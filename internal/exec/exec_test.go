@@ -2,6 +2,7 @@ package exec
 
 import (
 	"bufio"
+	"context"
 	"os"
 	"runtime"
 	"strings"
@@ -60,5 +61,21 @@ func TestRunCommandWritesLog(t *testing.T) {
 	}
 	if !strings.Contains(content, "hello") {
 		t.Fatalf("missing output in log")
+	}
+}
+
+func TestRunCommandWithContextCancel(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skip on windows: sleep may not be available")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	runner := Runner{
+		Permissions: PermissionAll,
+		Timeout:     time.Second,
+	}
+	_, err := runner.RunCommandWithContext(ctx, "sleep", "1")
+	if err == nil {
+		t.Fatalf("expected canceled error")
 	}
 }

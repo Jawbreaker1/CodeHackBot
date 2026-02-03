@@ -36,7 +36,7 @@ type CommandResult struct {
 	LogPath string
 }
 
-func (r *Runner) RunCommand(command string, args ...string) (CommandResult, error) {
+func (r *Runner) RunCommandWithContext(ctx context.Context, command string, args ...string) (CommandResult, error) {
 	if r.Permissions == PermissionReadOnly {
 		return CommandResult{}, fmt.Errorf("readonly mode: execution not permitted")
 	}
@@ -59,7 +59,7 @@ func (r *Runner) RunCommand(command string, args ...string) (CommandResult, erro
 		r.LogDir = "sessions"
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), r.Timeout)
+	ctx, cancel := context.WithTimeout(ctx, r.Timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, command, args...)
@@ -79,6 +79,10 @@ func (r *Runner) RunCommand(command string, args ...string) (CommandResult, erro
 		result.LogPath = logPath
 	}
 	return result, result.Error
+}
+
+func (r *Runner) RunCommand(command string, args ...string) (CommandResult, error) {
+	return r.RunCommandWithContext(context.Background(), command, args...)
 }
 
 func (r *Runner) writeLog(result CommandResult) (string, error) {

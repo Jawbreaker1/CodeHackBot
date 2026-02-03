@@ -66,6 +66,7 @@
 - Permission levels should mirror Codex CLI: `readonly`, `default` (approval required for executions), and `all` (fully allowed).
 - `/run <command> [args...]` should execute via the guarded runner and log output under the session `logs/` directory.
 - Display a concise ANSI-colored summary after major actions (e.g., `/run`, `/init`), and expose `/status` to show the current task.
+- Support ESC to interrupt a running major action and return to the prompt for next steps.
 
 ## Context Management (File-First)
 - Use a file-first memory model: store summaries and artifacts on disk; keep only a small working set in live context.

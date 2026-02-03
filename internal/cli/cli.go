@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bufio"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -25,6 +27,7 @@ type Runner struct {
 	profilePath       string
 	stopOnce          sync.Once
 	currentTask       string
+	currentTaskStart  time.Time
 }
 
 func NewRunner(cfg config.Config, sessionID, defaultConfigPath, profilePath string) *Runner {
@@ -162,7 +165,7 @@ func (r *Runner) handleInit(args []string) error {
 		}
 		r.logger.Printf("Inventory captured")
 	}
-	fmt.Print(renderInitSummary(sessionDir, sessionConfigPath, createInventory))
+	fmt.Print(renderInitSummary(r.currentTask, sessionDir, sessionConfigPath, createInventory))
 	return nil
 }
 
@@ -206,7 +209,8 @@ func (r *Runner) handleStatus() {
 		r.logger.Printf("Status: idle")
 		return
 	}
-	r.logger.Printf("Status: running %s", r.currentTask)
+	elapsed := formatElapsed(time.Since(r.currentTaskStart))
+	r.logger.Printf("Status: running %s (%s)", r.currentTask, elapsed)
 }
 
 func (r *Runner) handleRun(args []string) error {
@@ -231,7 +235,27 @@ func (r *Runner) handleRun(args []string) error {
 		Timeout:         timeout,
 		Reader:          r.reader,
 	}
-	result, err := runner.RunCommand(args[0], args[1:]...)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	escCh, stopEsc, escErr := startEscWatcher()
+	if escErr == nil && escCh != nil {
+		r.logger.Printf("Press ESC to interrupt")
+	} else if escErr != nil && r.isTTY() {
+		r.logger.Printf("ESC interrupt unavailable: %v", escErr)
+	}
+	if escCh != nil {
+		go func() {
+			<-escCh
+			cancel()
+		}()
+	}
+
+	result, err := runner.RunCommandWithContext(ctx, args[0], args[1:]...)
+	wasCanceled := errors.Is(err, context.Canceled)
+	if stopEsc != nil {
+		stopEsc()
+	}
 	if result.LogPath != "" {
 		r.logger.Printf("Log saved: %s", result.LogPath)
 	}
@@ -249,8 +273,12 @@ func (r *Runner) handleRun(args []string) error {
 			}
 		}
 	}
-	fmt.Print(renderExecSummary(args[0], args[1:], time.Since(start), result.LogPath, ledgerStatus, result.Output, err))
+	fmt.Print(renderExecSummary(r.currentTask, args[0], args[1:], time.Since(start), result.LogPath, ledgerStatus, result.Output, err))
 	if err != nil {
+		if wasCanceled {
+			err = fmt.Errorf("command interrupted")
+			r.logger.Printf("Interrupted. What should I do differently?")
+		}
 		return err
 	}
 	return nil
@@ -363,14 +391,39 @@ func (r *Runner) prompt() string {
 	if r.currentTask == "" {
 		return "BirdHackBot> "
 	}
-	return fmt.Sprintf("BirdHackBot[%s]> ", r.currentTask)
+	elapsed := formatElapsed(time.Since(r.currentTaskStart))
+	return fmt.Sprintf("BirdHackBot[%s %s]> ", r.currentTask, elapsed)
 }
 
 func (r *Runner) setTask(task string) {
 	r.currentTask = task
+	r.currentTaskStart = time.Now()
 	r.logger.Printf("Task: %s", task)
 }
 
 func (r *Runner) clearTask() {
 	r.currentTask = ""
+	r.currentTaskStart = time.Time{}
+}
+
+func formatElapsed(d time.Duration) string {
+	totalSeconds := int(d.Seconds())
+	if totalSeconds < 0 {
+		totalSeconds = 0
+	}
+	hours := totalSeconds / 3600
+	minutes := (totalSeconds % 3600) / 60
+	seconds := totalSeconds % 60
+	if hours > 0 {
+		return fmt.Sprintf("%02d:%02d:%02d", hours, minutes, seconds)
+	}
+	return fmt.Sprintf("%02d:%02d", minutes, seconds)
+}
+
+func (r *Runner) isTTY() bool {
+	info, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return (info.Mode() & os.ModeCharDevice) != 0
 }

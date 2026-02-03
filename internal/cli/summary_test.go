@@ -19,7 +19,7 @@ func TestPreviewOutput(t *testing.T) {
 }
 
 func TestRenderExecSummaryIncludesCommand(t *testing.T) {
-	summary := renderExecSummary("echo", []string{"hi"}, 150*time.Millisecond, "log.txt", "appended", "hi", nil)
+	summary := renderExecSummary("run echo", "echo", []string{"hi"}, 150*time.Millisecond, "log.txt", "appended", "hi", nil)
 	if !strings.Contains(summary, "Command: echo hi") {
 		t.Fatalf("missing command in summary")
 	}

@@ -11,18 +11,20 @@ const (
 	ansiGreen  = "\x1b[32m"
 	ansiRed    = "\x1b[31m"
 	ansiYellow = "\x1b[33m"
+	iconOk     = "✓"
+	iconErr    = "✗"
 )
 
 const outputPreviewLines = 5
 
 func formatStatus(ok bool) string {
 	if ok {
-		return ansiGreen + "ok" + ansiReset
+		return fmt.Sprintf("%s%s ok%s", ansiGreen, iconOk, ansiReset)
 	}
-	return ansiRed + "error" + ansiReset
+	return fmt.Sprintf("%s%s error%s", ansiRed, iconErr, ansiReset)
 }
 
-func renderExecSummary(command string, args []string, duration time.Duration, logPath, ledgerStatus, output string, execErr error) string {
+func renderExecSummary(task, command string, args []string, duration time.Duration, logPath, ledgerStatus, output string, execErr error) string {
 	cmd := strings.Join(append([]string{command}, args...), " ")
 	status := formatStatus(execErr == nil)
 	if ledgerStatus == "" {
@@ -30,6 +32,9 @@ func renderExecSummary(command string, args []string, duration time.Duration, lo
 	}
 	var b strings.Builder
 	b.WriteString("--- Execution Summary ---\n")
+	if task != "" {
+		b.WriteString(fmt.Sprintf("Task: %s\n", task))
+	}
 	b.WriteString(fmt.Sprintf("Status: %s (%s)\n", status, duration.Round(time.Millisecond)))
 	b.WriteString(fmt.Sprintf("Command: %s\n", cmd))
 	if logPath != "" {
@@ -52,13 +57,16 @@ func renderExecSummary(command string, args []string, duration time.Duration, lo
 	return b.String()
 }
 
-func renderInitSummary(sessionDir, configPath string, inventoryCaptured bool) string {
+func renderInitSummary(task, sessionDir, configPath string, inventoryCaptured bool) string {
 	status := formatStatus(true)
 	inventory := "skipped"
 	if inventoryCaptured {
 		inventory = "captured"
 	}
-	return fmt.Sprintf("--- Init Summary ---\nStatus: %s\nSession: %s\nConfig: %s\nInventory: %s\n", status, sessionDir, configPath, inventory)
+	if task == "" {
+		task = "init"
+	}
+	return fmt.Sprintf("--- Init Summary ---\nTask: %s\nStatus: %s\nSession: %s\nConfig: %s\nInventory: %s\n", task, status, sessionDir, configPath, inventory)
 }
 
 func previewOutput(output string, maxLines int) string {
