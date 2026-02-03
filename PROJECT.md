@@ -28,6 +28,10 @@
 ## Reporting Standards
 - Reporting rules and evidence expectations are defined in `AGENTS.md` and should be treated as required for any automated output.
 
+## Guidance Documents
+- `docs/tooling/` provides short, curated guidance for available tools (e.g., Metasploit).
+- `docs/playbooks/` contains scenario-based playbooks (network scan, web enumeration, credential audit, zip access) for safe, repeatable workflows.
+
 ## Execution Environment & Access
 - Initial access modes: local terminal execution and/or SSH into the Kali VM.
 - Future option: add an API-driven control plane to support orchestration of multiple agents.
@@ -67,6 +71,7 @@
 - `/run <command> [args...]` should execute via the guarded runner and log output under the session `logs/` directory.
 - Display a concise ANSI-colored summary after major actions (e.g., `/run`, `/init`), and expose `/status` to show the current task.
 - Support ESC to interrupt a running major action and return to the prompt for next steps.
+- `/msf [service=...] [platform=...] [keyword=...]` should run a non-interactive Metasploit search (msfconsole `-q -x`) and parse results.
 
 ## Context Management (File-First)
 - Use a file-first memory model: store summaries and artifacts on disk; keep only a small working set in live context.

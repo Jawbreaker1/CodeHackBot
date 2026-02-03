@@ -15,6 +15,7 @@ import (
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/config"
 	"github.com/Jawbreaker1/CodeHackBot/internal/exec"
+	"github.com/Jawbreaker1/CodeHackBot/internal/msf"
 	"github.com/Jawbreaker1/CodeHackBot/internal/session"
 )
 
@@ -97,6 +98,8 @@ func (r *Runner) handleCommand(line string) error {
 		r.handleStatus()
 	case "run":
 		return r.handleRun(args)
+	case "msf":
+		return r.handleMSF(args)
 	case "resume":
 		return r.handleResume()
 	case "stop":
@@ -284,6 +287,113 @@ func (r *Runner) handleRun(args []string) error {
 	return nil
 }
 
+func (r *Runner) handleMSF(args []string) error {
+	if r.cfg.Permissions.Level == "readonly" {
+		return fmt.Errorf("readonly mode: msf search not permitted")
+	}
+	if !r.cfg.Tools.Shell.Enabled {
+		return fmt.Errorf("shell execution disabled by config")
+	}
+	if r.cfg.Tools.Metasploit.DiscoveryMode != "msfconsole" {
+		if r.cfg.Tools.Metasploit.RPCEnabled {
+			return fmt.Errorf("msfrpcd discovery not implemented; set discovery_mode to msfconsole")
+		}
+		return fmt.Errorf("metasploit discovery disabled by config")
+	}
+
+	query := msf.Query{}
+	extra := []string{}
+	for _, arg := range args {
+		switch {
+		case strings.HasPrefix(arg, "service="):
+			query.Service = strings.TrimPrefix(arg, "service=")
+		case strings.HasPrefix(arg, "platform="):
+			query.Platform = strings.TrimPrefix(arg, "platform=")
+		case strings.HasPrefix(arg, "keyword="):
+			query.Keyword = strings.TrimPrefix(arg, "keyword=")
+		default:
+			extra = append(extra, arg)
+		}
+	}
+	if len(extra) > 0 {
+		if query.Keyword == "" {
+			query.Keyword = strings.Join(extra, " ")
+		} else {
+			query.Keyword = query.Keyword + " " + strings.Join(extra, " ")
+		}
+	}
+
+	search := msf.BuildSearch(query)
+	command := msf.BuildCommand(search)
+
+	r.setTask("msf search")
+	defer r.clearTask()
+
+	if r.cfg.Permissions.RequireApproval {
+		approved, err := r.confirm(fmt.Sprintf("Run msfconsole search: %s?", search))
+		if err != nil {
+			return err
+		}
+		if !approved {
+			return fmt.Errorf("execution not approved")
+		}
+	}
+
+	start := time.Now()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	escCh, stopEsc, escErr := startEscWatcher()
+	if escErr == nil && escCh != nil {
+		r.logger.Printf("Press ESC to interrupt")
+	} else if escErr != nil && r.isTTY() {
+		r.logger.Printf("ESC interrupt unavailable: %v", escErr)
+	}
+	if escCh != nil {
+		go func() {
+			<-escCh
+			cancel()
+		}()
+	}
+
+	execRunner := exec.Runner{
+		Permissions:     exec.PermissionLevel(r.cfg.Permissions.Level),
+		RequireApproval: false,
+		LogDir:          filepath.Join(r.cfg.Session.LogDir, r.sessionID, "logs"),
+		Timeout:         2 * time.Minute,
+		Reader:          r.reader,
+	}
+	cmdArgs := []string{"-q", "-x", command}
+	result, err := execRunner.RunCommandWithContext(ctx, "msfconsole", cmdArgs...)
+	wasCanceled := errors.Is(err, context.Canceled)
+	if stopEsc != nil {
+		stopEsc()
+	}
+	if result.LogPath != "" {
+		r.logger.Printf("Log saved: %s", result.LogPath)
+	}
+
+	fmt.Print(renderExecSummary(r.currentTask, "msfconsole", cmdArgs, time.Since(start), result.LogPath, "disabled", result.Output, err))
+	if err != nil {
+		if wasCanceled {
+			r.logger.Printf("Interrupted. What should I do differently?")
+			return fmt.Errorf("command interrupted")
+		}
+		return err
+	}
+
+	lines := msf.ParseSearchOutput(result.Output)
+	if len(lines) == 0 {
+		r.logger.Printf("No modules found")
+		return nil
+	}
+	r.logger.Printf("Modules:")
+	for _, line := range lines {
+		r.logger.Printf("%s", line)
+	}
+	return nil
+}
+
 func (r *Runner) handleResume() error {
 	root := r.cfg.Session.LogDir
 	entries, err := os.ReadDir(root)
@@ -352,7 +462,7 @@ func (r *Runner) Stop() {
 }
 
 func (r *Runner) printHelp() {
-	r.logger.Printf("Commands: /init /permissions /context /ledger /status /run /resume /stop /exit")
+	r.logger.Printf("Commands: /init /permissions /context /ledger /status /run /msf /resume /stop /exit")
 	r.logger.Printf("Example: /permissions readonly")
 	r.logger.Printf("Session logs live under: %s", filepath.Clean(r.cfg.Session.LogDir))
 }
