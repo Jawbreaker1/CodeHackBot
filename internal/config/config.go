@@ -23,16 +23,16 @@ type Config struct {
 		DenyTargets []string `json:"deny_targets"`
 	} `json:"scope"`
 	Context struct {
-		MaxRecentOutputs  int `json:"max_recent_outputs"`
-		SummarizeEvery    int `json:"summarize_every_steps"`
+		MaxRecentOutputs   int `json:"max_recent_outputs"`
+		SummarizeEvery     int `json:"summarize_every_steps"`
 		SummarizeAtPercent int `json:"summarize_at_percent"`
 	} `json:"context"`
 	Session struct {
-		LedgerEnabled    bool   `json:"ledger_enabled"`
-		LogDir           string `json:"log_dir"`
-		PlanFilename     string `json:"plan_filename"`
+		LedgerEnabled     bool   `json:"ledger_enabled"`
+		LogDir            string `json:"log_dir"`
+		PlanFilename      string `json:"plan_filename"`
 		InventoryFilename string `json:"inventory_filename"`
-		LedgerFilename   string `json:"ledger_filename"`
+		LedgerFilename    string `json:"ledger_filename"`
 	} `json:"session"`
 	Tools struct {
 		Shell struct {
