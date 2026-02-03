@@ -20,12 +20,15 @@ const (
 )
 
 type Runner struct {
-	Permissions     PermissionLevel
-	RequireApproval bool
-	LogDir          string
-	Timeout         time.Duration
-	Reader          *bufio.Reader
-	Now             func() time.Time
+	Permissions      PermissionLevel
+	RequireApproval  bool
+	LogDir           string
+	Timeout          time.Duration
+	Reader           *bufio.Reader
+	Now              func() time.Time
+	ScopeNetworks    []string
+	ScopeTargets     []string
+	ScopeDenyTargets []string
 }
 
 type CommandResult struct {
@@ -39,6 +42,9 @@ type CommandResult struct {
 func (r *Runner) RunCommandWithContext(ctx context.Context, command string, args ...string) (CommandResult, error) {
 	if r.Permissions == PermissionReadOnly {
 		return CommandResult{}, fmt.Errorf("readonly mode: execution not permitted")
+	}
+	if err := r.validateScope(command, args); err != nil {
+		return CommandResult{}, err
 	}
 	if r.RequireApproval {
 		approved, err := r.confirm(fmt.Sprintf("Run command: %s %s?", command, strings.Join(args, " ")))

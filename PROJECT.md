@@ -36,6 +36,12 @@
 - Initial access modes: local terminal execution and/or SSH into the Kali VM.
 - Future option: add an API-driven control plane to support orchestration of multiple agents.
 
+## Scope Enforcement
+- Scope is enforced for `/run` and replayed commands using `scope.networks`, `scope.targets`, and `scope.deny_targets`.
+- `scope.networks` accepts CIDR ranges or aliases: `internal`/`private` (RFC1918 + loopback + link-local) and `loopback`.
+- `scope.targets` can be IPs, CIDRs, or hostnames (exact/URL substring match).
+- Enforcement is best-effort: it detects IPv4/CIDR and known hostnames in command args; if no targets are detected, the command is allowed.
+
 ## Exploit Knowledge Sources
 - The agent should be able to query local exploit metadata sources (e.g., Metasploit module database) to discover relevant modules dynamically.
 - Use read-only access for discovery; execution still follows the session permission level and safety rules in `AGENTS.md`.
@@ -100,6 +106,7 @@
 - Support a replay mode that runs as its own session to re-run key steps from a saved plan/ledger for verification.
 - Replay should be opt-in and respect current scope, permissions, and safety rules.
 - CLI example: `BirdHackBot --replay <session-id>` to start a replay session (lookup under `sessions/`).
+- Replay input: `sessions/<id>/replay.txt` with one command per line (lines starting with `#` are comments).
 
 ## Session Resume
 - Support resuming an interrupted session by loading its saved context artifacts.

@@ -31,6 +31,11 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
 - [x] OWASP-style report template + generator
 
 ## Sprint 5 — Quality & Testing
-- [ ] Unit tests for config, scope enforcement, planning, report generation
-- [ ] Replay-based regression tests for known findings
+- [x] Unit tests for config, scope enforcement, planning, report generation
+- [x] Replay-based regression tests for known findings (basic replay harness)
 - [x] CLI end-to-end test harness
+
+## Sprint 6 — Scope Enforcement
+- [x] Enforce scope allow/deny lists for `/run` and replay (CIDR + hostname literals)
+- [x] Add scope enforcement tests
+- [x] Document scope configuration details

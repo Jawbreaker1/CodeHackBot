@@ -235,11 +235,14 @@ func (r *Runner) handleRun(args []string) error {
 		timeout = 30 * time.Second
 	}
 	runner := exec.Runner{
-		Permissions:     exec.PermissionLevel(r.cfg.Permissions.Level),
-		RequireApproval: requireApproval,
-		LogDir:          filepath.Join(r.cfg.Session.LogDir, r.sessionID, "logs"),
-		Timeout:         timeout,
-		Reader:          r.reader,
+		Permissions:      exec.PermissionLevel(r.cfg.Permissions.Level),
+		RequireApproval:  requireApproval,
+		LogDir:           filepath.Join(r.cfg.Session.LogDir, r.sessionID, "logs"),
+		Timeout:          timeout,
+		Reader:           r.reader,
+		ScopeNetworks:    r.cfg.Scope.Networks,
+		ScopeTargets:     r.cfg.Scope.Targets,
+		ScopeDenyTargets: r.cfg.Scope.DenyTargets,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -360,11 +363,14 @@ func (r *Runner) handleMSF(args []string) error {
 	}
 
 	execRunner := exec.Runner{
-		Permissions:     exec.PermissionLevel(r.cfg.Permissions.Level),
-		RequireApproval: false,
-		LogDir:          filepath.Join(r.cfg.Session.LogDir, r.sessionID, "logs"),
-		Timeout:         2 * time.Minute,
-		Reader:          r.reader,
+		Permissions:      exec.PermissionLevel(r.cfg.Permissions.Level),
+		RequireApproval:  false,
+		LogDir:           filepath.Join(r.cfg.Session.LogDir, r.sessionID, "logs"),
+		Timeout:          2 * time.Minute,
+		Reader:           r.reader,
+		ScopeNetworks:    r.cfg.Scope.Networks,
+		ScopeTargets:     r.cfg.Scope.Targets,
+		ScopeDenyTargets: r.cfg.Scope.DenyTargets,
 	}
 	cmdArgs := []string{"-q", "-x", command}
 	result, err := execRunner.RunCommandWithContext(ctx, "msfconsole", cmdArgs...)

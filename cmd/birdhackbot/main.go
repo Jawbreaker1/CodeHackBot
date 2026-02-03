@@ -6,10 +6,13 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/cli"
 	"github.com/Jawbreaker1/CodeHackBot/internal/config"
+	"github.com/Jawbreaker1/CodeHackBot/internal/exec"
+	"github.com/Jawbreaker1/CodeHackBot/internal/replay"
 	"github.com/Jawbreaker1/CodeHackBot/internal/session"
 )
 
@@ -27,7 +30,7 @@ func main() {
 	)
 
 	flag.BoolVar(&showVersion, "version", false, "Print version")
-	flag.StringVar(&replayID, "replay", "", "Start replay session from sessions/<id>")
+	flag.StringVar(&replayID, "replay", "", "Replay commands from sessions/<id>/replay.txt")
 	flag.StringVar(&resumeID, "resume", "", "Resume session from sessions/<id>")
 	flag.StringVar(&configPath, "config", "", "Path to default config JSON")
 	flag.StringVar(&profileName, "profile", "", "Profile name under config/profiles/")
@@ -104,6 +107,31 @@ func main() {
 	log.Printf("Loaded config: %v", paths)
 	if mode != "new" {
 		log.Printf("Mode: %s (session %s)", mode, sessionID)
+	}
+
+	if mode == "replay" {
+		if cfg.Permissions.Level == "readonly" || cfg.Permissions.RequireApproval {
+			log.Fatal("Replay requires non-interactive permissions. Use --permissions all or disable approval in config.")
+		}
+		replayPath := replay.FilePath(cfg.Session.LogDir, sessionID)
+		steps, err := replay.LoadSteps(replayPath)
+		if err != nil {
+			log.Fatalf("Replay load failed: %v", err)
+		}
+		runner := exec.Runner{
+			Permissions:      exec.PermissionLevel(cfg.Permissions.Level),
+			RequireApproval:  false,
+			LogDir:           filepath.Join(cfg.Session.LogDir, sessionID, "logs"),
+			ScopeNetworks:    cfg.Scope.Networks,
+			ScopeTargets:     cfg.Scope.Targets,
+			ScopeDenyTargets: cfg.Scope.DenyTargets,
+		}
+		results, err := replay.RunSteps(runner, steps)
+		if err != nil {
+			log.Fatalf("Replay failed: %v", err)
+		}
+		log.Printf("Replay completed: %d steps", len(results))
+		return
 	}
 
 	defaultPath := configPath
