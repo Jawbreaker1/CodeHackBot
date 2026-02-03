@@ -16,6 +16,7 @@ import (
 	"github.com/Jawbreaker1/CodeHackBot/internal/config"
 	"github.com/Jawbreaker1/CodeHackBot/internal/exec"
 	"github.com/Jawbreaker1/CodeHackBot/internal/msf"
+	"github.com/Jawbreaker1/CodeHackBot/internal/report"
 	"github.com/Jawbreaker1/CodeHackBot/internal/session"
 )
 
@@ -98,6 +99,8 @@ func (r *Runner) handleCommand(line string) error {
 		r.handleStatus()
 	case "run":
 		return r.handleRun(args)
+	case "report":
+		return r.handleReport(args)
 	case "msf":
 		return r.handleMSF(args)
 	case "resume":
@@ -394,6 +397,25 @@ func (r *Runner) handleMSF(args []string) error {
 	return nil
 }
 
+func (r *Runner) handleReport(args []string) error {
+	if r.cfg.Permissions.Level == "readonly" {
+		return fmt.Errorf("readonly mode: report generation not permitted")
+	}
+	outPath := filepath.Join(r.cfg.Session.LogDir, r.sessionID, "report.md")
+	if len(args) > 0 && strings.TrimSpace(args[0]) != "" {
+		outPath = args[0]
+	}
+	info := report.Info{
+		Scope:     r.cfg.Scope.Targets,
+		SessionID: r.sessionID,
+	}
+	if err := report.Generate("", outPath, info); err != nil {
+		return err
+	}
+	r.logger.Printf("Report generated: %s", outPath)
+	return nil
+}
+
 func (r *Runner) handleResume() error {
 	root := r.cfg.Session.LogDir
 	entries, err := os.ReadDir(root)
@@ -462,7 +484,7 @@ func (r *Runner) Stop() {
 }
 
 func (r *Runner) printHelp() {
-	r.logger.Printf("Commands: /init /permissions /context /ledger /status /run /msf /resume /stop /exit")
+	r.logger.Printf("Commands: /init /permissions /context /ledger /status /run /msf /report /resume /stop /exit")
 	r.logger.Printf("Example: /permissions readonly")
 	r.logger.Printf("Session logs live under: %s", filepath.Clean(r.cfg.Session.LogDir))
 }
