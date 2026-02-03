@@ -24,6 +24,7 @@ type Runner struct {
 	defaultConfigPath string
 	profilePath       string
 	stopOnce          sync.Once
+	currentTask       string
 }
 
 func NewRunner(cfg config.Config, sessionID, defaultConfigPath, profilePath string) *Runner {
@@ -40,14 +41,14 @@ func NewRunner(cfg config.Config, sessionID, defaultConfigPath, profilePath stri
 func (r *Runner) Run() error {
 	r.logger.Printf("BirdHackBot interactive mode. Type /help for commands.")
 	for {
-		line, err := r.readLine("BirdHackBot> ")
+		line, err := r.readLine(r.prompt())
 		if err != nil && err != io.EOF {
 			return err
 		}
 		line = strings.TrimSpace(line)
 		if line == "" {
 			if err == io.EOF {
-				_ = r.handleStop()
+				r.Stop()
 				return nil
 			}
 			continue
@@ -89,6 +90,8 @@ func (r *Runner) handleCommand(line string) error {
 		r.logger.Printf("Context: max_recent=%d summarize_every=%d summarize_at=%d%%", r.cfg.Context.MaxRecentOutputs, r.cfg.Context.SummarizeEvery, r.cfg.Context.SummarizeAtPercent)
 	case "ledger":
 		return r.handleLedger(args)
+	case "status":
+		r.handleStatus()
 	case "run":
 		return r.handleRun(args)
 	case "resume":
@@ -106,6 +109,8 @@ func (r *Runner) handleCommand(line string) error {
 }
 
 func (r *Runner) handleInit(args []string) error {
+	r.setTask("init")
+	defer r.clearTask()
 	createInventory := false
 	if len(args) > 0 {
 		switch strings.ToLower(args[0]) {
@@ -157,6 +162,7 @@ func (r *Runner) handleInit(args []string) error {
 		}
 		r.logger.Printf("Inventory captured")
 	}
+	fmt.Print(renderInitSummary(sessionDir, sessionConfigPath, createInventory))
 	return nil
 }
 
@@ -195,13 +201,24 @@ func (r *Runner) handleLedger(args []string) error {
 	return nil
 }
 
+func (r *Runner) handleStatus() {
+	if r.currentTask == "" {
+		r.logger.Printf("Status: idle")
+		return
+	}
+	r.logger.Printf("Status: running %s", r.currentTask)
+}
+
 func (r *Runner) handleRun(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: /run <command> [args...]")
 	}
+	r.setTask(fmt.Sprintf("run %s", args[0]))
+	defer r.clearTask()
 	if !r.cfg.Tools.Shell.Enabled {
 		return fmt.Errorf("shell execution disabled by config")
 	}
+	start := time.Now()
 	requireApproval := r.cfg.Permissions.Level == "default" && r.cfg.Permissions.RequireApproval
 	timeout := time.Duration(r.cfg.Tools.Shell.TimeoutSeconds) * time.Second
 	if timeout <= 0 {
@@ -218,17 +235,23 @@ func (r *Runner) handleRun(args []string) error {
 	if result.LogPath != "" {
 		r.logger.Printf("Log saved: %s", result.LogPath)
 	}
-	if r.cfg.Session.LedgerEnabled && result.LogPath != "" {
-		sessionDir := filepath.Join(r.cfg.Session.LogDir, r.sessionID)
-		if ledgerErr := session.AppendLedger(sessionDir, r.cfg.Session.LedgerFilename, strings.Join(append([]string{args[0]}, args[1:]...), " "), result.LogPath, ""); ledgerErr != nil {
-			r.logger.Printf("Ledger update failed: %v", ledgerErr)
+	ledgerStatus := "disabled"
+	if r.cfg.Session.LedgerEnabled {
+		if result.LogPath == "" {
+			ledgerStatus = "skipped"
+		} else {
+			sessionDir := filepath.Join(r.cfg.Session.LogDir, r.sessionID)
+			if ledgerErr := session.AppendLedger(sessionDir, r.cfg.Session.LedgerFilename, strings.Join(append([]string{args[0]}, args[1:]...), " "), result.LogPath, ""); ledgerErr != nil {
+				r.logger.Printf("Ledger update failed: %v", ledgerErr)
+				ledgerStatus = "error"
+			} else {
+				ledgerStatus = "appended"
+			}
 		}
 	}
+	fmt.Print(renderExecSummary(args[0], args[1:], time.Since(start), result.LogPath, ledgerStatus, result.Output, err))
 	if err != nil {
 		return err
-	}
-	if result.Output != "" {
-		r.logger.Printf("Output:\\n%s", result.Output)
 	}
 	return nil
 }
@@ -301,7 +324,7 @@ func (r *Runner) Stop() {
 }
 
 func (r *Runner) printHelp() {
-	r.logger.Printf("Commands: /init /permissions /context /ledger /run /resume /stop /exit")
+	r.logger.Printf("Commands: /init /permissions /context /ledger /status /run /resume /stop /exit")
 	r.logger.Printf("Example: /permissions readonly")
 	r.logger.Printf("Session logs live under: %s", filepath.Clean(r.cfg.Session.LogDir))
 }
@@ -334,4 +357,20 @@ func (r *Runner) confirm(prompt string) (bool, error) {
 			return false, nil
 		}
 	}
+}
+
+func (r *Runner) prompt() string {
+	if r.currentTask == "" {
+		return "BirdHackBot> "
+	}
+	return fmt.Sprintf("BirdHackBot[%s]> ", r.currentTask)
+}
+
+func (r *Runner) setTask(task string) {
+	r.currentTask = task
+	r.logger.Printf("Task: %s", task)
+}
+
+func (r *Runner) clearTask() {
+	r.currentTask = ""
 }
