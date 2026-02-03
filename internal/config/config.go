@@ -13,6 +13,12 @@ type Config struct {
 		Model        string `json:"model"`
 		SystemPrompt string `json:"system_prompt"`
 	} `json:"agent"`
+	LLM struct {
+		BaseURL        string `json:"base_url"`
+		Model          string `json:"model"`
+		TimeoutSeconds int    `json:"timeout_seconds"`
+		APIKey         string `json:"api_key"`
+	} `json:"llm"`
 	Permissions struct {
 		Level           string `json:"level"`
 		RequireApproval bool   `json:"require_approval"`

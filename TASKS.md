@@ -39,3 +39,8 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
 - [x] Enforce scope allow/deny lists for `/run` and replay (CIDR + hostname literals)
 - [x] Add scope enforcement tests
 - [x] Document scope configuration details
+
+## Sprint 7 — LLM Core & Planning
+- [x] Add LLM client interface + LMStudio config (base URL, model, timeout)
+- [ ] Implement planning phase command (`/plan`) that writes `sessions/<id>/plan.md`
+- [ ] Add context artifact stubs (`summary.md`, `known_facts.md`) with a `/summarize` helper
