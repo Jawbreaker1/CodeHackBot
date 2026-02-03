@@ -64,6 +64,7 @@
 - The CLI should support slash commands similar to Codex CLI. Example: `/permissions` to set the execution approval level.
 - `/init` should generate baseline scaffolding documents (e.g., `AGENTS.md`, `PROJECT.md`, basic config placeholders).
 - Permission levels should mirror Codex CLI: `readonly`, `default` (approval required for executions), and `all` (fully allowed).
+- `/run <command> [args...]` should execute via the guarded runner and log output under the session `logs/` directory.
 
 ## Context Management (File-First)
 - Use a file-first memory model: store summaries and artifacts on disk; keep only a small working set in live context.

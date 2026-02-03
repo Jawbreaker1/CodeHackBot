@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/config"
+	"github.com/Jawbreaker1/CodeHackBot/internal/exec"
 	"github.com/Jawbreaker1/CodeHackBot/internal/session"
 )
 
@@ -88,6 +89,8 @@ func (r *Runner) handleCommand(line string) error {
 		r.logger.Printf("Context: max_recent=%d summarize_every=%d summarize_at=%d%%", r.cfg.Context.MaxRecentOutputs, r.cfg.Context.SummarizeEvery, r.cfg.Context.SummarizeAtPercent)
 	case "ledger":
 		return r.handleLedger(args)
+	case "run":
+		return r.handleRun(args)
 	case "resume":
 		return r.handleResume()
 	case "stop":
@@ -192,6 +195,44 @@ func (r *Runner) handleLedger(args []string) error {
 	return nil
 }
 
+func (r *Runner) handleRun(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: /run <command> [args...]")
+	}
+	if !r.cfg.Tools.Shell.Enabled {
+		return fmt.Errorf("shell execution disabled by config")
+	}
+	requireApproval := r.cfg.Permissions.Level == "default" && r.cfg.Permissions.RequireApproval
+	timeout := time.Duration(r.cfg.Tools.Shell.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	runner := exec.Runner{
+		Permissions:     exec.PermissionLevel(r.cfg.Permissions.Level),
+		RequireApproval: requireApproval,
+		LogDir:          filepath.Join(r.cfg.Session.LogDir, r.sessionID, "logs"),
+		Timeout:         timeout,
+		Reader:          r.reader,
+	}
+	result, err := runner.RunCommand(args[0], args[1:]...)
+	if result.LogPath != "" {
+		r.logger.Printf("Log saved: %s", result.LogPath)
+	}
+	if r.cfg.Session.LedgerEnabled && result.LogPath != "" {
+		sessionDir := filepath.Join(r.cfg.Session.LogDir, r.sessionID)
+		if ledgerErr := session.AppendLedger(sessionDir, r.cfg.Session.LedgerFilename, strings.Join(append([]string{args[0]}, args[1:]...), " "), result.LogPath, ""); ledgerErr != nil {
+			r.logger.Printf("Ledger update failed: %v", ledgerErr)
+		}
+	}
+	if err != nil {
+		return err
+	}
+	if result.Output != "" {
+		r.logger.Printf("Output:\\n%s", result.Output)
+	}
+	return nil
+}
+
 func (r *Runner) handleResume() error {
 	root := r.cfg.Session.LogDir
 	entries, err := os.ReadDir(root)
@@ -260,7 +301,7 @@ func (r *Runner) Stop() {
 }
 
 func (r *Runner) printHelp() {
-	r.logger.Printf("Commands: /init /permissions /context /ledger /resume /stop /exit")
+	r.logger.Printf("Commands: /init /permissions /context /ledger /run /resume /stop /exit")
 	r.logger.Printf("Example: /permissions readonly")
 	r.logger.Printf("Session logs live under: %s", filepath.Clean(r.cfg.Session.LogDir))
 }
