@@ -91,6 +91,12 @@
 - Inspiration: Cline’s “Memory Bank” uses file-based summaries; use it as a reference for workflow design, adapted for security-testing needs (evidence retention, auditability).
 - The “memory bank” for this project is session-scoped and lives under `sessions/<id>/` (summaries, known facts, logs), not a global repo-level store.
 
+## Cline Context Inspiration (Documentation-Only)
+- Cline’s Memory Bank is a set of regular repo files that document: project brief, product context, active context, system patterns, tech context, and progress. Use this as a template for what our session-level files should capture.
+- Cline auto-compacts when context is near the limit, generating a comprehensive summary that preserves technical details and replaces the prior conversation. This maps to our summarize-on-threshold approach.
+- Cline exposes a manual `/smol` (a.k.a. `/compact`) command to condense context within the same task; we should mirror this with `/summarize`.
+- Cline’s context guidance suggests operating below the full model limit (~75–80% effective capacity). Keep our summarize threshold in that range.
+
 ## Configuration Layout
 - Keep configuration simple for now to support parallel agents without collisions.
 - Suggested hierarchy:

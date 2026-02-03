@@ -43,4 +43,7 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
 ## Sprint 7 — LLM Core & Planning
 - [x] Add LLM client interface + LMStudio config (base URL, model, timeout)
 - [x] Implement planning phase command (`/plan`) that writes `sessions/<id>/plan.md`
-- [ ] Add context artifact stubs (`summary.md`, `known_facts.md`) with a `/summarize` helper
+- [ ] Add context artifact stubs (`summary.md`, `known_facts.md`, optional `focus.md`)
+- [ ] Implement `/summarize` (manual) to update summaries from recent logs/ledger
+- [ ] Add auto-summarize hooks (threshold/step-based) for `/run` and `/msf`
+- [ ] Robust tests for context management (file creation, append/update, thresholds, size limits, readonly behavior)
