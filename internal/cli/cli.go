@@ -70,7 +70,10 @@ func (r *Runner) handleCommand(line string) error {
 		return r.handleLedger(args)
 	case "resume":
 		return r.handleResume()
+	case "stop":
+		return r.handleStop()
 	case "exit", "quit":
+		_ = r.handleStop()
 		os.Exit(0)
 	default:
 		r.logger.Printf("Unknown command: /%s", cmd)
@@ -197,12 +200,34 @@ func (r *Runner) handleResume() error {
 	}
 	r.sessionID = selection
 	r.logger.SetPrefix(fmt.Sprintf("[session:%s] ", r.sessionID))
-	r.logger.Printf("Session switched to %s. Use --resume for full context load.", r.sessionID)
+	sessionConfigPath := config.SessionPath(r.cfg.Session.LogDir, r.sessionID)
+	if cfg, _, err := config.Load(sessionConfigPath, "", ""); err == nil {
+		r.cfg = cfg
+		r.logger.Printf("Session %s loaded from %s", r.sessionID, sessionConfigPath)
+	} else {
+		r.logger.Printf("Session switched to %s. Config load failed: %v", r.sessionID, err)
+	}
+	return nil
+}
+
+func (r *Runner) handleStop() error {
+	sessionDir := filepath.Join(r.cfg.Session.LogDir, r.sessionID)
+	if _, err := os.Stat(sessionDir); err != nil {
+		if os.IsNotExist(err) {
+			r.logger.Printf("No session directory found for %s", r.sessionID)
+			return nil
+		}
+		return fmt.Errorf("stat session dir: %w", err)
+	}
+	if err := session.CloseMeta(sessionDir, r.sessionID); err != nil {
+		return err
+	}
+	r.logger.Printf("Session %s closed", r.sessionID)
 	return nil
 }
 
 func (r *Runner) printHelp() {
-	r.logger.Printf("Commands: /init /permissions /context /ledger /resume /exit")
+	r.logger.Printf("Commands: /init /permissions /context /ledger /resume /stop /exit")
 	r.logger.Printf("Example: /permissions readonly")
 	r.logger.Printf("Session logs live under: %s", filepath.Clean(r.cfg.Session.LogDir))
 }

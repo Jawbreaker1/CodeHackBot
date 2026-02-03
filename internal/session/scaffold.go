@@ -40,6 +40,10 @@ func CreateScaffold(opts ScaffoldOptions) (string, error) {
 		}
 	}
 
+	if err := InitMeta(sessionDir, opts.SessionID); err != nil {
+		return "", fmt.Errorf("write session meta: %w", err)
+	}
+
 	planPath := filepath.Join(sessionDir, opts.PlanFilename)
 	if _, err := os.Stat(planPath); os.IsNotExist(err) {
 		content := fmt.Sprintf("# Session Plan\n\n- Started (UTC): %s\n- Scope:\n- Targets:\n- Notes:\n\n## Phases\n- Recon:\n- Enumeration:\n- Validation:\n- Escalation:\n- Reporting:\n", time.Now().UTC().Format(time.RFC3339))

@@ -97,6 +97,9 @@
 - CLI example: `BirdHackBot --resume <session-id>` to continue a prior session from `sessions/`.
 - Provide `/resume` as a CLI slash command to list existing sessions and select one to continue.
 
+## Session Artifacts
+- Each session directory should include `plan.md`, `inventory.md`, optional `ledger.md`, `logs/`, `artifacts/`, and `session.json` (status/metadata).
+
 ## Future Improvement: Target Baselines
 - Consider a target-scoped baseline store (e.g., `targets/<id>/`) to reuse recon facts across sessions without re-discovery.
 - Include staleness checks before reuse to avoid relying on outdated recon data.
