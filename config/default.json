@@ -1,0 +1,41 @@
+{
+  "agent": {
+    "name": "CodeHackBot",
+    "model": "gpt-oss-20b",
+    "system_prompt": "prompts/system.md"
+  },
+  "permissions": {
+    "level": "default",
+    "require_approval": true
+  },
+  "scope": {
+    "networks": ["internal"],
+    "targets": [],
+    "deny_targets": []
+  },
+  "context": {
+    "max_recent_outputs": 20,
+    "summarize_every_steps": 8,
+    "summarize_at_percent": 70
+  },
+  "session": {
+    "ledger_enabled": false,
+    "log_dir": "sessions",
+    "plan_filename": "plan.md",
+    "inventory_filename": "inventory.md",
+    "ledger_filename": "ledger.md"
+  },
+  "tools": {
+    "shell": {
+      "enabled": true,
+      "timeout_seconds": 300
+    },
+    "metasploit": {
+      "discovery_mode": "msfconsole",
+      "rpc_enabled": false
+    }
+  },
+  "network": {
+    "assume_offline": true
+  }
+}
