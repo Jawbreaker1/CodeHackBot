@@ -14,10 +14,12 @@
 ## Coding Style & Naming Conventions
 - Adopt the canonical formatter/linter for the chosen language (e.g., `prettier`, `black`, `gofmt`) and check in config.
 - Naming: directories in `kebab-case`, files in `kebab-case` or `snake_case`, types/classes in `PascalCase`.
+- CLI implementation language: Go (for a single static binary and straightforward SSH/concurrency).
 
 ## Testing Guidelines
 - Choose one testing framework and keep it consistent.
 - Recommended conventions: `*.test.*` or `*.spec.*` filenames; tests under `tests/` or colocated with source.
+- Aim for high coverage on core logic (planning, scope enforcement, report generation, replay) and add regression tests for known findings.
 
 ## Commit & Pull Request Guidelines
 - Commit style is not established; default to Conventional Commits (e.g., `feat: add scan orchestration`).

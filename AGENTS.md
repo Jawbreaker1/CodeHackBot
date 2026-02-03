@@ -25,3 +25,6 @@
 ## Third-Party Inspiration
 - Cline may be used for conceptual inspiration only. Do not copy any code or documentation verbatim.
 - Any third-party code or assets must be properly licensed and attributed before inclusion.
+
+## Maintainability
+- Flag growing files early and recommend refactors when a file becomes large or hard to navigate.
