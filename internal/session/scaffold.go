@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 )
 
 type ScaffoldOptions struct {
@@ -46,7 +45,7 @@ func CreateScaffold(opts ScaffoldOptions) (string, error) {
 
 	planPath := filepath.Join(sessionDir, opts.PlanFilename)
 	if _, err := os.Stat(planPath); os.IsNotExist(err) {
-		content := fmt.Sprintf("# Session Plan\n\n- Started (UTC): %s\n- Scope:\n- Targets:\n- Notes:\n\n## Phases\n- Recon:\n- Enumeration:\n- Validation:\n- Escalation:\n- Reporting:\n", time.Now().UTC().Format(time.RFC3339))
+		content := DefaultPlanContent()
 		if err := os.WriteFile(planPath, []byte(content), 0o644); err != nil {
 			return "", fmt.Errorf("write plan: %w", err)
 		}

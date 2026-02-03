@@ -97,6 +97,8 @@ func (r *Runner) handleCommand(line string) error {
 		return r.handleLedger(args)
 	case "status":
 		r.handleStatus()
+	case "plan":
+		return r.handlePlan(args)
 	case "run":
 		return r.handleRun(args)
 	case "report":
@@ -217,6 +219,65 @@ func (r *Runner) handleStatus() {
 	}
 	elapsed := formatElapsed(time.Since(r.currentTaskStart))
 	r.logger.Printf("Status: running %s (%s)", r.currentTask, elapsed)
+}
+
+func (r *Runner) handlePlan(args []string) error {
+	r.setTask("plan")
+	defer r.clearTask()
+
+	if r.cfg.Permissions.Level == "readonly" {
+		return fmt.Errorf("readonly mode: plan updates not permitted")
+	}
+
+	sessionDir := filepath.Join(r.cfg.Session.LogDir, r.sessionID)
+	if _, err := os.Stat(sessionDir); os.IsNotExist(err) {
+		if _, err := session.CreateScaffold(session.ScaffoldOptions{
+			RootDir:           r.cfg.Session.LogDir,
+			SessionID:         r.sessionID,
+			PlanFilename:      r.cfg.Session.PlanFilename,
+			InventoryFilename: r.cfg.Session.InventoryFilename,
+			LedgerFilename:    r.cfg.Session.LedgerFilename,
+			CreateLedger:      r.cfg.Session.LedgerEnabled,
+		}); err != nil {
+			return err
+		}
+		sessionConfigPath := config.SessionPath(r.cfg.Session.LogDir, r.sessionID)
+		if _, err := os.Stat(sessionConfigPath); os.IsNotExist(err) {
+			if err := config.Save(sessionConfigPath, r.cfg); err != nil {
+				return fmt.Errorf("save session config: %w", err)
+			}
+		}
+	}
+
+	planText := strings.TrimSpace(strings.Join(args, " "))
+	if planText == "" {
+		r.logger.Printf("Enter plan text. End with a single '.' line.")
+		lines := []string{}
+		for {
+			line, err := r.readLine("> ")
+			if err != nil && err != io.EOF {
+				return err
+			}
+			if strings.TrimSpace(line) == "." {
+				break
+			}
+			lines = append(lines, line)
+			if err == io.EOF {
+				break
+			}
+		}
+		planText = strings.TrimSpace(strings.Join(lines, "\n"))
+	}
+
+	if planText == "" {
+		return fmt.Errorf("plan text is empty")
+	}
+	planPath, err := session.AppendPlan(sessionDir, r.cfg.Session.PlanFilename, planText)
+	if err != nil {
+		return err
+	}
+	r.logger.Printf("Plan updated: %s", planPath)
+	return nil
 }
 
 func (r *Runner) handleRun(args []string) error {
@@ -490,7 +551,7 @@ func (r *Runner) Stop() {
 }
 
 func (r *Runner) printHelp() {
-	r.logger.Printf("Commands: /init /permissions /context /ledger /status /run /msf /report /resume /stop /exit")
+	r.logger.Printf("Commands: /init /permissions /context /ledger /status /plan /run /msf /report /resume /stop /exit")
 	r.logger.Printf("Example: /permissions readonly")
 	r.logger.Printf("Session logs live under: %s", filepath.Clean(r.cfg.Session.LogDir))
 }

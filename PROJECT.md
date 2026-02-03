@@ -75,6 +75,7 @@
 - `/init` should generate baseline scaffolding documents (e.g., `AGENTS.md`, `PROJECT.md`, basic config placeholders).
 - Permission levels should mirror Codex CLI: `readonly`, `default` (approval required for executions), and `all` (fully allowed).
 - `/run <command> [args...]` should execute via the guarded runner and log output under the session `logs/` directory.
+- `/plan [text]` should append planning notes to `sessions/<id>/plan.md` (multi-line input ends with a single `.` line).
 - Display a concise ANSI-colored summary after major actions (e.g., `/run`, `/init`), and expose `/status` to show the current task.
 - Support ESC to interrupt a running major action and return to the prompt for next steps.
 - `/msf [service=...] [platform=...] [keyword=...]` should run a non-interactive Metasploit search (msfconsole `-q -x`) and parse results.
