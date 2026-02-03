@@ -118,6 +118,11 @@ func (r *Runner) handleInit(args []string) error {
 	}
 
 	r.logger.Printf("Session scaffold created at %s", sessionDir)
+	sessionConfigPath := config.SessionPath(r.cfg.Session.LogDir, r.sessionID)
+	if err := config.Save(sessionConfigPath, r.cfg); err != nil {
+		return fmt.Errorf("save session config: %w", err)
+	}
+	r.logger.Printf("Session config saved at %s", sessionConfigPath)
 
 	if createInventory {
 		if err := session.WriteInventory(sessionDir, r.cfg.Session.InventoryFilename, 5*time.Second); err != nil {
@@ -167,6 +172,10 @@ func (r *Runner) handleResume() error {
 	root := r.cfg.Session.LogDir
 	entries, err := os.ReadDir(root)
 	if err != nil {
+		if os.IsNotExist(err) {
+			r.logger.Printf("No sessions found. Run /init to create one.")
+			return nil
+		}
 		return fmt.Errorf("read sessions: %w", err)
 	}
 	r.logger.Printf("Available sessions:")

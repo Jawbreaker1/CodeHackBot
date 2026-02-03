@@ -1,0 +1,19 @@
+# Binaries / build output
+/birdhackbot
+/bin/
+/dist/
+
+# Session data and evidence
+/sessions/
+/reports/
+/artifacts/
+/logs/
+
+# Logs and temp
+*.log
+*.tmp
+*.out
+*.test
+
+# OS files
+.DS_Store

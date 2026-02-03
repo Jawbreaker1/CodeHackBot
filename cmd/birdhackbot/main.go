@@ -19,6 +19,8 @@ func main() {
 		resumeID    string
 		configPath  string
 		profileName string
+		permLevel   string
+		ledgerMode  string
 	)
 
 	flag.BoolVar(&showVersion, "version", false, "Print version")
@@ -26,11 +28,17 @@ func main() {
 	flag.StringVar(&resumeID, "resume", "", "Resume session from sessions/<id>")
 	flag.StringVar(&configPath, "config", "", "Path to default config JSON")
 	flag.StringVar(&profileName, "profile", "", "Profile name under config/profiles/")
+	flag.StringVar(&permLevel, "permissions", "", "Override permissions: readonly, default, all")
+	flag.StringVar(&ledgerMode, "ledger", "", "Override ledger: on or off")
 	flag.Parse()
 
 	if showVersion {
 		fmt.Printf("BirdHackBot %s\n", version)
 		return
+	}
+
+	if replayID != "" && resumeID != "" {
+		log.Fatal("Use either --replay or --resume, not both")
 	}
 
 	mode := "new"
@@ -62,6 +70,31 @@ func main() {
 		cfg, paths, err = config.Load(configPath, profilePath, sessionConfigPath)
 		if err != nil {
 			log.Fatalf("Config load failed: %v", err)
+		}
+	}
+
+	log.SetPrefix(fmt.Sprintf("[session:%s] ", sessionID))
+	log.SetFlags(log.LstdFlags)
+
+	if permLevel != "" {
+		level := permLevel
+		switch level {
+		case "readonly", "default", "all":
+			cfg.Permissions.Level = level
+			cfg.Permissions.RequireApproval = level == "default"
+		default:
+			log.Fatalf("Invalid --permissions value: %s", level)
+		}
+	}
+
+	if ledgerMode != "" {
+		switch ledgerMode {
+		case "on":
+			cfg.Session.LedgerEnabled = true
+		case "off":
+			cfg.Session.LedgerEnabled = false
+		default:
+			log.Fatalf("Invalid --ledger value: %s", ledgerMode)
 		}
 	}
 

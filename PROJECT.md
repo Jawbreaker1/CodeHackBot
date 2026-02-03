@@ -41,6 +41,10 @@
 - Each session starts with a planning phase that outlines recon → enumeration → validation → escalation → reporting.
 - The plan must be recorded in session artifacts for traceability and replay (e.g., `sessions/<id>/plan.md`).
 
+## Execution Model
+- MVP uses a single agent with two internal roles: planner (decides next steps) and executor (runs commands with logging and guardrails).
+- Script generation should be template-first; ad-hoc scripts must be saved under session artifacts with command + output captured.
+
 ## Roadmap Notes
 - Orchestrator layer for multi-agent coordination is a possible later task; not required for the first usable version.
 

@@ -141,3 +141,21 @@ func deepMerge(dst, src map[string]any) {
 		dst[key] = newMap
 	}
 }
+
+func Save(path string, cfg Config) error {
+	if path == "" {
+		return fmt.Errorf("config path is empty")
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	return nil
+}
