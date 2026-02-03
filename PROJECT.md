@@ -86,11 +86,11 @@
 ## Session Replay
 - Support a replay mode that runs as its own session to re-run key steps from a saved plan/ledger for verification.
 - Replay should be opt-in and respect current scope, permissions, and safety rules.
-- CLI example: `CodeHackBot --replay <session-id>` to start a replay session (lookup under `sessions/`).
+- CLI example: `BirdHackBot --replay <session-id>` to start a replay session (lookup under `sessions/`).
 
 ## Session Resume
 - Support resuming an interrupted session by loading its saved context artifacts.
-- CLI example: `CodeHackBot --resume <session-id>` to continue a prior session from `sessions/`.
+- CLI example: `BirdHackBot --resume <session-id>` to continue a prior session from `sessions/`.
 - Provide `/resume` as a CLI slash command to list existing sessions and select one to continue.
 
 ## Future Improvement: Target Baselines

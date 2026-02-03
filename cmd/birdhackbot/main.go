@@ -21,12 +21,12 @@ func main() {
 
 	switch {
 	case showVersion:
-		fmt.Printf("CodeHackBot %s\n", version)
+		fmt.Printf("BirdHackBot %s\n", version)
 	case replayID != "":
 		fmt.Printf("Replay requested for session %s (stub)\n", replayID)
 	case resumeID != "":
 		fmt.Printf("Resume requested for session %s (stub)\n", resumeID)
 	default:
-		fmt.Println("CodeHackBot CLI (stub). Use --help for options.")
+		fmt.Println("BirdHackBot CLI (stub). Use --help for options.")
 	}
 }

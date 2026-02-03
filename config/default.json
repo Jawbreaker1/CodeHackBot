@@ -1,6 +1,6 @@
 {
   "agent": {
-    "name": "CodeHackBot",
+    "name": "BirdHackBot",
     "model": "gpt-oss-20b",
     "system_prompt": "prompts/system.md"
   },
