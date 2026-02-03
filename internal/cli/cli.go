@@ -3,10 +3,12 @@ package cli
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/config"
@@ -14,38 +16,56 @@ import (
 )
 
 type Runner struct {
-	cfg       config.Config
-	sessionID string
-	logger    *log.Logger
+	cfg               config.Config
+	sessionID         string
+	logger            *log.Logger
+	reader            *bufio.Reader
+	defaultConfigPath string
+	profilePath       string
+	stopOnce          sync.Once
 }
 
-func NewRunner(cfg config.Config, sessionID string) *Runner {
+func NewRunner(cfg config.Config, sessionID, defaultConfigPath, profilePath string) *Runner {
 	return &Runner{
-		cfg:       cfg,
-		sessionID: sessionID,
-		logger:    log.New(os.Stdout, fmt.Sprintf("[session:%s] ", sessionID), log.LstdFlags),
+		cfg:               cfg,
+		sessionID:         sessionID,
+		logger:            log.New(os.Stdout, fmt.Sprintf("[session:%s] ", sessionID), log.LstdFlags),
+		reader:            bufio.NewReader(os.Stdin),
+		defaultConfigPath: defaultConfigPath,
+		profilePath:       profilePath,
 	}
 }
 
 func (r *Runner) Run() error {
 	r.logger.Printf("BirdHackBot interactive mode. Type /help for commands.")
-	scanner := bufio.NewScanner(os.Stdin)
 	for {
-		fmt.Print("BirdHackBot> ")
-		if !scanner.Scan() {
-			return scanner.Err()
+		line, err := r.readLine("BirdHackBot> ")
+		if err != nil && err != io.EOF {
+			return err
 		}
-		line := strings.TrimSpace(scanner.Text())
+		line = strings.TrimSpace(line)
 		if line == "" {
+			if err == io.EOF {
+				_ = r.handleStop()
+				return nil
+			}
 			continue
 		}
 		if strings.HasPrefix(line, "/") {
 			if err := r.handleCommand(line); err != nil {
 				r.logger.Printf("Command error: %v", err)
 			}
+			if err == io.EOF {
+				r.Stop()
+				return nil
+			}
 			continue
 		}
 		r.logger.Printf("Input received (stub): %s", line)
+		if err == io.EOF {
+			r.Stop()
+			return nil
+		}
 	}
 }
 
@@ -71,9 +91,10 @@ func (r *Runner) handleCommand(line string) error {
 	case "resume":
 		return r.handleResume()
 	case "stop":
-		return r.handleStop()
+		r.Stop()
+		return nil
 	case "exit", "quit":
-		_ = r.handleStop()
+		r.Stop()
 		os.Exit(0)
 	default:
 		r.logger.Printf("Unknown command: /%s", cmd)
@@ -99,7 +120,7 @@ func (r *Runner) handleInit(args []string) error {
 	}
 
 	if createInventory && r.cfg.Permissions.RequireApproval {
-		approved, err := confirm("Run inventory commands now?")
+		approved, err := r.confirm("Run inventory commands now?")
 		if err != nil {
 			return err
 		}
@@ -188,10 +209,8 @@ func (r *Runner) handleResume() error {
 		}
 		r.logger.Printf("- %s", entry.Name())
 	}
-	reader := bufio.NewReader(os.Stdin)
-	fmt.Print("Enter session id to resume (or blank to cancel): ")
-	line, err := reader.ReadString('\n')
-	if err != nil {
+	line, err := r.readLine("Enter session id to resume (or blank to cancel): ")
+	if err != nil && err != io.EOF {
 		return fmt.Errorf("read session id: %w", err)
 	}
 	selection := strings.TrimSpace(line)
@@ -201,11 +220,17 @@ func (r *Runner) handleResume() error {
 	r.sessionID = selection
 	r.logger.SetPrefix(fmt.Sprintf("[session:%s] ", r.sessionID))
 	sessionConfigPath := config.SessionPath(r.cfg.Session.LogDir, r.sessionID)
-	if cfg, _, err := config.Load(sessionConfigPath, "", ""); err == nil {
-		r.cfg = cfg
-		r.logger.Printf("Session %s loaded from %s", r.sessionID, sessionConfigPath)
+	if _, err := os.Stat(sessionConfigPath); err == nil {
+		if cfg, _, err := config.Load(r.defaultConfigPath, r.profilePath, sessionConfigPath); err == nil {
+			r.cfg = cfg
+			r.logger.Printf("Session %s loaded from %s", r.sessionID, sessionConfigPath)
+		} else {
+			r.logger.Printf("Session switched to %s. Config load failed: %v", r.sessionID, err)
+		}
+	} else if os.IsNotExist(err) {
+		r.logger.Printf("Session switched to %s. No config snapshot found.", r.sessionID)
 	} else {
-		r.logger.Printf("Session switched to %s. Config load failed: %v", r.sessionID, err)
+		return fmt.Errorf("stat session config: %w", err)
 	}
 	return nil
 }
@@ -226,18 +251,35 @@ func (r *Runner) handleStop() error {
 	return nil
 }
 
+func (r *Runner) Stop() {
+	r.stopOnce.Do(func() {
+		if err := r.handleStop(); err != nil {
+			r.logger.Printf("Session stop error: %v", err)
+		}
+	})
+}
+
 func (r *Runner) printHelp() {
 	r.logger.Printf("Commands: /init /permissions /context /ledger /resume /stop /exit")
 	r.logger.Printf("Example: /permissions readonly")
 	r.logger.Printf("Session logs live under: %s", filepath.Clean(r.cfg.Session.LogDir))
 }
 
-func confirm(prompt string) (bool, error) {
-	reader := bufio.NewReader(os.Stdin)
+func (r *Runner) readLine(prompt string) (string, error) {
+	if prompt != "" {
+		fmt.Print(prompt)
+	}
+	line, err := r.reader.ReadString('\n')
+	if err != nil && err != io.EOF {
+		return "", err
+	}
+	return strings.TrimSpace(line), err
+}
+
+func (r *Runner) confirm(prompt string) (bool, error) {
 	for {
-		fmt.Printf("%s [y/N]: ", prompt)
-		line, err := reader.ReadString('\n')
-		if err != nil {
+		line, err := r.readLine(fmt.Sprintf("%s [y/N]: ", prompt))
+		if err != nil && err != io.EOF {
 			return false, err
 		}
 		answer := strings.ToLower(strings.TrimSpace(line))
@@ -246,6 +288,9 @@ func confirm(prompt string) (bool, error) {
 		}
 		if answer == "y" || answer == "yes" {
 			return true, nil
+		}
+		if err == io.EOF {
+			return false, nil
 		}
 	}
 }

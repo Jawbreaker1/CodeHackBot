@@ -4,6 +4,9 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/cli"
 	"github.com/Jawbreaker1/CodeHackBot/internal/config"
@@ -103,7 +106,23 @@ func main() {
 		log.Printf("Mode: %s (session %s)", mode, sessionID)
 	}
 
-	runner := cli.NewRunner(cfg, sessionID)
+	defaultPath := configPath
+	if defaultPath == "" {
+		defaultPath = config.DefaultPath()
+	}
+
+	runner := cli.NewRunner(cfg, sessionID, defaultPath, profilePath)
+	defer runner.Stop()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		sig := <-sigCh
+		log.Printf("Received signal: %s", sig.String())
+		runner.Stop()
+		os.Exit(1)
+	}()
+
 	if err := runner.Run(); err != nil {
 		log.Fatalf("CLI exited: %v", err)
 	}
