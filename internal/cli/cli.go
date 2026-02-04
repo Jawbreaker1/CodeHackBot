@@ -41,6 +41,8 @@ type Runner struct {
 	stopOnce          sync.Once
 	currentTask       string
 	currentTaskStart  time.Time
+	currentMode       string
+	planWizard        *planWizard
 	llmGuard          llm.Guard
 }
 
@@ -82,6 +84,16 @@ func (r *Runner) Run() error {
 			}
 			continue
 		}
+		if r.planWizardActive() {
+			if err := r.handlePlanWizardInput(line); err != nil {
+				r.logger.Printf("Plan error: %v", err)
+			}
+			if err == io.EOF {
+				r.Stop()
+				return nil
+			}
+			continue
+		}
 		if looksLikeChat(line) {
 			if err := r.handleAsk(line); err != nil {
 				r.logger.Printf("Ask error: %v", err)
@@ -105,6 +117,11 @@ func (r *Runner) handleCommand(line string) error {
 	}
 	cmd := strings.ToLower(parts[0])
 	args := parts[1:]
+
+	if r.planWizardActive() && cmd != "plan" && cmd != "help" {
+		r.logger.Printf("Planning mode active. Use /plan done or /plan cancel.")
+		return nil
+	}
 
 	switch cmd {
 	case "help":
@@ -338,8 +355,20 @@ func (r *Runner) handlePlan(args []string) error {
 		return fmt.Errorf("readonly mode: plan updates not permitted")
 	}
 
+	if len(args) == 0 {
+		return r.handlePlanWizardStart()
+	}
 	if len(args) > 0 {
 		mode := strings.ToLower(args[0])
+		if mode == "start" {
+			return r.handlePlanWizardStart()
+		}
+		if mode == "done" || mode == "finish" {
+			return r.handlePlanWizardDone()
+		}
+		if mode == "cancel" || mode == "exit" {
+			return r.handlePlanWizardCancel()
+		}
 		if mode == "auto" || mode == "llm" {
 			return r.handlePlanAuto(strings.Join(args[1:], " "))
 		}
@@ -1010,6 +1039,7 @@ func (r *Runner) printHelp() {
 	r.logger.Printf("Commands: /init /permissions /verbose /context [/show] /ledger /status /plan /next /execute /assist /script /clean /ask /browse /summarize /run /msf /report /resume /stop /exit")
 	r.logger.Printf("Example: /permissions readonly")
 	r.logger.Printf("Plain text routes to /ask if it looks like chat; otherwise /assist.")
+	r.logger.Printf("/plan starts guided planning; /plan done or /plan cancel ends it.")
 	r.logger.Printf("Session logs live under: %s", filepath.Clean(r.cfg.Session.LogDir))
 }
 
@@ -1645,6 +1675,9 @@ func (r *Runner) confirm(prompt string) (bool, error) {
 
 func (r *Runner) prompt() string {
 	if r.currentTask == "" {
+		if r.currentMode != "" {
+			return fmt.Sprintf("BirdHackBot[%s]> ", r.currentMode)
+		}
 		return "BirdHackBot> "
 	}
 	elapsed := formatElapsed(time.Since(r.currentTaskStart))
@@ -1660,6 +1693,14 @@ func (r *Runner) setTask(task string) {
 func (r *Runner) clearTask() {
 	r.currentTask = ""
 	r.currentTaskStart = time.Time{}
+}
+
+func (r *Runner) setMode(mode string) {
+	r.currentMode = mode
+}
+
+func (r *Runner) clearMode() {
+	r.currentMode = ""
 }
 
 func formatElapsed(d time.Duration) string {
