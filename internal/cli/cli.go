@@ -99,6 +99,9 @@ func (r *Runner) handleCommand(line string) error {
 	case "permissions":
 		return r.handlePermissions(args)
 	case "context":
+		if len(args) > 0 && strings.ToLower(args[0]) == "show" {
+			return r.handleContextShow()
+		}
 		r.logger.Printf("Context: max_recent=%d summarize_every=%d summarize_at=%d%%", r.cfg.Context.MaxRecentOutputs, r.cfg.Context.SummarizeEvery, r.cfg.Context.SummarizeAtPercent)
 	case "ledger":
 		return r.handleLedger(args)
@@ -262,6 +265,27 @@ func (r *Runner) handleSummarize(args []string) error {
 		return err
 	}
 	r.logger.Printf("Summary updated")
+	return nil
+}
+
+func (r *Runner) handleContextShow() error {
+	sessionDir, err := r.ensureSessionScaffold()
+	if err != nil {
+		return err
+	}
+	artifacts, err := memory.EnsureArtifacts(sessionDir)
+	if err != nil {
+		return err
+	}
+	summary := readFileTrimmed(artifacts.SummaryPath)
+	facts := readFileTrimmed(artifacts.FactsPath)
+	focus := readFileTrimmed(artifacts.FocusPath)
+	state, _ := memory.LoadState(artifacts.StatePath)
+
+	r.logger.Printf("Context Summary:\n%s", fallbackBlock(summary))
+	r.logger.Printf("Known Facts:\n%s", fallbackBlock(facts))
+	r.logger.Printf("Focus:\n%s", fallbackBlock(focus))
+	r.logger.Printf("Context State: steps_since_summary=%d recent_logs=%d last_summary_at=%s", state.StepsSinceSummary, len(state.RecentLogs), state.LastSummaryAt)
 	return nil
 }
 
@@ -806,7 +830,7 @@ func (r *Runner) Stop() {
 }
 
 func (r *Runner) printHelp() {
-	r.logger.Printf("Commands: /init /permissions /context /ledger /status /plan /next /assist /script /clean /summarize /run /msf /report /resume /stop /exit")
+	r.logger.Printf("Commands: /init /permissions /context [/show] /ledger /status /plan /next /assist /script /clean /summarize /run /msf /report /resume /stop /exit")
 	r.logger.Printf("Example: /permissions readonly")
 	r.logger.Printf("Session logs live under: %s", filepath.Clean(r.cfg.Session.LogDir))
 }
@@ -973,6 +997,13 @@ func sanitizeFilename(name string) string {
 		}
 	}
 	return strings.Trim(builder.String(), "_")
+}
+
+func fallbackBlock(content string) string {
+	if strings.TrimSpace(content) == "" {
+		return "(empty)"
+	}
+	return content
 }
 
 func (r *Runner) assistGenerator() assist.Assistant {

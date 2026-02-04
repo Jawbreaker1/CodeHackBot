@@ -69,3 +69,6 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
 ## Sprint 12 — LLM Fail-Safe
 - [x] Add max failure + cooldown guard for LLM calls
 - [x] Tests for guard behavior
+
+## Sprint 13 — Context Visibility
+- [x] Add `/context show` for summary/facts/focus/state
