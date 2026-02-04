@@ -1662,9 +1662,10 @@ func hasURLHint(text string) bool {
 	if strings.Contains(text, "http://") || strings.Contains(text, "https://") {
 		return true
 	}
-	for _, token := range splitTokens(text) {
-		if strings.Count(token, ".") >= 1 && len(token) >= 4 {
-			if strings.HasPrefix(token, ".") || strings.HasSuffix(token, ".") {
+	for _, token := range strings.Fields(text) {
+		clean := strings.Trim(token, " \t\r\n\"'()[]{}<>.,;:")
+		if strings.Count(clean, ".") >= 1 && len(clean) >= 4 {
+			if strings.HasPrefix(clean, ".") || strings.HasSuffix(clean, ".") {
 				continue
 			}
 			return true
