@@ -86,6 +86,142 @@ func TestCLIInteractiveFlow(t *testing.T) {
 	assertContains(t, output, "Command: echo hello")
 }
 
+func TestCLISummarizeManual(t *testing.T) {
+	temp := t.TempDir()
+	sessionsDir := filepath.Join(temp, "sessions")
+	configPath := filepath.Join(temp, "config.json")
+
+	cfg := map[string]any{
+		"tools": map[string]any{
+			"shell": map[string]any{
+				"enabled":         true,
+				"timeout_seconds": 5,
+			},
+		},
+		"session": map[string]any{
+			"log_dir": sessionsDir,
+		},
+		"permissions": map[string]any{
+			"level":            "default",
+			"require_approval": false,
+		},
+		"network": map[string]any{
+			"assume_offline": true,
+		},
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	if err := os.WriteFile(configPath, data, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	input := "/init no-inventory\n/run echo 10.0.0.1\n/summarize manual-test\n/stop\n/exit\n"
+	cmd := exec.Command(cliPath, "--config", configPath, "--permissions", "all")
+	cmd.Dir = projectRoot
+	cmd.Stdin = strings.NewReader(input)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("cli run error: %v\nOutput:\n%s", err, out.String())
+	}
+
+	sessionDir := findSingleSessionDir(t, sessionsDir)
+	summaryPath := filepath.Join(sessionDir, "summary.md")
+	data, err = os.ReadFile(summaryPath)
+	if err != nil {
+		t.Fatalf("read summary: %v", err)
+	}
+	if !strings.Contains(string(data), "Summary refreshed (manual-test).") {
+		t.Fatalf("summary refresh missing:\n%s", string(data))
+	}
+	factsPath := filepath.Join(sessionDir, "known_facts.md")
+	data, err = os.ReadFile(factsPath)
+	if err != nil {
+		t.Fatalf("read facts: %v", err)
+	}
+	if !strings.Contains(string(data), "10.0.0.1") {
+		t.Fatalf("expected fact for IP:\n%s", string(data))
+	}
+}
+
+func TestCLIAutoSummarize(t *testing.T) {
+	temp := t.TempDir()
+	sessionsDir := filepath.Join(temp, "sessions")
+	configPath := filepath.Join(temp, "config.json")
+
+	cfg := map[string]any{
+		"tools": map[string]any{
+			"shell": map[string]any{
+				"enabled":         true,
+				"timeout_seconds": 5,
+			},
+		},
+		"session": map[string]any{
+			"log_dir": sessionsDir,
+		},
+		"permissions": map[string]any{
+			"level":            "default",
+			"require_approval": false,
+		},
+		"context": map[string]any{
+			"max_recent_outputs":    1,
+			"summarize_every_steps": 1,
+			"summarize_at_percent":  50,
+		},
+		"network": map[string]any{
+			"assume_offline": true,
+		},
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	if err := os.WriteFile(configPath, data, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	input := "/init no-inventory\n/run echo hello\n/stop\n/exit\n"
+	cmd := exec.Command(cliPath, "--config", configPath, "--permissions", "all")
+	cmd.Dir = projectRoot
+	cmd.Stdin = strings.NewReader(input)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("cli run error: %v\nOutput:\n%s", err, out.String())
+	}
+
+	sessionDir := findSingleSessionDir(t, sessionsDir)
+	summaryPath := filepath.Join(sessionDir, "summary.md")
+	data, err = os.ReadFile(summaryPath)
+	if err != nil {
+		t.Fatalf("read summary: %v", err)
+	}
+	if !strings.Contains(string(data), "Recent logs:") {
+		t.Fatalf("expected recent logs in summary:\n%s", string(data))
+	}
+}
+
+func findSingleSessionDir(t *testing.T, root string) string {
+	t.Helper()
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("read sessions dir: %v", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			return filepath.Join(root, entry.Name())
+		}
+	}
+	t.Fatalf("no session directory found in %s", root)
+	return ""
+}
+
 func assertContains(t *testing.T, haystack, needle string) {
 	t.Helper()
 	if !strings.Contains(haystack, needle) {

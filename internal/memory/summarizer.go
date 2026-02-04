@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/llm"
@@ -39,8 +40,12 @@ func (FallbackSummarizer) Summarize(_ context.Context, input SummaryInput) (Summ
 	summary := append([]string{}, input.ExistingSummary...)
 	if len(summary) == 0 {
 		summary = []string{"Summary unavailable; review recent logs."}
-	} else {
-		summary = append(summary, fmt.Sprintf("Summary refreshed (%s).", fallbackReason(input.Reason)))
+	}
+	summary = append(summary, fmt.Sprintf("Summary refreshed (%s).", fallbackReason(input.Reason)))
+
+	commands := extractCommands(input.LogSnippets)
+	if len(commands) > 0 {
+		summary = append(summary, fmt.Sprintf("Commands: %s", strings.Join(commands, ", ")))
 	}
 	if len(input.LogSnippets) > 0 {
 		paths := []string{}
@@ -49,7 +54,7 @@ func (FallbackSummarizer) Summarize(_ context.Context, input SummaryInput) (Summ
 		}
 		summary = append(summary, fmt.Sprintf("Recent logs: %s", strings.Join(paths, ", ")))
 	}
-	facts := append([]string{}, input.ExistingFacts...)
+	facts := mergeLines(input.ExistingFacts, extractFacts(input))
 	return SummaryOutput{Summary: summary, Facts: facts}, nil
 }
 
@@ -151,4 +156,72 @@ func fallbackReason(reason string) string {
 		return "manual"
 	}
 	return trimmed
+}
+
+var (
+	ipv4CIDRPattern = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}/\d{1,2}\b`)
+	ipv4Pattern     = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
+	urlPattern      = regexp.MustCompile(`https?://[^\s]+`)
+)
+
+func extractCommands(snippets []LogSnippet) []string {
+	commands := []string{}
+	seen := map[string]struct{}{}
+	for _, snippet := range snippets {
+		for _, line := range strings.Split(snippet.Content, "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "$ ") {
+				cmd := strings.TrimSpace(strings.TrimPrefix(line, "$ "))
+				if cmd == "" {
+					continue
+				}
+				if _, ok := seen[cmd]; ok {
+					continue
+				}
+				seen[cmd] = struct{}{}
+				commands = append(commands, cmd)
+			}
+		}
+	}
+	return commands
+}
+
+func extractFacts(input SummaryInput) []string {
+	facts := []string{}
+	seen := map[string]struct{}{}
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		if _, ok := seen[value]; ok {
+			return
+		}
+		seen[value] = struct{}{}
+		facts = append(facts, value)
+	}
+
+	for _, snippet := range input.LogSnippets {
+		for _, match := range ipv4CIDRPattern.FindAllString(snippet.Content, -1) {
+			add(fmt.Sprintf("Observed CIDR: %s", match))
+		}
+		for _, match := range ipv4Pattern.FindAllString(snippet.Content, -1) {
+			add(fmt.Sprintf("Observed IP: %s", match))
+		}
+		for _, match := range urlPattern.FindAllString(snippet.Content, -1) {
+			add(fmt.Sprintf("Observed URL: %s", trimPunctuation(match)))
+		}
+	}
+
+	if input.PlanSnippet != "" {
+		add("Plan updated")
+	}
+	if input.LedgerSnippet != "" {
+		add("Ledger entries present")
+	}
+	return facts
+}
+
+func trimPunctuation(value string) string {
+	return strings.TrimRight(value, ".,);]")
 }

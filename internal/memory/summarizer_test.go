@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/llm"
@@ -47,5 +48,33 @@ func TestChainedSummarizerFallback(t *testing.T) {
 	}
 	if len(out.Summary) == 0 {
 		t.Fatalf("expected fallback summary")
+	}
+}
+
+func TestFallbackSummarizerExtractsFacts(t *testing.T) {
+	input := SummaryInput{
+		LogSnippets: []LogSnippet{
+			{
+				Path:    "log1",
+				Content: "$ nmap 10.0.0.1\nDiscovered http://example.local:8080\n",
+			},
+		},
+	}
+	out, err := (FallbackSummarizer{}).Summarize(context.Background(), input)
+	if err != nil {
+		t.Fatalf("fallback summarize error: %v", err)
+	}
+	foundIP := false
+	foundURL := false
+	for _, fact := range out.Facts {
+		if strings.Contains(fact, "10.0.0.1") {
+			foundIP = true
+		}
+		if strings.Contains(fact, "http://example.local:8080") {
+			foundURL = true
+		}
+	}
+	if !foundIP || !foundURL {
+		t.Fatalf("expected facts for IP and URL, got %v", out.Facts)
 	}
 }
