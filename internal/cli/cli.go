@@ -1444,7 +1444,7 @@ func (r *Runner) handleAssistGoalWithMode(goal string, dryRun bool, mode string)
 		return fmt.Errorf("readonly mode: assist not permitted")
 	}
 	if url := extractFirstURL(goal); url != "" && shouldAutoBrowse(goal) {
-		return r.handleWebInfo(goal, url)
+		return r.handleAssistGoalWithMode(fmt.Sprintf("%s (fetch and analyze this URL, then summarize)", goal), dryRun, "web-agentic")
 	}
 	suggestion, err := r.getAssistSuggestion(goal, mode)
 	if err != nil {
