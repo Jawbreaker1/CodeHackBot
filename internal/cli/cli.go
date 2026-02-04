@@ -25,6 +25,11 @@ import (
 	"github.com/Jawbreaker1/CodeHackBot/internal/session"
 )
 
+const (
+	inputLineStyleStart = "\x1b[48;5;236m\x1b[38;5;252m"
+	inputLineStyleReset = "\x1b[0m"
+)
+
 type Runner struct {
 	cfg               config.Config
 	sessionID         string
@@ -1204,10 +1209,17 @@ func isPlaceholderCommand(cmd string) bool {
 }
 
 func (r *Runner) readLine(prompt string) (string, error) {
+	useStyle := prompt != "" && r.isTTY()
 	if prompt != "" {
+		if useStyle {
+			fmt.Print(inputLineStyleStart)
+		}
 		fmt.Print(prompt)
 	}
 	line, err := r.reader.ReadString('\n')
+	if useStyle {
+		fmt.Print(inputLineStyleReset)
+	}
 	if err != nil && err != io.EOF {
 		return "", err
 	}
