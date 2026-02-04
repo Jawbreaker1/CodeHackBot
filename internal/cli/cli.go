@@ -15,6 +15,8 @@ import (
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/config"
 	"github.com/Jawbreaker1/CodeHackBot/internal/exec"
+	"github.com/Jawbreaker1/CodeHackBot/internal/llm"
+	"github.com/Jawbreaker1/CodeHackBot/internal/memory"
 	"github.com/Jawbreaker1/CodeHackBot/internal/msf"
 	"github.com/Jawbreaker1/CodeHackBot/internal/report"
 	"github.com/Jawbreaker1/CodeHackBot/internal/session"
@@ -99,6 +101,8 @@ func (r *Runner) handleCommand(line string) error {
 		r.handleStatus()
 	case "plan":
 		return r.handlePlan(args)
+	case "summarize":
+		return r.handleSummarize(args)
 	case "run":
 		return r.handleRun(args)
 	case "report":
@@ -221,6 +225,33 @@ func (r *Runner) handleStatus() {
 	r.logger.Printf("Status: running %s (%s)", r.currentTask, elapsed)
 }
 
+func (r *Runner) handleSummarize(args []string) error {
+	r.setTask("summarize")
+	defer r.clearTask()
+
+	if r.cfg.Permissions.Level == "readonly" {
+		return fmt.Errorf("readonly mode: summarize not permitted")
+	}
+	sessionDir, err := r.ensureSessionScaffold()
+	if err != nil {
+		return err
+	}
+	manager := r.memoryManager(sessionDir)
+	summarizer := r.summaryGenerator()
+
+	reason := "manual"
+	if len(args) > 0 {
+		reason = strings.Join(args, " ")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if err := manager.Summarize(ctx, summarizer, reason); err != nil {
+		return err
+	}
+	r.logger.Printf("Summary updated")
+	return nil
+}
+
 func (r *Runner) handlePlan(args []string) error {
 	r.setTask("plan")
 	defer r.clearTask()
@@ -229,24 +260,9 @@ func (r *Runner) handlePlan(args []string) error {
 		return fmt.Errorf("readonly mode: plan updates not permitted")
 	}
 
-	sessionDir := filepath.Join(r.cfg.Session.LogDir, r.sessionID)
-	if _, err := os.Stat(sessionDir); os.IsNotExist(err) {
-		if _, err := session.CreateScaffold(session.ScaffoldOptions{
-			RootDir:           r.cfg.Session.LogDir,
-			SessionID:         r.sessionID,
-			PlanFilename:      r.cfg.Session.PlanFilename,
-			InventoryFilename: r.cfg.Session.InventoryFilename,
-			LedgerFilename:    r.cfg.Session.LedgerFilename,
-			CreateLedger:      r.cfg.Session.LedgerEnabled,
-		}); err != nil {
-			return err
-		}
-		sessionConfigPath := config.SessionPath(r.cfg.Session.LogDir, r.sessionID)
-		if _, err := os.Stat(sessionConfigPath); os.IsNotExist(err) {
-			if err := config.Save(sessionConfigPath, r.cfg); err != nil {
-				return fmt.Errorf("save session config: %w", err)
-			}
-		}
+	sessionDir, err := r.ensureSessionScaffold()
+	if err != nil {
+		return err
 	}
 
 	planText := strings.TrimSpace(strings.Join(args, " "))
@@ -329,6 +345,7 @@ func (r *Runner) handleRun(args []string) error {
 	if result.LogPath != "" {
 		r.logger.Printf("Log saved: %s", result.LogPath)
 	}
+	r.maybeAutoSummarize(result.LogPath, "run")
 	ledgerStatus := "disabled"
 	if r.cfg.Session.LedgerEnabled {
 		if result.LogPath == "" {
@@ -442,6 +459,7 @@ func (r *Runner) handleMSF(args []string) error {
 	if result.LogPath != "" {
 		r.logger.Printf("Log saved: %s", result.LogPath)
 	}
+	r.maybeAutoSummarize(result.LogPath, "msf")
 
 	fmt.Print(renderExecSummary(r.currentTask, "msfconsole", cmdArgs, time.Since(start), result.LogPath, "disabled", result.Output, err))
 	if err != nil {
@@ -542,6 +560,32 @@ func (r *Runner) handleStop() error {
 	return nil
 }
 
+func (r *Runner) ensureSessionScaffold() (string, error) {
+	sessionDir := filepath.Join(r.cfg.Session.LogDir, r.sessionID)
+	if _, err := os.Stat(sessionDir); err == nil {
+		return sessionDir, nil
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("stat session dir: %w", err)
+	}
+	if _, err := session.CreateScaffold(session.ScaffoldOptions{
+		RootDir:           r.cfg.Session.LogDir,
+		SessionID:         r.sessionID,
+		PlanFilename:      r.cfg.Session.PlanFilename,
+		InventoryFilename: r.cfg.Session.InventoryFilename,
+		LedgerFilename:    r.cfg.Session.LedgerFilename,
+		CreateLedger:      r.cfg.Session.LedgerEnabled,
+	}); err != nil {
+		return "", err
+	}
+	sessionConfigPath := config.SessionPath(r.cfg.Session.LogDir, r.sessionID)
+	if _, err := os.Stat(sessionConfigPath); os.IsNotExist(err) {
+		if err := config.Save(sessionConfigPath, r.cfg); err != nil {
+			return "", fmt.Errorf("save session config: %w", err)
+		}
+	}
+	return sessionDir, nil
+}
+
 func (r *Runner) Stop() {
 	r.stopOnce.Do(func() {
 		if err := r.handleStop(); err != nil {
@@ -551,9 +595,60 @@ func (r *Runner) Stop() {
 }
 
 func (r *Runner) printHelp() {
-	r.logger.Printf("Commands: /init /permissions /context /ledger /status /plan /run /msf /report /resume /stop /exit")
+	r.logger.Printf("Commands: /init /permissions /context /ledger /status /plan /summarize /run /msf /report /resume /stop /exit")
 	r.logger.Printf("Example: /permissions readonly")
 	r.logger.Printf("Session logs live under: %s", filepath.Clean(r.cfg.Session.LogDir))
+}
+
+func (r *Runner) memoryManager(sessionDir string) memory.Manager {
+	return memory.Manager{
+		SessionDir:         sessionDir,
+		LogDir:             filepath.Join(sessionDir, "logs"),
+		PlanFilename:       r.cfg.Session.PlanFilename,
+		LedgerFilename:     r.cfg.Session.LedgerFilename,
+		LedgerEnabled:      r.cfg.Session.LedgerEnabled,
+		MaxRecentOutputs:   r.cfg.Context.MaxRecentOutputs,
+		SummarizeEvery:     r.cfg.Context.SummarizeEvery,
+		SummarizeAtPercent: r.cfg.Context.SummarizeAtPercent,
+	}
+}
+
+func (r *Runner) summaryGenerator() memory.Summarizer {
+	if r.cfg.Network.AssumeOffline {
+		return memory.FallbackSummarizer{}
+	}
+	client := llm.NewLMStudioClient(r.cfg)
+	return memory.ChainedSummarizer{
+		Primary:  memory.LLMSummarizer{Client: client, Model: r.cfg.LLM.Model},
+		Fallback: memory.FallbackSummarizer{},
+	}
+}
+
+func (r *Runner) maybeAutoSummarize(logPath, reason string) {
+	if logPath == "" {
+		return
+	}
+	sessionDir := filepath.Join(r.cfg.Session.LogDir, r.sessionID)
+	manager := r.memoryManager(sessionDir)
+	state, err := manager.RecordLog(logPath)
+	if err != nil {
+		r.logger.Printf("Context tracking failed: %v", err)
+		return
+	}
+	if !manager.ShouldSummarize(state) {
+		return
+	}
+	if r.cfg.Permissions.Level == "readonly" {
+		r.logger.Printf("Auto-summarize skipped (readonly)")
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if err := manager.Summarize(ctx, r.summaryGenerator(), reason); err != nil {
+		r.logger.Printf("Auto-summarize failed: %v", err)
+		return
+	}
+	r.logger.Printf("Auto-summary updated")
 }
 
 func (r *Runner) readLine(prompt string) (string, error) {

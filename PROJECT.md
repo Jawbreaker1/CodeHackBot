@@ -76,6 +76,7 @@
 - Permission levels should mirror Codex CLI: `readonly`, `default` (approval required for executions), and `all` (fully allowed).
 - `/run <command> [args...]` should execute via the guarded runner and log output under the session `logs/` directory.
 - `/plan [text]` should append planning notes to `sessions/<id>/plan.md` (multi-line input ends with a single `.` line).
+- `/summarize [reason]` should refresh `summary.md` and `known_facts.md` from recent logs (falls back to a non-LLM summary if offline).
 - Display a concise ANSI-colored summary after major actions (e.g., `/run`, `/init`), and expose `/status` to show the current task.
 - Support ESC to interrupt a running major action and return to the prompt for next steps.
 - `/msf [service=...] [platform=...] [keyword=...]` should run a non-interactive Metasploit search (msfconsole `-q -x`) and parse results.
@@ -90,6 +91,7 @@
 - These limits should be user-manageable via config and a CLI slash command (e.g., `/context`).
 - Inspiration: Cline’s “Memory Bank” uses file-based summaries; use it as a reference for workflow design, adapted for security-testing needs (evidence retention, auditability).
 - The “memory bank” for this project is session-scoped and lives under `sessions/<id>/` (summaries, known facts, logs), not a global repo-level store.
+- Session context artifacts (created on `/init`): `summary.md`, `known_facts.md`, `focus.md`, and `context.json`.
 
 ## Cline Context Inspiration (Documentation-Only)
 - Cline’s Memory Bank is a set of regular repo files that document: project brief, product context, active context, system patterns, tech context, and progress. Use this as a template for what our session-level files should capture.

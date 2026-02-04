@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/Jawbreaker1/CodeHackBot/internal/memory"
 )
 
 type ScaffoldOptions struct {
@@ -67,6 +69,10 @@ func CreateScaffold(opts ScaffoldOptions) (string, error) {
 				return "", fmt.Errorf("write ledger: %w", err)
 			}
 		}
+	}
+
+	if _, err := memory.EnsureArtifacts(sessionDir); err != nil {
+		return "", fmt.Errorf("write context artifacts: %w", err)
 	}
 
 	return sessionDir, nil
