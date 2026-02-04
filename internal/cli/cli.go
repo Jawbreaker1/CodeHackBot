@@ -617,23 +617,23 @@ func (r *Runner) handleRun(args []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	escCh, stopEsc, escErr := startEscWatcher()
-	if escErr == nil && escCh != nil {
-		r.logger.Printf("Press ESC to interrupt")
-	} else if escErr != nil && r.isTTY() {
-		r.logger.Printf("ESC interrupt unavailable: %v", escErr)
+	interruptCh, stopInterrupt, keyErr := startInterruptWatcher()
+	if keyErr == nil {
+		r.logger.Printf("Press ESC or Ctrl-C to interrupt")
+	} else if r.isTTY() {
+		r.logger.Printf("Ctrl-C to interrupt (ESC unavailable: %v)", keyErr)
 	}
-	if escCh != nil {
+	if interruptCh != nil {
 		go func() {
-			<-escCh
+			<-interruptCh
 			cancel()
 		}()
 	}
 
 	result, err := runner.RunCommandWithContext(ctx, args[0], args[1:]...)
 	wasCanceled := errors.Is(err, context.Canceled)
-	if stopEsc != nil {
-		stopEsc()
+	if stopInterrupt != nil {
+		stopInterrupt()
 	}
 	if result.LogPath != "" {
 		r.logger.Printf("Log saved: %s", result.LogPath)
@@ -723,15 +723,15 @@ func (r *Runner) handleMSF(args []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	escCh, stopEsc, escErr := startEscWatcher()
-	if escErr == nil && escCh != nil {
-		r.logger.Printf("Press ESC to interrupt")
-	} else if escErr != nil && r.isTTY() {
-		r.logger.Printf("ESC interrupt unavailable: %v", escErr)
+	interruptCh, stopInterrupt, keyErr := startInterruptWatcher()
+	if keyErr == nil {
+		r.logger.Printf("Press ESC or Ctrl-C to interrupt")
+	} else if r.isTTY() {
+		r.logger.Printf("Ctrl-C to interrupt (ESC unavailable: %v)", keyErr)
 	}
-	if escCh != nil {
+	if interruptCh != nil {
 		go func() {
-			<-escCh
+			<-interruptCh
 			cancel()
 		}()
 	}
@@ -750,8 +750,8 @@ func (r *Runner) handleMSF(args []string) error {
 	cmdArgs := []string{"-q", "-x", command}
 	result, err := execRunner.RunCommandWithContext(ctx, "msfconsole", cmdArgs...)
 	wasCanceled := errors.Is(err, context.Canceled)
-	if stopEsc != nil {
-		stopEsc()
+	if stopInterrupt != nil {
+		stopInterrupt()
 	}
 	if result.LogPath != "" {
 		r.logger.Printf("Log saved: %s", result.LogPath)
