@@ -107,6 +107,8 @@ func (r *Runner) handleCommand(line string) error {
 		return r.handleNext(args)
 	case "assist":
 		return r.handleAssist(args)
+	case "script":
+		return r.handleScript(args)
 	case "summarize":
 		return r.handleSummarize(args)
 	case "run":
@@ -363,6 +365,72 @@ func (r *Runner) handleNext(_ []string) error {
 		r.logger.Printf("- %s", step)
 	}
 	return nil
+}
+
+func (r *Runner) handleScript(args []string) error {
+	r.setTask("script")
+	defer r.clearTask()
+
+	if r.cfg.Permissions.Level == "readonly" {
+		return fmt.Errorf("readonly mode: scripts not permitted")
+	}
+	if len(args) < 2 {
+		return fmt.Errorf("usage: /script <py|sh> <name>")
+	}
+	lang := strings.ToLower(args[0])
+	name := sanitizeFilename(args[1])
+	if name == "" {
+		return fmt.Errorf("invalid script name")
+	}
+	var ext string
+	var interpreter string
+	switch lang {
+	case "py", "python":
+		ext = ".py"
+		interpreter = "python"
+	case "sh", "bash":
+		ext = ".sh"
+		interpreter = "bash"
+	default:
+		return fmt.Errorf("unsupported script type: %s", lang)
+	}
+
+	sessionDir, err := r.ensureSessionScaffold()
+	if err != nil {
+		return err
+	}
+	artifactsDir := filepath.Join(sessionDir, "artifacts")
+	if err := os.MkdirAll(artifactsDir, 0o755); err != nil {
+		return fmt.Errorf("create artifacts dir: %w", err)
+	}
+	scriptPath := filepath.Join(artifactsDir, name+ext)
+
+	r.logger.Printf("Enter %s script content. End with a single '.' line.", lang)
+	lines := []string{}
+	for {
+		line, err := r.readLine("> ")
+		if err != nil && err != io.EOF {
+			return err
+		}
+		if strings.TrimSpace(line) == "." {
+			break
+		}
+		lines = append(lines, line)
+		if err == io.EOF {
+			break
+		}
+	}
+	content := strings.TrimRight(strings.Join(lines, "\n"), "\n") + "\n"
+	if strings.TrimSpace(content) == "" {
+		return fmt.Errorf("script content is empty")
+	}
+	if err := os.WriteFile(scriptPath, []byte(content), 0o644); err != nil {
+		return fmt.Errorf("write script: %w", err)
+	}
+	r.logger.Printf("Script saved: %s", scriptPath)
+
+	runArgs := []string{interpreter, scriptPath}
+	return r.handleRun(runArgs)
 }
 
 func (r *Runner) handleAssist(args []string) error {
@@ -683,7 +751,7 @@ func (r *Runner) Stop() {
 }
 
 func (r *Runner) printHelp() {
-	r.logger.Printf("Commands: /init /permissions /context /ledger /status /plan /next /assist /summarize /run /msf /report /resume /stop /exit")
+	r.logger.Printf("Commands: /init /permissions /context /ledger /status /plan /next /assist /script /summarize /run /msf /report /resume /stop /exit")
 	r.logger.Printf("Example: /permissions readonly")
 	r.logger.Printf("Session logs live under: %s", filepath.Clean(r.cfg.Session.LogDir))
 }
@@ -811,6 +879,23 @@ func (r *Runner) assistInput(sessionDir string) (assist.Input, error) {
 		Plan:       readFileTrimmed(planPath),
 		Inventory:  readFileTrimmed(inventoryPath),
 	}, nil
+}
+
+func sanitizeFilename(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	name = filepath.Base(name)
+	builder := strings.Builder{}
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			builder.WriteRune(r)
+		} else {
+			builder.WriteRune('_')
+		}
+	}
+	return strings.Trim(builder.String(), "_")
 }
 
 func (r *Runner) assistGenerator() assist.Assistant {

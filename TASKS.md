@@ -57,3 +57,7 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
 - [x] Add `/assist` to request and optionally execute a suggested command
 - [x] LLM assistant prompt + fallback assistant
 - [x] Tests for assistant parsing + e2e assist flow
+
+## Sprint 10 — Script Helper
+- [x] Add `/script <py|sh> <name>` to write and run scripts
+- [x] Script helper tests (e2e)

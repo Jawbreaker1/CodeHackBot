@@ -304,6 +304,57 @@ func TestCLIAssistFallback(t *testing.T) {
 	}
 }
 
+func TestCLIScriptWritesAndRuns(t *testing.T) {
+	temp := t.TempDir()
+	sessionsDir := filepath.Join(temp, "sessions")
+	configPath := filepath.Join(temp, "config.json")
+
+	cfg := map[string]any{
+		"tools": map[string]any{
+			"shell": map[string]any{
+				"enabled":         true,
+				"timeout_seconds": 5,
+			},
+		},
+		"session": map[string]any{
+			"log_dir": sessionsDir,
+		},
+		"permissions": map[string]any{
+			"level":            "default",
+			"require_approval": false,
+		},
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	if err := os.WriteFile(configPath, data, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	input := "/init no-inventory\n/script sh demo\necho hello\n.\n/stop\n/exit\n"
+	cmd := exec.Command(cliPath, "--config", configPath, "--permissions", "all")
+	cmd.Dir = projectRoot
+	cmd.Stdin = strings.NewReader(input)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("cli run error: %v\nOutput:\n%s", err, out.String())
+	}
+
+	sessionDir := findSingleSessionDir(t, sessionsDir)
+	scriptPath := filepath.Join(sessionDir, "artifacts", "demo.sh")
+	if _, err := os.Stat(scriptPath); err != nil {
+		t.Fatalf("script missing: %v", err)
+	}
+	output := out.String()
+	if !strings.Contains(output, "Command: bash") {
+		t.Fatalf("expected script run output:\n%s", output)
+	}
+}
+
 func findSingleSessionDir(t *testing.T, root string) string {
 	t.Helper()
 	entries, err := os.ReadDir(root)
