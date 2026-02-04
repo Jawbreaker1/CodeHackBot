@@ -1446,6 +1446,16 @@ func (r *Runner) handlePlanSuggestion(suggestion assist.Suggestion, dryRun bool)
 			r.logger.Printf("Plan updated: %s", planPath)
 		}
 	}
+	if planText != "" {
+		fmt.Println("Plan:")
+		fmt.Println(planText)
+	}
+	if len(suggestion.Steps) > 0 {
+		fmt.Println("Plan steps:")
+		for i, step := range suggestion.Steps {
+			fmt.Printf("%d) %s\n", i+1, step)
+		}
+	}
 	if dryRun {
 		return nil
 	}
