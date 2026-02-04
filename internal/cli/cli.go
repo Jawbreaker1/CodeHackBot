@@ -47,7 +47,7 @@ func NewRunner(cfg config.Config, sessionID, defaultConfigPath, profilePath stri
 	return &Runner{
 		cfg:               cfg,
 		sessionID:         sessionID,
-		logger:            log.New(os.Stdout, fmt.Sprintf("[session:%s] ", sessionID), log.LstdFlags),
+		logger:            log.New(os.Stdout, fmt.Sprintf("[session:%s] ", sessionID), 0),
 		reader:            bufio.NewReader(os.Stdin),
 		defaultConfigPath: defaultConfigPath,
 		profilePath:       profilePath,
@@ -81,8 +81,14 @@ func (r *Runner) Run() error {
 			}
 			continue
 		}
-		if assistErr := r.handleAssistGoal(line, false); assistErr != nil {
-			r.logger.Printf("Assist error: %v", assistErr)
+		if looksLikeChat(line) {
+			if err := r.handleAsk(line); err != nil {
+				r.logger.Printf("Ask error: %v", err)
+			}
+		} else {
+			if assistErr := r.handleAssistGoal(line, false); assistErr != nil {
+				r.logger.Printf("Assist error: %v", assistErr)
+			}
 		}
 		if err == io.EOF {
 			r.Stop()
@@ -1206,6 +1212,52 @@ func isPlaceholderCommand(cmd string) bool {
 	default:
 		return false
 	}
+}
+
+func looksLikeChat(text string) bool {
+	trimmed := strings.TrimSpace(strings.ToLower(text))
+	if trimmed == "" {
+		return false
+	}
+	if strings.Contains(trimmed, "?") {
+		return true
+	}
+	if hasPrefixOneOf(trimmed, "hello", "hi", "hey", "good morning", "good afternoon", "good evening") {
+		return true
+	}
+	if hasPrefixOneOf(trimmed, "my name is", "i am", "i'm") {
+		return true
+	}
+	if hasPrefixOneOf(trimmed, "who ", "what ", "where ", "why ", "how ", "can you", "could you", "would you", "tell me", "explain", "describe") {
+		return true
+	}
+	if looksLikeAction(trimmed) {
+		return false
+	}
+	return true
+}
+
+func looksLikeAction(text string) bool {
+	verbs := []string{
+		"scan", "enumerate", "list", "show", "find", "run", "check", "exploit",
+		"test", "probe", "search", "ping", "nmap", "curl", "msf", "msfconsole",
+		"netstat", "ls", "whoami", "cat", "dir", "open", "dump", "inspect", "analyze",
+	}
+	for _, verb := range verbs {
+		if text == verb || strings.HasPrefix(text, verb+" ") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasPrefixOneOf(text string, prefixes ...string) bool {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(text, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Runner) readLine(prompt string) (string, error) {
