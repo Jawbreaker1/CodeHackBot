@@ -698,6 +698,13 @@ func (r *Runner) handleRun(args []string) error {
 			return fmt.Errorf("execution not approved")
 		}
 	}
+	liveWriter := r.liveWriter()
+	activityWriter := newActivityWriter(liveWriter)
+	stopIndicator := r.startWorkingIndicator(activityWriter)
+	defer stopIndicator()
+	if activityWriter != nil {
+		liveWriter = activityWriter
+	}
 	runner := exec.Runner{
 		Permissions:      exec.PermissionLevel(r.cfg.Permissions.Level),
 		RequireApproval:  false,
@@ -707,7 +714,7 @@ func (r *Runner) handleRun(args []string) error {
 		ScopeNetworks:    r.cfg.Scope.Networks,
 		ScopeTargets:     r.cfg.Scope.Targets,
 		ScopeDenyTargets: r.cfg.Scope.DenyTargets,
-		LiveWriter:       r.liveWriter(),
+		LiveWriter:       liveWriter,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -831,6 +838,13 @@ func (r *Runner) handleMSF(args []string) error {
 		}()
 	}
 
+	liveWriter := r.liveWriter()
+	activityWriter := newActivityWriter(liveWriter)
+	stopIndicator := r.startWorkingIndicator(activityWriter)
+	defer stopIndicator()
+	if activityWriter != nil {
+		liveWriter = activityWriter
+	}
 	execRunner := exec.Runner{
 		Permissions:      exec.PermissionLevel(r.cfg.Permissions.Level),
 		RequireApproval:  false,
@@ -840,7 +854,7 @@ func (r *Runner) handleMSF(args []string) error {
 		ScopeNetworks:    r.cfg.Scope.Networks,
 		ScopeTargets:     r.cfg.Scope.Targets,
 		ScopeDenyTargets: r.cfg.Scope.DenyTargets,
-		LiveWriter:       r.liveWriter(),
+		LiveWriter:       liveWriter,
 	}
 	cmdArgs := []string{"-q", "-x", command}
 	result, err := execRunner.RunCommandWithContext(ctx, "msfconsole", cmdArgs...)
