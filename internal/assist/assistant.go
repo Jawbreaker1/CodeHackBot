@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os/exec"
 	"strings"
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/llm"
@@ -176,5 +177,34 @@ func normalizeSuggestion(suggestion Suggestion) Suggestion {
 			suggestion.Args = parts[1:]
 		}
 	}
+	if suggestion.Command != "" && len(suggestion.Args) == 0 {
+		suggestion = splitDashCommandIfNeeded(suggestion)
+	}
 	return suggestion
+}
+
+func splitDashCommandIfNeeded(suggestion Suggestion) Suggestion {
+	if !strings.Contains(suggestion.Command, "-") {
+		return suggestion
+	}
+	// If full command exists, keep it.
+	if _, err := exec.LookPath(suggestion.Command); err == nil {
+		return suggestion
+	}
+	parts := strings.SplitN(suggestion.Command, "-", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return suggestion
+	}
+	base := parts[0]
+	if _, err := exec.LookPath(base); err != nil {
+		return suggestion
+	}
+	return Suggestion{
+		Type:     suggestion.Type,
+		Command:  base,
+		Args:     []string{"-" + parts[1]},
+		Question: suggestion.Question,
+		Summary:  suggestion.Summary,
+		Risk:     suggestion.Risk,
+	}
 }

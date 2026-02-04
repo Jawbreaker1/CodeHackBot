@@ -3,6 +3,8 @@ package assist
 import (
 	"context"
 	"errors"
+	"os/exec"
+	"runtime"
 	"testing"
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/llm"
@@ -77,6 +79,25 @@ func TestNormalizeSuggestionSplitsCommand(t *testing.T) {
 		t.Fatalf("expected command nmap, got %s", suggestion.Command)
 	}
 	if len(suggestion.Args) != 2 || suggestion.Args[0] != "-sV" {
+		t.Fatalf("unexpected args: %v", suggestion.Args)
+	}
+}
+
+func TestNormalizeSuggestionSplitsDashCommand(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skip on windows: ls may be unavailable")
+	}
+	if _, err := exec.LookPath("ls-la"); err == nil {
+		t.Skip("ls-la exists on PATH; cannot validate split")
+	}
+	suggestion := normalizeSuggestion(Suggestion{
+		Type:    "command",
+		Command: "ls-la",
+	})
+	if suggestion.Command != "ls" {
+		t.Fatalf("expected command ls, got %s", suggestion.Command)
+	}
+	if len(suggestion.Args) != 1 || suggestion.Args[0] != "-la" {
 		t.Fatalf("unexpected args: %v", suggestion.Args)
 	}
 }

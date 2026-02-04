@@ -585,15 +585,27 @@ func (r *Runner) handleRun(args []string) error {
 	if !r.cfg.Tools.Shell.Enabled {
 		return fmt.Errorf("shell execution disabled by config")
 	}
+	if r.cfg.Permissions.Level == "readonly" {
+		return fmt.Errorf("readonly mode: run not permitted")
+	}
 	start := time.Now()
 	requireApproval := r.cfg.Permissions.Level == "default" && r.cfg.Permissions.RequireApproval
 	timeout := time.Duration(r.cfg.Tools.Shell.TimeoutSeconds) * time.Second
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
+	if requireApproval {
+		approved, err := r.confirm(fmt.Sprintf("Run command: %s %s?", args[0], strings.Join(args[1:], " ")))
+		if err != nil {
+			return err
+		}
+		if !approved {
+			return fmt.Errorf("execution not approved")
+		}
+	}
 	runner := exec.Runner{
 		Permissions:      exec.PermissionLevel(r.cfg.Permissions.Level),
-		RequireApproval:  requireApproval,
+		RequireApproval:  false,
 		LogDir:           filepath.Join(r.cfg.Session.LogDir, r.sessionID, "logs"),
 		Timeout:          timeout,
 		Reader:           r.reader,
@@ -658,6 +670,9 @@ func (r *Runner) handleMSF(args []string) error {
 	}
 	if !r.cfg.Tools.Shell.Enabled {
 		return fmt.Errorf("shell execution disabled by config")
+	}
+	if r.cfg.Permissions.Level == "readonly" {
+		return fmt.Errorf("readonly mode: run not permitted")
 	}
 	if r.cfg.Tools.Metasploit.DiscoveryMode != "msfconsole" {
 		if r.cfg.Tools.Metasploit.RPCEnabled {
@@ -1132,6 +1147,10 @@ func (r *Runner) handleAssistGoal(goal string, dryRun bool) error {
 	if err != nil {
 		return err
 	}
+	if suggestion.Type == "noop" && strings.TrimSpace(goal) != "" {
+		r.logger.Printf("No actionable suggestion; answering via /ask.")
+		return r.handleAsk(goal)
+	}
 	return r.executeAssistSuggestion(suggestion, dryRun)
 }
 
@@ -1169,15 +1188,6 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 	}
 	if dryRun {
 		return nil
-	}
-	if r.cfg.Permissions.RequireApproval {
-		approved, err := r.confirm("Run suggested command?")
-		if err != nil {
-			return err
-		}
-		if !approved {
-			return fmt.Errorf("execution not approved")
-		}
 	}
 	args := append([]string{suggestion.Command}, suggestion.Args...)
 	return r.handleRun(args)
