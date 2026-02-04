@@ -61,6 +61,7 @@
 ## Prompting & Behavior
 - Maintain a dedicated behavior/system prompt so the LLM’s purpose, safety rules, and workflow are explicit.
 - Suggested location: `prompts/system.md` (agent reads this at startup).
+- LLM calls use a simple fail-safe: after repeated failures, the LLM is temporarily disabled and the CLI falls back to template guidance.
 
 ## Language & Tooling Policy
 - Default to Bash for orchestration and Python for logic, parsing, and report generation.

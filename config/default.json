@@ -8,7 +8,9 @@
     "base_url": "http://192.168.50.213:1234/v1",
     "model": "openai/gpt-oss-20b",
     "timeout_seconds": 120,
-    "api_key": ""
+    "api_key": "",
+    "max_failures": 3,
+    "cooldown_seconds": 300
   },
   "permissions": {
     "level": "default",

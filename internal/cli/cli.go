@@ -35,6 +35,7 @@ type Runner struct {
 	stopOnce          sync.Once
 	currentTask       string
 	currentTaskStart  time.Time
+	llmGuard          llm.Guard
 }
 
 func NewRunner(cfg config.Config, sessionID, defaultConfigPath, profilePath string) *Runner {
@@ -45,6 +46,7 @@ func NewRunner(cfg config.Config, sessionID, defaultConfigPath, profilePath stri
 		reader:            bufio.NewReader(os.Stdin),
 		defaultConfigPath: defaultConfigPath,
 		profilePath:       profilePath,
+		llmGuard:          llm.NewGuard(cfg.LLM.MaxFailures, time.Duration(cfg.LLM.CooldownSeconds)*time.Second),
 	}
 }
 
@@ -823,13 +825,14 @@ func (r *Runner) memoryManager(sessionDir string) memory.Manager {
 }
 
 func (r *Runner) summaryGenerator() memory.Summarizer {
-	if !r.llmAvailable() {
-		return memory.FallbackSummarizer{}
-	}
-	client := llm.NewLMStudioClient(r.cfg)
-	return memory.ChainedSummarizer{
-		Primary:  memory.LLMSummarizer{Client: client, Model: r.cfg.LLM.Model},
-		Fallback: memory.FallbackSummarizer{},
+	primary := memory.LLMSummarizer{Client: llm.NewLMStudioClient(r.cfg), Model: r.cfg.LLM.Model}
+	fallback := memory.FallbackSummarizer{}
+	return guardedSummarizer{
+		allow:     r.llmAllowed,
+		onSuccess: r.recordLLMSuccess,
+		onFailure: r.recordLLMFailure,
+		primary:   primary,
+		fallback:  fallback,
 	}
 }
 
@@ -881,17 +884,14 @@ func (r *Runner) planInput(sessionDir string) (plan.Input, error) {
 }
 
 func (r *Runner) planGenerator() plan.Planner {
-	if !r.llmAvailable() {
-		return plan.FallbackPlanner{}
-	}
-	client := llm.NewLMStudioClient(r.cfg)
-	llmPlanner := plan.LLMPlanner{
-		Client: client,
-		Model:  r.cfg.LLM.Model,
-	}
-	return plan.ChainedPlanner{
-		Primary:  llmPlanner,
-		Fallback: plan.FallbackPlanner{},
+	llmPlanner := plan.LLMPlanner{Client: llm.NewLMStudioClient(r.cfg), Model: r.cfg.LLM.Model}
+	fallback := plan.FallbackPlanner{}
+	return guardedPlanner{
+		allow:     r.llmAllowed,
+		onSuccess: r.recordLLMSuccess,
+		onFailure: r.recordLLMFailure,
+		primary:   llmPlanner,
+		fallback:  fallback,
 	}
 }
 
@@ -901,6 +901,30 @@ func (r *Runner) llmAvailable() bool {
 		return true
 	}
 	return !r.cfg.Network.AssumeOffline
+}
+
+func (r *Runner) llmAllowed() bool {
+	if !r.llmAvailable() {
+		return false
+	}
+	return r.llmGuard.Allow()
+}
+
+func (r *Runner) recordLLMFailure(err error) {
+	if err == nil {
+		return
+	}
+	r.llmGuard.RecordFailure()
+	if !r.llmGuard.Allow() {
+		until := r.llmGuard.DisabledUntil()
+		if !until.IsZero() {
+			r.logger.Printf("LLM disabled until %s after %d failures.", until.Format(time.RFC3339), r.llmGuard.Failures())
+		}
+	}
+}
+
+func (r *Runner) recordLLMSuccess() {
+	r.llmGuard.RecordSuccess()
 }
 
 func readFileTrimmed(path string) string {
@@ -952,17 +976,14 @@ func sanitizeFilename(name string) string {
 }
 
 func (r *Runner) assistGenerator() assist.Assistant {
-	if !r.llmAvailable() {
-		return assist.FallbackAssistant{}
-	}
-	client := llm.NewLMStudioClient(r.cfg)
-	llmAssistant := assist.LLMAssistant{
-		Client: client,
-		Model:  r.cfg.LLM.Model,
-	}
-	return assist.ChainedAssistant{
-		Primary:  llmAssistant,
-		Fallback: assist.FallbackAssistant{},
+	llmAssistant := assist.LLMAssistant{Client: llm.NewLMStudioClient(r.cfg), Model: r.cfg.LLM.Model}
+	fallback := assist.FallbackAssistant{}
+	return guardedAssistant{
+		allow:     r.llmAllowed,
+		onSuccess: r.recordLLMSuccess,
+		onFailure: r.recordLLMFailure,
+		primary:   llmAssistant,
+		fallback:  fallback,
 	}
 }
 

@@ -14,10 +14,12 @@ type Config struct {
 		SystemPrompt string `json:"system_prompt"`
 	} `json:"agent"`
 	LLM struct {
-		BaseURL        string `json:"base_url"`
-		Model          string `json:"model"`
-		TimeoutSeconds int    `json:"timeout_seconds"`
-		APIKey         string `json:"api_key"`
+		BaseURL         string `json:"base_url"`
+		Model           string `json:"model"`
+		TimeoutSeconds  int    `json:"timeout_seconds"`
+		APIKey          string `json:"api_key"`
+		MaxFailures     int    `json:"max_failures"`
+		CooldownSeconds int    `json:"cooldown_seconds"`
 	} `json:"llm"`
 	Permissions struct {
 		Level           string `json:"level"`

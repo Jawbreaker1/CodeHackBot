@@ -65,3 +65,7 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
 ## Sprint 11 — Session Cleanup
 - [x] Add `/clean [days]` to remove session folders
 - [x] Cleanup e2e test
+
+## Sprint 12 — LLM Fail-Safe
+- [x] Add max failure + cooldown guard for LLM calls
+- [x] Tests for guard behavior
