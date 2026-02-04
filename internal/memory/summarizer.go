@@ -23,6 +23,7 @@ type SummaryInput struct {
 	LogSnippets     []LogSnippet
 	LedgerSnippet   string
 	PlanSnippet     string
+	ChatHistory     string
 }
 
 type SummaryOutput struct {
@@ -53,6 +54,9 @@ func (FallbackSummarizer) Summarize(_ context.Context, input SummaryInput) (Summ
 			paths = append(paths, snippet.Path)
 		}
 		summary = append(summary, fmt.Sprintf("Recent logs: %s", strings.Join(paths, ", ")))
+	}
+	if input.ChatHistory != "" {
+		summary = append(summary, "Recent conversation included.")
 	}
 	facts := mergeLines(input.ExistingFacts, extractFacts(input))
 	return SummaryOutput{Summary: summary, Facts: facts}, nil
@@ -139,6 +143,10 @@ func buildPrompt(input SummaryInput) string {
 	if input.LedgerSnippet != "" {
 		builder.WriteString("\nLedger snippet:\n")
 		builder.WriteString(input.LedgerSnippet + "\n")
+	}
+	if input.ChatHistory != "" {
+		builder.WriteString("\nRecent conversation:\n")
+		builder.WriteString(input.ChatHistory + "\n")
 	}
 	if len(input.LogSnippets) > 0 {
 		builder.WriteString("\nRecent log snippets:\n")

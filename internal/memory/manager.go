@@ -21,6 +21,7 @@ type Manager struct {
 	SummarizeEvery     int
 	SummarizeAtPercent int
 	MaxLogBytes        int
+	ChatHistoryLines   int
 }
 
 func (m Manager) Ensure() (Artifacts, error) {
@@ -94,6 +95,9 @@ func (m Manager) Summarize(ctx context.Context, summarizer Summarizer, reason st
 	if m.LedgerEnabled && m.LedgerFilename != "" {
 		ledgerPath := filepath.Join(m.SessionDir, m.LedgerFilename)
 		input.LedgerSnippet = readSnippet(ledgerPath, m.maxLogBytes())
+	}
+	if m.ChatHistoryLines > 0 {
+		input.ChatHistory = readTailLines(artifacts.ChatPath, m.ChatHistoryLines, m.maxLogBytes())
 	}
 
 	output, err := summarizer.Summarize(ctx, input)
@@ -217,6 +221,32 @@ func readSnippet(path string, maxBytes int) string {
 		data = data[len(data)-maxBytes:]
 	}
 	return strings.TrimSpace(string(data))
+}
+
+func readTailLines(path string, maxLines, maxBytes int) string {
+	if path == "" || maxLines <= 0 {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	if maxBytes > 0 && len(data) > maxBytes {
+		data = data[len(data)-maxBytes:]
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		out = append(out, line)
+	}
+	if len(out) > maxLines {
+		out = out[len(out)-maxLines:]
+	}
+	return strings.Join(out, "\n")
 }
 
 func readLogSnippets(paths []string, maxBytes int) []LogSnippet {

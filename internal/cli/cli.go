@@ -956,6 +956,7 @@ func (r *Runner) memoryManager(sessionDir string) memory.Manager {
 		MaxRecentOutputs:   r.cfg.Context.MaxRecentOutputs,
 		SummarizeEvery:     r.cfg.Context.SummarizeEvery,
 		SummarizeAtPercent: r.cfg.Context.SummarizeAtPercent,
+		ChatHistoryLines:   r.cfg.Context.ChatHistoryLines,
 	}
 }
 
@@ -1080,17 +1081,19 @@ func (r *Runner) assistInput(sessionDir, goal string) (assist.Input, error) {
 	}
 	summaryText := readFileTrimmed(artifacts.SummaryPath)
 	facts, _ := memory.ReadBullets(artifacts.FactsPath)
+	history := r.readChatHistory(artifacts.ChatPath)
 	planPath := filepath.Join(sessionDir, r.cfg.Session.PlanFilename)
 	inventoryPath := filepath.Join(sessionDir, r.cfg.Session.InventoryFilename)
 	return assist.Input{
-		SessionID:  r.sessionID,
-		Scope:      r.cfg.Scope.Networks,
-		Targets:    r.cfg.Scope.Targets,
-		Summary:    summaryText,
-		KnownFacts: facts,
-		Plan:       readFileTrimmed(planPath),
-		Inventory:  readFileTrimmed(inventoryPath),
-		Goal:       strings.TrimSpace(goal),
+		SessionID:   r.sessionID,
+		Scope:       r.cfg.Scope.Networks,
+		Targets:     r.cfg.Scope.Targets,
+		Summary:     summaryText,
+		KnownFacts:  facts,
+		ChatHistory: history,
+		Plan:        readFileTrimmed(planPath),
+		Inventory:   readFileTrimmed(inventoryPath),
+		Goal:        strings.TrimSpace(goal),
 	}, nil
 }
 

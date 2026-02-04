@@ -11,14 +11,15 @@ import (
 )
 
 type Input struct {
-	SessionID  string
-	Scope      []string
-	Targets    []string
-	Summary    string
-	KnownFacts []string
-	Inventory  string
-	Plan       string
-	Goal       string
+	SessionID   string
+	Scope       []string
+	Targets     []string
+	Summary     string
+	KnownFacts  []string
+	Inventory   string
+	Plan        string
+	Goal        string
+	ChatHistory string
 }
 
 type Suggestion struct {
@@ -125,6 +126,9 @@ func buildPrompt(input Input) string {
 		for _, fact := range input.KnownFacts {
 			builder.WriteString("- " + fact + "\n")
 		}
+	}
+	if input.ChatHistory != "" {
+		builder.WriteString("\nRecent conversation:\n" + input.ChatHistory + "\n")
 	}
 	if input.Plan != "" {
 		builder.WriteString("\nPlan snippet:\n" + input.Plan + "\n")
