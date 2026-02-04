@@ -76,11 +76,14 @@
 - Permission levels should mirror Codex CLI: `readonly`, `default` (approval required for executions), and `all` (fully allowed).
 - `/run <command> [args...]` should execute via the guarded runner and log output under the session `logs/` directory.
 - `/plan [text]` should append planning notes to `sessions/<id>/plan.md` (multi-line input ends with a single `.` line).
+- `/plan auto [reason]` drafts a plan using the LLM (falls back to a template when offline).
+- `/next` prints suggested next steps based on summaries + known facts (LLM-backed with fallback).
 - `/summarize [reason]` should refresh `summary.md` and `known_facts.md` from recent logs (falls back to a non-LLM summary if offline).
 - Display a concise ANSI-colored summary after major actions (e.g., `/run`, `/init`), and expose `/status` to show the current task.
 - Support ESC to interrupt a running major action and return to the prompt for next steps.
 - `/msf [service=...] [platform=...] [keyword=...]` should run a non-interactive Metasploit search (msfconsole `-q -x`) and parse results.
 - `/report [path]` should generate an OWASP-style report from the template, defaulting to `sessions/<id>/report.md`.
+- Reports should include the session evidence ledger when ledgering is enabled.
 
 ## Context Management (File-First)
 - Use a file-first memory model: store summaries and artifacts on disk; keep only a small working set in live context.

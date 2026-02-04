@@ -18,6 +18,7 @@ import (
 	"github.com/Jawbreaker1/CodeHackBot/internal/llm"
 	"github.com/Jawbreaker1/CodeHackBot/internal/memory"
 	"github.com/Jawbreaker1/CodeHackBot/internal/msf"
+	"github.com/Jawbreaker1/CodeHackBot/internal/plan"
 	"github.com/Jawbreaker1/CodeHackBot/internal/report"
 	"github.com/Jawbreaker1/CodeHackBot/internal/session"
 )
@@ -101,6 +102,8 @@ func (r *Runner) handleCommand(line string) error {
 		r.handleStatus()
 	case "plan":
 		return r.handlePlan(args)
+	case "next":
+		return r.handleNext(args)
 	case "summarize":
 		return r.handleSummarize(args)
 	case "run":
@@ -260,6 +263,16 @@ func (r *Runner) handlePlan(args []string) error {
 		return fmt.Errorf("readonly mode: plan updates not permitted")
 	}
 
+	if len(args) > 0 {
+		mode := strings.ToLower(args[0])
+		if mode == "auto" || mode == "llm" {
+			return r.handlePlanAuto(strings.Join(args[1:], " "))
+		}
+	}
+	return r.handlePlanManual(args)
+}
+
+func (r *Runner) handlePlanManual(args []string) error {
 	sessionDir, err := r.ensureSessionScaffold()
 	if err != nil {
 		return err
@@ -293,6 +306,59 @@ func (r *Runner) handlePlan(args []string) error {
 		return err
 	}
 	r.logger.Printf("Plan updated: %s", planPath)
+	return nil
+}
+
+func (r *Runner) handlePlanAuto(reason string) error {
+	sessionDir, err := r.ensureSessionScaffold()
+	if err != nil {
+		return err
+	}
+	input, err := r.planInput(sessionDir)
+	if err != nil {
+		return err
+	}
+	planner := r.planGenerator()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	content, err := planner.Plan(ctx, input)
+	if err != nil {
+		return err
+	}
+	if reason != "" {
+		content = fmt.Sprintf("### Auto Plan (%s)\n\n%s", reason, content)
+	}
+	planPath, err := session.AppendPlan(sessionDir, r.cfg.Session.PlanFilename, content)
+	if err != nil {
+		return err
+	}
+	r.logger.Printf("Auto plan written: %s", planPath)
+	return nil
+}
+
+func (r *Runner) handleNext(_ []string) error {
+	r.setTask("next")
+	defer r.clearTask()
+
+	sessionDir, err := r.ensureSessionScaffold()
+	if err != nil {
+		return err
+	}
+	input, err := r.planInput(sessionDir)
+	if err != nil {
+		return err
+	}
+	planner := r.planGenerator()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	steps, err := planner.Next(ctx, input)
+	if err != nil {
+		return err
+	}
+	r.logger.Printf("Next steps:")
+	for _, step := range steps {
+		r.logger.Printf("- %s", step)
+	}
 	return nil
 }
 
@@ -494,6 +560,10 @@ func (r *Runner) handleReport(args []string) error {
 		Scope:     r.cfg.Scope.Targets,
 		SessionID: r.sessionID,
 	}
+	if r.cfg.Session.LedgerEnabled {
+		ledgerPath := filepath.Join(r.cfg.Session.LogDir, r.sessionID, r.cfg.Session.LedgerFilename)
+		info.Ledger = readFileTrimmed(ledgerPath)
+	}
 	if err := report.Generate("", outPath, info); err != nil {
 		return err
 	}
@@ -595,7 +665,7 @@ func (r *Runner) Stop() {
 }
 
 func (r *Runner) printHelp() {
-	r.logger.Printf("Commands: /init /permissions /context /ledger /status /plan /summarize /run /msf /report /resume /stop /exit")
+	r.logger.Printf("Commands: /init /permissions /context /ledger /status /plan /next /summarize /run /msf /report /resume /stop /exit")
 	r.logger.Printf("Example: /permissions readonly")
 	r.logger.Printf("Session logs live under: %s", filepath.Clean(r.cfg.Session.LogDir))
 }
@@ -614,7 +684,7 @@ func (r *Runner) memoryManager(sessionDir string) memory.Manager {
 }
 
 func (r *Runner) summaryGenerator() memory.Summarizer {
-	if r.cfg.Network.AssumeOffline {
+	if !r.llmAvailable() {
 		return memory.FallbackSummarizer{}
 	}
 	client := llm.NewLMStudioClient(r.cfg)
@@ -649,6 +719,68 @@ func (r *Runner) maybeAutoSummarize(logPath, reason string) {
 		return
 	}
 	r.logger.Printf("Auto-summary updated")
+}
+
+func (r *Runner) planInput(sessionDir string) (plan.Input, error) {
+	artifacts, err := memory.EnsureArtifacts(sessionDir)
+	if err != nil {
+		return plan.Input{}, err
+	}
+	summaryText := readFileTrimmed(artifacts.SummaryPath)
+	facts, _ := memory.ReadBullets(artifacts.FactsPath)
+	inventoryPath := filepath.Join(sessionDir, r.cfg.Session.InventoryFilename)
+	inventory := readFileTrimmed(inventoryPath)
+
+	return plan.Input{
+		SessionID:  r.sessionID,
+		Scope:      r.cfg.Scope.Networks,
+		Targets:    r.cfg.Scope.Targets,
+		Summary:    summaryText,
+		KnownFacts: facts,
+		Inventory:  inventory,
+	}, nil
+}
+
+func (r *Runner) planGenerator() plan.Planner {
+	if !r.llmAvailable() {
+		return plan.FallbackPlanner{}
+	}
+	client := llm.NewLMStudioClient(r.cfg)
+	llmPlanner := plan.LLMPlanner{
+		Client: client,
+		Model:  r.cfg.LLM.Model,
+	}
+	return plan.ChainedPlanner{
+		Primary:  llmPlanner,
+		Fallback: plan.FallbackPlanner{},
+	}
+}
+
+func (r *Runner) llmAvailable() bool {
+	if !r.cfg.Network.AssumeOffline {
+		return true
+	}
+	baseURL := strings.TrimSpace(r.cfg.LLM.BaseURL)
+	return isLocalURL(baseURL)
+}
+
+func isLocalURL(baseURL string) bool {
+	if baseURL == "" {
+		return false
+	}
+	lower := strings.ToLower(baseURL)
+	return strings.Contains(lower, "localhost") || strings.Contains(lower, "127.0.0.1")
+}
+
+func readFileTrimmed(path string) string {
+	if path == "" {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }
 
 func (r *Runner) readLine(prompt string) (string, error) {

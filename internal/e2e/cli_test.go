@@ -207,6 +207,54 @@ func TestCLIAutoSummarize(t *testing.T) {
 	}
 }
 
+func TestCLIPlanAuto(t *testing.T) {
+	temp := t.TempDir()
+	sessionsDir := filepath.Join(temp, "sessions")
+	configPath := filepath.Join(temp, "config.json")
+
+	cfg := map[string]any{
+		"session": map[string]any{
+			"log_dir": sessionsDir,
+		},
+		"permissions": map[string]any{
+			"level":            "default",
+			"require_approval": false,
+		},
+		"network": map[string]any{
+			"assume_offline": true,
+		},
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	if err := os.WriteFile(configPath, data, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	input := "/init no-inventory\n/plan auto sprint8\n/stop\n/exit\n"
+	cmd := exec.Command(cliPath, "--config", configPath, "--permissions", "all")
+	cmd.Dir = projectRoot
+	cmd.Stdin = strings.NewReader(input)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("cli run error: %v\nOutput:\n%s", err, out.String())
+	}
+
+	sessionDir := findSingleSessionDir(t, sessionsDir)
+	planPath := filepath.Join(sessionDir, "plan.md")
+	data, err = os.ReadFile(planPath)
+	if err != nil {
+		t.Fatalf("read plan: %v", err)
+	}
+	if !strings.Contains(string(data), "Auto Plan (sprint8)") {
+		t.Fatalf("expected auto plan content:\n%s", string(data))
+	}
+}
+
 func findSingleSessionDir(t *testing.T, root string) string {
 	t.Helper()
 	entries, err := os.ReadDir(root)

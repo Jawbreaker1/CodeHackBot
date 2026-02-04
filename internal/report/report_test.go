@@ -41,3 +41,30 @@ func TestGenerateReport(t *testing.T) {
 		t.Fatalf("expected session id in appendix")
 	}
 }
+
+func TestGenerateReportWithLedger(t *testing.T) {
+	temp := t.TempDir()
+	outPath := filepath.Join(temp, "report.md")
+	info := Info{
+		SessionID: "session-456",
+		Ledger:    "# Evidence Ledger\n\n| Finding | Command | Log Path | Timestamp | Notes |\n| --- | --- | --- | --- | --- |",
+	}
+	templatePath := filepath.Join("internal", "report", "template.md")
+	if _, err := os.Stat(templatePath); err != nil {
+		templatePath = filepath.Join("..", "..", "internal", "report", "template.md")
+	}
+	if err := Generate(templatePath, outPath, info); err != nil {
+		t.Fatalf("Generate error: %v", err)
+	}
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "## Evidence Ledger") {
+		t.Fatalf("expected evidence ledger section")
+	}
+	if !strings.Contains(content, "Finding | Command") {
+		t.Fatalf("expected ledger table")
+	}
+}

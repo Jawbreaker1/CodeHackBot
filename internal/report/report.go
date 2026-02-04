@@ -13,6 +13,7 @@ type Info struct {
 	Scope     []string
 	Findings  []string
 	SessionID string
+	Ledger    string
 }
 
 func DefaultTemplatePath() string {
@@ -41,6 +42,9 @@ func Generate(templatePath, outPath string, info Info) error {
 	}
 	if info.SessionID != "" {
 		content = strings.ReplaceAll(content, "Session IDs", fmt.Sprintf("Session IDs\n- %s", info.SessionID))
+	}
+	if info.Ledger != "" {
+		content = strings.TrimSpace(content) + "\n\n## Evidence Ledger\n\n" + strings.TrimSpace(info.Ledger) + "\n"
 	}
 	if outPath == "" {
 		return fmt.Errorf("output path is required")

@@ -47,3 +47,8 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
 - [x] Implement `/summarize` (manual) to update summaries from recent logs/ledger
 - [x] Add auto-summarize hooks (threshold/step-based) for `/run` and `/msf`
 - [x] Robust tests for context management (file creation, append/update, thresholds, size limits, readonly behavior)
+
+## Sprint 8 — LLM Guidance & Reporting
+- [x] LLM-backed `/plan auto` and `/next` guidance (fallback when offline)
+- [x] Minimal report enhancement: include evidence ledger in report output
+- [x] Tests for planner outputs and report evidence inclusion
