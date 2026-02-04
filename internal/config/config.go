@@ -55,6 +55,9 @@ type Config struct {
 	Network struct {
 		AssumeOffline bool `json:"assume_offline"`
 	} `json:"network"`
+	UI struct {
+		Verbose bool `json:"verbose"`
+	} `json:"ui"`
 }
 
 func DefaultPath() string {

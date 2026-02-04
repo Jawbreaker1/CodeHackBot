@@ -112,6 +112,8 @@ func (r *Runner) handleCommand(line string) error {
 		return r.handleInit(args)
 	case "permissions":
 		return r.handlePermissions(args)
+	case "verbose":
+		return r.handleVerbose(args)
 	case "context":
 		if len(args) > 0 && strings.ToLower(args[0]) == "show" {
 			return r.handleContextShow()
@@ -228,6 +230,24 @@ func (r *Runner) handlePermissions(args []string) error {
 	default:
 		return fmt.Errorf("invalid permissions level: %s", level)
 	}
+}
+
+func (r *Runner) handleVerbose(args []string) error {
+	if len(args) == 0 {
+		r.logger.Printf("Verbose logging: %t", r.cfg.UI.Verbose)
+		return nil
+	}
+	switch strings.ToLower(args[0]) {
+	case "on", "true", "1":
+		r.cfg.UI.Verbose = true
+		r.logger.Printf("Verbose logging enabled")
+	case "off", "false", "0":
+		r.cfg.UI.Verbose = false
+		r.logger.Printf("Verbose logging disabled")
+	default:
+		return fmt.Errorf("usage: /verbose on|off")
+	}
+	return nil
 }
 
 func (r *Runner) handleLedger(args []string) error {
@@ -582,7 +602,9 @@ func (r *Runner) handleAsk(text string) error {
 		return err
 	}
 	r.recordLLMSuccess()
-	r.logger.Printf("Assistant response:")
+	if r.cfg.UI.Verbose {
+		r.logger.Printf("Assistant response:")
+	}
 	fmt.Println(resp.Content)
 	return nil
 }
@@ -907,9 +929,9 @@ func (r *Runner) Stop() {
 }
 
 func (r *Runner) printHelp() {
-	r.logger.Printf("Commands: /init /permissions /context [/show] /ledger /status /plan /next /assist /script /clean /ask /summarize /run /msf /report /resume /stop /exit")
+	r.logger.Printf("Commands: /init /permissions /verbose /context [/show] /ledger /status /plan /next /assist /script /clean /ask /summarize /run /msf /report /resume /stop /exit")
 	r.logger.Printf("Example: /permissions readonly")
-	r.logger.Printf("Plain text input routes to /assist; use /ask for chat-only.")
+	r.logger.Printf("Plain text routes to /ask if it looks like chat; otherwise /assist.")
 	r.logger.Printf("Session logs live under: %s", filepath.Clean(r.cfg.Session.LogDir))
 }
 
@@ -1159,7 +1181,9 @@ func (r *Runner) handleAssistGoal(goal string, dryRun bool) error {
 		return err
 	}
 	if suggestion.Type == "noop" && strings.TrimSpace(goal) != "" {
-		r.logger.Printf("No actionable suggestion; answering via /ask.")
+		if r.cfg.UI.Verbose {
+			r.logger.Printf("No actionable suggestion; answering via /ask.")
+		}
 		return r.handleAsk(goal)
 	}
 	return r.executeAssistSuggestion(suggestion, dryRun)
@@ -1174,13 +1198,19 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 		if suggestion.Question == "" {
 			return fmt.Errorf("assistant returned empty question")
 		}
-		r.logger.Printf("Assistant question: %s", suggestion.Question)
-		if suggestion.Summary != "" {
-			r.logger.Printf("Summary: %s", suggestion.Summary)
+		if r.cfg.UI.Verbose {
+			r.logger.Printf("Assistant question: %s", suggestion.Question)
+			if suggestion.Summary != "" {
+				r.logger.Printf("Summary: %s", suggestion.Summary)
+			}
+		} else {
+			fmt.Println(suggestion.Question)
 		}
 		return nil
 	case "noop":
-		r.logger.Printf("Assistant has no suggestion")
+		if r.cfg.UI.Verbose {
+			r.logger.Printf("Assistant has no suggestion")
+		}
 		return nil
 	case "command":
 		if suggestion.Command == "" {
@@ -1191,11 +1221,13 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 	}
 
 	r.logger.Printf("Suggested command: %s %s", suggestion.Command, strings.Join(suggestion.Args, " "))
-	if suggestion.Summary != "" {
-		r.logger.Printf("Summary: %s", suggestion.Summary)
-	}
-	if suggestion.Risk != "" {
-		r.logger.Printf("Risk: %s", suggestion.Risk)
+	if r.cfg.UI.Verbose {
+		if suggestion.Summary != "" {
+			r.logger.Printf("Summary: %s", suggestion.Summary)
+		}
+		if suggestion.Risk != "" {
+			r.logger.Printf("Risk: %s", suggestion.Risk)
+		}
 	}
 	if dryRun {
 		return nil

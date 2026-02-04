@@ -27,6 +27,7 @@ func main() {
 		profileName string
 		permLevel   string
 		ledgerMode  string
+		verbose     bool
 	)
 
 	flag.BoolVar(&showVersion, "version", false, "Print version")
@@ -36,6 +37,7 @@ func main() {
 	flag.StringVar(&profileName, "profile", "", "Profile name under config/profiles/")
 	flag.StringVar(&permLevel, "permissions", "", "Override permissions: readonly, default, all")
 	flag.StringVar(&ledgerMode, "ledger", "", "Override ledger: on or off")
+	flag.BoolVar(&verbose, "verbose", false, "Enable verbose assistant output")
 	flag.Parse()
 
 	if showVersion {
@@ -102,6 +104,9 @@ func main() {
 		default:
 			log.Fatalf("Invalid --ledger value: %s", ledgerMode)
 		}
+	}
+	if verbose {
+		cfg.UI.Verbose = true
 	}
 
 	log.Printf("Loaded config: %v", paths)

@@ -45,5 +45,8 @@
   },
   "network": {
     "assume_offline": true
+  },
+  "ui": {
+    "verbose": false
   }
 }
