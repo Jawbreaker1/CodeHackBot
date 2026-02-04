@@ -1251,6 +1251,9 @@ func looksLikeChat(text string) bool {
 	if trimmed == "" {
 		return false
 	}
+	if looksLikeAction(trimmed) {
+		return false
+	}
 	if strings.Contains(trimmed, "?") {
 		return true
 	}
@@ -1263,20 +1266,17 @@ func looksLikeChat(text string) bool {
 	if hasPrefixOneOf(trimmed, "who ", "what ", "where ", "why ", "how ", "can you", "could you", "would you", "tell me", "explain", "describe") {
 		return true
 	}
-	if looksLikeAction(trimmed) {
-		return false
-	}
 	return true
 }
 
 func looksLikeAction(text string) bool {
-	verbs := []string{
-		"scan", "enumerate", "list", "show", "find", "run", "check", "exploit",
-		"test", "probe", "search", "ping", "nmap", "curl", "msf", "msfconsole",
-		"netstat", "ls", "whoami", "cat", "dir", "open", "dump", "inspect", "analyze",
+	verbs := map[string]struct{}{
+		"scan": {}, "enumerate": {}, "list": {}, "show": {}, "find": {}, "run": {}, "check": {}, "exploit": {},
+		"test": {}, "probe": {}, "search": {}, "ping": {}, "nmap": {}, "curl": {}, "msf": {}, "msfconsole": {},
+		"netstat": {}, "ls": {}, "whoami": {}, "cat": {}, "dir": {}, "open": {}, "dump": {}, "inspect": {}, "analyze": {},
 	}
-	for _, verb := range verbs {
-		if text == verb || strings.HasPrefix(text, verb+" ") {
+	for _, token := range splitTokens(text) {
+		if _, ok := verbs[token]; ok {
 			return true
 		}
 	}
@@ -1290,6 +1290,18 @@ func hasPrefixOneOf(text string, prefixes ...string) bool {
 		}
 	}
 	return false
+}
+
+func splitTokens(text string) []string {
+	return strings.FieldsFunc(text, func(r rune) bool {
+		if r >= 'a' && r <= 'z' {
+			return false
+		}
+		if r >= '0' && r <= '9' {
+			return false
+		}
+		return true
+	})
 }
 
 func (r *Runner) readLine(prompt string) (string, error) {
