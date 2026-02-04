@@ -22,9 +22,16 @@ func startInterruptWatcher() (<-chan struct{}, func(), error) {
 	cancelCh := make(chan struct{}, 1)
 	done := make(chan struct{})
 	var once sync.Once
+	var cleanupOnce sync.Once
+	var cleanup func()
 	stop := func() {
 		once.Do(func() {
 			close(done)
+		})
+		cleanupOnce.Do(func() {
+			if cleanup != nil {
+				cleanup()
+			}
 		})
 	}
 
@@ -43,13 +50,16 @@ func startInterruptWatcher() (<-chan struct{}, func(), error) {
 		}
 	}()
 
-	keyErr := startKeyWatcher(cancelCh, done)
+	keyErr, keyCleanup := startKeyWatcher(cancelCh, done)
+	if keyCleanup != nil {
+		cleanup = keyCleanup
+	}
 	return cancelCh, stop, keyErr
 }
 
-func startKeyWatcher(cancelCh chan<- struct{}, done <-chan struct{}) error {
+func startKeyWatcher(cancelCh chan<- struct{}, done <-chan struct{}) (error, func()) {
 	if runtime.GOOS == "windows" {
-		return fmt.Errorf("ESC interrupt not supported on windows")
+		return fmt.Errorf("ESC interrupt not supported on windows"), nil
 	}
 
 	tty, err := os.OpenFile("/dev/tty", os.O_RDONLY, 0)
@@ -62,25 +72,27 @@ func startKeyWatcher(cancelCh chan<- struct{}, done <-chan struct{}) error {
 		if tty != os.Stdin {
 			_ = tty.Close()
 		}
-		return fmt.Errorf("no TTY available for ESC")
+		return fmt.Errorf("no TTY available for ESC"), nil
 	}
 	state, err := term.MakeRaw(fd)
 	if err != nil {
-		return fmt.Errorf("raw mode failed: %w", err)
+		return fmt.Errorf("raw mode failed: %w", err), nil
 	}
 	if err := syscall.SetNonblock(fd, true); err != nil {
 		_ = term.Restore(fd, state)
-		return fmt.Errorf("set nonblock failed: %w", err)
+		return fmt.Errorf("set nonblock failed: %w", err), nil
+	}
+
+	cleanup := func() {
+		_ = term.Restore(fd, state)
+		_ = syscall.SetNonblock(fd, false)
+		if tty != os.Stdin {
+			_ = tty.Close()
+		}
 	}
 
 	go func() {
-		defer func() {
-			_ = term.Restore(fd, state)
-			_ = syscall.SetNonblock(fd, false)
-			if tty != os.Stdin {
-				_ = tty.Close()
-			}
-		}()
+		defer cleanup()
 		buf := make([]byte, 1)
 		for {
 			select {
@@ -103,5 +115,5 @@ func startKeyWatcher(cancelCh chan<- struct{}, done <-chan struct{}) error {
 		}
 	}()
 
-	return nil
+	return nil, cleanup
 }
