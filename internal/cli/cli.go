@@ -51,6 +51,7 @@ func NewRunner(cfg config.Config, sessionID, defaultConfigPath, profilePath stri
 }
 
 func (r *Runner) Run() error {
+	r.printLogo()
 	r.logger.Printf("BirdHackBot interactive mode. Type /help for commands.")
 	for {
 		line, err := r.readLine(r.prompt())
@@ -833,6 +834,14 @@ func (r *Runner) printHelp() {
 	r.logger.Printf("Commands: /init /permissions /context [/show] /ledger /status /plan /next /assist /script /clean /summarize /run /msf /report /resume /stop /exit")
 	r.logger.Printf("Example: /permissions readonly")
 	r.logger.Printf("Session logs live under: %s", filepath.Clean(r.cfg.Session.LogDir))
+}
+
+func (r *Runner) printLogo() {
+	data, err := os.ReadFile(filepath.Join("assets", "logo.ascii"))
+	if err != nil {
+		return
+	}
+	fmt.Println(string(data))
 }
 
 func (r *Runner) memoryManager(sessionDir string) memory.Manager {
