@@ -61,3 +61,7 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
 ## Sprint 10 — Script Helper
 - [x] Add `/script <py|sh> <name>` to write and run scripts
 - [x] Script helper tests (e2e)
+
+## Sprint 11 — Session Cleanup
+- [x] Add `/clean [days]` to remove session folders
+- [x] Cleanup e2e test

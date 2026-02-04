@@ -80,6 +80,7 @@
 - `/next` prints suggested next steps based on summaries + known facts (LLM-backed with fallback).
 - `/assist` requests a suggested command (LLM-backed), with `dry` mode to preview without running.
 - `/script <py|sh> <name>` captures a script into `sessions/<id>/artifacts/` and runs it via the interpreter.
+- `/clean [days]` deletes session folders (0 = all, otherwise older than N days).
 - `/summarize [reason]` should refresh `summary.md` and `known_facts.md` from recent logs (falls back to a non-LLM summary if offline).
 - Display a concise ANSI-colored summary after major actions (e.g., `/run`, `/init`), and expose `/status` to show the current task.
 - Support ESC to interrupt a running major action and return to the prompt for next steps.

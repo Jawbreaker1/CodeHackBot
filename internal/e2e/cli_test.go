@@ -355,6 +355,49 @@ func TestCLIScriptWritesAndRuns(t *testing.T) {
 	}
 }
 
+func TestCLICleanRemovesSessions(t *testing.T) {
+	temp := t.TempDir()
+	sessionsDir := filepath.Join(temp, "sessions")
+	configPath := filepath.Join(temp, "config.json")
+
+	cfg := map[string]any{
+		"session": map[string]any{
+			"log_dir": sessionsDir,
+		},
+		"permissions": map[string]any{
+			"level":            "default",
+			"require_approval": false,
+		},
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	if err := os.WriteFile(configPath, data, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	input := "/init no-inventory\n/clean 0\n/exit\n"
+	cmd := exec.Command(cliPath, "--config", configPath, "--permissions", "all")
+	cmd.Dir = projectRoot
+	cmd.Stdin = strings.NewReader(input)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("cli run error: %v\nOutput:\n%s", err, out.String())
+	}
+
+	entries, err := os.ReadDir(sessionsDir)
+	if err != nil {
+		t.Fatalf("read sessions: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected sessions to be cleaned, found %d", len(entries))
+	}
+}
+
 func findSingleSessionDir(t *testing.T, root string) string {
 	t.Helper()
 	entries, err := os.ReadDir(root)

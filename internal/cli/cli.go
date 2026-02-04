@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -109,6 +110,8 @@ func (r *Runner) handleCommand(line string) error {
 		return r.handleAssist(args)
 	case "script":
 		return r.handleScript(args)
+	case "clean":
+		return r.handleClean(args)
 	case "summarize":
 		return r.handleSummarize(args)
 	case "run":
@@ -433,6 +436,56 @@ func (r *Runner) handleScript(args []string) error {
 	return r.handleRun(runArgs)
 }
 
+func (r *Runner) handleClean(args []string) error {
+	r.setTask("clean")
+	defer r.clearTask()
+
+	if r.cfg.Permissions.Level == "readonly" {
+		return fmt.Errorf("readonly mode: clean not permitted")
+	}
+
+	days := 0
+	if len(args) > 0 {
+		value, err := strconv.Atoi(args[0])
+		if err != nil || value < 0 {
+			return fmt.Errorf("usage: /clean [days]")
+		}
+		days = value
+	}
+
+	root := r.cfg.Session.LogDir
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			r.logger.Printf("No sessions to clean.")
+			return nil
+		}
+		return fmt.Errorf("read sessions: %w", err)
+	}
+
+	cutoff := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
+	removed := 0
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(root, entry.Name())
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if days == 0 || info.ModTime().Before(cutoff) {
+			if err := os.RemoveAll(path); err != nil {
+				r.logger.Printf("Failed to remove %s: %v", path, err)
+				continue
+			}
+			removed++
+		}
+	}
+	r.logger.Printf("Cleaned %d session(s).", removed)
+	return nil
+}
+
 func (r *Runner) handleAssist(args []string) error {
 	r.setTask("assist")
 	defer r.clearTask()
@@ -751,7 +804,7 @@ func (r *Runner) Stop() {
 }
 
 func (r *Runner) printHelp() {
-	r.logger.Printf("Commands: /init /permissions /context /ledger /status /plan /next /assist /script /summarize /run /msf /report /resume /stop /exit")
+	r.logger.Printf("Commands: /init /permissions /context /ledger /status /plan /next /assist /script /clean /summarize /run /msf /report /resume /stop /exit")
 	r.logger.Printf("Example: /permissions readonly")
 	r.logger.Printf("Session logs live under: %s", filepath.Clean(r.cfg.Session.LogDir))
 }
