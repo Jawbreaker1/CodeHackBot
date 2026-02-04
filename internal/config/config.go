@@ -12,6 +12,7 @@ type Config struct {
 		Name         string `json:"name"`
 		Model        string `json:"model"`
 		SystemPrompt string `json:"system_prompt"`
+		MaxSteps     int    `json:"max_steps"`
 	} `json:"agent"`
 	LLM struct {
 		BaseURL         string `json:"base_url"`

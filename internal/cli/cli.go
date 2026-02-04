@@ -1443,9 +1443,13 @@ func (r *Runner) handleAssistGoalWithMode(goal string, dryRun bool, mode string)
 	if r.cfg.Permissions.Level == "readonly" {
 		return fmt.Errorf("readonly mode: assist not permitted")
 	}
-	if url := extractFirstURL(goal); url != "" && shouldAutoBrowse(goal) {
-		return r.handleAssistGoalWithMode(fmt.Sprintf("%s (fetch and analyze this URL, then summarize)", goal), dryRun, "web-agentic")
+	if mode == "execute-step" {
+		return r.handleAssistSingleStep(goal, dryRun, mode)
 	}
+	return r.handleAssistAgentic(goal, dryRun, mode)
+}
+
+func (r *Runner) handleAssistSingleStep(goal string, dryRun bool, mode string) error {
 	suggestion, err := r.getAssistSuggestion(goal, mode)
 	if err != nil {
 		return err
@@ -1457,6 +1461,53 @@ func (r *Runner) handleAssistGoalWithMode(goal string, dryRun bool, mode string)
 		return r.handleAsk(goal)
 	}
 	return r.executeAssistSuggestion(suggestion, dryRun)
+}
+
+func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) error {
+	if url := extractFirstURL(goal); url != "" && shouldAutoBrowse(goal) {
+		return r.handleAssistAgentic(fmt.Sprintf("%s (fetch and analyze this URL, then summarize)", goal), dryRun, "web-agentic")
+	}
+
+	maxSteps := r.assistMaxSteps()
+	stepsRun := 0
+	stepMode := mode
+	for {
+		if maxSteps > 0 && stepsRun >= maxSteps {
+			r.logger.Printf("Reached max steps (%d).", maxSteps)
+			return nil
+		}
+		suggestion, err := r.getAssistSuggestion(goal, stepMode)
+		if err != nil {
+			return err
+		}
+		if suggestion.Type == "noop" && strings.TrimSpace(goal) != "" {
+			if r.cfg.UI.Verbose {
+				r.logger.Printf("No actionable suggestion; answering via /ask.")
+			}
+			return r.handleAsk(goal)
+		}
+		if suggestion.Type == "plan" {
+			return r.handlePlanSuggestion(suggestion, dryRun)
+		}
+		if err := r.executeAssistSuggestion(suggestion, dryRun); err != nil {
+			return err
+		}
+		if dryRun {
+			return nil
+		}
+		if suggestion.Type == "question" {
+			return nil
+		}
+		stepsRun++
+		stepMode = "execute-step"
+	}
+}
+
+func (r *Runner) assistMaxSteps() int {
+	if r.cfg.Agent.MaxSteps > 0 {
+		return r.cfg.Agent.MaxSteps
+	}
+	return 6
 }
 
 func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bool) error {
@@ -1546,9 +1597,15 @@ func (r *Runner) handlePlanSuggestion(suggestion assist.Suggestion, dryRun bool)
 	}
 	if len(suggestion.Steps) > 0 {
 		fmt.Println("Plan steps:")
-		for i, step := range suggestion.Steps {
+		steps := suggestion.Steps
+		maxSteps := r.assistMaxSteps()
+		if maxSteps > 0 && len(steps) > maxSteps {
+			steps = steps[:maxSteps]
+		}
+		for i, step := range steps {
 			fmt.Printf("%d) %s\n", i+1, step)
 		}
+		suggestion.Steps = steps
 	}
 	if dryRun {
 		return nil

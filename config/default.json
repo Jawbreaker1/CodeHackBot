@@ -2,7 +2,8 @@
   "agent": {
     "name": "BirdHackBot",
     "model": "openai/gpt-oss-20b",
-    "system_prompt": "prompts/system.md"
+    "system_prompt": "prompts/system.md",
+    "max_steps": 6
   },
   "llm": {
     "base_url": "http://192.168.50.213:1234/v1",
