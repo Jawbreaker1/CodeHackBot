@@ -20,6 +20,8 @@ type Input struct {
 	Plan        string
 	Goal        string
 	ChatHistory string
+	WorkingDir  string
+	RecentLog   string
 }
 
 type Suggestion struct {
@@ -108,7 +110,7 @@ func (c ChainedAssistant) Suggest(ctx context.Context, input Input) (Suggestion,
 	return Suggestion{}, fmt.Errorf("no assistant available")
 }
 
-const assistSystemPrompt = "You are a security testing assistant. Respond with JSON only: {\"type\":\"command|question|noop\",\"command\":\"\",\"args\":[\"\"],\"question\":\"\",\"summary\":\"\",\"risk\":\"low|medium|high\"}. Provide one safe next action. The command must be a real executable (e.g., nmap, curl, nc, ping). Put flags/targets in args. Prefer verbose flags when safe (-v/--verbose) so users see progress. Do not use placeholders like \"scan\"; if you cannot provide a concrete command, return type=question. Stay within scope and avoid destructive actions unless explicitly requested."
+const assistSystemPrompt = "You are a security testing assistant. Respond with JSON only: {\"type\":\"command|question|noop\",\"command\":\"\",\"args\":[\"\"],\"question\":\"\",\"summary\":\"\",\"risk\":\"low|medium|high\"}. Provide one safe next action. The command must be a real executable (e.g., nmap, curl, nc, ping). Put flags/targets in args. Prefer verbose flags when safe (-v/--verbose) so users see progress. You can run shell commands locally in the working directory provided to inspect files or run tooling. Do not use placeholders like \"scan\"; if you cannot provide a concrete command, return type=question. Stay within scope and avoid destructive actions unless explicitly requested."
 
 func buildPrompt(input Input) string {
 	builder := strings.Builder{}
@@ -129,6 +131,12 @@ func buildPrompt(input Input) string {
 	}
 	if input.ChatHistory != "" {
 		builder.WriteString("\nRecent conversation:\n" + input.ChatHistory + "\n")
+	}
+	if input.WorkingDir != "" {
+		builder.WriteString("\nWorking directory:\n" + input.WorkingDir + "\n")
+	}
+	if input.RecentLog != "" {
+		builder.WriteString("\nRecent log snippet:\n" + input.RecentLog + "\n")
 	}
 	if input.Plan != "" {
 		builder.WriteString("\nPlan snippet:\n" + input.Plan + "\n")

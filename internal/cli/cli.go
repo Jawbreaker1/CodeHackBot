@@ -1082,6 +1082,8 @@ func (r *Runner) assistInput(sessionDir, goal string) (assist.Input, error) {
 	summaryText := readFileTrimmed(artifacts.SummaryPath)
 	facts, _ := memory.ReadBullets(artifacts.FactsPath)
 	history := r.readChatHistory(artifacts.ChatPath)
+	workingDir := r.currentWorkingDir()
+	recentLog := r.readRecentLogSnippet(artifacts)
 	planPath := filepath.Join(sessionDir, r.cfg.Session.PlanFilename)
 	inventoryPath := filepath.Join(sessionDir, r.cfg.Session.InventoryFilename)
 	return assist.Input{
@@ -1091,6 +1093,8 @@ func (r *Runner) assistInput(sessionDir, goal string) (assist.Input, error) {
 		Summary:     summaryText,
 		KnownFacts:  facts,
 		ChatHistory: history,
+		WorkingDir:  workingDir,
+		RecentLog:   recentLog,
 		Plan:        readFileTrimmed(planPath),
 		Inventory:   readFileTrimmed(inventoryPath),
 		Goal:        strings.TrimSpace(goal),
@@ -1176,6 +1180,38 @@ func filterNonEmpty(lines []string) []string {
 		out = append(out, line)
 	}
 	return out
+}
+
+func (r *Runner) currentWorkingDir() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return wd
+}
+
+func (r *Runner) readRecentLogSnippet(artifacts memory.Artifacts) string {
+	state, err := memory.LoadState(artifacts.StatePath)
+	if err != nil {
+		return ""
+	}
+	if len(state.RecentLogs) == 0 {
+		return ""
+	}
+	path := state.RecentLogs[len(state.RecentLogs)-1]
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	const maxBytes = 2000
+	if len(data) > maxBytes {
+		data = data[len(data)-maxBytes:]
+	}
+	content := strings.TrimSpace(string(data))
+	if content == "" {
+		return ""
+	}
+	return fmt.Sprintf("[log: %s]\n%s", path, content)
 }
 
 func sanitizeFilename(name string) string {
@@ -1327,6 +1363,9 @@ func looksLikeChat(text string) bool {
 }
 
 func looksLikeAction(text string) bool {
+	if looksLikeFileQuery(text) {
+		return true
+	}
 	verbs := map[string]struct{}{
 		"scan": {}, "enumerate": {}, "list": {}, "show": {}, "find": {}, "run": {}, "check": {}, "exploit": {},
 		"test": {}, "probe": {}, "search": {}, "ping": {}, "nmap": {}, "curl": {}, "msf": {}, "msfconsole": {},
@@ -1359,6 +1398,42 @@ func splitTokens(text string) []string {
 		}
 		return true
 	})
+}
+
+func looksLikeFileQuery(text string) bool {
+	lower := strings.ToLower(text)
+	if !hasFileHint(lower) {
+		return false
+	}
+	if strings.Contains(lower, "?") {
+		return true
+	}
+	if hasPrefixOneOf(lower, "open", "read", "show", "view", "display", "cat", "print") {
+		return true
+	}
+	if strings.Contains(lower, "inside") || strings.Contains(lower, "contents") || strings.Contains(lower, "content") {
+		return true
+	}
+	if strings.Contains(lower, "what is in") || strings.Contains(lower, "what's in") {
+		return true
+	}
+	return false
+}
+
+func hasFileHint(text string) bool {
+	if strings.Contains(text, "readme") {
+		return true
+	}
+	if strings.Contains(text, "/") || strings.Contains(text, "\\") {
+		return true
+	}
+	extensions := []string{".md", ".txt", ".log", ".json", ".yaml", ".yml", ".toml", ".ini", ".conf", ".cfg", ".go", ".py", ".sh", ".js", ".ts"}
+	for _, ext := range extensions {
+		if strings.Contains(text, ext) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Runner) readLine(prompt string) (string, error) {
