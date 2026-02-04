@@ -91,6 +91,15 @@ func (a LLMAssistant) Suggest(ctx context.Context, input Input) (Suggestion, err
 	raw := extractJSON(resp.Content)
 	var suggestion Suggestion
 	if err := json.Unmarshal([]byte(raw), &suggestion); err != nil {
+		fallback := parseSimpleCommand(resp.Content)
+		if fallback != "" {
+			return normalizeSuggestion(Suggestion{
+				Type:    "command",
+				Command: fallback,
+				Summary: "Recovered command from plain-text response.",
+				Risk:    "low",
+			}), nil
+		}
 		return Suggestion{}, fmt.Errorf("parse suggestion json: %w", err)
 	}
 	return normalizeSuggestion(suggestion), nil
@@ -184,6 +193,49 @@ func extractJSON(content string) string {
 		return trimmed[start : end+1]
 	}
 	return trimmed
+}
+
+func parseSimpleCommand(content string) string {
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		lower := strings.ToLower(line)
+		if lower == "run:" || strings.HasPrefix(lower, "run ") {
+			continue
+		}
+		if strings.HasPrefix(line, "```") {
+			continue
+		}
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* ") {
+			line = strings.TrimSpace(line[2:])
+		}
+		if looksLikeShellCommand(line) {
+			return line
+		}
+	}
+	return ""
+}
+
+func looksLikeShellCommand(line string) bool {
+	if line == "" {
+		return false
+	}
+	if strings.Contains(line, " ") {
+		return true
+	}
+	common := map[string]struct{}{
+		"ls": {}, "pwd": {}, "whoami": {}, "hostname": {}, "ip": {}, "ifconfig": {}, "uname": {}, "cat": {}, "curl": {}, "nmap": {}, "dig": {}, "nslookup": {}, "whois": {},
+	}
+	if _, ok := common[line]; ok {
+		return true
+	}
+	return false
 }
 
 func normalizeSuggestion(suggestion Suggestion) Suggestion {
