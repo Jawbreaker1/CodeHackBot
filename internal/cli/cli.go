@@ -138,6 +138,8 @@ func (r *Runner) handleCommand(line string) error {
 		return r.handleClean(args)
 	case "ask":
 		return r.handleAsk(strings.Join(args, " "))
+	case "browse":
+		return r.handleBrowse(args)
 	case "summarize":
 		return r.handleSummarize(args)
 	case "run":
@@ -650,7 +652,7 @@ func (r *Runner) handleAsk(text string) error {
 		Messages: []llm.Message{
 			{
 				Role:    "system",
-				Content: "You are BirdHackBot, a security testing assistant operating in an authorized lab owned by the user. Provide direct help within scope, including inspecting local files or assisting with encrypted files the user created. If access requires a password, ask for it; if asked to crack a password, proceed only when the user confirms authorization for that file. Answer clearly and concisely and ask follow-up questions when needed.",
+				Content: "You are BirdHackBot, a security testing assistant operating in an authorized lab owned by the user. Provide direct help within scope, including inspecting local files or assisting with encrypted files the user created. If access requires a password, ask for it; if asked to crack a password, proceed only when the user confirms authorization for that file. Do not emit tool-call markup; respond in plain text. If web access is needed, ask the user to run /browse with the URL (it requires approval). Answer clearly and concisely and ask follow-up questions when needed.",
 			},
 			{
 				Role:    "user",
@@ -1005,7 +1007,7 @@ func (r *Runner) Stop() {
 }
 
 func (r *Runner) printHelp() {
-	r.logger.Printf("Commands: /init /permissions /verbose /context [/show] /ledger /status /plan /next /execute /assist /script /clean /ask /summarize /run /msf /report /resume /stop /exit")
+	r.logger.Printf("Commands: /init /permissions /verbose /context [/show] /ledger /status /plan /next /execute /assist /script /clean /ask /browse /summarize /run /msf /report /resume /stop /exit")
 	r.logger.Printf("Example: /permissions readonly")
 	r.logger.Printf("Plain text routes to /ask if it looks like chat; otherwise /assist.")
 	r.logger.Printf("Session logs live under: %s", filepath.Clean(r.cfg.Session.LogDir))
@@ -1432,6 +1434,15 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 	}
 	if dryRun {
 		return nil
+	}
+	if strings.EqualFold(suggestion.Command, "browse") {
+		if len(suggestion.Args) == 0 {
+			return fmt.Errorf("assistant returned browse without url")
+		}
+		return r.handleBrowse(suggestion.Args)
+	}
+	if strings.HasPrefix(strings.ToLower(suggestion.Command), "http") && len(suggestion.Args) == 0 {
+		return r.handleBrowse([]string{suggestion.Command})
 	}
 	args := append([]string{suggestion.Command}, suggestion.Args...)
 	return r.handleRun(args)
