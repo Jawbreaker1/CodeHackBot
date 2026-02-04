@@ -2,8 +2,10 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -64,7 +66,24 @@ func (r *Runner) handleBrowse(args []string) error {
 	req.Header.Set("User-Agent", "BirdHackBot/0.1 (+lab)")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("fetch: %w", err)
+		if altURL, ok := alternateHostURL(target); ok {
+			reqAlt, altErr := http.NewRequestWithContext(ctx, http.MethodGet, altURL, nil)
+			if altErr == nil {
+				reqAlt.Header.Set("User-Agent", "BirdHackBot/0.1 (+lab)")
+				respAlt, altDoErr := http.DefaultClient.Do(reqAlt)
+				if altDoErr == nil {
+					resp = respAlt
+					target = altURL
+				} else if isDNSError(err) || strings.Contains(err.Error(), "no such host") {
+					return fmt.Errorf("fetch: %w (also tried %s)", err, altURL)
+				}
+			}
+		} else if isDNSError(err) || strings.Contains(err.Error(), "no such host") {
+			return fmt.Errorf("fetch: %w (check spelling or DNS)", err)
+		}
+		if resp == nil {
+			return fmt.Errorf("fetch: %w", err)
+		}
 	}
 	defer resp.Body.Close()
 
@@ -108,6 +127,31 @@ func normalizeURL(raw string) (string, error) {
 		return "", fmt.Errorf("invalid url host")
 	}
 	return parsed.String(), nil
+}
+
+func alternateHostURL(raw string) (string, bool) {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" {
+		return "", false
+	}
+	host := parsed.Host
+	if strings.HasPrefix(host, "www.") {
+		parsed.Host = strings.TrimPrefix(host, "www.")
+	} else {
+		parsed.Host = "www." + host
+	}
+	return parsed.String(), true
+}
+
+func isDNSError(err error) bool {
+	var dnsErr *net.DNSError
+	if err == nil {
+		return false
+	}
+	if errors.As(err, &dnsErr) {
+		return true
+	}
+	return false
 }
 
 func extractTitle(content string) string {
