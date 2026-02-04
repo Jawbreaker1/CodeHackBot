@@ -13,7 +13,7 @@ func TestEnsureArtifactsCreatesFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnsureArtifacts error: %v", err)
 	}
-	paths := []string{artifacts.SummaryPath, artifacts.FactsPath, artifacts.FocusPath, artifacts.StatePath}
+	paths := []string{artifacts.SummaryPath, artifacts.FactsPath, artifacts.FocusPath, artifacts.StatePath, artifacts.ChatPath}
 	for _, path := range paths {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("missing artifact %s: %v", path, err)

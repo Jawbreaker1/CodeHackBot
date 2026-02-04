@@ -580,6 +580,8 @@ func (r *Runner) handleAsk(text string) error {
 		return err
 	}
 	prompt := r.buildAskPrompt(sessionDir, text)
+	artifacts, _ := memory.EnsureArtifacts(sessionDir)
+	r.appendChatHistory(artifacts.ChatPath, "User", text)
 	client := llm.NewLMStudioClient(r.cfg)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -606,6 +608,7 @@ func (r *Runner) handleAsk(text string) error {
 		r.logger.Printf("Assistant response:")
 	}
 	fmt.Println(resp.Content)
+	r.appendChatHistory(artifacts.ChatPath, "Assistant", resp.Content)
 	return nil
 }
 
@@ -1096,11 +1099,15 @@ func (r *Runner) buildAskPrompt(sessionDir, question string) string {
 	summary := readFileTrimmed(artifacts.SummaryPath)
 	facts := readFileTrimmed(artifacts.FactsPath)
 	focus := readFileTrimmed(artifacts.FocusPath)
+	history := r.readChatHistory(artifacts.ChatPath)
 	planPath := filepath.Join(sessionDir, r.cfg.Session.PlanFilename)
 	inventoryPath := filepath.Join(sessionDir, r.cfg.Session.InventoryFilename)
 
 	builder := strings.Builder{}
 	builder.WriteString("User question: " + question + "\n")
+	if history != "" {
+		builder.WriteString("\nRecent conversation:\n" + history + "\n")
+	}
 	if summary != "" {
 		builder.WriteString("\nSummary:\n" + summary + "\n")
 	}
@@ -1119,6 +1126,53 @@ func (r *Runner) buildAskPrompt(sessionDir, question string) string {
 		builder.WriteString("\nInventory:\n" + inventory + "\n")
 	}
 	return builder.String()
+}
+
+func (r *Runner) readChatHistory(path string) string {
+	if r.cfg.Context.ChatHistoryLines <= 0 || path == "" {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	lines = filterNonEmpty(lines)
+	if len(lines) == 0 {
+		return ""
+	}
+	if len(lines) > r.cfg.Context.ChatHistoryLines {
+		lines = lines[len(lines)-r.cfg.Context.ChatHistoryLines:]
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (r *Runner) appendChatHistory(path, role, content string) {
+	if r.cfg.Context.ChatHistoryLines <= 0 || path == "" {
+		return
+	}
+	clean := strings.TrimSpace(strings.ReplaceAll(content, "\n", " "))
+	if clean == "" {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = fmt.Fprintf(f, "%s: %s\n", role, clean)
+}
+
+func filterNonEmpty(lines []string) []string {
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
 }
 
 func sanitizeFilename(name string) string {

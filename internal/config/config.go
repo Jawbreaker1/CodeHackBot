@@ -34,6 +34,7 @@ type Config struct {
 		MaxRecentOutputs   int `json:"max_recent_outputs"`
 		SummarizeEvery     int `json:"summarize_every_steps"`
 		SummarizeAtPercent int `json:"summarize_at_percent"`
+		ChatHistoryLines   int `json:"chat_history_lines"`
 	} `json:"context"`
 	Session struct {
 		LedgerEnabled     bool   `json:"ledger_enabled"`

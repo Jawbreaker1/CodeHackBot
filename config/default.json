@@ -24,7 +24,8 @@
   "context": {
     "max_recent_outputs": 20,
     "summarize_every_steps": 8,
-    "summarize_at_percent": 70
+    "summarize_at_percent": 70,
+    "chat_history_lines": 16
   },
   "session": {
     "ledger_enabled": false,

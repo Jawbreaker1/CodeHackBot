@@ -11,6 +11,7 @@ const (
 	FactsFilename   = "known_facts.md"
 	FocusFilename   = "focus.md"
 	StateFilename   = "context.json"
+	ChatFilename    = "chat.log"
 )
 
 type Artifacts struct {
@@ -18,6 +19,7 @@ type Artifacts struct {
 	FactsPath   string
 	FocusPath   string
 	StatePath   string
+	ChatPath    string
 }
 
 func EnsureArtifacts(sessionDir string) (Artifacts, error) {
@@ -33,6 +35,7 @@ func EnsureArtifacts(sessionDir string) (Artifacts, error) {
 		FactsPath:   filepath.Join(sessionDir, FactsFilename),
 		FocusPath:   filepath.Join(sessionDir, FocusFilename),
 		StatePath:   filepath.Join(sessionDir, StateFilename),
+		ChatPath:    filepath.Join(sessionDir, ChatFilename),
 	}
 
 	if _, err := os.Stat(paths.SummaryPath); os.IsNotExist(err) {
@@ -53,6 +56,11 @@ func EnsureArtifacts(sessionDir string) (Artifacts, error) {
 	if _, err := os.Stat(paths.StatePath); os.IsNotExist(err) {
 		if err := SaveState(paths.StatePath, State{}); err != nil {
 			return Artifacts{}, err
+		}
+	}
+	if _, err := os.Stat(paths.ChatPath); os.IsNotExist(err) {
+		if err := os.WriteFile(paths.ChatPath, nil, 0o644); err != nil {
+			return Artifacts{}, fmt.Errorf("write chat history: %w", err)
 		}
 	}
 
