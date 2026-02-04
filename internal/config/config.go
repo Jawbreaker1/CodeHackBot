@@ -35,6 +35,8 @@ type Config struct {
 		SummarizeEvery     int `json:"summarize_every_steps"`
 		SummarizeAtPercent int `json:"summarize_at_percent"`
 		ChatHistoryLines   int `json:"chat_history_lines"`
+		PlaybookMax        int `json:"playbook_max"`
+		PlaybookLines      int `json:"playbook_lines"`
 	} `json:"context"`
 	Session struct {
 		LedgerEnabled     bool   `json:"ledger_enabled"`

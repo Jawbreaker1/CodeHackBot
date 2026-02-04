@@ -25,7 +25,9 @@
     "max_recent_outputs": 20,
     "summarize_every_steps": 8,
     "summarize_at_percent": 70,
-    "chat_history_lines": 16
+    "chat_history_lines": 16,
+    "playbook_max": 2,
+    "playbook_lines": 60
   },
   "session": {
     "ledger_enabled": false,

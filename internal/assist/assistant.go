@@ -22,6 +22,7 @@ type Input struct {
 	ChatHistory string
 	WorkingDir  string
 	RecentLog   string
+	Playbooks   string
 }
 
 type Suggestion struct {
@@ -137,6 +138,9 @@ func buildPrompt(input Input) string {
 	}
 	if input.RecentLog != "" {
 		builder.WriteString("\nRecent log snippet:\n" + input.RecentLog + "\n")
+	}
+	if input.Playbooks != "" {
+		builder.WriteString("\nRelevant playbooks:\n" + input.Playbooks + "\n")
 	}
 	if input.Plan != "" {
 		builder.WriteString("\nPlan snippet:\n" + input.Plan + "\n")

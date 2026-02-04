@@ -92,6 +92,9 @@ func buildPrompt(input Input) string {
 	builder.WriteString(fmt.Sprintf("Session: %s\n", input.SessionID))
 	builder.WriteString(fmt.Sprintf("Scope: %s\n", joinOrFallback(input.Scope)))
 	builder.WriteString(fmt.Sprintf("Targets: %s\n", joinOrFallback(input.Targets)))
+	if input.Goal != "" {
+		builder.WriteString("\nGoal:\n" + input.Goal + "\n")
+	}
 	if input.Summary != "" {
 		builder.WriteString("\nSummary:\n" + input.Summary + "\n")
 	}
@@ -101,8 +104,14 @@ func buildPrompt(input Input) string {
 			builder.WriteString("- " + fact + "\n")
 		}
 	}
+	if input.Playbooks != "" {
+		builder.WriteString("\nRelevant playbooks:\n" + input.Playbooks + "\n")
+	}
 	if input.Inventory != "" {
 		builder.WriteString("\nInventory:\n" + input.Inventory + "\n")
+	}
+	if input.Plan != "" {
+		builder.WriteString("\nExisting plan:\n" + input.Plan + "\n")
 	}
 	return builder.String()
 }

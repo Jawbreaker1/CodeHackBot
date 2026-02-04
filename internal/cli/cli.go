@@ -21,6 +21,7 @@ import (
 	"github.com/Jawbreaker1/CodeHackBot/internal/memory"
 	"github.com/Jawbreaker1/CodeHackBot/internal/msf"
 	"github.com/Jawbreaker1/CodeHackBot/internal/plan"
+	"github.com/Jawbreaker1/CodeHackBot/internal/playbook"
 	"github.com/Jawbreaker1/CodeHackBot/internal/report"
 	"github.com/Jawbreaker1/CodeHackBot/internal/session"
 )
@@ -127,6 +128,8 @@ func (r *Runner) handleCommand(line string) error {
 		return r.handlePlan(args)
 	case "next":
 		return r.handleNext(args)
+	case "execute":
+		return r.handleExecute(args)
 	case "assist":
 		return r.handleAssist(args)
 	case "script":
@@ -388,6 +391,10 @@ func (r *Runner) handlePlanAuto(reason string) error {
 	if err != nil {
 		return err
 	}
+	if reason != "" {
+		input.Goal = reason
+	}
+	input.Playbooks = r.playbookHints(reason)
 	planner := r.planGenerator()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -418,6 +425,7 @@ func (r *Runner) handleNext(_ []string) error {
 	if err != nil {
 		return err
 	}
+	input.Playbooks = r.playbookHints(input.Plan)
 	planner := r.planGenerator()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -430,6 +438,57 @@ func (r *Runner) handleNext(_ []string) error {
 		r.logger.Printf("- %s", step)
 	}
 	return nil
+}
+
+func (r *Runner) handleExecute(args []string) error {
+	r.setTask("execute")
+	defer r.clearTask()
+
+	if r.cfg.Permissions.Level == "readonly" {
+		return fmt.Errorf("readonly mode: execute not permitted")
+	}
+
+	mode := ""
+	if len(args) > 0 {
+		mode = strings.ToLower(args[0])
+	}
+
+	sessionDir, err := r.ensureSessionScaffold()
+	if err != nil {
+		return err
+	}
+
+	if mode == "auto" || mode == "plan" {
+		if err := r.handlePlanAuto("execute"); err != nil {
+			return err
+		}
+	}
+
+	input, err := r.planInput(sessionDir)
+	if err != nil {
+		return err
+	}
+	input.Playbooks = r.playbookHints(input.Plan)
+	planner := r.planGenerator()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	steps, err := planner.Next(ctx, input)
+	if err != nil {
+		return err
+	}
+	if len(steps) == 0 {
+		return fmt.Errorf("no next steps available")
+	}
+
+	stepIndex := 0
+	if len(args) > 1 {
+		if value, err := strconv.Atoi(args[1]); err == nil && value > 0 && value <= len(steps) {
+			stepIndex = value - 1
+		}
+	}
+	step := steps[stepIndex]
+	r.logger.Printf("Executing step: %s", step)
+	return r.handleAssistGoal(step, false)
 }
 
 func (r *Runner) handleScript(args []string) error {
@@ -932,7 +991,7 @@ func (r *Runner) Stop() {
 }
 
 func (r *Runner) printHelp() {
-	r.logger.Printf("Commands: /init /permissions /verbose /context [/show] /ledger /status /plan /next /assist /script /clean /ask /summarize /run /msf /report /resume /stop /exit")
+	r.logger.Printf("Commands: /init /permissions /verbose /context [/show] /ledger /status /plan /next /execute /assist /script /clean /ask /summarize /run /msf /report /resume /stop /exit")
 	r.logger.Printf("Example: /permissions readonly")
 	r.logger.Printf("Plain text routes to /ask if it looks like chat; otherwise /assist.")
 	r.logger.Printf("Session logs live under: %s", filepath.Clean(r.cfg.Session.LogDir))
@@ -1008,6 +1067,8 @@ func (r *Runner) planInput(sessionDir string) (plan.Input, error) {
 	facts, _ := memory.ReadBullets(artifacts.FactsPath)
 	inventoryPath := filepath.Join(sessionDir, r.cfg.Session.InventoryFilename)
 	inventory := readFileTrimmed(inventoryPath)
+	planPath := filepath.Join(sessionDir, r.cfg.Session.PlanFilename)
+	planText := readFileTrimmed(planPath)
 
 	return plan.Input{
 		SessionID:  r.sessionID,
@@ -1016,6 +1077,7 @@ func (r *Runner) planInput(sessionDir string) (plan.Input, error) {
 		Summary:    summaryText,
 		KnownFacts: facts,
 		Inventory:  inventory,
+		Plan:       planText,
 	}, nil
 }
 
@@ -1084,6 +1146,7 @@ func (r *Runner) assistInput(sessionDir, goal string) (assist.Input, error) {
 	history := r.readChatHistory(artifacts.ChatPath)
 	workingDir := r.currentWorkingDir()
 	recentLog := r.readRecentLogSnippet(artifacts)
+	playbooks := r.playbookHints(goal)
 	planPath := filepath.Join(sessionDir, r.cfg.Session.PlanFilename)
 	inventoryPath := filepath.Join(sessionDir, r.cfg.Session.InventoryFilename)
 	return assist.Input{
@@ -1095,6 +1158,7 @@ func (r *Runner) assistInput(sessionDir, goal string) (assist.Input, error) {
 		ChatHistory: history,
 		WorkingDir:  workingDir,
 		RecentLog:   recentLog,
+		Playbooks:   playbooks,
 		Plan:        readFileTrimmed(planPath),
 		Inventory:   readFileTrimmed(inventoryPath),
 		Goal:        strings.TrimSpace(goal),
@@ -1212,6 +1276,29 @@ func (r *Runner) readRecentLogSnippet(artifacts memory.Artifacts) string {
 		return ""
 	}
 	return fmt.Sprintf("[log: %s]\n%s", path, content)
+}
+
+func (r *Runner) playbookHints(goal string) string {
+	if r.cfg.Context.PlaybookMax == 0 {
+		return ""
+	}
+	entries, err := playbook.Load(filepath.Join("docs", "playbooks"))
+	if err != nil || len(entries) == 0 {
+		return ""
+	}
+	text := strings.TrimSpace(goal)
+	if text == "" {
+		return ""
+	}
+	matches := playbook.Match(entries, text, r.cfg.Context.PlaybookMax)
+	if len(matches) == 0 {
+		lower := strings.ToLower(text)
+		if strings.Contains(lower, "playbook") || strings.Contains(lower, "workflow") || strings.Contains(lower, "procedure") {
+			return playbook.List(entries)
+		}
+		return ""
+	}
+	return playbook.Render(matches, r.cfg.Context.PlaybookLines)
 }
 
 func sanitizeFilename(name string) string {

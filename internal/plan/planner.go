@@ -13,6 +13,9 @@ type Input struct {
 	Summary    string
 	KnownFacts []string
 	Inventory  string
+	Plan       string
+	Goal       string
+	Playbooks  string
 }
 
 type Planner interface {
@@ -73,6 +76,10 @@ func (FallbackPlanner) Plan(_ context.Context, input Input) (string, error) {
 		for _, fact := range input.KnownFacts {
 			builder.WriteString("- " + fact + "\n")
 		}
+	}
+	if input.Playbooks != "" {
+		builder.WriteString("\n### Relevant Playbooks\n")
+		builder.WriteString(input.Playbooks + "\n")
 	}
 	return builder.String(), nil
 }
