@@ -821,8 +821,9 @@ func (r *Runner) handleRun(args []string) error {
 		if wasCanceled {
 			err = fmt.Errorf("command interrupted")
 			r.logger.Printf("Interrupted. What should I do differently?")
+			return err
 		}
-		return err
+		return commandError{Result: result, Err: err}
 	}
 	return nil
 }
@@ -1494,7 +1495,13 @@ func (r *Runner) handleAssistSingleStep(goal string, dryRun bool, mode string) e
 		}
 		return r.handleAsk(goal)
 	}
-	return r.executeAssistSuggestion(suggestion, dryRun)
+	if err := r.executeAssistSuggestion(suggestion, dryRun); err != nil {
+		if r.handleAssistCommandFailure(suggestion, err) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) error {
@@ -1537,6 +1544,9 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 			return r.handlePlanSuggestion(suggestion, dryRun)
 		}
 		if err := r.executeAssistSuggestion(suggestion, dryRun); err != nil {
+			if r.handleAssistCommandFailure(suggestion, err) {
+				return nil
+			}
 			return err
 		}
 		if dryRun {
@@ -1680,6 +1690,117 @@ func (r *Runner) handlePlanSuggestion(suggestion assist.Suggestion, dryRun bool)
 		}
 	}
 	return nil
+}
+
+func (r *Runner) handleAssistCommandFailure(suggestion assist.Suggestion, err error) bool {
+	var cmdErr commandError
+	if !errors.As(err, &cmdErr) {
+		return false
+	}
+	summary := summarizeCommandFailure(cmdErr)
+	if summary != "" {
+		r.logger.Printf("Command failed: %s", summary)
+	} else {
+		r.logger.Printf("Command failed: %v", cmdErr.Err)
+	}
+	if hint := assistFailureHint(suggestion, cmdErr); hint != "" {
+		r.logger.Printf("Hint: %s", hint)
+	}
+	if r.tryAssistRecovery(suggestion, cmdErr) {
+		return true
+	}
+	return true
+}
+
+func summarizeCommandFailure(cmdErr commandError) string {
+	parts := []string{}
+	if cmdErr.Err != nil {
+		parts = append(parts, cmdErr.Err.Error())
+	}
+	if output := firstLines(cmdErr.Result.Output, 2); output != "" {
+		parts = append(parts, output)
+	}
+	return strings.Join(parts, " | ")
+}
+
+func assistFailureHint(suggestion assist.Suggestion, cmdErr commandError) string {
+	command := strings.ToLower(strings.TrimSpace(suggestion.Command))
+	outputLower := strings.ToLower(cmdErr.Result.Output)
+	errLower := ""
+	if cmdErr.Err != nil {
+		errLower = strings.ToLower(cmdErr.Err.Error())
+	}
+	if command == "whois" {
+		if strings.Contains(outputLower, "no match") || strings.Contains(outputLower, "not found") {
+			return "WHOIS typically only supports root domains (e.g., systemverification.com), not subdomains."
+		}
+	}
+	if strings.Contains(errLower, "executable file not found") || strings.Contains(errLower, "not found") {
+		return "Tool not available in PATH. Install it or update your tool inventory."
+	}
+	return ""
+}
+
+func (r *Runner) tryAssistRecovery(suggestion assist.Suggestion, cmdErr commandError) bool {
+	command := strings.ToLower(strings.TrimSpace(suggestion.Command))
+	if command != "whois" {
+		return false
+	}
+	if len(cmdErr.Result.Args) == 0 {
+		return false
+	}
+	original := cmdErr.Result.Args[0]
+	alt, ok := normalizeWhoisTarget(original)
+	if !ok || strings.EqualFold(alt, original) {
+		return false
+	}
+	outputLower := strings.ToLower(cmdErr.Result.Output)
+	if outputLower != "" && !strings.Contains(outputLower, "no match") && !strings.Contains(outputLower, "not found") {
+		return false
+	}
+	r.logger.Printf("Retrying whois with root domain: %s", alt)
+	if retryErr := r.handleRun([]string{"whois", alt}); retryErr != nil {
+		r.logger.Printf("Retry failed: %v", retryErr)
+	}
+	return true
+}
+
+func normalizeWhoisTarget(target string) (string, bool) {
+	trimmed := strings.TrimSpace(target)
+	if trimmed == "" {
+		return "", false
+	}
+	lower := strings.ToLower(trimmed)
+	lower = strings.TrimPrefix(lower, "http://")
+	lower = strings.TrimPrefix(lower, "https://")
+	lower = strings.SplitN(lower, "/", 2)[0]
+	lower = strings.TrimSuffix(lower, ".")
+	if strings.HasPrefix(lower, "www.") {
+		lower = strings.TrimPrefix(lower, "www.")
+	}
+	if lower == "" {
+		return "", false
+	}
+	return lower, true
+}
+
+func firstLines(text string, maxLines int) string {
+	if maxLines <= 0 {
+		return ""
+	}
+	lines := strings.Split(strings.TrimSpace(text), "\n")
+	out := []string{}
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		out = append(out, line)
+		if len(out) >= maxLines {
+			break
+		}
+	}
+	return strings.Join(out, " / ")
 }
 
 func isPlaceholderCommand(cmd string) bool {
@@ -2075,6 +2196,22 @@ func formatElapsed(d time.Duration) string {
 		return fmt.Sprintf("%02d:%02d:%02d", hours, minutes, seconds)
 	}
 	return fmt.Sprintf("%02d:%02d", minutes, seconds)
+}
+
+type commandError struct {
+	Result exec.CommandResult
+	Err    error
+}
+
+func (e commandError) Error() string {
+	if e.Err == nil {
+		return "command failed"
+	}
+	return e.Err.Error()
+}
+
+func (e commandError) Unwrap() error {
+	return e.Err
 }
 
 func (r *Runner) startLLMIndicator(label string) func() {
