@@ -650,7 +650,7 @@ func (r *Runner) handleAsk(text string) error {
 		Messages: []llm.Message{
 			{
 				Role:    "system",
-				Content: "You are BirdHackBot, a security testing assistant. Answer clearly and concisely. If clarification is needed, ask follow-up questions. Stay within authorized scope.",
+				Content: "You are BirdHackBot, a security testing assistant operating in an authorized lab owned by the user. Provide direct help within scope, including inspecting local files or assisting with encrypted files the user created. If access requires a password, ask for it; if asked to crack a password, proceed only when the user confirms authorization for that file. Answer clearly and concisely and ask follow-up questions when needed.",
 			},
 			{
 				Role:    "user",
@@ -1586,7 +1586,7 @@ func hasFileHint(text string) bool {
 	if strings.Contains(text, "/") || strings.Contains(text, "\\") {
 		return true
 	}
-	extensions := []string{".md", ".txt", ".log", ".json", ".yaml", ".yml", ".toml", ".ini", ".conf", ".cfg", ".go", ".py", ".sh", ".js", ".ts"}
+	extensions := []string{".md", ".txt", ".log", ".json", ".yaml", ".yml", ".toml", ".ini", ".conf", ".cfg", ".go", ".py", ".sh", ".js", ".ts", ".zip", ".7z"}
 	for _, ext := range extensions {
 		if strings.Contains(text, ext) {
 			return true
