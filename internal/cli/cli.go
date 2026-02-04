@@ -998,6 +998,7 @@ func (r *Runner) handleStop() error {
 		return err
 	}
 	r.logger.Printf("Session %s closed", r.sessionID)
+	r.logger.Printf("Resume with: %s --resume %s", filepath.Base(os.Args[0]), r.sessionID)
 	return nil
 }
 
