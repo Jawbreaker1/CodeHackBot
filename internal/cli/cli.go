@@ -1219,7 +1219,7 @@ func (r *Runner) buildAskPrompt(sessionDir, question string) string {
 	facts := readFileTrimmed(artifacts.FactsPath)
 	focus := readFileTrimmed(artifacts.FocusPath)
 	history := r.readChatHistory(artifacts.ChatPath)
-	recentLog := r.readRecentLogSnippet(artifacts)
+	recentLogs := r.readRecentLogSnippets(artifacts, 3)
 	planPath := filepath.Join(sessionDir, r.cfg.Session.PlanFilename)
 	inventoryPath := filepath.Join(sessionDir, r.cfg.Session.InventoryFilename)
 
@@ -1228,8 +1228,8 @@ func (r *Runner) buildAskPrompt(sessionDir, question string) string {
 	if history != "" {
 		builder.WriteString("\nRecent conversation:\n" + history + "\n")
 	}
-	if recentLog != "" {
-		builder.WriteString("\nRecent log snippet:\n" + recentLog + "\n")
+	if recentLogs != "" {
+		builder.WriteString("\nRecent log snippets:\n" + recentLogs + "\n")
 	}
 	if summary != "" {
 		builder.WriteString("\nSummary:\n" + summary + "\n")
@@ -1330,6 +1330,37 @@ func (r *Runner) readRecentLogSnippet(artifacts memory.Artifacts) string {
 	return fmt.Sprintf("[log: %s]\n%s", path, content)
 }
 
+func (r *Runner) readRecentLogSnippets(artifacts memory.Artifacts, maxLogs int) string {
+	state, err := memory.LoadState(artifacts.StatePath)
+	if err != nil {
+		return ""
+	}
+	if len(state.RecentLogs) == 0 {
+		return ""
+	}
+	paths := state.RecentLogs
+	if maxLogs > 0 && len(paths) > maxLogs {
+		paths = paths[len(paths)-maxLogs:]
+	}
+	const maxBytes = 1200
+	builder := strings.Builder{}
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if len(data) > maxBytes {
+			data = data[len(data)-maxBytes:]
+		}
+		content := strings.TrimSpace(string(data))
+		if content == "" {
+			continue
+		}
+		builder.WriteString(fmt.Sprintf("[log: %s]\n%s\n", path, content))
+	}
+	return strings.TrimSpace(builder.String())
+}
+
 func (r *Runner) playbookHints(goal string) string {
 	if r.cfg.Context.PlaybookMax == 0 {
 		return ""
@@ -1413,10 +1444,7 @@ func (r *Runner) handleAssistGoalWithMode(goal string, dryRun bool, mode string)
 		return fmt.Errorf("readonly mode: assist not permitted")
 	}
 	if url := extractFirstURL(goal); url != "" && shouldAutoBrowse(goal) {
-		if err := r.handleBrowse([]string{url}); err != nil {
-			return err
-		}
-		return r.handleAsk(goal)
+		return r.handleWebInfo(goal, url)
 	}
 	suggestion, err := r.getAssistSuggestion(goal, mode)
 	if err != nil {
