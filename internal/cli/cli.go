@@ -118,7 +118,7 @@ func (r *Runner) handleCommand(line string) error {
 	cmd := strings.ToLower(parts[0])
 	args := parts[1:]
 
-	if r.planWizardActive() && cmd != "plan" && cmd != "help" {
+	if r.planWizardActive() && cmd != "plan" && cmd != "help" && cmd != "stop" && cmd != "exit" && cmd != "quit" {
 		r.logger.Printf("Planning mode active. Use /plan done or /plan cancel.")
 		return nil
 	}
@@ -1522,8 +1522,16 @@ func (r *Runner) handlePlanSuggestion(suggestion assist.Suggestion, dryRun bool)
 	}
 	for i, step := range suggestion.Steps {
 		r.logger.Printf("Executing step %d/%d: %s", i+1, len(suggestion.Steps), step)
-		if err := r.handleAssistGoalWithMode(step, false, "execute-step"); err != nil {
+		result, err := r.getAssistSuggestion(step, "execute-step")
+		if err != nil {
 			return err
+		}
+		if err := r.executeAssistSuggestion(result, false); err != nil {
+			return err
+		}
+		if result.Type == "question" {
+			r.logger.Printf("Plan paused for user input. Continue after answering.")
+			break
 		}
 	}
 	return nil

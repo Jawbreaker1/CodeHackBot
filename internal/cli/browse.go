@@ -32,7 +32,6 @@ func (r *Runner) handleBrowse(args []string) error {
 		return err
 	}
 
-	approved := false
 	if r.cfg.Network.AssumeOffline {
 		ok, err := r.confirm(fmt.Sprintf("Network is disabled by config. Allow this fetch? %s", target))
 		if err != nil {
@@ -41,9 +40,7 @@ func (r *Runner) handleBrowse(args []string) error {
 		if !ok {
 			return fmt.Errorf("network access not approved")
 		}
-		approved = true
-	}
-	if !approved && r.cfg.Permissions.RequireApproval {
+	} else {
 		ok, err := r.confirm(fmt.Sprintf("Fetch URL: %s?", target))
 		if err != nil {
 			return err
