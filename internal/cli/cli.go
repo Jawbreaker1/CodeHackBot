@@ -24,11 +24,14 @@ import (
 	"github.com/Jawbreaker1/CodeHackBot/internal/playbook"
 	"github.com/Jawbreaker1/CodeHackBot/internal/report"
 	"github.com/Jawbreaker1/CodeHackBot/internal/session"
+	"golang.org/x/term"
 )
 
 const (
-	inputLineStyleStart = "\x1b[48;5;236m\x1b[38;5;252m"
-	inputLineStyleReset = "\x1b[0m"
+	inputLineStyleStart  = "\x1b[48;5;236m\x1b[38;5;252m"
+	inputLineStyleReset  = "\x1b[0m"
+	llmIndicatorDelay    = 700 * time.Millisecond
+	llmIndicatorInterval = 200 * time.Millisecond
 )
 
 type Runner struct {
@@ -43,6 +46,13 @@ type Runner struct {
 	currentTaskStart  time.Time
 	currentMode       string
 	planWizard        *planWizard
+	history           []string
+	historyIndex      int
+	historyScratch    string
+	llmMu             sync.Mutex
+	llmInFlight       bool
+	llmLabel          string
+	llmStarted        time.Time
 	llmGuard          llm.Guard
 }
 
@@ -54,6 +64,7 @@ func NewRunner(cfg config.Config, sessionID, defaultConfigPath, profilePath stri
 		reader:            bufio.NewReader(os.Stdin),
 		defaultConfigPath: defaultConfigPath,
 		profilePath:       profilePath,
+		historyIndex:      -1,
 		llmGuard:          llm.NewGuard(cfg.LLM.MaxFailures, time.Duration(cfg.LLM.CooldownSeconds)*time.Second),
 	}
 }
@@ -291,12 +302,21 @@ func (r *Runner) handleLedger(args []string) error {
 }
 
 func (r *Runner) handleStatus() {
+	active, label, started := r.llmStatus()
 	if r.currentTask == "" {
+		if !active {
+			r.logger.Printf("Status: idle")
+			return
+		}
 		r.logger.Printf("Status: idle")
+		r.logger.Printf("LLM: %s (%s)", label, formatElapsed(time.Since(started)))
 		return
 	}
 	elapsed := formatElapsed(time.Since(r.currentTaskStart))
 	r.logger.Printf("Status: running %s (%s)", r.currentTask, elapsed)
+	if active {
+		r.logger.Printf("LLM: %s (%s)", label, formatElapsed(time.Since(started)))
+	}
 }
 
 func (r *Runner) handleSummarize(args []string) error {
@@ -319,6 +339,8 @@ func (r *Runner) handleSummarize(args []string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	stopIndicator := r.startLLMIndicatorIfAllowed("summarize")
+	defer stopIndicator()
 	if err := manager.Summarize(ctx, summarizer, reason); err != nil {
 		return err
 	}
@@ -429,6 +451,8 @@ func (r *Runner) handlePlanAuto(reason string) error {
 	planner := r.planGenerator()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	stopIndicator := r.startLLMIndicatorIfAllowed("plan")
+	defer stopIndicator()
 	content, err := planner.Plan(ctx, input)
 	if err != nil {
 		return err
@@ -460,6 +484,8 @@ func (r *Runner) handleNext(_ []string) error {
 	planner := r.planGenerator()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	stopIndicator := r.startLLMIndicatorIfAllowed("next")
+	defer stopIndicator()
 	steps, err := planner.Next(ctx, input)
 	if err != nil {
 		return err
@@ -503,6 +529,8 @@ func (r *Runner) handleExecute(args []string) error {
 	planner := r.planGenerator()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	stopIndicator := r.startLLMIndicatorIfAllowed("next")
+	defer stopIndicator()
 	steps, err := planner.Next(ctx, input)
 	if err != nil {
 		return err
@@ -675,6 +703,8 @@ func (r *Runner) handleAsk(text string) error {
 	client := llm.NewLMStudioClient(r.cfg)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	stopIndicator := r.startLLMIndicatorIfAllowed("ask")
+	defer stopIndicator()
 	resp, err := client.Chat(ctx, llm.ChatRequest{
 		Model:       r.cfg.LLM.Model,
 		Temperature: 0.2,
@@ -1098,6 +1128,8 @@ func (r *Runner) maybeAutoSummarize(logPath, reason string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	stopIndicator := r.startLLMIndicatorIfAllowed("summarize")
+	defer stopIndicator()
 	if err := manager.Summarize(ctx, r.summaryGenerator(), reason); err != nil {
 		r.logger.Printf("Auto-summarize failed: %v", err)
 		return
@@ -1450,6 +1482,8 @@ func (r *Runner) handleAssistGoalWithMode(goal string, dryRun bool, mode string)
 }
 
 func (r *Runner) handleAssistSingleStep(goal string, dryRun bool, mode string) error {
+	stopIndicator := r.startLLMIndicatorIfAllowed("assist")
+	defer stopIndicator()
 	suggestion, err := r.getAssistSuggestion(goal, mode)
 	if err != nil {
 		return err
@@ -1464,8 +1498,10 @@ func (r *Runner) handleAssistSingleStep(goal string, dryRun bool, mode string) e
 }
 
 func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) error {
-	if url := extractFirstURL(goal); url != "" && shouldAutoBrowse(goal) {
-		return r.handleAssistAgentic(fmt.Sprintf("%s (fetch and analyze this URL, then summarize)", goal), dryRun, "web-agentic")
+	if mode != "web-agentic" {
+		if url := extractFirstURL(goal); url != "" && shouldAutoBrowse(goal) {
+			return r.handleAssistAgentic(fmt.Sprintf("%s (fetch and analyze this URL, then summarize)", goal), dryRun, "web-agentic")
+		}
 	}
 
 	maxSteps := r.assistMaxSteps()
@@ -1476,7 +1512,18 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 			r.logger.Printf("Reached max steps (%d).", maxSteps)
 			return nil
 		}
+		if maxSteps > 0 {
+			r.logger.Printf("Assistant step %d/%d", stepsRun+1, maxSteps)
+		} else {
+			r.logger.Printf("Assistant step %d", stepsRun+1)
+		}
+		label := "assist"
+		if maxSteps > 0 {
+			label = fmt.Sprintf("assist %d/%d", stepsRun+1, maxSteps)
+		}
+		stopIndicator := r.startLLMIndicatorIfAllowed(label)
 		suggestion, err := r.getAssistSuggestion(goal, stepMode)
+		stopIndicator()
 		if err != nil {
 			return err
 		}
@@ -1618,7 +1665,9 @@ func (r *Runner) handlePlanSuggestion(suggestion assist.Suggestion, dryRun bool)
 	}
 	for i, step := range suggestion.Steps {
 		r.logger.Printf("Executing step %d/%d: %s", i+1, len(suggestion.Steps), step)
+		stopIndicator := r.startLLMIndicatorIfAllowed("assist")
 		result, err := r.getAssistSuggestion(step, "execute-step")
+		stopIndicator()
 		if err != nil {
 			return err
 		}
@@ -1829,21 +1878,140 @@ func shouldAutoBrowse(text string) bool {
 }
 
 func (r *Runner) readLine(prompt string) (string, error) {
-	useStyle := prompt != "" && r.isTTY()
+	if prompt != "" && r.isTTY() {
+		return r.readLineInteractive(prompt)
+	}
 	if prompt != "" {
-		if useStyle {
-			fmt.Print(inputLineStyleStart)
-		}
 		fmt.Print(prompt)
 	}
 	line, err := r.reader.ReadString('\n')
-	if useStyle {
-		fmt.Print(inputLineStyleReset)
-	}
 	if err != nil && err != io.EOF {
 		return "", err
 	}
 	return strings.TrimSpace(line), err
+}
+
+func (r *Runner) readLineInteractive(prompt string) (string, error) {
+	fd := int(os.Stdin.Fd())
+	if !term.IsTerminal(fd) {
+		if prompt != "" {
+			fmt.Print(prompt)
+		}
+		line, err := r.reader.ReadString('\n')
+		if err != nil && err != io.EOF {
+			return "", err
+		}
+		return strings.TrimSpace(line), err
+	}
+
+	state, err := term.MakeRaw(fd)
+	if err != nil {
+		if prompt != "" {
+			fmt.Print(prompt)
+		}
+		line, readErr := r.reader.ReadString('\n')
+		if readErr != nil && readErr != io.EOF {
+			return "", readErr
+		}
+		return strings.TrimSpace(line), readErr
+	}
+	defer func() {
+		_ = term.Restore(fd, state)
+	}()
+
+	buf := make([]byte, 0, 128)
+	recordHistory := strings.HasPrefix(prompt, "BirdHackBot")
+	r.historyIndex = -1
+	r.historyScratch = ""
+
+	r.redrawInputLine(prompt, buf)
+
+	for {
+		b, readErr := r.reader.ReadByte()
+		if readErr != nil {
+			return "", readErr
+		}
+		switch b {
+		case '\r', '\n':
+			fmt.Print("\r\n")
+			line := strings.TrimSpace(string(buf))
+			if recordHistory && line != "" {
+				if len(r.history) == 0 || r.history[len(r.history)-1] != line {
+					r.history = append(r.history, line)
+				}
+			}
+			r.historyIndex = -1
+			r.historyScratch = ""
+			return line, nil
+		case 0x03:
+			fmt.Print("\r\n")
+			r.historyIndex = -1
+			r.historyScratch = ""
+			return "", io.EOF
+		case 0x04:
+			if len(buf) == 0 {
+				fmt.Print("\r\n")
+				r.historyIndex = -1
+				r.historyScratch = ""
+				return "", io.EOF
+			}
+		case 0x7f, 0x08:
+			if len(buf) > 0 {
+				buf = buf[:len(buf)-1]
+				r.redrawInputLine(prompt, buf)
+			}
+			continue
+		case 0x1b:
+			seq1, seqErr := r.reader.ReadByte()
+			if seqErr != nil {
+				continue
+			}
+			if seq1 != '[' {
+				continue
+			}
+			seq2, seqErr := r.reader.ReadByte()
+			if seqErr != nil {
+				continue
+			}
+			switch seq2 {
+			case 'A':
+				if len(r.history) == 0 {
+					continue
+				}
+				if r.historyIndex == -1 {
+					r.historyScratch = string(buf)
+					r.historyIndex = len(r.history) - 1
+				} else if r.historyIndex > 0 {
+					r.historyIndex--
+				}
+				buf = []byte(r.history[r.historyIndex])
+				r.redrawInputLine(prompt, buf)
+			case 'B':
+				if r.historyIndex == -1 {
+					continue
+				}
+				if r.historyIndex < len(r.history)-1 {
+					r.historyIndex++
+					buf = []byte(r.history[r.historyIndex])
+				} else {
+					r.historyIndex = -1
+					buf = []byte(r.historyScratch)
+					r.historyScratch = ""
+				}
+				r.redrawInputLine(prompt, buf)
+			}
+			continue
+		default:
+			if b >= 32 && b != 127 {
+				buf = append(buf, b)
+				r.redrawInputLine(prompt, buf)
+			}
+		}
+	}
+}
+
+func (r *Runner) redrawInputLine(prompt string, buf []byte) {
+	fmt.Printf("\r\x1b[2K%s%s%s%s", inputLineStyleStart, prompt, string(buf), inputLineStyleReset)
 }
 
 func (r *Runner) confirm(prompt string) (bool, error) {
@@ -1907,6 +2075,81 @@ func formatElapsed(d time.Duration) string {
 		return fmt.Sprintf("%02d:%02d:%02d", hours, minutes, seconds)
 	}
 	return fmt.Sprintf("%02d:%02d", minutes, seconds)
+}
+
+func (r *Runner) startLLMIndicator(label string) func() {
+	r.setLLMStatus(label)
+	if !r.isTTY() {
+		return func() {
+			r.clearLLMStatus()
+		}
+	}
+	stop := make(chan struct{})
+	var once sync.Once
+	go func() {
+		timer := time.NewTimer(llmIndicatorDelay)
+		defer timer.Stop()
+		select {
+		case <-stop:
+			return
+		case <-timer.C:
+		}
+		frames := []string{"-", "\\", "|", "/"}
+		idx := 0
+		start := time.Now()
+		ticker := time.NewTicker(llmIndicatorInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				fmt.Print("\r\x1b[2K")
+				return
+			case <-ticker.C:
+				elapsed := formatElapsed(time.Since(start))
+				fmt.Printf("\rLLM %s %s (%s)", label, frames[idx], elapsed)
+				idx = (idx + 1) % len(frames)
+			}
+		}
+	}()
+	return func() {
+		once.Do(func() {
+			close(stop)
+			r.clearLLMStatus()
+			fmt.Print("\r\x1b[2K")
+		})
+	}
+}
+
+func (r *Runner) startLLMIndicatorIfAllowed(label string) func() {
+	if !r.llmAllowed() {
+		return func() {}
+	}
+	return r.startLLMIndicator(label)
+}
+
+func (r *Runner) setLLMStatus(label string) {
+	if label == "" {
+		label = "thinking"
+	}
+	r.llmMu.Lock()
+	r.llmInFlight = true
+	r.llmLabel = label
+	r.llmStarted = time.Now()
+	r.llmMu.Unlock()
+}
+
+func (r *Runner) clearLLMStatus() {
+	r.llmMu.Lock()
+	r.llmInFlight = false
+	r.llmLabel = ""
+	r.llmStarted = time.Time{}
+	r.llmMu.Unlock()
+}
+
+func (r *Runner) llmStatus() (bool, string, time.Time) {
+	r.llmMu.Lock()
+	defer r.llmMu.Unlock()
+	return r.llmInFlight, r.llmLabel, r.llmStarted
 }
 
 func (r *Runner) isTTY() bool {
