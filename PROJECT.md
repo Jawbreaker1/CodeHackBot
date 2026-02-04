@@ -82,6 +82,7 @@
 - `/assist` requests a suggested command (LLM-backed), with `dry` mode to preview without running.
 - `/script <py|sh> <name>` captures a script into `sessions/<id>/artifacts/` and runs it via the interpreter.
 - `/clean [days]` deletes session folders (0 = all, otherwise older than N days).
+- `/ask <question>` sends a direct question to the LLM (plain text input behaves like `/assist`).
 - `/summarize [reason]` should refresh `summary.md` and `known_facts.md` from recent logs (falls back to a non-LLM summary if offline).
 - `/context show` prints the current summary, known facts, focus, and context state.
 - Display a concise ANSI-colored summary after major actions (e.g., `/run`, `/init`), and expose `/status` to show the current task.

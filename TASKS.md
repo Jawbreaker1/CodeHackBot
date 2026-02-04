@@ -72,3 +72,10 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
 
 ## Sprint 13 — Context Visibility
 - [x] Add `/context show` for summary/facts/focus/state
+
+## Sprint 14 — Chat Input
+- [x] Route plain text input to LLM (`/ask`)
+- [x] Add `/ask` command
+
+## Sprint 15 — Agent Default Mode
+- [x] Route plain text input to `/assist` (agent mode)

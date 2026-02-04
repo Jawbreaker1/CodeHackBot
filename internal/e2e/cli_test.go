@@ -283,7 +283,7 @@ func TestCLIAssistFallback(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	input := "/init no-inventory\n/assist dry\n/stop\n/exit\n"
+	input := "/init no-inventory\nscan 10.0.0.5\n/stop\n/exit\n"
 	cmd := exec.Command(cliPath, "--config", configPath, "--permissions", "all")
 	cmd.Dir = projectRoot
 	cmd.Stdin = strings.NewReader(input)
@@ -298,9 +298,6 @@ func TestCLIAssistFallback(t *testing.T) {
 	output := out.String()
 	if !strings.Contains(output, "Suggested command: nmap -sV 10.0.0.5") {
 		t.Fatalf("expected fallback assist suggestion:\n%s", output)
-	}
-	if strings.Contains(output, "execution not approved") {
-		t.Fatalf("did not expect approval prompt:\n%s", output)
 	}
 }
 

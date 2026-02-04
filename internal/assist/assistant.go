@@ -17,6 +17,7 @@ type Input struct {
 	KnownFacts []string
 	Inventory  string
 	Plan       string
+	Goal       string
 }
 
 type Suggestion struct {
@@ -112,6 +113,9 @@ func buildPrompt(input Input) string {
 	builder.WriteString(fmt.Sprintf("Session: %s\n", input.SessionID))
 	builder.WriteString(fmt.Sprintf("Scope: %s\n", joinOrFallback(input.Scope)))
 	builder.WriteString(fmt.Sprintf("Targets: %s\n", joinOrFallback(input.Targets)))
+	if input.Goal != "" {
+		builder.WriteString("\nUser intent:\n" + input.Goal + "\n")
+	}
 	if input.Summary != "" {
 		builder.WriteString("\nSummary:\n" + input.Summary + "\n")
 	}

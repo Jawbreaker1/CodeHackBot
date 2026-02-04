@@ -76,7 +76,9 @@ func (r *Runner) Run() error {
 			}
 			continue
 		}
-		r.logger.Printf("Input received (stub): %s", line)
+		if assistErr := r.handleAssistGoal(line, false); assistErr != nil {
+			r.logger.Printf("Assist error: %v", assistErr)
+		}
 		if err == io.EOF {
 			r.Stop()
 			return nil
@@ -118,6 +120,8 @@ func (r *Runner) handleCommand(line string) error {
 		return r.handleScript(args)
 	case "clean":
 		return r.handleClean(args)
+	case "ask":
+		return r.handleAsk(strings.Join(args, " "))
 	case "summarize":
 		return r.handleSummarize(args)
 	case "run":
@@ -520,12 +524,56 @@ func (r *Runner) handleAssist(args []string) error {
 	if r.cfg.Permissions.Level == "readonly" {
 		return fmt.Errorf("readonly mode: assist not permitted")
 	}
-	dryRun := len(args) > 0 && strings.ToLower(args[0]) == "dry"
-	suggestion, err := r.getAssistSuggestion()
+	dryRun := false
+	goal := ""
+	if len(args) > 0 && strings.ToLower(args[0]) == "dry" {
+		dryRun = true
+		goal = strings.Join(args[1:], " ")
+	} else {
+		goal = strings.Join(args, " ")
+	}
+	return r.handleAssistGoal(goal, dryRun)
+}
+
+func (r *Runner) handleAsk(text string) error {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	if !r.llmAllowed() {
+		r.logger.Printf("LLM unavailable; configure llm.base_url or wait for cooldown.")
+		return nil
+	}
+	sessionDir, err := r.ensureSessionScaffold()
 	if err != nil {
 		return err
 	}
-	return r.executeAssistSuggestion(suggestion, dryRun)
+	prompt := r.buildAskPrompt(sessionDir, text)
+	client := llm.NewLMStudioClient(r.cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	resp, err := client.Chat(ctx, llm.ChatRequest{
+		Model:       r.cfg.LLM.Model,
+		Temperature: 0.2,
+		Messages: []llm.Message{
+			{
+				Role:    "system",
+				Content: "You are BirdHackBot, a security testing assistant. Answer clearly and concisely. If clarification is needed, ask follow-up questions. Stay within authorized scope.",
+			},
+			{
+				Role:    "user",
+				Content: prompt,
+			},
+		},
+	})
+	if err != nil {
+		r.recordLLMFailure(err)
+		return err
+	}
+	r.recordLLMSuccess()
+	r.logger.Printf("Assistant response:")
+	fmt.Println(resp.Content)
+	return nil
 }
 
 func (r *Runner) handleRun(args []string) error {
@@ -831,8 +879,9 @@ func (r *Runner) Stop() {
 }
 
 func (r *Runner) printHelp() {
-	r.logger.Printf("Commands: /init /permissions /context [/show] /ledger /status /plan /next /assist /script /clean /summarize /run /msf /report /resume /stop /exit")
+	r.logger.Printf("Commands: /init /permissions /context [/show] /ledger /status /plan /next /assist /script /clean /ask /summarize /run /msf /report /resume /stop /exit")
 	r.logger.Printf("Example: /permissions readonly")
+	r.logger.Printf("Plain text input routes to /assist; use /ask for chat-only.")
 	r.logger.Printf("Session logs live under: %s", filepath.Clean(r.cfg.Session.LogDir))
 }
 
@@ -971,7 +1020,7 @@ func readFileTrimmed(path string) string {
 	return strings.TrimSpace(string(data))
 }
 
-func (r *Runner) assistInput(sessionDir string) (assist.Input, error) {
+func (r *Runner) assistInput(sessionDir, goal string) (assist.Input, error) {
 	artifacts, err := memory.EnsureArtifacts(sessionDir)
 	if err != nil {
 		return assist.Input{}, err
@@ -988,7 +1037,38 @@ func (r *Runner) assistInput(sessionDir string) (assist.Input, error) {
 		KnownFacts: facts,
 		Plan:       readFileTrimmed(planPath),
 		Inventory:  readFileTrimmed(inventoryPath),
+		Goal:       strings.TrimSpace(goal),
 	}, nil
+}
+
+func (r *Runner) buildAskPrompt(sessionDir, question string) string {
+	artifacts, _ := memory.EnsureArtifacts(sessionDir)
+	summary := readFileTrimmed(artifacts.SummaryPath)
+	facts := readFileTrimmed(artifacts.FactsPath)
+	focus := readFileTrimmed(artifacts.FocusPath)
+	planPath := filepath.Join(sessionDir, r.cfg.Session.PlanFilename)
+	inventoryPath := filepath.Join(sessionDir, r.cfg.Session.InventoryFilename)
+
+	builder := strings.Builder{}
+	builder.WriteString("User question: " + question + "\n")
+	if summary != "" {
+		builder.WriteString("\nSummary:\n" + summary + "\n")
+	}
+	if facts != "" {
+		builder.WriteString("\nKnown facts:\n" + facts + "\n")
+	}
+	if focus != "" {
+		builder.WriteString("\nFocus:\n" + focus + "\n")
+	}
+	plan := readFileTrimmed(planPath)
+	if plan != "" {
+		builder.WriteString("\nPlan:\n" + plan + "\n")
+	}
+	inventory := readFileTrimmed(inventoryPath)
+	if inventory != "" {
+		builder.WriteString("\nInventory:\n" + inventory + "\n")
+	}
+	return builder.String()
 }
 
 func sanitizeFilename(name string) string {
@@ -1027,12 +1107,12 @@ func (r *Runner) assistGenerator() assist.Assistant {
 	}
 }
 
-func (r *Runner) getAssistSuggestion() (assist.Suggestion, error) {
+func (r *Runner) getAssistSuggestion(goal string) (assist.Suggestion, error) {
 	sessionDir, err := r.ensureSessionScaffold()
 	if err != nil {
 		return assist.Suggestion{}, err
 	}
-	input, err := r.assistInput(sessionDir)
+	input, err := r.assistInput(sessionDir, goal)
 	if err != nil {
 		return assist.Suggestion{}, err
 	}
@@ -1040,6 +1120,17 @@ func (r *Runner) getAssistSuggestion() (assist.Suggestion, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	return assistant.Suggest(ctx, input)
+}
+
+func (r *Runner) handleAssistGoal(goal string, dryRun bool) error {
+	if r.cfg.Permissions.Level == "readonly" {
+		return fmt.Errorf("readonly mode: assist not permitted")
+	}
+	suggestion, err := r.getAssistSuggestion(goal)
+	if err != nil {
+		return err
+	}
+	return r.executeAssistSuggestion(suggestion, dryRun)
 }
 
 func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bool) error {
