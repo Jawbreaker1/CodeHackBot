@@ -600,6 +600,7 @@ func (r *Runner) handleRun(args []string) error {
 		ScopeNetworks:    r.cfg.Scope.Networks,
 		ScopeTargets:     r.cfg.Scope.Targets,
 		ScopeDenyTargets: r.cfg.Scope.DenyTargets,
+		LiveWriter:       os.Stdout,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -729,6 +730,7 @@ func (r *Runner) handleMSF(args []string) error {
 		ScopeNetworks:    r.cfg.Scope.Networks,
 		ScopeTargets:     r.cfg.Scope.Targets,
 		ScopeDenyTargets: r.cfg.Scope.DenyTargets,
+		LiveWriter:       os.Stdout,
 	}
 	cmdArgs := []string{"-q", "-x", command}
 	result, err := execRunner.RunCommandWithContext(ctx, "msfconsole", cmdArgs...)

@@ -47,7 +47,7 @@ func (FallbackAssistant) Suggest(_ context.Context, input Input) (Suggestion, er
 	return normalizeSuggestion(Suggestion{
 		Type:    "command",
 		Command: "nmap",
-		Args:    []string{"-sV", input.Targets[0]},
+		Args:    []string{"-sV", "-v", input.Targets[0]},
 		Summary: "Run a safe service/version scan on the primary target.",
 		Risk:    "low",
 	}), nil
@@ -106,7 +106,7 @@ func (c ChainedAssistant) Suggest(ctx context.Context, input Input) (Suggestion,
 	return Suggestion{}, fmt.Errorf("no assistant available")
 }
 
-const assistSystemPrompt = "You are a security testing assistant. Respond with JSON only: {\"type\":\"command|question|noop\",\"command\":\"\",\"args\":[\"\"],\"question\":\"\",\"summary\":\"\",\"risk\":\"low|medium|high\"}. Provide one safe next action. The command must be a real executable (e.g., nmap, curl, nc, ping). Put flags/targets in args. Do not use placeholders like \"scan\"; if you cannot provide a concrete command, return type=question. Stay within scope and avoid destructive actions unless explicitly requested."
+const assistSystemPrompt = "You are a security testing assistant. Respond with JSON only: {\"type\":\"command|question|noop\",\"command\":\"\",\"args\":[\"\"],\"question\":\"\",\"summary\":\"\",\"risk\":\"low|medium|high\"}. Provide one safe next action. The command must be a real executable (e.g., nmap, curl, nc, ping). Put flags/targets in args. Prefer verbose flags when safe (-v/--verbose) so users see progress. Do not use placeholders like \"scan\"; if you cannot provide a concrete command, return type=question. Stay within scope and avoid destructive actions unless explicitly requested."
 
 func buildPrompt(input Input) string {
 	builder := strings.Builder{}

@@ -296,7 +296,7 @@ func TestCLIAssistFallback(t *testing.T) {
 	}
 
 	output := out.String()
-	if !strings.Contains(output, "Suggested command: nmap -sV 10.0.0.5") {
+	if !strings.Contains(output, "Suggested command: nmap -sV -v 10.0.0.5") {
 		t.Fatalf("expected fallback assist suggestion:\n%s", output)
 	}
 }

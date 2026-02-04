@@ -2,12 +2,15 @@ package exec
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -29,6 +32,7 @@ type Runner struct {
 	ScopeNetworks    []string
 	ScopeTargets     []string
 	ScopeDenyTargets []string
+	LiveWriter       io.Writer
 }
 
 type CommandResult struct {
@@ -69,11 +73,19 @@ func (r *Runner) RunCommandWithContext(ctx context.Context, command string, args
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, command, args...)
-	output, err := cmd.CombinedOutput()
+	var output string
+	var err error
+	if r.LiveWriter != nil {
+		output, err = runWithStreaming(cmd, r.LiveWriter)
+	} else {
+		var combined []byte
+		combined, err = cmd.CombinedOutput()
+		output = string(combined)
+	}
 	result := CommandResult{
 		Command: command,
 		Args:    args,
-		Output:  strings.TrimSpace(string(output)),
+		Output:  strings.TrimSpace(output),
 		Error:   err,
 	}
 	if ctx.Err() == context.DeadlineExceeded {
@@ -89,6 +101,58 @@ func (r *Runner) RunCommandWithContext(ctx context.Context, command string, args
 
 func (r *Runner) RunCommand(command string, args ...string) (CommandResult, error) {
 	return r.RunCommandWithContext(context.Background(), command, args...)
+}
+
+func runWithStreaming(cmd *exec.Cmd, live io.Writer) (string, error) {
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", err
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return "", err
+	}
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+
+	var buf bytes.Buffer
+	var mu sync.Mutex
+	writer := streamWriter{
+		buf:  &buf,
+		live: live,
+		mu:   &mu,
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, _ = io.Copy(writer, stdout)
+	}()
+	go func() {
+		defer wg.Done()
+		_, _ = io.Copy(writer, stderr)
+	}()
+
+	waitErr := cmd.Wait()
+	wg.Wait()
+	return buf.String(), waitErr
+}
+
+type streamWriter struct {
+	buf  *bytes.Buffer
+	live io.Writer
+	mu   *sync.Mutex
+}
+
+func (w streamWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.live != nil {
+		_, _ = w.live.Write(p)
+	}
+	return w.buf.Write(p)
 }
 
 func (r *Runner) writeLog(result CommandResult) (string, error) {

@@ -2,6 +2,7 @@ package exec
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"os"
 	"runtime"
@@ -61,6 +62,29 @@ func TestRunCommandWritesLog(t *testing.T) {
 	}
 	if !strings.Contains(content, "hello") {
 		t.Fatalf("missing output in log")
+	}
+}
+
+func TestRunCommandStreaming(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skip on windows: echo may not be available as an external command")
+	}
+	var live bytes.Buffer
+	temp := t.TempDir()
+	runner := Runner{
+		Permissions: PermissionAll,
+		LogDir:      temp,
+		LiveWriter:  &live,
+	}
+	result, err := runner.RunCommand("echo", "hello")
+	if err != nil {
+		t.Fatalf("RunCommand error: %v", err)
+	}
+	if !strings.Contains(live.String(), "hello") {
+		t.Fatalf("expected live output, got %q", live.String())
+	}
+	if !strings.Contains(result.Output, "hello") {
+		t.Fatalf("expected result output, got %q", result.Output)
 	}
 }
 
