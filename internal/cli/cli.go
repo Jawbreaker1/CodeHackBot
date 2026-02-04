@@ -1136,7 +1136,7 @@ func readFileTrimmed(path string) string {
 	return strings.TrimSpace(string(data))
 }
 
-func (r *Runner) assistInput(sessionDir, goal string) (assist.Input, error) {
+func (r *Runner) assistInput(sessionDir, goal, mode string) (assist.Input, error) {
 	artifacts, err := memory.EnsureArtifacts(sessionDir)
 	if err != nil {
 		return assist.Input{}, err
@@ -1159,6 +1159,7 @@ func (r *Runner) assistInput(sessionDir, goal string) (assist.Input, error) {
 		WorkingDir:  workingDir,
 		RecentLog:   recentLog,
 		Playbooks:   playbooks,
+		Mode:        mode,
 		Plan:        readFileTrimmed(planPath),
 		Inventory:   readFileTrimmed(inventoryPath),
 		Goal:        strings.TrimSpace(goal),
@@ -1337,12 +1338,12 @@ func (r *Runner) assistGenerator() assist.Assistant {
 	}
 }
 
-func (r *Runner) getAssistSuggestion(goal string) (assist.Suggestion, error) {
+func (r *Runner) getAssistSuggestion(goal string, mode string) (assist.Suggestion, error) {
 	sessionDir, err := r.ensureSessionScaffold()
 	if err != nil {
 		return assist.Suggestion{}, err
 	}
-	input, err := r.assistInput(sessionDir, goal)
+	input, err := r.assistInput(sessionDir, goal, mode)
 	if err != nil {
 		return assist.Suggestion{}, err
 	}
@@ -1353,10 +1354,14 @@ func (r *Runner) getAssistSuggestion(goal string) (assist.Suggestion, error) {
 }
 
 func (r *Runner) handleAssistGoal(goal string, dryRun bool) error {
+	return r.handleAssistGoalWithMode(goal, dryRun, "")
+}
+
+func (r *Runner) handleAssistGoalWithMode(goal string, dryRun bool, mode string) error {
 	if r.cfg.Permissions.Level == "readonly" {
 		return fmt.Errorf("readonly mode: assist not permitted")
 	}
-	suggestion, err := r.getAssistSuggestion(goal)
+	suggestion, err := r.getAssistSuggestion(goal, mode)
 	if err != nil {
 		return err
 	}
@@ -1392,6 +1397,8 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 			r.logger.Printf("Assistant has no suggestion")
 		}
 		return nil
+	case "plan":
+		return r.handlePlanSuggestion(suggestion, dryRun)
 	case "command":
 		if suggestion.Command == "" {
 			return fmt.Errorf("assistant returned empty command")
@@ -1414,6 +1421,47 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 	}
 	args := append([]string{suggestion.Command}, suggestion.Args...)
 	return r.handleRun(args)
+}
+
+func (r *Runner) handlePlanSuggestion(suggestion assist.Suggestion, dryRun bool) error {
+	sessionDir, err := r.ensureSessionScaffold()
+	if err != nil {
+		return err
+	}
+	planText := strings.TrimSpace(suggestion.Plan)
+	if planText == "" && len(suggestion.Steps) > 0 {
+		builder := strings.Builder{}
+		builder.WriteString("## Plan (Assistant)\n\n### Steps\n")
+		for i, step := range suggestion.Steps {
+			builder.WriteString(fmt.Sprintf("%d. %s\n", i+1, step))
+		}
+		planText = builder.String()
+	}
+	if planText != "" {
+		planPath, err := session.AppendPlan(sessionDir, r.cfg.Session.PlanFilename, planText)
+		if err != nil {
+			return err
+		}
+		if r.cfg.UI.Verbose {
+			r.logger.Printf("Plan updated: %s", planPath)
+		}
+	}
+	if dryRun {
+		return nil
+	}
+	if len(suggestion.Steps) == 0 {
+		if r.cfg.UI.Verbose {
+			r.logger.Printf("Plan has no executable steps.")
+		}
+		return nil
+	}
+	for i, step := range suggestion.Steps {
+		r.logger.Printf("Executing step %d/%d: %s", i+1, len(suggestion.Steps), step)
+		if err := r.handleAssistGoalWithMode(step, false, "execute-step"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func isPlaceholderCommand(cmd string) bool {

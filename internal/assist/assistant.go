@@ -23,6 +23,7 @@ type Input struct {
 	WorkingDir  string
 	RecentLog   string
 	Playbooks   string
+	Mode        string
 }
 
 type Suggestion struct {
@@ -32,6 +33,8 @@ type Suggestion struct {
 	Question string   `json:"question,omitempty"`
 	Summary  string   `json:"summary,omitempty"`
 	Risk     string   `json:"risk,omitempty"`
+	Steps    []string `json:"steps,omitempty"`
+	Plan     string   `json:"plan,omitempty"`
 }
 
 type Assistant interface {
@@ -111,7 +114,7 @@ func (c ChainedAssistant) Suggest(ctx context.Context, input Input) (Suggestion,
 	return Suggestion{}, fmt.Errorf("no assistant available")
 }
 
-const assistSystemPrompt = "You are a security testing assistant. Respond with JSON only: {\"type\":\"command|question|noop\",\"command\":\"\",\"args\":[\"\"],\"question\":\"\",\"summary\":\"\",\"risk\":\"low|medium|high\"}. Provide one safe next action. The command must be a real executable (e.g., nmap, curl, nc, ping). Put flags/targets in args. Prefer verbose flags when safe (-v/--verbose) so users see progress. You can run shell commands locally in the working directory provided to inspect files or run tooling. Do not use placeholders like \"scan\"; if you cannot provide a concrete command, return type=question. Stay within scope and avoid destructive actions unless explicitly requested."
+const assistSystemPrompt = "You are a security testing assistant. Respond with JSON only: {\"type\":\"command|question|noop|plan\",\"command\":\"\",\"args\":[\"\"],\"question\":\"\",\"summary\":\"\",\"risk\":\"low|medium|high\",\"steps\":[\"...\"],\"plan\":\"\"}. Provide one safe next action. Use type=plan with a short plan and 2-6 executable steps when the request is multi-step. If Mode is execute-step, respond with type=command or type=question only (do not return type=plan). The command must be a real executable (e.g., nmap, curl, nc, ping). Put flags/targets in args. Prefer verbose flags when safe (-v/--verbose) so users see progress. You can run shell commands locally in the working directory provided to inspect files or run tooling. Do not use placeholders like \"scan\"; if you cannot provide a concrete command, return type=question. Stay within scope and avoid destructive actions unless explicitly requested."
 
 func buildPrompt(input Input) string {
 	builder := strings.Builder{}
@@ -141,6 +144,9 @@ func buildPrompt(input Input) string {
 	}
 	if input.Playbooks != "" {
 		builder.WriteString("\nRelevant playbooks:\n" + input.Playbooks + "\n")
+	}
+	if input.Mode != "" {
+		builder.WriteString("\nMode:\n" + input.Mode + "\n")
 	}
 	if input.Plan != "" {
 		builder.WriteString("\nPlan snippet:\n" + input.Plan + "\n")
@@ -186,6 +192,8 @@ func normalizeSuggestion(suggestion Suggestion) Suggestion {
 	suggestion.Question = strings.TrimSpace(suggestion.Question)
 	suggestion.Summary = strings.TrimSpace(suggestion.Summary)
 	suggestion.Risk = strings.ToLower(strings.TrimSpace(suggestion.Risk))
+	suggestion.Plan = strings.TrimSpace(suggestion.Plan)
+	suggestion.Steps = normalizeSteps(suggestion.Steps)
 	if suggestion.Command != "" && len(suggestion.Args) == 0 {
 		parts := strings.Fields(suggestion.Command)
 		if len(parts) > 1 {
@@ -197,6 +205,21 @@ func normalizeSuggestion(suggestion Suggestion) Suggestion {
 		suggestion = splitDashCommandIfNeeded(suggestion)
 	}
 	return suggestion
+}
+
+func normalizeSteps(steps []string) []string {
+	if len(steps) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(steps))
+	for _, step := range steps {
+		step = strings.TrimSpace(step)
+		if step == "" {
+			continue
+		}
+		out = append(out, step)
+	}
+	return out
 }
 
 func splitDashCommandIfNeeded(suggestion Suggestion) Suggestion {
