@@ -255,6 +255,55 @@ func TestCLIPlanAuto(t *testing.T) {
 	}
 }
 
+func TestCLIAssistFallback(t *testing.T) {
+	temp := t.TempDir()
+	sessionsDir := filepath.Join(temp, "sessions")
+	configPath := filepath.Join(temp, "config.json")
+
+	cfg := map[string]any{
+		"session": map[string]any{
+			"log_dir": sessionsDir,
+		},
+		"permissions": map[string]any{
+			"level":            "default",
+			"require_approval": false,
+		},
+		"scope": map[string]any{
+			"targets": []string{"10.0.0.5"},
+		},
+		"network": map[string]any{
+			"assume_offline": true,
+		},
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	if err := os.WriteFile(configPath, data, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	input := "/init no-inventory\n/assist dry\n/stop\n/exit\n"
+	cmd := exec.Command(cliPath, "--config", configPath, "--permissions", "all")
+	cmd.Dir = projectRoot
+	cmd.Stdin = strings.NewReader(input)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("cli run error: %v\nOutput:\n%s", err, out.String())
+	}
+
+	output := out.String()
+	if !strings.Contains(output, "Suggested command: nmap -sV 10.0.0.5") {
+		t.Fatalf("expected fallback assist suggestion:\n%s", output)
+	}
+	if strings.Contains(output, "execution not approved") {
+		t.Fatalf("did not expect approval prompt:\n%s", output)
+	}
+}
+
 func findSingleSessionDir(t *testing.T, root string) string {
 	t.Helper()
 	entries, err := os.ReadDir(root)

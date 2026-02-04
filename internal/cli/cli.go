@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Jawbreaker1/CodeHackBot/internal/assist"
 	"github.com/Jawbreaker1/CodeHackBot/internal/config"
 	"github.com/Jawbreaker1/CodeHackBot/internal/exec"
 	"github.com/Jawbreaker1/CodeHackBot/internal/llm"
@@ -104,6 +105,8 @@ func (r *Runner) handleCommand(line string) error {
 		return r.handlePlan(args)
 	case "next":
 		return r.handleNext(args)
+	case "assist":
+		return r.handleAssist(args)
 	case "summarize":
 		return r.handleSummarize(args)
 	case "run":
@@ -360,6 +363,21 @@ func (r *Runner) handleNext(_ []string) error {
 		r.logger.Printf("- %s", step)
 	}
 	return nil
+}
+
+func (r *Runner) handleAssist(args []string) error {
+	r.setTask("assist")
+	defer r.clearTask()
+
+	if r.cfg.Permissions.Level == "readonly" {
+		return fmt.Errorf("readonly mode: assist not permitted")
+	}
+	dryRun := len(args) > 0 && strings.ToLower(args[0]) == "dry"
+	suggestion, err := r.getAssistSuggestion()
+	if err != nil {
+		return err
+	}
+	return r.executeAssistSuggestion(suggestion, dryRun)
 }
 
 func (r *Runner) handleRun(args []string) error {
@@ -665,7 +683,7 @@ func (r *Runner) Stop() {
 }
 
 func (r *Runner) printHelp() {
-	r.logger.Printf("Commands: /init /permissions /context /ledger /status /plan /next /summarize /run /msf /report /resume /stop /exit")
+	r.logger.Printf("Commands: /init /permissions /context /ledger /status /plan /next /assist /summarize /run /msf /report /resume /stop /exit")
 	r.logger.Printf("Example: /permissions readonly")
 	r.logger.Printf("Session logs live under: %s", filepath.Clean(r.cfg.Session.LogDir))
 }
@@ -757,19 +775,11 @@ func (r *Runner) planGenerator() plan.Planner {
 }
 
 func (r *Runner) llmAvailable() bool {
-	if !r.cfg.Network.AssumeOffline {
+	baseURL := strings.TrimSpace(r.cfg.LLM.BaseURL)
+	if baseURL != "" {
 		return true
 	}
-	baseURL := strings.TrimSpace(r.cfg.LLM.BaseURL)
-	return isLocalURL(baseURL)
-}
-
-func isLocalURL(baseURL string) bool {
-	if baseURL == "" {
-		return false
-	}
-	lower := strings.ToLower(baseURL)
-	return strings.Contains(lower, "localhost") || strings.Contains(lower, "127.0.0.1")
+	return !r.cfg.Network.AssumeOffline
 }
 
 func readFileTrimmed(path string) string {
@@ -781,6 +791,114 @@ func readFileTrimmed(path string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(data))
+}
+
+func (r *Runner) assistInput(sessionDir string) (assist.Input, error) {
+	artifacts, err := memory.EnsureArtifacts(sessionDir)
+	if err != nil {
+		return assist.Input{}, err
+	}
+	summaryText := readFileTrimmed(artifacts.SummaryPath)
+	facts, _ := memory.ReadBullets(artifacts.FactsPath)
+	planPath := filepath.Join(sessionDir, r.cfg.Session.PlanFilename)
+	inventoryPath := filepath.Join(sessionDir, r.cfg.Session.InventoryFilename)
+	return assist.Input{
+		SessionID:  r.sessionID,
+		Scope:      r.cfg.Scope.Networks,
+		Targets:    r.cfg.Scope.Targets,
+		Summary:    summaryText,
+		KnownFacts: facts,
+		Plan:       readFileTrimmed(planPath),
+		Inventory:  readFileTrimmed(inventoryPath),
+	}, nil
+}
+
+func (r *Runner) assistGenerator() assist.Assistant {
+	if !r.llmAvailable() {
+		return assist.FallbackAssistant{}
+	}
+	client := llm.NewLMStudioClient(r.cfg)
+	llmAssistant := assist.LLMAssistant{
+		Client: client,
+		Model:  r.cfg.LLM.Model,
+	}
+	return assist.ChainedAssistant{
+		Primary:  llmAssistant,
+		Fallback: assist.FallbackAssistant{},
+	}
+}
+
+func (r *Runner) getAssistSuggestion() (assist.Suggestion, error) {
+	sessionDir, err := r.ensureSessionScaffold()
+	if err != nil {
+		return assist.Suggestion{}, err
+	}
+	input, err := r.assistInput(sessionDir)
+	if err != nil {
+		return assist.Suggestion{}, err
+	}
+	assistant := r.assistGenerator()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	return assistant.Suggest(ctx, input)
+}
+
+func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bool) error {
+	if isPlaceholderCommand(suggestion.Command) {
+		return fmt.Errorf("assistant returned placeholder command: %s", suggestion.Command)
+	}
+	switch suggestion.Type {
+	case "question":
+		if suggestion.Question == "" {
+			return fmt.Errorf("assistant returned empty question")
+		}
+		r.logger.Printf("Assistant question: %s", suggestion.Question)
+		if suggestion.Summary != "" {
+			r.logger.Printf("Summary: %s", suggestion.Summary)
+		}
+		return nil
+	case "noop":
+		r.logger.Printf("Assistant has no suggestion")
+		return nil
+	case "command":
+		if suggestion.Command == "" {
+			return fmt.Errorf("assistant returned empty command")
+		}
+	default:
+		return fmt.Errorf("assistant returned unknown type: %s", suggestion.Type)
+	}
+
+	r.logger.Printf("Suggested command: %s %s", suggestion.Command, strings.Join(suggestion.Args, " "))
+	if suggestion.Summary != "" {
+		r.logger.Printf("Summary: %s", suggestion.Summary)
+	}
+	if suggestion.Risk != "" {
+		r.logger.Printf("Risk: %s", suggestion.Risk)
+	}
+	if dryRun {
+		return nil
+	}
+	if r.cfg.Permissions.RequireApproval {
+		approved, err := r.confirm("Run suggested command?")
+		if err != nil {
+			return err
+		}
+		if !approved {
+			return fmt.Errorf("execution not approved")
+		}
+	}
+	args := append([]string{suggestion.Command}, suggestion.Args...)
+	return r.handleRun(args)
+}
+
+func isPlaceholderCommand(cmd string) bool {
+	cmd = strings.ToLower(strings.TrimSpace(cmd))
+	switch cmd {
+	case "scan", "recon", "enumerate", "probe", "test":
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *Runner) readLine(prompt string) (string, error) {

@@ -52,3 +52,8 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
 - [x] LLM-backed `/plan auto` and `/next` guidance (fallback when offline)
 - [x] Minimal report enhancement: include evidence ledger in report output
 - [x] Tests for planner outputs and report evidence inclusion
+
+## Sprint 9 — Interactive Assistant Loop
+- [x] Add `/assist` to request and optionally execute a suggested command
+- [x] LLM assistant prompt + fallback assistant
+- [x] Tests for assistant parsing + e2e assist flow

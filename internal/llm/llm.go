@@ -118,6 +118,12 @@ type chatCompletionResponse struct {
 
 func normalizeBaseURL(baseURL string) string {
 	trimmed := strings.TrimSpace(baseURL)
+	if trimmed == "" {
+		return trimmed
+	}
+	if !strings.Contains(trimmed, "://") {
+		trimmed = "http://" + trimmed
+	}
 	trimmed = strings.TrimRight(trimmed, "/")
 	if strings.HasSuffix(trimmed, "/v1") {
 		return trimmed
