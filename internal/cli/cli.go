@@ -1219,6 +1219,7 @@ func (r *Runner) buildAskPrompt(sessionDir, question string) string {
 	facts := readFileTrimmed(artifacts.FactsPath)
 	focus := readFileTrimmed(artifacts.FocusPath)
 	history := r.readChatHistory(artifacts.ChatPath)
+	recentLog := r.readRecentLogSnippet(artifacts)
 	planPath := filepath.Join(sessionDir, r.cfg.Session.PlanFilename)
 	inventoryPath := filepath.Join(sessionDir, r.cfg.Session.InventoryFilename)
 
@@ -1226,6 +1227,9 @@ func (r *Runner) buildAskPrompt(sessionDir, question string) string {
 	builder.WriteString("User question: " + question + "\n")
 	if history != "" {
 		builder.WriteString("\nRecent conversation:\n" + history + "\n")
+	}
+	if recentLog != "" {
+		builder.WriteString("\nRecent log snippet:\n" + recentLog + "\n")
 	}
 	if summary != "" {
 		builder.WriteString("\nSummary:\n" + summary + "\n")
@@ -1407,6 +1411,12 @@ func (r *Runner) handleAssistGoal(goal string, dryRun bool) error {
 func (r *Runner) handleAssistGoalWithMode(goal string, dryRun bool, mode string) error {
 	if r.cfg.Permissions.Level == "readonly" {
 		return fmt.Errorf("readonly mode: assist not permitted")
+	}
+	if url := extractFirstURL(goal); url != "" && shouldAutoBrowse(goal) {
+		if err := r.handleBrowse([]string{url}); err != nil {
+			return err
+		}
+		return r.handleAsk(goal)
 	}
 	suggestion, err := r.getAssistSuggestion(goal, mode)
 	if err != nil {
@@ -1657,6 +1667,75 @@ func hasURLHint(text string) bool {
 			if strings.HasPrefix(token, ".") || strings.HasSuffix(token, ".") {
 				continue
 			}
+			return true
+		}
+	}
+	return false
+}
+
+func extractFirstURL(text string) string {
+	if text == "" {
+		return ""
+	}
+	if match := findURLWithScheme(text); match != "" {
+		return match
+	}
+	for _, token := range strings.Fields(text) {
+		clean := strings.Trim(token, " \t\r\n\"'()[]{}<>.,;:")
+		if clean == "" {
+			continue
+		}
+		if strings.Contains(clean, "://") {
+			return clean
+		}
+		if strings.HasPrefix(strings.ToLower(clean), "www.") || strings.Count(clean, ".") >= 1 {
+			if strings.HasPrefix(clean, ".") || strings.HasSuffix(clean, ".") {
+				continue
+			}
+			return clean
+		}
+	}
+	return ""
+}
+
+func findURLWithScheme(text string) string {
+	start := strings.Index(text, "http://")
+	if start == -1 {
+		start = strings.Index(text, "https://")
+	}
+	if start == -1 {
+		return ""
+	}
+	rest := text[start:]
+	end := len(rest)
+	for i, r := range rest {
+		if r == ' ' || r == '\n' || r == '\t' || r == '\r' {
+			end = i
+			break
+		}
+	}
+	candidate := strings.Trim(rest[:end], "\"'()[]{}<>.,;:")
+	return candidate
+}
+
+func shouldAutoBrowse(text string) bool {
+	url := extractFirstURL(text)
+	if url == "" {
+		return false
+	}
+	lower := strings.ToLower(text)
+	blockers := []string{"scan", "enumerate", "ffuf", "gobuster", "dirsearch", "nmap", "nikto", "nuclei", "exploit", "attack"}
+	for _, word := range blockers {
+		if strings.Contains(lower, word) {
+			return false
+		}
+	}
+	if strings.TrimSpace(lower) == strings.ToLower(url) || strings.TrimSpace(lower) == "www."+strings.TrimPrefix(strings.ToLower(url), "www.") {
+		return true
+	}
+	infoHints := []string{"what", "tell me", "about", "overview", "summarize", "whois", "info", "information", "website", "site", "page"}
+	for _, hint := range infoHints {
+		if strings.Contains(lower, hint) {
 			return true
 		}
 	}
