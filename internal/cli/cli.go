@@ -1572,6 +1572,9 @@ func looksLikeChat(text string) bool {
 }
 
 func looksLikeAction(text string) bool {
+	if hasURLHint(text) {
+		return true
+	}
 	if looksLikeFileQuery(text) {
 		return true
 	}
@@ -1639,6 +1642,21 @@ func hasFileHint(text string) bool {
 	extensions := []string{".md", ".txt", ".log", ".json", ".yaml", ".yml", ".toml", ".ini", ".conf", ".cfg", ".go", ".py", ".sh", ".js", ".ts", ".zip", ".7z"}
 	for _, ext := range extensions {
 		if strings.Contains(text, ext) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasURLHint(text string) bool {
+	if strings.Contains(text, "http://") || strings.Contains(text, "https://") {
+		return true
+	}
+	for _, token := range splitTokens(text) {
+		if strings.Count(token, ".") >= 1 && len(token) >= 4 {
+			if strings.HasPrefix(token, ".") || strings.HasSuffix(token, ".") {
+				continue
+			}
 			return true
 		}
 	}
