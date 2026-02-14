@@ -92,6 +92,7 @@ func (m Manager) Summarize(ctx context.Context, summarizer Summarizer, reason st
 		planPath := filepath.Join(m.SessionDir, m.PlanFilename)
 		input.PlanSnippet = readSnippet(planPath, m.maxLogBytes())
 	}
+	input.FocusSnippet = readSnippet(artifacts.FocusPath, m.maxLogBytes())
 	if m.LedgerEnabled && m.LedgerFilename != "" {
 		ledgerPath := filepath.Join(m.SessionDir, m.LedgerFilename)
 		input.LedgerSnippet = readSnippet(ledgerPath, m.maxLogBytes())

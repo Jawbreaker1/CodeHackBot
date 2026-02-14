@@ -16,6 +16,7 @@ type Input struct {
 	Targets     []string
 	Summary     string
 	KnownFacts  []string
+	Focus       string
 	Inventory   string
 	Plan        string
 	Goal        string
@@ -141,6 +142,9 @@ func buildPrompt(input Input) string {
 		for _, fact := range input.KnownFacts {
 			builder.WriteString("- " + fact + "\n")
 		}
+	}
+	if input.Focus != "" {
+		builder.WriteString("\nTask foundation:\n" + input.Focus + "\n")
 	}
 	if input.ChatHistory != "" {
 		builder.WriteString("\nRecent conversation:\n" + input.ChatHistory + "\n")

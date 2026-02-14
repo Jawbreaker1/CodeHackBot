@@ -20,6 +20,7 @@ type SummaryInput struct {
 	Reason          string
 	ExistingSummary []string
 	ExistingFacts   []string
+	FocusSnippet    string
 	LogSnippets     []LogSnippet
 	LedgerSnippet   string
 	PlanSnippet     string
@@ -147,6 +148,10 @@ func buildPrompt(input SummaryInput) string {
 	if input.ChatHistory != "" {
 		builder.WriteString("\nRecent conversation:\n")
 		builder.WriteString(input.ChatHistory + "\n")
+	}
+	if input.FocusSnippet != "" {
+		builder.WriteString("\nTask foundation:\n")
+		builder.WriteString(input.FocusSnippet + "\n")
 	}
 	if len(input.LogSnippets) > 0 {
 		builder.WriteString("\nRecent log snippets:\n")

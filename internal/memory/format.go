@@ -10,6 +10,7 @@ import (
 const (
 	maxSummaryItems = 40
 	maxFactItems    = 80
+	maxFocusItems   = 20
 )
 
 func ReadBullets(path string) ([]string, error) {
@@ -44,6 +45,11 @@ func WriteSummary(path string, bullets []string) error {
 func WriteKnownFacts(path string, bullets []string) error {
 	bullets = limitTail(normalizeLines(bullets), maxFactItems)
 	return writeBullets(path, "Known Facts", bullets, "None recorded.")
+}
+
+func WriteFocus(path string, bullets []string) error {
+	bullets = limitTail(normalizeLines(bullets), maxFocusItems)
+	return writeBullets(path, "Current Focus", bullets, "Not set.")
 }
 
 func writeBullets(path, title string, bullets []string, fallback string) error {

@@ -1237,6 +1237,7 @@ func (r *Runner) assistInput(sessionDir, goal, mode string) (assist.Input, error
 	}
 	summaryText := readFileTrimmed(artifacts.SummaryPath)
 	facts, _ := memory.ReadBullets(artifacts.FactsPath)
+	focusText := readFileTrimmed(artifacts.FocusPath)
 	history := r.readChatHistory(artifacts.ChatPath)
 	workingDir := r.currentWorkingDir()
 	recentLog := r.readRecentLogSnippet(artifacts)
@@ -1249,6 +1250,7 @@ func (r *Runner) assistInput(sessionDir, goal, mode string) (assist.Input, error
 		Targets:     r.cfg.Scope.Targets,
 		Summary:     summaryText,
 		KnownFacts:  facts,
+		Focus:       focusText,
 		ChatHistory: history,
 		WorkingDir:  workingDir,
 		RecentLog:   recentLog,
@@ -1483,10 +1485,18 @@ func (r *Runner) getAssistSuggestion(goal string, mode string) (assist.Suggestio
 }
 
 func (r *Runner) handleAssistGoal(goal string, dryRun bool) error {
-	if strings.TrimSpace(goal) != "" {
+	trimmedGoal := strings.TrimSpace(goal)
+	if trimmedGoal != "" {
+		r.updateTaskFoundation(trimmedGoal)
 		r.pendingAssistGoal = ""
 		r.resetAssistLoopState()
-		r.clearActionContext()
+	}
+	if !dryRun && isSummaryIntent(trimmedGoal) && strings.TrimSpace(r.lastActionLogPath) != "" {
+		if r.cfg.UI.Verbose {
+			r.logger.Printf("Using latest artifact for summary: %s", r.lastActionLogPath)
+		}
+		summaryPrompt := fmt.Sprintf("Summarize findings for: %s. Use the latest action artifact at %s plus recent session context. If data is missing, say exactly what is missing.", trimmedGoal, r.lastActionLogPath)
+		return r.handleAsk(summaryPrompt)
 	}
 	return r.handleAssistGoalWithMode(goal, dryRun, "")
 }
@@ -1513,6 +1523,7 @@ func (r *Runner) handleAssistSingleStep(goal string, dryRun bool, mode string) e
 	}
 	if err := r.executeAssistSuggestion(suggestion, dryRun); err != nil {
 		if r.handleAssistCommandFailure(goal, suggestion, err) {
+			r.maybeEmitGoalSummary(goal, dryRun)
 			return nil
 		}
 		return err
@@ -1541,6 +1552,7 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 			if !dryRun && lastCommand.Type == "command" {
 				r.maybeSuggestNextSteps(goal, lastCommand)
 			}
+			r.maybeEmitGoalSummary(goal, dryRun)
 			return nil
 		}
 		if maxSteps > 0 {
@@ -1562,10 +1574,15 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 			return r.handleAssistNoop(goal, dryRun)
 		}
 		if suggestion.Type == "plan" {
-			return r.handlePlanSuggestion(suggestion, dryRun)
+			if err := r.handlePlanSuggestion(suggestion, dryRun); err != nil {
+				return err
+			}
+			r.maybeEmitGoalSummary(goal, dryRun)
+			return nil
 		}
 		if err := r.executeAssistSuggestion(suggestion, dryRun); err != nil {
 			if r.handleAssistCommandFailure(goal, suggestion, err) {
+				r.maybeEmitGoalSummary(goal, dryRun)
 				return nil
 			}
 			return err
@@ -1697,7 +1714,12 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 		return r.handleBrowse([]string{suggestion.Command})
 	}
 	args := append([]string{suggestion.Command}, suggestion.Args...)
-	return r.handleRun(args)
+	err := r.handleRun(args)
+	if isBenignNoMatchError(err) {
+		r.logger.Printf("No matches found for this step; continuing.")
+		return nil
+	}
+	return err
 }
 
 func (r *Runner) handlePlanSuggestion(suggestion assist.Suggestion, dryRun bool) error {
@@ -1904,6 +1926,23 @@ func (r *Runner) maybeSuggestNextSteps(goal string, lastSuggestion assist.Sugges
 		if r.cfg.UI.Verbose {
 			r.logger.Printf("No next-step suggestion.")
 		}
+	}
+}
+
+func (r *Runner) maybeEmitGoalSummary(goal string, dryRun bool) {
+	if dryRun {
+		return
+	}
+	goal = strings.TrimSpace(goal)
+	if !isSummaryIntent(goal) {
+		return
+	}
+	if strings.TrimSpace(r.lastActionLogPath) == "" {
+		return
+	}
+	prompt := fmt.Sprintf("Provide the requested summary for this goal: %s. Use the latest action artifact at %s and recent session context. Include what is known, what is unknown, and concrete next steps.", goal, r.lastActionLogPath)
+	if err := r.handleAsk(prompt); err != nil && r.cfg.UI.Verbose {
+		r.logger.Printf("Summary generation failed: %v", err)
 	}
 }
 
@@ -2137,6 +2176,40 @@ func (r *Runner) appendConversation(role, content string) {
 	r.maybeAutoSummarizeChat(sessionDir, artifacts.ChatPath)
 }
 
+func (r *Runner) updateTaskFoundation(goal string) {
+	goal = collapseWhitespace(strings.TrimSpace(goal))
+	if goal == "" {
+		return
+	}
+	if len(goal) > 240 {
+		goal = goal[:240]
+	}
+	sessionDir, err := r.ensureSessionScaffold()
+	if err != nil {
+		return
+	}
+	artifacts, err := memory.EnsureArtifacts(sessionDir)
+	if err != nil {
+		return
+	}
+	existing, err := memory.ReadBullets(artifacts.FocusPath)
+	if err != nil {
+		existing = nil
+	}
+	items := []string{goal}
+	for _, item := range existing {
+		item = collapseWhitespace(strings.TrimSpace(item))
+		if item == "" || strings.EqualFold(item, goal) || strings.EqualFold(item, "Not set.") {
+			continue
+		}
+		items = append(items, item)
+		if len(items) >= 12 {
+			break
+		}
+	}
+	_ = memory.WriteFocus(artifacts.FocusPath, items)
+}
+
 func (r *Runner) maybeAutoSummarizeChat(sessionDir, chatPath string) {
 	if chatPath == "" {
 		return
@@ -2176,6 +2249,46 @@ func isPlaceholderCommand(cmd string) bool {
 	switch cmd {
 	case "scan", "recon", "enumerate", "probe", "test":
 		return true
+	default:
+		return false
+	}
+}
+
+func isSummaryIntent(goal string) bool {
+	if goal == "" {
+		return false
+	}
+	lower := strings.ToLower(goal)
+	hints := []string{"summary", "summarize", "what did you find", "findings", "what is it about", "tell me what", "report"}
+	for _, hint := range hints {
+		if strings.Contains(lower, hint) {
+			return true
+		}
+	}
+	return false
+}
+
+func isBenignNoMatchError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var cmdErr commandError
+	if !errors.As(err, &cmdErr) {
+		return false
+	}
+	if cmdErr.Err == nil || !strings.Contains(strings.ToLower(cmdErr.Err.Error()), "exit status 1") {
+		return false
+	}
+	command := strings.ToLower(strings.TrimSpace(cmdErr.Result.Command))
+	switch command {
+	case "grep", "rg":
+		return strings.TrimSpace(cmdErr.Result.Output) == ""
+	case "bash", "sh":
+		if len(cmdErr.Result.Args) == 0 {
+			return false
+		}
+		joined := strings.ToLower(strings.Join(cmdErr.Result.Args, " "))
+		return strings.Contains(joined, "grep") && strings.TrimSpace(cmdErr.Result.Output) == ""
 	default:
 		return false
 	}
