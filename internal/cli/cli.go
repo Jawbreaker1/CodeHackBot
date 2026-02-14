@@ -1999,7 +1999,7 @@ func shouldAutoBrowse(text string) bool {
 }
 
 func (r *Runner) readLine(prompt string) (string, error) {
-	if prompt != "" && r.isTTY() {
+	if prompt != "" && r.isTTY() && strings.HasPrefix(prompt, "BirdHackBot") {
 		return r.readLineInteractive(prompt)
 	}
 	if prompt != "" {
