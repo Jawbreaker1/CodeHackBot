@@ -62,6 +62,7 @@ type Runner struct {
 	lastBrowseLogPath  string
 	lastActionLogPath  string
 	lastKnownTarget    string
+	inputRenderLines   int
 	llmGuard           llm.Guard
 }
 
@@ -2695,6 +2696,7 @@ func (r *Runner) readLineInteractive(prompt string) (string, error) {
 		switch b {
 		case '\r', '\n':
 			fmt.Print("\r\n")
+			r.inputRenderLines = 0
 			line := strings.TrimSpace(string(buf))
 			if recordHistory && line != "" {
 				if len(r.history) == 0 || r.history[len(r.history)-1] != line {
@@ -2706,12 +2708,14 @@ func (r *Runner) readLineInteractive(prompt string) (string, error) {
 			return line, nil
 		case 0x03:
 			fmt.Print("\r\n")
+			r.inputRenderLines = 0
 			r.historyIndex = -1
 			r.historyScratch = ""
 			return "", io.EOF
 		case 0x04:
 			if len(buf) == 0 {
 				fmt.Print("\r\n")
+				r.inputRenderLines = 0
 				r.historyIndex = -1
 				r.historyScratch = ""
 				return "", io.EOF
@@ -2772,7 +2776,48 @@ func (r *Runner) readLineInteractive(prompt string) (string, error) {
 }
 
 func (r *Runner) redrawInputLine(prompt string, buf []byte) {
-	fmt.Printf("\r\x1b[2K%s%s%s%s", inputLineStyleStart, prompt, string(buf), inputLineStyleReset)
+	r.clearInputRender()
+	fmt.Printf("%s%s%s%s", inputLineStyleStart, prompt, string(buf), inputLineStyleReset)
+	r.inputRenderLines = visualLineCount(prompt+string(buf), terminalWidth())
+}
+
+func (r *Runner) clearInputRender() {
+	if r.inputRenderLines <= 0 {
+		return
+	}
+	for i := 0; i < r.inputRenderLines; i++ {
+		fmt.Print("\r\x1b[2K")
+		if i < r.inputRenderLines-1 {
+			fmt.Print("\x1b[1A")
+		}
+	}
+	fmt.Print("\r")
+}
+
+func terminalWidth() int {
+	width, _, err := term.GetSize(int(os.Stdout.Fd()))
+	if err != nil || width <= 0 {
+		return 80
+	}
+	return width
+}
+
+func visualLineCount(text string, width int) int {
+	if width <= 0 {
+		width = 80
+	}
+	runes := len([]rune(text))
+	if runes <= 0 {
+		return 1
+	}
+	lines := runes / width
+	if runes%width != 0 {
+		lines++
+	}
+	if lines <= 0 {
+		return 1
+	}
+	return lines
 }
 
 func (r *Runner) confirm(prompt string) (bool, error) {
