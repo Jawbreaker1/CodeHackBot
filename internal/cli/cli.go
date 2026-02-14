@@ -1676,10 +1676,11 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 		return nil
 	}
 	if strings.EqualFold(suggestion.Command, "browse") {
-		if len(suggestion.Args) == 0 {
-			return fmt.Errorf("assistant returned browse without url")
+		args, err := sanitizeBrowseArgs(suggestion.Args)
+		if err != nil {
+			return err
 		}
-		return r.handleBrowse(suggestion.Args)
+		return r.handleBrowse(args)
 	}
 	if strings.HasPrefix(strings.ToLower(suggestion.Command), "http") && len(suggestion.Args) == 0 {
 		return r.handleBrowse([]string{suggestion.Command})
@@ -1761,9 +1762,18 @@ func (r *Runner) handlePlanSuggestion(suggestion assist.Suggestion, dryRun bool)
 }
 
 func (r *Runner) handleAssistCommandFailure(goal string, suggestion assist.Suggestion, err error) bool {
+	if err == nil {
+		return false
+	}
 	var cmdErr commandError
 	if !errors.As(err, &cmdErr) {
-		return false
+		cmdErr = commandError{
+			Result: exec.CommandResult{
+				Command: suggestion.Command,
+				Args:    suggestion.Args,
+			},
+			Err: err,
+		}
 	}
 	summary := summarizeCommandFailure(cmdErr)
 	if summary != "" {
@@ -2000,6 +2010,23 @@ func firstLines(text string, maxLines int) string {
 		}
 	}
 	return strings.Join(out, " / ")
+}
+
+func sanitizeBrowseArgs(args []string) ([]string, error) {
+	if len(args) == 0 {
+		return nil, fmt.Errorf("assistant returned browse without url")
+	}
+	filtered := make([]string, 0, len(args))
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		filtered = append(filtered, arg)
+	}
+	if len(filtered) == 0 {
+		return nil, fmt.Errorf("assistant returned browse without url")
+	}
+	return []string{filtered[0]}, nil
 }
 
 func (r *Runner) appendConversation(role, content string) {
