@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	neturl "net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -60,6 +61,7 @@ type Runner struct {
 	lastAssistQSeen    int
 	lastBrowseLogPath  string
 	lastActionLogPath  string
+	lastKnownTarget    string
 	llmGuard           llm.Guard
 }
 
@@ -1487,6 +1489,7 @@ func (r *Runner) getAssistSuggestion(goal string, mode string) (assist.Suggestio
 func (r *Runner) handleAssistGoal(goal string, dryRun bool) error {
 	trimmedGoal := strings.TrimSpace(goal)
 	if trimmedGoal != "" {
+		r.updateKnownTargetFromText(trimmedGoal)
 		r.updateTaskFoundation(trimmedGoal)
 		r.pendingAssistGoal = ""
 		r.resetAssistLoopState()
@@ -1638,7 +1641,17 @@ func (r *Runner) handleAssistFollowUp(answer string) error {
 	if goal == "" {
 		return nil
 	}
+	if shouldStartBaselineScan(answer) && strings.TrimSpace(r.lastKnownTarget) != "" {
+		target := r.bestKnownTarget()
+		if target != "" {
+			r.logger.Printf("Using remembered target for baseline non-intrusive scan: %s", target)
+			return r.handleRun([]string{"nmap", "-sV", "-Pn", "--top-ports", "100", target})
+		}
+	}
 	combined := fmt.Sprintf("Original goal: %s\nUser answer to previous assistant question: %s\nContinue the task using available tools.", goal, strings.TrimSpace(answer))
+	if target := strings.TrimSpace(r.lastKnownTarget); target != "" {
+		combined += fmt.Sprintf("\nCurrent remembered target: %s", target)
+	}
 	return r.handleAssistGoalWithMode(combined, false, "follow-up")
 }
 
@@ -2159,6 +2172,39 @@ func (r *Runner) clearActionContext() {
 	r.lastBrowseLogPath = ""
 }
 
+func (r *Runner) updateKnownTargetFromText(text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	if url := extractFirstURL(text); url != "" {
+		if normalized, err := normalizeURL(url); err == nil {
+			if parsed, err := neturl.Parse(normalized); err == nil && parsed.Host != "" {
+				r.lastKnownTarget = parsed.Hostname()
+				return
+			}
+		}
+	}
+	token := extractHostLikeToken(text)
+	if token != "" {
+		r.lastKnownTarget = token
+	}
+}
+
+func (r *Runner) bestKnownTarget() string {
+	target := strings.TrimSpace(r.lastKnownTarget)
+	if target == "" {
+		return ""
+	}
+	if strings.Contains(target, "://") {
+		parsed, err := neturl.Parse(target)
+		if err == nil && parsed.Hostname() != "" {
+			return parsed.Hostname()
+		}
+	}
+	return strings.TrimSpace(strings.TrimSuffix(target, "."))
+}
+
 func (r *Runner) appendConversation(role, content string) {
 	content = strings.TrimSpace(content)
 	if role == "" || content == "" {
@@ -2266,6 +2312,37 @@ func isSummaryIntent(goal string) bool {
 		}
 	}
 	return false
+}
+
+func shouldStartBaselineScan(answer string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(answer))
+	if normalized == "" {
+		return false
+	}
+	if strings.Contains(normalized, "scan") && (strings.Contains(normalized, "start") || strings.Contains(normalized, "first") || strings.HasPrefix(normalized, "yes")) {
+		return true
+	}
+	if strings.Contains(normalized, "non intrusive") && strings.Contains(normalized, "start") {
+		return true
+	}
+	return false
+}
+
+func extractHostLikeToken(text string) string {
+	candidates := strings.Fields(strings.ToLower(text))
+	for _, token := range candidates {
+		token = strings.Trim(token, "\"'()[]{}<>.,;:")
+		if token == "" {
+			continue
+		}
+		if strings.Contains(token, "/") || strings.Contains(token, ":") {
+			continue
+		}
+		if strings.Count(token, ".") >= 1 && !strings.HasPrefix(token, ".") && !strings.HasSuffix(token, ".") {
+			return token
+		}
+	}
+	return ""
 }
 
 func isBenignNoMatchError(err error) bool {

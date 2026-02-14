@@ -39,6 +39,7 @@ func (r *Runner) handleBrowse(args []string) error {
 	if err != nil {
 		return err
 	}
+	r.updateKnownTargetFromText(target)
 
 	sessionDir, err := r.ensureSessionScaffold()
 	if err != nil {
