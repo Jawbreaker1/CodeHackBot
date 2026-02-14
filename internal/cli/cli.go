@@ -1246,10 +1246,16 @@ func (r *Runner) assistInput(sessionDir, goal, mode string) (assist.Input, error
 	playbooks := r.playbookHints(goal)
 	planPath := filepath.Join(sessionDir, r.cfg.Session.PlanFilename)
 	inventoryPath := filepath.Join(sessionDir, r.cfg.Session.InventoryFilename)
+	targets := append([]string{}, r.cfg.Scope.Targets...)
+	if len(targets) == 0 {
+		if target := strings.TrimSpace(r.bestKnownTarget()); target != "" {
+			targets = append(targets, target)
+		}
+	}
 	return assist.Input{
 		SessionID:   r.sessionID,
 		Scope:       r.cfg.Scope.Networks,
-		Targets:     r.cfg.Scope.Targets,
+		Targets:     targets,
 		Summary:     summaryText,
 		KnownFacts:  facts,
 		Focus:       focusText,
@@ -1498,8 +1504,7 @@ func (r *Runner) handleAssistGoal(goal string, dryRun bool) error {
 		if r.cfg.UI.Verbose {
 			r.logger.Printf("Using latest artifact for summary: %s", r.lastActionLogPath)
 		}
-		summaryPrompt := fmt.Sprintf("Summarize findings for: %s. Use the latest action artifact at %s plus recent session context. If data is missing, say exactly what is missing.", trimmedGoal, r.lastActionLogPath)
-		return r.handleAsk(summaryPrompt)
+		return r.summarizeFromLatestArtifact(trimmedGoal)
 	}
 	return r.handleAssistGoalWithMode(goal, dryRun, "")
 }
@@ -1867,6 +1872,10 @@ func (r *Runner) suggestAssistRecovery(goal string, suggestion assist.Suggestion
 	}
 	if recovery.Type == "question" {
 		fmt.Println(recovery.Question)
+		r.appendConversation("Assistant", recovery.Question)
+		if strings.TrimSpace(goal) != "" {
+			r.pendingAssistGoal = goal
+		}
 		return true
 	}
 	if recovery.Type == "plan" {
@@ -1910,6 +1919,9 @@ func (r *Runner) maybeSuggestNextSteps(goal string, lastSuggestion assist.Sugges
 		if next.Question != "" {
 			fmt.Println(next.Question)
 			r.appendConversation("Assistant", next.Question)
+			if strings.TrimSpace(goal) != "" {
+				r.pendingAssistGoal = goal
+			}
 		}
 	case "plan":
 		steps := next.Steps
@@ -1953,10 +1965,80 @@ func (r *Runner) maybeEmitGoalSummary(goal string, dryRun bool) {
 	if strings.TrimSpace(r.lastActionLogPath) == "" {
 		return
 	}
-	prompt := fmt.Sprintf("Provide the requested summary for this goal: %s. Use the latest action artifact at %s and recent session context. Include what is known, what is unknown, and concrete next steps.", goal, r.lastActionLogPath)
-	if err := r.handleAsk(prompt); err != nil && r.cfg.UI.Verbose {
+	if err := r.summarizeFromLatestArtifact(goal); err != nil && r.cfg.UI.Verbose {
 		r.logger.Printf("Summary generation failed: %v", err)
 	}
+}
+
+func (r *Runner) summarizeFromLatestArtifact(goal string) error {
+	if strings.TrimSpace(goal) == "" || strings.TrimSpace(r.lastActionLogPath) == "" {
+		return nil
+	}
+	if !r.llmAllowed() {
+		return nil
+	}
+	artifactPath := r.lastActionLogPath
+	data, err := os.ReadFile(artifactPath)
+	if err != nil {
+		return fmt.Errorf("read latest artifact: %w", err)
+	}
+	const maxArtifactBytes = 16000
+	if len(data) > maxArtifactBytes {
+		data = data[len(data)-maxArtifactBytes:]
+	}
+	sessionDir, err := r.ensureSessionScaffold()
+	if err != nil {
+		return err
+	}
+	artifacts, _ := memory.EnsureArtifacts(sessionDir)
+	contextSummary := readFileTrimmed(artifacts.SummaryPath)
+	contextFacts := readFileTrimmed(artifacts.FactsPath)
+	contextFocus := readFileTrimmed(artifacts.FocusPath)
+	prompt := strings.Builder{}
+	prompt.WriteString("Goal:\n")
+	prompt.WriteString(goal + "\n\n")
+	prompt.WriteString("Latest action artifact path:\n")
+	prompt.WriteString(artifactPath + "\n\n")
+	prompt.WriteString("Latest action artifact content:\n")
+	prompt.WriteString(string(data) + "\n\n")
+	if contextSummary != "" {
+		prompt.WriteString("Session summary:\n" + contextSummary + "\n\n")
+	}
+	if contextFacts != "" {
+		prompt.WriteString("Known facts:\n" + contextFacts + "\n\n")
+	}
+	if contextFocus != "" {
+		prompt.WriteString("Task foundation:\n" + contextFocus + "\n\n")
+	}
+	prompt.WriteString("Provide: 1) concise summary, 2) known findings, 3) unknown/missing data, 4) next 2-3 concrete steps.")
+
+	client := llm.NewLMStudioClient(r.cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	stopIndicator := r.startLLMIndicatorIfAllowed("summary")
+	defer stopIndicator()
+	resp, err := client.Chat(ctx, llm.ChatRequest{
+		Model:       r.cfg.LLM.Model,
+		Temperature: 0.2,
+		Messages: []llm.Message{
+			{
+				Role:    "system",
+				Content: "You are BirdHackBot. Summarize from provided artifact/content only. Do not ask user to paste files if artifact content is already present.",
+			},
+			{
+				Role:    "user",
+				Content: prompt.String(),
+			},
+		},
+	})
+	if err != nil {
+		r.recordLLMFailure(err)
+		return err
+	}
+	r.recordLLMSuccess()
+	fmt.Println(resp.Content)
+	r.appendConversation("Assistant", resp.Content)
+	return nil
 }
 
 func assistFailureHint(suggestion assist.Suggestion, cmdErr commandError) string {
