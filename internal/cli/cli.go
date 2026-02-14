@@ -2362,8 +2362,10 @@ func (r *Runner) startLLMIndicator(label string) func() {
 		}
 	}
 	stop := make(chan struct{})
+	done := make(chan struct{})
 	var once sync.Once
 	go func() {
+		defer close(done)
 		timer := time.NewTimer(llmIndicatorDelay)
 		defer timer.Stop()
 		select {
@@ -2391,8 +2393,8 @@ func (r *Runner) startLLMIndicator(label string) func() {
 	return func() {
 		once.Do(func() {
 			close(stop)
+			<-done
 			r.clearLLMStatus()
-			fmt.Print("\r\x1b[2K")
 		})
 	}
 }
