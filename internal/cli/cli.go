@@ -2222,7 +2222,7 @@ func sanitizeBrowseArgs(args []string) ([]string, error) {
 }
 
 func (r *Runner) enrichAssistGoal(goal, mode string) string {
-	if mode != "execute-step" && mode != "recover" && mode != "follow-up" && mode != "next-steps" {
+	if mode != "recover" && mode != "follow-up" && mode != "next-steps" {
 		return goal
 	}
 	path := strings.TrimSpace(r.lastActionLogPath)
