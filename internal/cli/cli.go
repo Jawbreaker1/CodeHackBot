@@ -1496,10 +1496,13 @@ func (r *Runner) handleAssistSingleStep(goal string, dryRun bool, mode string) e
 		return r.handleAsk(goal)
 	}
 	if err := r.executeAssistSuggestion(suggestion, dryRun); err != nil {
-		if r.handleAssistCommandFailure(suggestion, err) {
+		if r.handleAssistCommandFailure(goal, suggestion, err) {
 			return nil
 		}
 		return err
+	}
+	if !dryRun && suggestion.Type == "command" {
+		r.maybeSuggestNextSteps(goal, suggestion)
 	}
 	return nil
 }
@@ -1514,9 +1517,13 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 	maxSteps := r.assistMaxSteps()
 	stepsRun := 0
 	stepMode := mode
+	lastCommand := assist.Suggestion{}
 	for {
 		if maxSteps > 0 && stepsRun >= maxSteps {
 			r.logger.Printf("Reached max steps (%d).", maxSteps)
+			if !dryRun && lastCommand.Type == "command" {
+				r.maybeSuggestNextSteps(goal, lastCommand)
+			}
 			return nil
 		}
 		if maxSteps > 0 {
@@ -1544,7 +1551,7 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 			return r.handlePlanSuggestion(suggestion, dryRun)
 		}
 		if err := r.executeAssistSuggestion(suggestion, dryRun); err != nil {
-			if r.handleAssistCommandFailure(suggestion, err) {
+			if r.handleAssistCommandFailure(goal, suggestion, err) {
 				return nil
 			}
 			return err
@@ -1554,6 +1561,9 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 		}
 		if suggestion.Type == "question" {
 			return nil
+		}
+		if suggestion.Type == "command" {
+			lastCommand = suggestion
 		}
 		stepsRun++
 		stepMode = "execute-step"
@@ -1682,6 +1692,9 @@ func (r *Runner) handlePlanSuggestion(suggestion assist.Suggestion, dryRun bool)
 			return err
 		}
 		if err := r.executeAssistSuggestion(result, false); err != nil {
+			if r.handleAssistCommandFailure(step, result, err) {
+				return nil
+			}
 			return err
 		}
 		if result.Type == "question" {
@@ -1692,7 +1705,7 @@ func (r *Runner) handlePlanSuggestion(suggestion assist.Suggestion, dryRun bool)
 	return nil
 }
 
-func (r *Runner) handleAssistCommandFailure(suggestion assist.Suggestion, err error) bool {
+func (r *Runner) handleAssistCommandFailure(goal string, suggestion assist.Suggestion, err error) bool {
 	var cmdErr commandError
 	if !errors.As(err, &cmdErr) {
 		return false
@@ -1709,7 +1722,7 @@ func (r *Runner) handleAssistCommandFailure(suggestion assist.Suggestion, err er
 	if r.tryAssistRecovery(suggestion, cmdErr) {
 		return true
 	}
-	return true
+	return r.suggestAssistRecovery(goal, suggestion, cmdErr)
 }
 
 func summarizeCommandFailure(cmdErr commandError) string {
@@ -1721,6 +1734,97 @@ func summarizeCommandFailure(cmdErr commandError) string {
 		parts = append(parts, output)
 	}
 	return strings.Join(parts, " | ")
+}
+
+func (r *Runner) suggestAssistRecovery(goal string, suggestion assist.Suggestion, cmdErr commandError) bool {
+	if !r.llmAllowed() {
+		r.logger.Printf("No recovery suggestion (LLM unavailable).")
+		return true
+	}
+	recoveryGoal := buildRecoveryGoal(goal, suggestion, cmdErr)
+	label := "recover"
+	stopIndicator := r.startLLMIndicatorIfAllowed(label)
+	recovery, err := r.getAssistSuggestion(recoveryGoal, "recover")
+	stopIndicator()
+	if err != nil {
+		r.logger.Printf("Recovery suggestion failed: %v", err)
+		return true
+	}
+	if recovery.Type == "noop" {
+		r.logger.Printf("No recovery suggestion provided.")
+		return true
+	}
+	if recovery.Type == "question" {
+		fmt.Println(recovery.Question)
+		return true
+	}
+	if recovery.Type == "plan" {
+		_ = r.handlePlanSuggestion(recovery, true)
+		return true
+	}
+	if recovery.Type == "command" {
+		r.logger.Printf("Recovery suggestion: %s %s", recovery.Command, strings.Join(recovery.Args, " "))
+		if recovery.Summary != "" {
+			r.logger.Printf("Recovery summary: %s", recovery.Summary)
+		}
+		if recovery.Risk != "" {
+			r.logger.Printf("Recovery risk: %s", recovery.Risk)
+		}
+		if err := r.executeAssistSuggestion(recovery, false); err != nil {
+			r.logger.Printf("Recovery attempt failed: %v", err)
+		}
+		return true
+	}
+	r.logger.Printf("Recovery suggestion returned unknown type: %s", recovery.Type)
+	return true
+}
+
+func (r *Runner) maybeSuggestNextSteps(goal string, lastSuggestion assist.Suggestion) {
+	if !r.llmAllowed() {
+		return
+	}
+	if strings.TrimSpace(goal) == "" && lastSuggestion.Summary == "" {
+		return
+	}
+	nextGoal := buildNextStepsGoal(goal, lastSuggestion)
+	stopIndicator := r.startLLMIndicatorIfAllowed("next steps")
+	next, err := r.getAssistSuggestion(nextGoal, "next-steps")
+	stopIndicator()
+	if err != nil {
+		r.logger.Printf("Next-step suggestion failed: %v", err)
+		return
+	}
+	switch next.Type {
+	case "question":
+		if next.Question != "" {
+			fmt.Println(next.Question)
+		}
+	case "plan":
+		steps := next.Steps
+		if len(steps) == 0 && next.Plan != "" {
+			fmt.Println("Possible next steps:")
+			fmt.Println(next.Plan)
+			return
+		}
+		if len(steps) > 0 {
+			fmt.Println("Possible next steps:")
+			for i, step := range steps {
+				fmt.Printf("%d) %s\n", i+1, step)
+			}
+		}
+	case "command":
+		cmdLine := strings.TrimSpace(strings.Join(append([]string{next.Command}, next.Args...), " "))
+		if cmdLine != "" {
+			fmt.Printf("Suggested next command: %s\n", cmdLine)
+		}
+		if next.Summary != "" {
+			fmt.Printf("Why: %s\n", next.Summary)
+		}
+	default:
+		if r.cfg.UI.Verbose {
+			r.logger.Printf("No next-step suggestion.")
+		}
+	}
 }
 
 func assistFailureHint(suggestion assist.Suggestion, cmdErr commandError) string {
@@ -1763,6 +1867,42 @@ func (r *Runner) tryAssistRecovery(suggestion assist.Suggestion, cmdErr commandE
 		r.logger.Printf("Retry failed: %v", retryErr)
 	}
 	return true
+}
+
+func buildRecoveryGoal(goal string, suggestion assist.Suggestion, cmdErr commandError) string {
+	builder := strings.Builder{}
+	if goal != "" {
+		builder.WriteString("Original goal: " + goal + "\n")
+	}
+	builder.WriteString("Previous command failed.\n")
+	cmdLine := strings.TrimSpace(strings.Join(append([]string{suggestion.Command}, suggestion.Args...), " "))
+	if cmdLine != "" {
+		builder.WriteString("Command: " + cmdLine + "\n")
+	}
+	if cmdErr.Err != nil {
+		builder.WriteString("Error: " + cmdErr.Err.Error() + "\n")
+	}
+	if output := firstLines(cmdErr.Result.Output, 3); output != "" {
+		builder.WriteString("Output: " + output + "\n")
+	}
+	builder.WriteString("Provide a recovery suggestion or alternative next step.")
+	return builder.String()
+}
+
+func buildNextStepsGoal(goal string, suggestion assist.Suggestion) string {
+	builder := strings.Builder{}
+	if goal != "" {
+		builder.WriteString("Original goal: " + goal + "\n")
+	}
+	if suggestion.Summary != "" {
+		builder.WriteString("Last action summary: " + suggestion.Summary + "\n")
+	}
+	cmdLine := strings.TrimSpace(strings.Join(append([]string{suggestion.Command}, suggestion.Args...), " "))
+	if cmdLine != "" {
+		builder.WriteString("Last command: " + cmdLine + "\n")
+	}
+	builder.WriteString("Suggest 1-3 concise next steps or a clarifying question.")
+	return builder.String()
 }
 
 func normalizeWhoisTarget(target string) (string, bool) {
