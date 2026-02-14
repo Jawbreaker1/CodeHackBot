@@ -110,6 +110,7 @@ func (r *Runner) Run() error {
 				r.logger.Printf("Ask error: %v", err)
 			}
 		} else {
+			r.appendConversation("User", line)
 			if assistErr := r.handleAssistGoal(line, false); assistErr != nil {
 				r.logger.Printf("Assist error: %v", assistErr)
 			}
@@ -681,6 +682,7 @@ func (r *Runner) handleAssist(args []string) error {
 	} else {
 		goal = strings.Join(args, " ")
 	}
+	r.appendConversation("User", goal)
 	return r.handleAssistGoal(goal, dryRun)
 }
 
@@ -698,8 +700,7 @@ func (r *Runner) handleAsk(text string) error {
 		return err
 	}
 	prompt := r.buildAskPrompt(sessionDir, text)
-	artifacts, _ := memory.EnsureArtifacts(sessionDir)
-	r.appendChatHistory(artifacts.ChatPath, "User", text)
+	r.appendConversation("User", text)
 	client := llm.NewLMStudioClient(r.cfg)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -728,7 +729,7 @@ func (r *Runner) handleAsk(text string) error {
 		r.logger.Printf("Assistant response:")
 	}
 	fmt.Println(resp.Content)
-	r.appendChatHistory(artifacts.ChatPath, "Assistant", resp.Content)
+	r.appendConversation("Assistant", resp.Content)
 	return nil
 }
 
@@ -1594,6 +1595,7 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 		} else {
 			fmt.Println(suggestion.Question)
 		}
+		r.appendConversation("Assistant", suggestion.Question)
 		return nil
 	case "noop":
 		if r.cfg.UI.Verbose {
@@ -1611,6 +1613,7 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 	}
 
 	r.logger.Printf("Suggested command: %s %s", suggestion.Command, strings.Join(suggestion.Args, " "))
+	r.appendConversation("Assistant", fmt.Sprintf("Suggested command: %s %s", suggestion.Command, strings.Join(suggestion.Args, " ")))
 	if r.cfg.UI.Verbose {
 		if suggestion.Summary != "" {
 			r.logger.Printf("Summary: %s", suggestion.Summary)
@@ -1661,6 +1664,7 @@ func (r *Runner) handlePlanSuggestion(suggestion assist.Suggestion, dryRun bool)
 	if planText != "" {
 		fmt.Println("Plan:")
 		fmt.Println(planText)
+		r.appendConversation("Assistant", planText)
 	}
 	if len(suggestion.Steps) > 0 {
 		fmt.Println("Plan steps:")
@@ -1672,6 +1676,7 @@ func (r *Runner) handlePlanSuggestion(suggestion assist.Suggestion, dryRun bool)
 		for i, step := range steps {
 			fmt.Printf("%d) %s\n", i+1, step)
 		}
+		r.appendConversation("Assistant", "Plan steps: "+strings.Join(steps, " | "))
 		suggestion.Steps = steps
 	}
 	if dryRun {
@@ -1798,12 +1803,14 @@ func (r *Runner) maybeSuggestNextSteps(goal string, lastSuggestion assist.Sugges
 	case "question":
 		if next.Question != "" {
 			fmt.Println(next.Question)
+			r.appendConversation("Assistant", next.Question)
 		}
 	case "plan":
 		steps := next.Steps
 		if len(steps) == 0 && next.Plan != "" {
 			fmt.Println("Possible next steps:")
 			fmt.Println(next.Plan)
+			r.appendConversation("Assistant", "Possible next steps: "+next.Plan)
 			return
 		}
 		if len(steps) > 0 {
@@ -1811,6 +1818,7 @@ func (r *Runner) maybeSuggestNextSteps(goal string, lastSuggestion assist.Sugges
 			for i, step := range steps {
 				fmt.Printf("%d) %s\n", i+1, step)
 			}
+			r.appendConversation("Assistant", "Possible next steps: "+strings.Join(steps, " | "))
 		}
 	case "command":
 		cmdLine := strings.TrimSpace(strings.Join(append([]string{next.Command}, next.Args...), " "))
@@ -1820,6 +1828,7 @@ func (r *Runner) maybeSuggestNextSteps(goal string, lastSuggestion assist.Sugges
 		if next.Summary != "" {
 			fmt.Printf("Why: %s\n", next.Summary)
 		}
+		r.appendConversation("Assistant", fmt.Sprintf("Suggested next command: %s", cmdLine))
 	default:
 		if r.cfg.UI.Verbose {
 			r.logger.Printf("No next-step suggestion.")
@@ -1941,6 +1950,57 @@ func firstLines(text string, maxLines int) string {
 		}
 	}
 	return strings.Join(out, " / ")
+}
+
+func (r *Runner) appendConversation(role, content string) {
+	content = strings.TrimSpace(content)
+	if role == "" || content == "" {
+		return
+	}
+	sessionDir, err := r.ensureSessionScaffold()
+	if err != nil {
+		return
+	}
+	artifacts, err := memory.EnsureArtifacts(sessionDir)
+	if err != nil {
+		return
+	}
+	r.appendChatHistory(artifacts.ChatPath, role, content)
+	r.maybeAutoSummarizeChat(sessionDir, artifacts.ChatPath)
+}
+
+func (r *Runner) maybeAutoSummarizeChat(sessionDir, chatPath string) {
+	if chatPath == "" {
+		return
+	}
+	manager := r.memoryManager(sessionDir)
+	state, err := manager.RecordLog(chatPath)
+	if err != nil {
+		if r.cfg.UI.Verbose {
+			r.logger.Printf("Context tracking failed: %v", err)
+		}
+		return
+	}
+	if !manager.ShouldSummarize(state) {
+		return
+	}
+	if r.cfg.Permissions.Level == "readonly" {
+		if r.cfg.UI.Verbose {
+			r.logger.Printf("Auto-summarize skipped (readonly)")
+		}
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	stopIndicator := r.startLLMIndicatorIfAllowed("summarize")
+	defer stopIndicator()
+	if err := manager.Summarize(ctx, r.summaryGenerator(), "chat"); err != nil {
+		r.logger.Printf("Auto-summarize failed: %v", err)
+		return
+	}
+	if r.cfg.UI.Verbose {
+		r.logger.Printf("Auto-summary updated")
+	}
 }
 
 func isPlaceholderCommand(cmd string) bool {
