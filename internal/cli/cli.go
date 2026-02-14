@@ -53,6 +53,7 @@ type Runner struct {
 	llmInFlight       bool
 	llmLabel          string
 	llmStarted        time.Time
+	pendingAssistGoal string
 	llmGuard          llm.Guard
 }
 
@@ -88,6 +89,16 @@ func (r *Runner) Run() error {
 		if strings.HasPrefix(line, "/") {
 			if err := r.handleCommand(line); err != nil {
 				r.logger.Printf("Command error: %v", err)
+			}
+			if err == io.EOF {
+				r.Stop()
+				return nil
+			}
+			continue
+		}
+		if r.pendingAssistGoal != "" {
+			if err := r.handleAssistFollowUp(line); err != nil {
+				r.logger.Printf("Assist follow-up error: %v", err)
 			}
 			if err == io.EOF {
 				r.Stop()
@@ -1470,6 +1481,9 @@ func (r *Runner) getAssistSuggestion(goal string, mode string) (assist.Suggestio
 }
 
 func (r *Runner) handleAssistGoal(goal string, dryRun bool) error {
+	if strings.TrimSpace(goal) != "" {
+		r.pendingAssistGoal = ""
+	}
 	return r.handleAssistGoalWithMode(goal, dryRun, "")
 }
 
@@ -1491,10 +1505,7 @@ func (r *Runner) handleAssistSingleStep(goal string, dryRun bool, mode string) e
 		return err
 	}
 	if suggestion.Type == "noop" && strings.TrimSpace(goal) != "" {
-		if r.cfg.UI.Verbose {
-			r.logger.Printf("No actionable suggestion; answering via /ask.")
-		}
-		return r.handleAsk(goal)
+		return r.handleAssistNoop(goal, dryRun)
 	}
 	if err := r.executeAssistSuggestion(suggestion, dryRun); err != nil {
 		if r.handleAssistCommandFailure(goal, suggestion, err) {
@@ -1503,6 +1514,7 @@ func (r *Runner) handleAssistSingleStep(goal string, dryRun bool, mode string) e
 		return err
 	}
 	if !dryRun && suggestion.Type == "command" {
+		r.pendingAssistGoal = ""
 		r.maybeSuggestNextSteps(goal, suggestion)
 	}
 	return nil
@@ -1543,10 +1555,7 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 			return err
 		}
 		if suggestion.Type == "noop" && strings.TrimSpace(goal) != "" {
-			if r.cfg.UI.Verbose {
-				r.logger.Printf("No actionable suggestion; answering via /ask.")
-			}
-			return r.handleAsk(goal)
+			return r.handleAssistNoop(goal, dryRun)
 		}
 		if suggestion.Type == "plan" {
 			return r.handlePlanSuggestion(suggestion, dryRun)
@@ -1561,14 +1570,55 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 			return nil
 		}
 		if suggestion.Type == "question" {
+			r.pendingAssistGoal = goal
 			return nil
 		}
 		if suggestion.Type == "command" {
 			lastCommand = suggestion
+			r.pendingAssistGoal = ""
 		}
 		stepsRun++
 		stepMode = "execute-step"
 	}
+}
+
+func (r *Runner) handleAssistNoop(goal string, dryRun bool) error {
+	clarifyGoal := fmt.Sprintf("Original goal: %s\nThe previous suggestion was noop. Provide one concrete next step. If details are missing, ask one concise clarifying question.", goal)
+	stopIndicator := r.startLLMIndicatorIfAllowed("assist clarify")
+	defer stopIndicator()
+	suggestion, err := r.getAssistSuggestion(clarifyGoal, "recover")
+	if err != nil {
+		r.pendingAssistGoal = goal
+		fmt.Println("I need one more detail to continue. Share what target/path/url to act on.")
+		return nil
+	}
+	if suggestion.Type == "noop" {
+		r.pendingAssistGoal = goal
+		fmt.Println("I need one more detail to continue. Share what target/path/url to act on.")
+		return nil
+	}
+	if err := r.executeAssistSuggestion(suggestion, dryRun); err != nil {
+		if r.handleAssistCommandFailure(goal, suggestion, err) {
+			return nil
+		}
+		return err
+	}
+	if suggestion.Type == "question" {
+		r.pendingAssistGoal = goal
+	} else if suggestion.Type == "command" {
+		r.pendingAssistGoal = ""
+	}
+	return nil
+}
+
+func (r *Runner) handleAssistFollowUp(answer string) error {
+	goal := strings.TrimSpace(r.pendingAssistGoal)
+	r.pendingAssistGoal = ""
+	if goal == "" {
+		return nil
+	}
+	combined := fmt.Sprintf("Original goal: %s\nUser answer to previous assistant question: %s\nContinue the task using available tools.", goal, strings.TrimSpace(answer))
+	return r.handleAssistGoalWithMode(combined, false, "follow-up")
 }
 
 func (r *Runner) assistMaxSteps() int {
