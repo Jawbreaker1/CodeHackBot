@@ -10,11 +10,22 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
 
 const browseBodyLimit = 1_000_000
+
+var (
+	scriptBlockPattern  = regexp.MustCompile(`(?is)<script\b[^>]*>.*?</script>`)
+	styleBlockPattern   = regexp.MustCompile(`(?is)<style\b[^>]*>.*?</style>`)
+	metaTagPattern      = regexp.MustCompile(`(?is)<meta\b[^>]*>`)
+	metaNamePattern     = regexp.MustCompile(`(?is)\bname\s*=\s*("description"|'description'|description)\b`)
+	metaPropertyPattern = regexp.MustCompile(`(?is)\bproperty\s*=\s*("og:description"|'og:description'|og:description)\b`)
+	metaContentPattern  = regexp.MustCompile(`(?is)\bcontent\s*=\s*("([^"]*)"|'([^']*)'|([^'"\s>]+))`)
+	headingPattern      = regexp.MustCompile(`(?is)<h([1-3])\b[^>]*>(.*?)</h[1-3]>`)
+)
 
 func (r *Runner) handleBrowse(args []string) error {
 	if len(args) == 0 {
@@ -93,20 +104,30 @@ func (r *Runner) handleBrowse(args []string) error {
 	}
 	content := string(body)
 	title := extractTitle(content)
-	text := collapseWhitespace(stripHTML(content))
+	metaDescription := extractMetaDescription(content)
+	headings := extractHeadings(content, 8)
+	text := collapseWhitespace(stripHTML(stripScriptsAndStyles(content)))
 	snippet := truncate(text, 2000)
 
 	fmt.Printf("URL: %s\n", target)
 	if title != "" {
 		fmt.Printf("Title: %s\n", title)
 	}
+	if metaDescription != "" {
+		fmt.Printf("Meta description: %s\n", metaDescription)
+	}
+	if len(headings) > 0 {
+		fmt.Printf("Headings: %s\n", strings.Join(headings, " | "))
+	}
 	fmt.Printf("Status: %d\n", resp.StatusCode)
 	if snippet != "" {
 		fmt.Printf("Snippet:\n%s\n", snippet)
 	}
 
-	logPath, err := writeBrowseLog(sessionDir, target, resp.StatusCode, resp.Header.Get("Content-Type"), title, snippet)
+	logPath, err := writeBrowseLog(sessionDir, target, resp.StatusCode, resp.Header.Get("Content-Type"), title, metaDescription, headings, snippet)
 	if err == nil {
+		r.lastBrowseLogPath = logPath
+		r.recordActionArtifact(logPath)
 		r.maybeAutoSummarize(logPath, "browse")
 	}
 	return nil
@@ -175,6 +196,56 @@ func extractTitle(content string) string {
 	return strings.TrimSpace(title)
 }
 
+func stripScriptsAndStyles(content string) string {
+	content = scriptBlockPattern.ReplaceAllString(content, " ")
+	return styleBlockPattern.ReplaceAllString(content, " ")
+}
+
+func extractMetaDescription(content string) string {
+	tags := metaTagPattern.FindAllString(content, -1)
+	for _, tag := range tags {
+		if !metaNamePattern.MatchString(tag) && !metaPropertyPattern.MatchString(tag) {
+			continue
+		}
+		match := metaContentPattern.FindStringSubmatch(tag)
+		if len(match) < 5 {
+			continue
+		}
+		value := strings.TrimSpace(firstNonEmpty(match[2], match[3], match[4]))
+		value = collapseWhitespace(stripHTML(value))
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func extractHeadings(content string, max int) []string {
+	if max <= 0 {
+		return nil
+	}
+	matches := headingPattern.FindAllStringSubmatch(content, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	out := make([]string, 0, minInt(len(matches), max))
+	for _, match := range matches {
+		if len(match) < 3 {
+			continue
+		}
+		level := strings.TrimSpace(match[1])
+		text := collapseWhitespace(stripHTML(match[2]))
+		if text == "" {
+			continue
+		}
+		out = append(out, "h"+level+": "+text)
+		if len(out) >= max {
+			break
+		}
+	}
+	return out
+}
+
 func stripHTML(content string) string {
 	var builder strings.Builder
 	inTag := false
@@ -204,7 +275,7 @@ func truncate(text string, max int) string {
 	return text[:max] + "..."
 }
 
-func writeBrowseLog(sessionDir, url string, status int, contentType, title, snippet string) (string, error) {
+func writeBrowseLog(sessionDir, url string, status int, contentType, title, metaDescription string, headings []string, snippet string) (string, error) {
 	logDir := filepath.Join(sessionDir, "logs")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return "", err
@@ -219,6 +290,12 @@ func writeBrowseLog(sessionDir, url string, status int, contentType, title, snip
 	if title != "" {
 		builder.WriteString(fmt.Sprintf("Title: %s\n", title))
 	}
+	if metaDescription != "" {
+		builder.WriteString(fmt.Sprintf("Meta-Description: %s\n", metaDescription))
+	}
+	if len(headings) > 0 {
+		builder.WriteString(fmt.Sprintf("Headings: %s\n", strings.Join(headings, " | ")))
+	}
 	if snippet != "" {
 		builder.WriteString("\nSnippet:\n")
 		builder.WriteString(snippet)
@@ -228,4 +305,20 @@ func writeBrowseLog(sessionDir, url string, status int, contentType, title, snip
 		return "", err
 	}
 	return path, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

@@ -35,26 +35,32 @@ const (
 )
 
 type Runner struct {
-	cfg               config.Config
-	sessionID         string
-	logger            *log.Logger
-	reader            *bufio.Reader
-	defaultConfigPath string
-	profilePath       string
-	stopOnce          sync.Once
-	currentTask       string
-	currentTaskStart  time.Time
-	currentMode       string
-	planWizard        *planWizard
-	history           []string
-	historyIndex      int
-	historyScratch    string
-	llmMu             sync.Mutex
-	llmInFlight       bool
-	llmLabel          string
-	llmStarted        time.Time
-	pendingAssistGoal string
-	llmGuard          llm.Guard
+	cfg                config.Config
+	sessionID          string
+	logger             *log.Logger
+	reader             *bufio.Reader
+	defaultConfigPath  string
+	profilePath        string
+	stopOnce           sync.Once
+	currentTask        string
+	currentTaskStart   time.Time
+	currentMode        string
+	planWizard         *planWizard
+	history            []string
+	historyIndex       int
+	historyScratch     string
+	llmMu              sync.Mutex
+	llmInFlight        bool
+	llmLabel           string
+	llmStarted         time.Time
+	pendingAssistGoal  string
+	lastAssistCmdKey   string
+	lastAssistCmdSeen  int
+	lastAssistQuestion string
+	lastAssistQSeen    int
+	lastBrowseLogPath  string
+	lastActionLogPath  string
+	llmGuard           llm.Guard
 }
 
 func NewRunner(cfg config.Config, sessionID, defaultConfigPath, profilePath string) *Runner {
@@ -116,15 +122,9 @@ func (r *Runner) Run() error {
 			}
 			continue
 		}
-		if looksLikeChat(line) {
-			if err := r.handleAsk(line); err != nil {
-				r.logger.Printf("Ask error: %v", err)
-			}
-		} else {
-			r.appendConversation("User", line)
-			if assistErr := r.handleAssistGoal(line, false); assistErr != nil {
-				r.logger.Printf("Assist error: %v", assistErr)
-			}
+		r.appendConversation("User", line)
+		if assistErr := r.handleAssistGoal(line, false); assistErr != nil {
+			r.logger.Printf("Assist error: %v", assistErr)
 		}
 		if err == io.EOF {
 			r.Stop()
@@ -812,6 +812,7 @@ func (r *Runner) handleRun(args []string) error {
 	}
 	if result.LogPath != "" {
 		r.logger.Printf("Log saved: %s", result.LogPath)
+		r.recordActionArtifact(result.LogPath)
 	}
 	r.maybeAutoSummarize(result.LogPath, "run")
 	ledgerStatus := "disabled"
@@ -938,6 +939,7 @@ func (r *Runner) handleMSF(args []string) error {
 	}
 	if result.LogPath != "" {
 		r.logger.Printf("Log saved: %s", result.LogPath)
+		r.recordActionArtifact(result.LogPath)
 	}
 	r.maybeAutoSummarize(result.LogPath, "msf")
 
@@ -1082,7 +1084,7 @@ func (r *Runner) Stop() {
 func (r *Runner) printHelp() {
 	r.logger.Printf("Commands: /init /permissions /verbose /context [/show] /ledger /status /plan /next /execute /assist /script /clean /ask /browse /summarize /run /msf /report /resume /stop /exit")
 	r.logger.Printf("Example: /permissions readonly")
-	r.logger.Printf("Plain text routes to /ask if it looks like chat; otherwise /assist.")
+	r.logger.Printf("Plain text routes to /assist. Use /ask for explicit non-agentic chat.")
 	r.logger.Printf("/plan starts guided planning; /plan done or /plan cancel ends it.")
 	r.logger.Printf("Session logs live under: %s", filepath.Clean(r.cfg.Session.LogDir))
 }
@@ -1470,7 +1472,7 @@ func (r *Runner) getAssistSuggestion(goal string, mode string) (assist.Suggestio
 	if err != nil {
 		return assist.Suggestion{}, err
 	}
-	input, err := r.assistInput(sessionDir, goal, mode)
+	input, err := r.assistInput(sessionDir, r.enrichAssistGoal(goal, mode), mode)
 	if err != nil {
 		return assist.Suggestion{}, err
 	}
@@ -1483,6 +1485,8 @@ func (r *Runner) getAssistSuggestion(goal string, mode string) (assist.Suggestio
 func (r *Runner) handleAssistGoal(goal string, dryRun bool) error {
 	if strings.TrimSpace(goal) != "" {
 		r.pendingAssistGoal = ""
+		r.resetAssistLoopState()
+		r.clearActionContext()
 	}
 	return r.handleAssistGoalWithMode(goal, dryRun, "")
 }
@@ -1637,6 +1641,9 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 		if suggestion.Question == "" {
 			return fmt.Errorf("assistant returned empty question")
 		}
+		if err := r.guardAssistQuestionLoop(suggestion.Question); err != nil {
+			return err
+		}
 		if r.cfg.UI.Verbose {
 			r.logger.Printf("Assistant question: %s", suggestion.Question)
 			if suggestion.Summary != "" {
@@ -1653,6 +1660,7 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 		}
 		return nil
 	case "plan":
+		r.resetAssistLoopState()
 		return r.handlePlanSuggestion(suggestion, dryRun)
 	case "command":
 		if suggestion.Command == "" {
@@ -1674,6 +1682,9 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 	}
 	if dryRun {
 		return nil
+	}
+	if err := r.guardAssistCommandLoop(suggestion.Command, suggestion.Args); err != nil {
+		return err
 	}
 	if strings.EqualFold(suggestion.Command, "browse") {
 		args, err := sanitizeBrowseArgs(suggestion.Args)
@@ -2012,6 +2023,53 @@ func firstLines(text string, maxLines int) string {
 	return strings.Join(out, " / ")
 }
 
+func (r *Runner) resetAssistCommandLoop() {
+	r.lastAssistCmdKey = ""
+	r.lastAssistCmdSeen = 0
+}
+
+func (r *Runner) resetAssistLoopState() {
+	r.resetAssistCommandLoop()
+	r.lastAssistQuestion = ""
+	r.lastAssistQSeen = 0
+}
+
+func (r *Runner) guardAssistCommandLoop(command string, args []string) error {
+	key := strings.ToLower(strings.TrimSpace(command)) + "\x1f" + strings.Join(args, "\x1f")
+	if key == r.lastAssistCmdKey {
+		r.lastAssistCmdSeen++
+	} else {
+		r.lastAssistCmdKey = key
+		r.lastAssistCmdSeen = 1
+	}
+	const maxSameCommandInRow = 2
+	if r.lastAssistCmdSeen > maxSameCommandInRow {
+		return fmt.Errorf("assistant loop guard: repeated command blocked: %s %s", command, strings.Join(args, " "))
+	}
+	r.lastAssistQuestion = ""
+	r.lastAssistQSeen = 0
+	return nil
+}
+
+func (r *Runner) guardAssistQuestionLoop(question string) error {
+	key := strings.TrimSpace(strings.ToLower(question))
+	if key == "" {
+		return nil
+	}
+	if key == r.lastAssistQuestion {
+		r.lastAssistQSeen++
+	} else {
+		r.lastAssistQuestion = key
+		r.lastAssistQSeen = 1
+	}
+	const maxSameQuestionInRow = 2
+	if r.lastAssistQSeen > maxSameQuestionInRow {
+		return fmt.Errorf("assistant loop guard: repeated question blocked")
+	}
+	r.resetAssistCommandLoop()
+	return nil
+}
+
 func sanitizeBrowseArgs(args []string) ([]string, error) {
 	if len(args) == 0 {
 		return nil, fmt.Errorf("assistant returned browse without url")
@@ -2027,6 +2085,39 @@ func sanitizeBrowseArgs(args []string) ([]string, error) {
 		return nil, fmt.Errorf("assistant returned browse without url")
 	}
 	return []string{filtered[0]}, nil
+}
+
+func (r *Runner) enrichAssistGoal(goal, mode string) string {
+	if mode != "execute-step" && mode != "recover" && mode != "follow-up" && mode != "next-steps" {
+		return goal
+	}
+	path := strings.TrimSpace(r.lastActionLogPath)
+	if path == "" {
+		return goal
+	}
+	if _, err := os.Stat(path); err != nil {
+		return goal
+	}
+	builder := strings.Builder{}
+	builder.WriteString(strings.TrimSpace(goal))
+	builder.WriteString("\n")
+	builder.WriteString("Context: latest action artifact: ")
+	builder.WriteString(path)
+	builder.WriteString(". Prefer analyzing this local artifact before repeating the same action.")
+	return builder.String()
+}
+
+func (r *Runner) recordActionArtifact(logPath string) {
+	path := strings.TrimSpace(logPath)
+	if path == "" {
+		return
+	}
+	r.lastActionLogPath = path
+}
+
+func (r *Runner) clearActionContext() {
+	r.lastActionLogPath = ""
+	r.lastBrowseLogPath = ""
 }
 
 func (r *Runner) appendConversation(role, content string) {
