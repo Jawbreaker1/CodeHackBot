@@ -1702,6 +1702,7 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 		if suggestion.Command == "" {
 			return fmt.Errorf("assistant returned empty command")
 		}
+		suggestion.Args = normalizeShellScriptArgs(suggestion.Command, suggestion.Args)
 	default:
 		return fmt.Errorf("assistant returned unknown type: %s", suggestion.Type)
 	}
@@ -2137,6 +2138,28 @@ func normalizeWhoisTarget(target string) (string, bool) {
 		return "", false
 	}
 	return lower, true
+}
+
+func normalizeShellScriptArgs(command string, args []string) []string {
+	if len(args) < 2 {
+		return args
+	}
+	cmd := strings.ToLower(strings.TrimSpace(command))
+	if cmd != "bash" && cmd != "sh" && cmd != "zsh" {
+		return args
+	}
+	flag := strings.TrimSpace(args[0])
+	if flag != "-c" && flag != "-lc" {
+		return args
+	}
+	script := strings.TrimSpace(strings.Join(args[1:], " "))
+	if len(script) >= 2 {
+		if (strings.HasPrefix(script, "'") && strings.HasSuffix(script, "'")) ||
+			(strings.HasPrefix(script, "\"") && strings.HasSuffix(script, "\"")) {
+			script = strings.TrimSpace(script[1 : len(script)-1])
+		}
+	}
+	return []string{flag, script}
 }
 
 func firstLines(text string, maxLines int) string {
