@@ -103,6 +103,10 @@ func (r *Runner) handleBrowse(args []string) error {
 	if err != nil {
 		return fmt.Errorf("read: %w", err)
 	}
+	bodyPath, bodyErr := writeBrowseBody(sessionDir, target, resp.Header.Get("Content-Type"), body)
+	if bodyErr != nil {
+		r.logger.Printf("Browse body save failed: %v", bodyErr)
+	}
 	content := string(body)
 	title := extractTitle(content)
 	metaDescription := extractMetaDescription(content)
@@ -121,21 +125,24 @@ func (r *Runner) handleBrowse(args []string) error {
 		fmt.Printf("Headings: %s\n", strings.Join(headings, " | "))
 	}
 	fmt.Printf("Status: %d\n", resp.StatusCode)
+	if strings.TrimSpace(bodyPath) != "" {
+		fmt.Printf("Body saved: %s\n", bodyPath)
+	}
 	if snippet != "" {
 		fmt.Printf("Snippet:\n%s\n", snippet)
 	}
 
-	logPath, err := writeBrowseLog(sessionDir, target, resp.StatusCode, resp.Header.Get("Content-Type"), title, metaDescription, headings, snippet)
+	logPath, err := writeBrowseLog(sessionDir, target, resp.StatusCode, resp.Header.Get("Content-Type"), title, metaDescription, headings, snippet, bodyPath)
 	if err == nil {
 		r.lastBrowseLogPath = logPath
 		r.recordActionArtifact(logPath)
-		r.recordObservation("browse", []string{target}, logPath, browseObservationExcerpt(title, metaDescription, resp.StatusCode, snippet), nil)
+		r.recordObservation("browse", []string{target}, logPath, browseObservationExcerpt(title, metaDescription, resp.StatusCode, snippet, bodyPath), nil)
 		r.maybeAutoSummarize(logPath, "browse")
 	}
 	return nil
 }
 
-func browseObservationExcerpt(title, meta string, status int, snippet string) string {
+func browseObservationExcerpt(title, meta string, status int, snippet string, bodyPath string) string {
 	parts := []string{}
 	if title != "" {
 		parts = append(parts, "Title: "+title)
@@ -144,8 +151,12 @@ func browseObservationExcerpt(title, meta string, status int, snippet string) st
 		parts = append(parts, "Meta: "+truncate(meta, 180))
 	}
 	parts = append(parts, fmt.Sprintf("Status: %d", status))
+	if strings.TrimSpace(bodyPath) != "" {
+		parts = append(parts, "Body: "+bodyPath)
+	}
 	if snippet != "" {
-		parts = append(parts, "Snippet: "+truncate(snippet, 280))
+		// Keep a larger excerpt so the agent doesn't re-fetch just to see content.
+		parts = append(parts, "Snippet: "+truncate(snippet, 900))
 	}
 	return strings.Join(parts, " | ")
 }
@@ -292,7 +303,7 @@ func truncate(text string, max int) string {
 	return text[:max] + "..."
 }
 
-func writeBrowseLog(sessionDir, url string, status int, contentType, title, metaDescription string, headings []string, snippet string) (string, error) {
+func writeBrowseLog(sessionDir, url string, status int, contentType, title, metaDescription string, headings []string, snippet string, bodyPath string) (string, error) {
 	logDir := filepath.Join(sessionDir, "logs")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return "", err
@@ -303,6 +314,9 @@ func writeBrowseLog(sessionDir, url string, status int, contentType, title, meta
 	builder.WriteString(fmt.Sprintf("URL: %s\nStatus: %d\n", url, status))
 	if contentType != "" {
 		builder.WriteString(fmt.Sprintf("Content-Type: %s\n", contentType))
+	}
+	if strings.TrimSpace(bodyPath) != "" {
+		builder.WriteString(fmt.Sprintf("Body-Path: %s\n", bodyPath))
 	}
 	if title != "" {
 		builder.WriteString(fmt.Sprintf("Title: %s\n", title))
@@ -319,6 +333,29 @@ func writeBrowseLog(sessionDir, url string, status int, contentType, title, meta
 		builder.WriteString("\n")
 	}
 	if err := os.WriteFile(path, []byte(builder.String()), 0o644); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func writeBrowseBody(sessionDir, url string, contentType string, body []byte) (string, error) {
+	dir := filepath.Join(sessionDir, "artifacts", "web")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	ext := ".bin"
+	lowerCT := strings.ToLower(strings.TrimSpace(contentType))
+	switch {
+	case strings.Contains(lowerCT, "text/html"):
+		ext = ".html"
+	case strings.Contains(lowerCT, "application/json"):
+		ext = ".json"
+	case strings.Contains(lowerCT, "text/plain"):
+		ext = ".txt"
+	}
+	timestamp := time.Now().UTC().Format("20060102-150405.000000000")
+	path := filepath.Join(dir, fmt.Sprintf("body-%s%s", timestamp, ext))
+	if err := os.WriteFile(path, body, 0o644); err != nil {
 		return "", err
 	}
 	return path, nil

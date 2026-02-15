@@ -1249,17 +1249,58 @@ func sanitizeBrowseArgs(args []string) ([]string, error) {
 	if len(args) == 0 {
 		return nil, fmt.Errorf("assistant returned browse without url")
 	}
-	filtered := make([]string, 0, len(args))
+	candidates := make([]string, 0, len(args))
 	for _, arg := range args {
-		if strings.HasPrefix(arg, "-") {
+		arg = strings.TrimSpace(arg)
+		if arg == "" {
 			continue
 		}
-		filtered = append(filtered, arg)
+		// Treat unicode dashes as flags too, to avoid "https://-v" style bugs.
+		if isFlagLike(arg) {
+			continue
+		}
+		candidates = append(candidates, arg)
 	}
-	if len(filtered) == 0 {
-		return nil, fmt.Errorf("assistant returned browse without url")
+	for _, c := range candidates {
+		if looksLikeURLOrHost(c) {
+			return []string{c}, nil
+		}
 	}
-	return []string{filtered[0]}, nil
+	return nil, fmt.Errorf("assistant returned browse without url")
+}
+
+func isFlagLike(arg string) bool {
+	if arg == "" {
+		return false
+	}
+	// Also treat some common unicode dash variants as flags.
+	// Use escapes to keep the source ASCII-only.
+	return strings.HasPrefix(arg, "-") || strings.HasPrefix(arg, "\u2013") || strings.HasPrefix(arg, "\u2014")
+}
+
+func looksLikeURLOrHost(arg string) bool {
+	lower := strings.ToLower(strings.TrimSpace(arg))
+	if lower == "" {
+		return false
+	}
+	if strings.Contains(lower, "://") {
+		return true
+	}
+	// Very small heuristic: hosts normally have a dot or are localhost.
+	if lower == "localhost" {
+		return true
+	}
+	if strings.Contains(lower, ".") {
+		return true
+	}
+	// Allow raw IPs.
+	for _, r := range lower {
+		if (r >= '0' && r <= '9') || r == '.' {
+			continue
+		}
+		return false
+	}
+	return strings.Count(lower, ".") == 3
 }
 
 func (r *Runner) enrichAssistGoal(goal, mode string) string {
