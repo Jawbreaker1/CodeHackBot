@@ -89,30 +89,30 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
 
 ## Sprint 17 — Tool Primitives + Tool Forge (next)
 - [ ] Add first-class tool primitives:
-  - [ ] `fetch_url(url)` (replacement for brittle `/browse` shelling); save body to `sessions/<id>/artifacts/web/`.
-  - [ ] `parse_links(html_path|html)` (extract + normalize links; bounded).
-  - [ ] `read_file(path)` / `list_dir(path)` (bounded to session dir + repo docs by default).
-  - [ ] `write_file(path, content)` (bounded to `sessions/<id>/artifacts/tools/` by default).
+  - [x] `fetch_url(url)` (replacement for brittle `/browse` shelling); save body to `sessions/<id>/artifacts/web/`. (implemented via `/browse` saving body artifacts)
+  - [x] `parse_links(html_path|html)` (extract + normalize links; bounded). (implemented via `/parse_links` and saved `links-*.txt`)
+  - [x] `read_file(path)` / `list_dir(path)` (bounded to session dir + repo docs by default). (implemented via `/read` + `/ls` bounded to session dir or CWD)
+  - [x] `write_file(path, content)` (bounded to `sessions/<id>/artifacts/tools/` by default). (implemented via `/write`)
 - [ ] Implement “tool forge” loop for on-demand utilities:
-  - [ ] Assistant can return `type=tool` with `{language, name, files, run, purpose}`.
-  - [ ] Execution flow: write files -> run -> capture observation -> iterate (bounded) until `type=complete`.
-  - [ ] Default languages for MVP: Python + Bash; allow Go later.
+  - [x] Assistant can return `type=tool` with `{language, name, files, run, purpose}`.
+  - [x] Execution flow: write files -> run -> capture observation -> iterate (bounded) until `type=complete`. (bounded auto-fix loop)
+  - [x] Default languages for MVP: Python + Bash; allow Go later.
 - [ ] Safety boundaries:
-  - [ ] Path sandbox for tool forge (no writes outside tool dir unless explicitly allowed).
-  - [ ] Approval gates: first write + first run require confirmation in `permissions=default`.
+  - [x] Path sandbox for tool forge (no writes outside tool dir unless explicitly allowed).
+  - [x] Approval gates: write + run require confirmation in `permissions=default`.
   - [ ] Timeouts + max tool-build iterations per goal (configurable).
-  - [ ] Scope enforcement applies to all tool runs that include targets.
+  - [x] Scope enforcement applies to all tool runs that include targets.
 - [ ] Reuse & traceability:
-  - [ ] Persist a per-session `sessions/<id>/artifacts/tools/manifest.json` (what was built, hashes, purpose, run command).
-  - [ ] Prefer reuse over rebuild when a matching tool exists.
+  - [x] Persist a per-session `sessions/<id>/artifacts/tools/manifest.json` (what was built, hashes, purpose, run command).
+  - [x] Prefer reuse over rebuild when a matching tool exists.
 - [ ] Wire into `/assist`:
-  - [ ] Prefer primitives (fetch/read/parse) over `bash -c` pipelines when accomplishing goals.
+  - [x] Prefer primitives (fetch/read/parse) over `bash -c` pipelines when accomplishing goals. (guardrail blocks fragile curl|grep pipelines)
   - [ ] Web recon flow: fetch -> parse -> bounded crawl (N pages) -> summarize -> persist artifacts.
 - [ ] Tests:
-  - [ ] Tool forge: create Python tool, fix intentional syntax error, rerun, complete.
-  - [ ] Sandbox: attempts to write outside `artifacts/tools/` are blocked.
-  - [ ] Observation carry-forward: tool outputs influence the next assistant step.
-  - [ ] Bounded crawl: never exceeds page/byte limits; produces a summary artifact.
+  - [x] Tool forge: create tool, fix failure via recovery, rerun, complete. (bash-based test)
+  - [x] Sandbox: attempts to write outside `artifacts/tools/` are blocked.
+  - [x] Observation carry-forward: tool outputs influence the next assistant step.
+  - [x] Bounded crawl: never exceeds page/byte limits; produces crawl index + artifacts. (summary artifact still TODO)
 
 ## Sprint 18 — Chat vs Act UX (future)
 - [ ] Lightweight “answer vs act” classification so normal conversation feels like Codex/Claude while still being agentic.
