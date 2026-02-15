@@ -22,18 +22,7 @@ func startInterruptWatcher() (<-chan struct{}, func(), error) {
 	cancelCh := make(chan struct{}, 1)
 	done := make(chan struct{})
 	var once sync.Once
-	var cleanupOnce sync.Once
-	var cleanup func()
-	stop := func() {
-		once.Do(func() {
-			close(done)
-		})
-		cleanupOnce.Do(func() {
-			if cleanup != nil {
-				cleanup()
-			}
-		})
-	}
+	stop := func() { once.Do(func() { close(done) }) }
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
@@ -50,16 +39,13 @@ func startInterruptWatcher() (<-chan struct{}, func(), error) {
 		}
 	}()
 
-	keyErr, keyCleanup := startKeyWatcher(cancelCh, done)
-	if keyCleanup != nil {
-		cleanup = keyCleanup
-	}
+	keyErr := startKeyWatcher(cancelCh, done)
 	return cancelCh, stop, keyErr
 }
 
-func startKeyWatcher(cancelCh chan<- struct{}, done <-chan struct{}) (error, func()) {
+func startKeyWatcher(cancelCh chan<- struct{}, done <-chan struct{}) error {
 	if runtime.GOOS == "windows" {
-		return fmt.Errorf("ESC interrupt not supported on windows"), nil
+		return fmt.Errorf("ESC interrupt not supported on windows")
 	}
 
 	tty, err := os.OpenFile("/dev/tty", os.O_RDONLY, 0)
@@ -72,15 +58,15 @@ func startKeyWatcher(cancelCh chan<- struct{}, done <-chan struct{}) (error, fun
 		if tty != os.Stdin {
 			_ = tty.Close()
 		}
-		return fmt.Errorf("no TTY available for ESC"), nil
+		return fmt.Errorf("no TTY available for ESC")
 	}
 	state, err := term.MakeRaw(fd)
 	if err != nil {
-		return fmt.Errorf("raw mode failed: %w", err), nil
+		return fmt.Errorf("raw mode failed: %w", err)
 	}
 	if err := syscall.SetNonblock(fd, true); err != nil {
 		_ = term.Restore(fd, state)
-		return fmt.Errorf("set nonblock failed: %w", err), nil
+		return fmt.Errorf("set nonblock failed: %w", err)
 	}
 
 	cleanup := func() {
@@ -115,5 +101,5 @@ func startKeyWatcher(cancelCh chan<- struct{}, done <-chan struct{}) (error, fun
 		}
 	}()
 
-	return nil, cleanup
+	return nil
 }

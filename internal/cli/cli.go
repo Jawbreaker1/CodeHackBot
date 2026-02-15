@@ -551,7 +551,9 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 	lastCommand := assist.Suggestion{}
 	for {
 		if maxSteps > 0 && stepsRun >= maxSteps {
-			r.logger.Printf("Reached max steps (%d).", maxSteps)
+			if r.cfg.UI.Verbose {
+				r.logger.Printf("Reached max steps (%d).", maxSteps)
+			}
 			if !dryRun && lastCommand.Type == "command" {
 				r.maybeSuggestNextSteps(goal, lastCommand)
 			}
@@ -559,10 +561,12 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 			r.maybeFinalizeReport(goal, dryRun)
 			return nil
 		}
-		if maxSteps > 0 {
-			r.logger.Printf("Assistant step %d/%d", stepsRun+1, maxSteps)
-		} else {
-			r.logger.Printf("Assistant step %d", stepsRun+1)
+		if r.cfg.UI.Verbose {
+			if maxSteps > 0 {
+				r.logger.Printf("Assistant step %d/%d", stepsRun+1, maxSteps)
+			} else {
+				r.logger.Printf("Assistant step %d", stepsRun+1)
+			}
 		}
 		label := "assist"
 		if maxSteps > 0 {

@@ -113,3 +113,22 @@ func TestNormalizeSuggestionSplitsDashCommand(t *testing.T) {
 		t.Fatalf("unexpected args: %v", suggestion.Args)
 	}
 }
+
+func TestNormalizeSuggestionSplitsBashScriptPreservingQuotes(t *testing.T) {
+	suggestion := normalizeSuggestion(Suggestion{
+		Type:    "command",
+		Command: "bash -lc 'echo hi | grep hi'",
+	})
+	if suggestion.Command != "bash" {
+		t.Fatalf("expected command bash, got %s", suggestion.Command)
+	}
+	if len(suggestion.Args) != 2 {
+		t.Fatalf("expected 2 args, got %v", suggestion.Args)
+	}
+	if suggestion.Args[0] != "-lc" {
+		t.Fatalf("expected -lc, got %q", suggestion.Args[0])
+	}
+	if suggestion.Args[1] != "echo hi | grep hi" {
+		t.Fatalf("unexpected script arg: %q", suggestion.Args[1])
+	}
+}

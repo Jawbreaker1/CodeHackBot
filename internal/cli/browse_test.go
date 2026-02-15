@@ -71,3 +71,13 @@ func TestBrowseSavesBodyArtifactAndLog(t *testing.T) {
 		t.Fatalf("expected browse log to include Body-Path")
 	}
 }
+
+func TestNormalizeURLRejectsFlagLikeInput(t *testing.T) {
+	_, err := normalizeURL("-v")
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "flag") {
+		t.Fatalf("expected flag-like error, got %v", err)
+	}
+}

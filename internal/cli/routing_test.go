@@ -15,8 +15,8 @@ func TestShouldRouteToAssist(t *testing.T) {
 		in   string
 		want bool
 	}{
-		{"who are you?", false},
-		{"hello", false},
+		{"who are you?", true},
+		{"hello", true},
 		{"scan 10.0.0.5", true},
 		{"list files in this folder", true},
 		{"what is inside README.md?", true},

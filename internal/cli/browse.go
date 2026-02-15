@@ -169,6 +169,11 @@ func normalizeURL(raw string) (string, error) {
 	if raw == "" {
 		return "", fmt.Errorf("url is empty")
 	}
+	raw = strings.TrimSpace(raw)
+	// Guard against LLM mistakes like passing "-v" as the URL.
+	if strings.HasPrefix(raw, "-") || strings.HasPrefix(raw, "\u2013") || strings.HasPrefix(raw, "\u2014") {
+		return "", fmt.Errorf("invalid url: looks like a flag (%s)", raw)
+	}
 	if !strings.Contains(raw, "://") {
 		raw = "https://" + raw
 	}

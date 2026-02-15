@@ -15,7 +15,7 @@ const (
 )
 
 func (r *Runner) readLine(prompt string) (string, error) {
-	if prompt != "" && r.isTTY() && strings.HasPrefix(prompt, "BirdHackBot") {
+	if r.isTTY() {
 		return r.readLineInteractive(prompt)
 	}
 	if prompt != "" {

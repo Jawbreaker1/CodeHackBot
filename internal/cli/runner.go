@@ -135,11 +135,9 @@ func (r *Runner) Run() error {
 }
 
 func (r *Runner) shouldRouteToAssist(text string) bool {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return true
-	}
-	return looksLikeAction(strings.ToLower(text))
+	// Default to agentic behavior for plain text input.
+	// Use `/ask` explicitly when you want non-agentic chat.
+	return true
 }
 
 func (r *Runner) refreshLoggerPrefix() {
