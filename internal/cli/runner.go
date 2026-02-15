@@ -54,10 +54,14 @@ type Runner struct {
 }
 
 func NewRunner(cfg config.Config, sessionID, defaultConfigPath, profilePath string) *Runner {
+	prefix := ""
+	if cfg.UI.Verbose {
+		prefix = fmt.Sprintf("[session:%s] ", sessionID)
+	}
 	return &Runner{
 		cfg:               cfg,
 		sessionID:         sessionID,
-		logger:            log.New(os.Stdout, fmt.Sprintf("[session:%s] ", sessionID), 0),
+		logger:            log.New(os.Stdout, prefix, 0),
 		reader:            bufio.NewReader(os.Stdin),
 		defaultConfigPath: defaultConfigPath,
 		profilePath:       profilePath,
@@ -112,14 +116,39 @@ func (r *Runner) Run() error {
 			}
 			continue
 		}
-		r.appendConversation("User", line)
-		if assistErr := r.handleAssistGoal(line, false); assistErr != nil {
-			r.logger.Printf("Assist error: %v", assistErr)
+
+		if r.shouldRouteToAssist(line) {
+			r.appendConversation("User", line)
+			if assistErr := r.handleAssistGoal(line, false); assistErr != nil {
+				r.logger.Printf("Assist error: %v", assistErr)
+			}
+		} else {
+			if askErr := r.handleAsk(line); askErr != nil {
+				r.logger.Printf("Ask error: %v", askErr)
+			}
 		}
 		if err == io.EOF {
 			r.Stop()
 			return nil
 		}
+	}
+}
+
+func (r *Runner) shouldRouteToAssist(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return true
+	}
+	return looksLikeAction(strings.ToLower(text))
+}
+
+func (r *Runner) refreshLoggerPrefix() {
+	prefix := ""
+	if r.cfg.UI.Verbose {
+		prefix = fmt.Sprintf("[session:%s] ", r.sessionID)
+	}
+	if r.logger != nil {
+		r.logger.SetPrefix(prefix)
 	}
 }
 

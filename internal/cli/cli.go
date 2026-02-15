@@ -1743,6 +1743,7 @@ func looksLikeAction(text string) bool {
 		"scan": {}, "enumerate": {}, "list": {}, "show": {}, "find": {}, "run": {}, "check": {}, "exploit": {},
 		"test": {}, "probe": {}, "search": {}, "ping": {}, "nmap": {}, "curl": {}, "msf": {}, "msfconsole": {},
 		"netstat": {}, "ls": {}, "whoami": {}, "cat": {}, "dir": {}, "open": {}, "dump": {}, "inspect": {}, "analyze": {},
+		"investigate": {}, "recon": {}, "crawl": {}, "browse": {}, "report": {}, "summarize": {},
 	}
 	for _, token := range splitTokens(text) {
 		if _, ok := verbs[token]; ok {

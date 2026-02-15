@@ -49,7 +49,9 @@ func (r *Runner) prompt() string {
 func (r *Runner) setTask(task string) {
 	r.currentTask = task
 	r.currentTaskStart = time.Now()
-	r.logger.Printf("Task: %s", task)
+	if r.cfg.UI.Verbose {
+		r.logger.Printf("Task: %s", task)
+	}
 }
 
 func (r *Runner) clearTask() {

@@ -97,9 +97,11 @@ func (r *Runner) handleVerbose(args []string) error {
 	switch strings.ToLower(args[0]) {
 	case "on", "true", "1":
 		r.cfg.UI.Verbose = true
+		r.refreshLoggerPrefix()
 		r.logger.Printf("Verbose logging enabled")
 	case "off", "false", "0":
 		r.cfg.UI.Verbose = false
+		r.refreshLoggerPrefix()
 		r.logger.Printf("Verbose logging disabled")
 	default:
 		return fmt.Errorf("usage: /verbose on|off")
