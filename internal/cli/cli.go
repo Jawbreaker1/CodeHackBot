@@ -974,17 +974,64 @@ func (r *Runner) handleReport(args []string) error {
 	if r.cfg.Permissions.Level == "readonly" {
 		return fmt.Errorf("readonly mode: report generation not permitted")
 	}
-	outPath := filepath.Join(r.cfg.Session.LogDir, r.sessionID, "report.md")
+	sessionDir, err := r.ensureSessionScaffold()
+	if err != nil {
+		return err
+	}
+	outPath := filepath.Join(sessionDir, "report.md")
 	if len(args) > 0 && strings.TrimSpace(args[0]) != "" {
 		outPath = args[0]
 	}
-	info := report.Info{
-		Scope:     r.cfg.Scope.Targets,
-		SessionID: r.sessionID,
+
+	artifacts, err := memory.EnsureArtifacts(sessionDir)
+	if err != nil {
+		return err
 	}
+	summary := readFileTrimmed(artifacts.SummaryPath)
+	factsText := readFileTrimmed(artifacts.FactsPath)
+	focus := readFileTrimmed(artifacts.FocusPath)
+	obsText := r.readRecentObservations(artifacts, 12)
+	planPath := filepath.Join(sessionDir, r.cfg.Session.PlanFilename)
+	inventoryPath := filepath.Join(sessionDir, r.cfg.Session.InventoryFilename)
+	planText := readFileTrimmed(planPath)
+	inventoryText := readFileTrimmed(inventoryPath)
+
+	scope := append([]string{}, r.cfg.Scope.Targets...)
+	if len(scope) == 0 {
+		if target := strings.TrimSpace(r.bestKnownTarget()); target != "" {
+			scope = append(scope, target)
+		}
+	}
+	findings := []string{}
+	if bullets, err := memory.ReadBullets(artifacts.FactsPath); err == nil {
+		for _, b := range bullets {
+			if strings.TrimSpace(b) == "" || strings.EqualFold(strings.TrimSpace(b), "None recorded.") {
+				continue
+			}
+			findings = append(findings, b)
+			if len(findings) >= 6 {
+				break
+			}
+		}
+	}
+	ledger := ""
 	if r.cfg.Session.LedgerEnabled {
-		ledgerPath := filepath.Join(r.cfg.Session.LogDir, r.sessionID, r.cfg.Session.LedgerFilename)
-		info.Ledger = readFileTrimmed(ledgerPath)
+		ledgerPath := filepath.Join(sessionDir, r.cfg.Session.LedgerFilename)
+		ledger = readFileTrimmed(ledgerPath)
+	}
+
+	info := report.Info{
+		Date:         time.Now().UTC().Format("2006-01-02"),
+		Scope:        scope,
+		Findings:     findings,
+		SessionID:    r.sessionID,
+		Ledger:       ledger,
+		Summary:      summary,
+		KnownFacts:   factsText,
+		Focus:        focus,
+		Plan:         planText,
+		Inventory:    inventoryText,
+		Observations: obsText,
 	}
 	if err := report.Generate("", outPath, info); err != nil {
 		return err
@@ -1604,6 +1651,7 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 				r.maybeSuggestNextSteps(goal, lastCommand)
 			}
 			r.maybeEmitGoalSummary(goal, dryRun)
+			r.maybeFinalizeReport(goal, dryRun)
 			return nil
 		}
 		if maxSteps > 0 {
@@ -1626,20 +1674,25 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 		}
 		if suggestion.Type == "plan" {
 			if err := r.handlePlanSuggestion(suggestion, dryRun); err != nil {
+				r.maybeFinalizeReport(goal, dryRun)
 				return err
 			}
 			r.maybeEmitGoalSummary(goal, dryRun)
+			r.maybeFinalizeReport(goal, dryRun)
 			return nil
 		}
 		if suggestion.Type == "complete" {
 			_ = r.executeAssistSuggestion(suggestion, dryRun)
+			r.maybeFinalizeReport(goal, dryRun)
 			return nil
 		}
 		if err := r.executeAssistSuggestion(suggestion, dryRun); err != nil {
 			if r.handleAssistCommandFailure(goal, suggestion, err) {
 				r.maybeEmitGoalSummary(goal, dryRun)
+				r.maybeFinalizeReport(goal, dryRun)
 				return nil
 			}
+			r.maybeFinalizeReport(goal, dryRun)
 			return err
 		}
 		if dryRun {
@@ -2104,6 +2157,103 @@ func (r *Runner) summarizeFromLatestArtifact(goal string) error {
 	return nil
 }
 
+func (r *Runner) maybeFinalizeReport(goal string, dryRun bool) {
+	if dryRun {
+		return
+	}
+	if strings.TrimSpace(r.pendingAssistGoal) != "" {
+		// Don't finalize while waiting for user input; the task is still in-flight.
+		return
+	}
+	goal = strings.TrimSpace(goal)
+	if !isReportIntent(goal) {
+		return
+	}
+	path, err := r.finalizeReport(goal)
+	if err != nil {
+		r.logger.Printf("Report finalize failed: %v", err)
+		return
+	}
+	if path != "" {
+		r.logger.Printf("Report generated: %s", path)
+	}
+}
+
+func (r *Runner) finalizeReport(goal string) (string, error) {
+	if r.cfg.Permissions.Level == "readonly" {
+		return "", nil
+	}
+	sessionDir, err := r.ensureSessionScaffold()
+	if err != nil {
+		return "", err
+	}
+	artifacts, err := memory.EnsureArtifacts(sessionDir)
+	if err != nil {
+		return "", err
+	}
+	obsText := r.readRecentObservations(artifacts, 12)
+
+	summary := readFileTrimmed(artifacts.SummaryPath)
+	factsText := readFileTrimmed(artifacts.FactsPath)
+	focus := readFileTrimmed(artifacts.FocusPath)
+	planPath := filepath.Join(sessionDir, r.cfg.Session.PlanFilename)
+	inventoryPath := filepath.Join(sessionDir, r.cfg.Session.InventoryFilename)
+	planText := readFileTrimmed(planPath)
+	inventoryText := readFileTrimmed(inventoryPath)
+
+	scope := append([]string{}, r.cfg.Scope.Targets...)
+	if len(scope) == 0 {
+		if target := strings.TrimSpace(r.bestKnownTarget()); target != "" {
+			scope = append(scope, target)
+		}
+	}
+	findings := []string{}
+	if bullets, err := memory.ReadBullets(artifacts.FactsPath); err == nil {
+		for _, b := range bullets {
+			if strings.TrimSpace(b) == "" || strings.EqualFold(strings.TrimSpace(b), "None recorded.") {
+				continue
+			}
+			findings = append(findings, b)
+			if len(findings) >= 6 {
+				break
+			}
+		}
+	}
+	ledger := ""
+	if r.cfg.Session.LedgerEnabled {
+		ledgerPath := filepath.Join(sessionDir, r.cfg.Session.LedgerFilename)
+		ledger = readFileTrimmed(ledgerPath)
+	}
+
+	outPath := filepath.Join(sessionDir, "report.md")
+	timestamp := time.Now().UTC().Format("20060102-150405")
+	archiveDir := filepath.Join(sessionDir, "reports")
+	archivePath := filepath.Join(archiveDir, fmt.Sprintf("report-%s.md", timestamp))
+	if err := os.MkdirAll(archiveDir, 0o755); err != nil {
+		return "", err
+	}
+
+	info := report.Info{
+		Date:         time.Now().UTC().Format("2006-01-02"),
+		Scope:        scope,
+		Findings:     findings,
+		SessionID:    r.sessionID,
+		Ledger:       ledger,
+		Summary:      summary,
+		KnownFacts:   factsText,
+		Focus:        focus,
+		Plan:         planText,
+		Inventory:    inventoryText,
+		Observations: obsText,
+	}
+	if err := report.Generate("", outPath, info); err != nil {
+		return "", err
+	}
+	_ = report.Generate("", archivePath, info)
+
+	return outPath, nil
+}
+
 func assistFailureHint(suggestion assist.Suggestion, cmdErr commandError) string {
 	command := strings.ToLower(strings.TrimSpace(suggestion.Command))
 	outputLower := strings.ToLower(cmdErr.Result.Output)
@@ -2544,6 +2694,20 @@ func isSummaryIntent(goal string) bool {
 	}
 	lower := strings.ToLower(goal)
 	hints := []string{"summary", "summarize", "what did you find", "findings", "what is it about", "tell me what", "report"}
+	for _, hint := range hints {
+		if strings.Contains(lower, hint) {
+			return true
+		}
+	}
+	return false
+}
+
+func isReportIntent(goal string) bool {
+	if goal == "" {
+		return false
+	}
+	lower := strings.ToLower(goal)
+	hints := []string{"security report", "assessment report", "pen test report", "pentest report", "write a report", "create a report", "generate a report", "produce a report", "report"}
 	for _, hint := range hints {
 		if strings.Contains(lower, hint) {
 			return true

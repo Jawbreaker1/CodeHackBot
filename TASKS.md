@@ -83,7 +83,7 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
 ## Sprint 16 — True Agent Loop (in progress)
 - [x] Extend assistant protocol with explicit completion (`type=complete`) and richer observations (avoid `cat`-the-log loops).
 - [x] Add step-level Observation plumbing (exit code + key output) and feed it back into each subsequent LLM call.
-- [ ] Add deterministic Finalize phase for goals like “create a report” (write report artifact every time).
+- [x] Add deterministic Finalize phase for goals like “create a report” (write report artifact every time).
 - [ ] Add agent-loop tests (complete handling, observation carry-forward, finalize artifact creation).
 
 ## Sprint 17 — Tool Primitives (future)

@@ -1,6 +1,7 @@
 package report
 
 import (
+	_ "embed"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,12 +9,21 @@ import (
 	"time"
 )
 
+//go:embed template.md
+var defaultTemplate string
+
 type Info struct {
-	Date      string
-	Scope     []string
-	Findings  []string
-	SessionID string
-	Ledger    string
+	Date         string
+	Scope        []string
+	Findings     []string
+	SessionID    string
+	Ledger       string
+	Summary      string
+	KnownFacts   string
+	Focus        string
+	Plan         string
+	Inventory    string
+	Observations string
 }
 
 func DefaultTemplatePath() string {
@@ -21,14 +31,16 @@ func DefaultTemplatePath() string {
 }
 
 func Generate(templatePath, outPath string, info Info) error {
-	if templatePath == "" {
-		templatePath = DefaultTemplatePath()
+	content := ""
+	if strings.TrimSpace(templatePath) == "" {
+		content = defaultTemplate
+	} else {
+		data, err := os.ReadFile(templatePath)
+		if err != nil {
+			return fmt.Errorf("read template: %w", err)
+		}
+		content = string(data)
 	}
-	data, err := os.ReadFile(templatePath)
-	if err != nil {
-		return fmt.Errorf("read template: %w", err)
-	}
-	content := string(data)
 	date := info.Date
 	if date == "" {
 		date = time.Now().UTC().Format("2006-01-02")
@@ -46,6 +58,12 @@ func Generate(templatePath, outPath string, info Info) error {
 	if info.Ledger != "" {
 		content = strings.TrimSpace(content) + "\n\n## Evidence Ledger\n\n" + strings.TrimSpace(info.Ledger) + "\n"
 	}
+	content = appendSection(content, "Session Summary", info.Summary)
+	content = appendSection(content, "Known Facts", info.KnownFacts)
+	content = appendSection(content, "Recent Observations", info.Observations)
+	content = appendSection(content, "Task Foundation", info.Focus)
+	content = appendSection(content, "Plan", info.Plan)
+	content = appendSection(content, "Inventory", info.Inventory)
 	if outPath == "" {
 		return fmt.Errorf("output path is required")
 	}
@@ -56,4 +74,13 @@ func Generate(templatePath, outPath string, info Info) error {
 		return fmt.Errorf("write report: %w", err)
 	}
 	return nil
+}
+
+func appendSection(content string, title string, body string) string {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return content
+	}
+	content = strings.TrimSpace(content)
+	return content + "\n\n## " + title + "\n\n" + body + "\n"
 }
