@@ -52,6 +52,8 @@ func (r *Runner) handleCommand(line string) error {
 		return r.handleAsk(strings.Join(args, " "))
 	case "browse":
 		return r.handleBrowse(args)
+	case "crawl":
+		return r.handleCrawl(args)
 	case "links", "parse_links":
 		return r.handleParseLinks(args)
 	case "read", "read_file":

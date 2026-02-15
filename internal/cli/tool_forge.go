@@ -345,6 +345,8 @@ func (r *Runner) executeToolRun(command string, args []string) error {
 	switch strings.ToLower(command) {
 	case "browse":
 		return r.handleBrowse(args)
+	case "crawl":
+		return r.handleCrawl(args)
 	case "parse_links", "links":
 		return r.handleParseLinks(args)
 	case "read_file", "read":

@@ -752,6 +752,9 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 		}
 		return r.handleBrowse(args)
 	}
+	if strings.EqualFold(suggestion.Command, "crawl") {
+		return r.handleCrawl(suggestion.Args)
+	}
 	if strings.EqualFold(suggestion.Command, "parse_links") || strings.EqualFold(suggestion.Command, "links") {
 		return r.handleParseLinks(suggestion.Args)
 	}
