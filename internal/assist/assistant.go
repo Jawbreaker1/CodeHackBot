@@ -24,6 +24,7 @@ type Input struct {
 	WorkingDir  string
 	RecentLog   string
 	Playbooks   string
+	Tools       string
 	Mode        string
 }
 
@@ -177,6 +178,9 @@ func buildPrompt(input Input) string {
 	}
 	if input.Playbooks != "" {
 		builder.WriteString("\nRelevant playbooks:\n" + input.Playbooks + "\n")
+	}
+	if input.Tools != "" {
+		builder.WriteString("\nAvailable tools (session):\n" + input.Tools + "\n")
 	}
 	if input.Mode != "" {
 		builder.WriteString("\nMode:\n" + input.Mode + "\n")

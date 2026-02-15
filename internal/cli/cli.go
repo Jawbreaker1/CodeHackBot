@@ -204,6 +204,7 @@ func (r *Runner) assistInput(sessionDir, goal, mode string) (assist.Input, error
 		}
 	}
 	playbooks := r.playbookHints(goal)
+	tools := r.toolsSummary(sessionDir, 12)
 	planPath := filepath.Join(sessionDir, r.cfg.Session.PlanFilename)
 	inventoryPath := filepath.Join(sessionDir, r.cfg.Session.InventoryFilename)
 	targets := append([]string{}, r.cfg.Scope.Targets...)
@@ -223,6 +224,7 @@ func (r *Runner) assistInput(sessionDir, goal, mode string) (assist.Input, error
 		WorkingDir:  workingDir,
 		RecentLog:   recentLog,
 		Playbooks:   playbooks,
+		Tools:       tools,
 		Mode:        mode,
 		Plan:        readFileTrimmed(planPath),
 		Inventory:   readFileTrimmed(inventoryPath),
