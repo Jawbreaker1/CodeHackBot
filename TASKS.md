@@ -81,8 +81,8 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
 - [x] Route plain text input to `/assist` (agent mode)
 
 ## Sprint 16 — True Agent Loop (in progress)
-- [ ] Extend assistant protocol with explicit completion (`type=complete`) and richer observations (avoid `cat`-the-log loops).
-- [ ] Add step-level Observation plumbing (exit code + key output) and feed it back into each subsequent LLM call.
+- [x] Extend assistant protocol with explicit completion (`type=complete`) and richer observations (avoid `cat`-the-log loops).
+- [x] Add step-level Observation plumbing (exit code + key output) and feed it back into each subsequent LLM call.
 - [ ] Add deterministic Finalize phase for goals like “create a report” (write report artifact every time).
 - [ ] Add agent-loop tests (complete handling, observation carry-forward, finalize artifact creation).
 

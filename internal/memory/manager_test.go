@@ -65,6 +65,42 @@ func TestShouldSummarize(t *testing.T) {
 	}
 }
 
+func TestRecordObservationUpdatesState(t *testing.T) {
+	temp := t.TempDir()
+	manager := Manager{
+		SessionDir:       temp,
+		MaxRecentOutputs: 2,
+	}
+	state, err := manager.RecordObservation(Observation{
+		Time:          "now",
+		Kind:          "run",
+		Command:       "echo",
+		Args:          []string{"hi"},
+		ExitCode:      0,
+		OutputExcerpt: "hi",
+	})
+	if err != nil {
+		t.Fatalf("RecordObservation error: %v", err)
+	}
+	if len(state.RecentObservations) != 1 {
+		t.Fatalf("recent observations mismatch: %v", state.RecentObservations)
+	}
+	state, err = manager.RecordObservation(Observation{Time: "later", Kind: "run", Command: "true", ExitCode: 0})
+	if err != nil {
+		t.Fatalf("RecordObservation error: %v", err)
+	}
+	state, err = manager.RecordObservation(Observation{Time: "later2", Kind: "run", Command: "false", ExitCode: 1})
+	if err != nil {
+		t.Fatalf("RecordObservation error: %v", err)
+	}
+	if len(state.RecentObservations) != 2 {
+		t.Fatalf("expected trimming to 2 observations, got %d", len(state.RecentObservations))
+	}
+	if state.RecentObservations[0].Command != "true" || state.RecentObservations[1].Command != "false" {
+		t.Fatalf("unexpected observation order after trim: %+v", state.RecentObservations)
+	}
+}
+
 func TestSummarizeFallback(t *testing.T) {
 	temp := t.TempDir()
 	sessionDir := filepath.Join(temp, "session-1")

@@ -129,9 +129,25 @@ func (r *Runner) handleBrowse(args []string) error {
 	if err == nil {
 		r.lastBrowseLogPath = logPath
 		r.recordActionArtifact(logPath)
+		r.recordObservation("browse", []string{target}, logPath, browseObservationExcerpt(title, metaDescription, resp.StatusCode, snippet), nil)
 		r.maybeAutoSummarize(logPath, "browse")
 	}
 	return nil
+}
+
+func browseObservationExcerpt(title, meta string, status int, snippet string) string {
+	parts := []string{}
+	if title != "" {
+		parts = append(parts, "Title: "+title)
+	}
+	if meta != "" {
+		parts = append(parts, "Meta: "+truncate(meta, 180))
+	}
+	parts = append(parts, fmt.Sprintf("Status: %d", status))
+	if snippet != "" {
+		parts = append(parts, "Snippet: "+truncate(snippet, 280))
+	}
+	return strings.Join(parts, " | ")
 }
 
 func normalizeURL(raw string) (string, error) {

@@ -8,10 +8,22 @@ import (
 )
 
 type State struct {
-	StepsSinceSummary int      `json:"steps_since_summary"`
-	LastSummaryAt     string   `json:"last_summary_at"`
-	LastSummaryHash   string   `json:"last_summary_hash"`
-	RecentLogs        []string `json:"recent_logs"`
+	StepsSinceSummary  int           `json:"steps_since_summary"`
+	LastSummaryAt      string        `json:"last_summary_at"`
+	LastSummaryHash    string        `json:"last_summary_hash"`
+	RecentLogs         []string      `json:"recent_logs"`
+	RecentObservations []Observation `json:"recent_observations,omitempty"`
+}
+
+type Observation struct {
+	Time          string   `json:"time"`
+	Kind          string   `json:"kind"`
+	Command       string   `json:"command"`
+	Args          []string `json:"args,omitempty"`
+	ExitCode      int      `json:"exit_code"`
+	Error         string   `json:"error,omitempty"`
+	LogPath       string   `json:"log_path,omitempty"`
+	OutputExcerpt string   `json:"output_excerpt,omitempty"`
 }
 
 func LoadState(path string) (State, error) {

@@ -154,7 +154,7 @@ func buildPrompt(input Input) string {
 		builder.WriteString("\nWorking directory:\n" + input.WorkingDir + "\n")
 	}
 	if input.RecentLog != "" {
-		builder.WriteString("\nRecent log snippet:\n" + input.RecentLog + "\n")
+		builder.WriteString("\nRecent observations:\n" + input.RecentLog + "\n")
 	}
 	if input.Playbooks != "" {
 		builder.WriteString("\nRelevant playbooks:\n" + input.Playbooks + "\n")

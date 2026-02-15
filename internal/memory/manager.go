@@ -50,6 +50,27 @@ func (m Manager) RecordLog(logPath string) (State, error) {
 	return state, nil
 }
 
+func (m Manager) RecordObservation(obs Observation) (State, error) {
+	artifacts, err := EnsureArtifacts(m.SessionDir)
+	if err != nil {
+		return State{}, err
+	}
+	state, err := LoadState(artifacts.StatePath)
+	if err != nil {
+		return State{}, err
+	}
+	if strings.TrimSpace(obs.Command) != "" || strings.TrimSpace(obs.Error) != "" || strings.TrimSpace(obs.LogPath) != "" {
+		state.RecentObservations = append(state.RecentObservations, obs)
+		if m.MaxRecentOutputs > 0 && len(state.RecentObservations) > m.MaxRecentOutputs {
+			state.RecentObservations = state.RecentObservations[len(state.RecentObservations)-m.MaxRecentOutputs:]
+		}
+	}
+	if err := SaveState(artifacts.StatePath, state); err != nil {
+		return State{}, err
+	}
+	return state, nil
+}
+
 func (m Manager) ShouldSummarize(state State) bool {
 	if m.SummarizeEvery > 0 && state.StepsSinceSummary >= m.SummarizeEvery {
 		return true

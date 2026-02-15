@@ -9,6 +9,7 @@ import (
 	"log"
 	neturl "net/url"
 	"os"
+	goexec "os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -817,6 +818,7 @@ func (r *Runner) handleRun(args []string) error {
 		r.logger.Printf("Log saved: %s", result.LogPath)
 		r.recordActionArtifact(result.LogPath)
 	}
+	r.recordObservationFromResult("run", result, err)
 	r.maybeAutoSummarize(result.LogPath, "run")
 	ledgerStatus := "disabled"
 	if r.cfg.Session.LedgerEnabled {
@@ -944,6 +946,7 @@ func (r *Runner) handleMSF(args []string) error {
 		r.logger.Printf("Log saved: %s", result.LogPath)
 		r.recordActionArtifact(result.LogPath)
 	}
+	r.recordObservationFromResult("msf", result, err)
 	r.maybeAutoSummarize(result.LogPath, "msf")
 
 	fmt.Print(renderExecSummary(r.currentTask, "msfconsole", cmdArgs, time.Since(start), result.LogPath, "disabled", result.Output, err))
@@ -1243,9 +1246,12 @@ func (r *Runner) assistInput(sessionDir, goal, mode string) (assist.Input, error
 	focusText := readFileTrimmed(artifacts.FocusPath)
 	history := r.readChatHistory(artifacts.ChatPath)
 	workingDir := r.currentWorkingDir()
-	recentLog := r.readRecentLogSnippet(artifacts)
-	if snippets := r.readRecentLogSnippets(artifacts, 3); snippets != "" {
-		recentLog = snippets
+	recentLog := r.readRecentObservations(artifacts, 3)
+	if recentLog == "" {
+		recentLog = r.readRecentLogSnippet(artifacts)
+		if snippets := r.readRecentLogSnippets(artifacts, 3); snippets != "" {
+			recentLog = snippets
+		}
 	}
 	playbooks := r.playbookHints(goal)
 	planPath := filepath.Join(sessionDir, r.cfg.Session.PlanFilename)
@@ -1418,6 +1424,39 @@ func (r *Runner) readRecentLogSnippets(artifacts memory.Artifacts, maxLogs int) 
 			continue
 		}
 		builder.WriteString(fmt.Sprintf("[log: %s]\n%s\n", path, content))
+	}
+	return strings.TrimSpace(builder.String())
+}
+
+func (r *Runner) readRecentObservations(artifacts memory.Artifacts, max int) string {
+	state, err := memory.LoadState(artifacts.StatePath)
+	if err != nil {
+		return ""
+	}
+	if len(state.RecentObservations) == 0 {
+		return ""
+	}
+	obs := state.RecentObservations
+	if max > 0 && len(obs) > max {
+		obs = obs[len(obs)-max:]
+	}
+	builder := strings.Builder{}
+	for _, item := range obs {
+		cmdLine := strings.TrimSpace(strings.Join(append([]string{item.Command}, item.Args...), " "))
+		if cmdLine == "" {
+			continue
+		}
+		builder.WriteString(fmt.Sprintf("[%s] %s: %s (exit=%d)", fallbackBlock(item.Time), fallbackBlock(item.Kind), cmdLine, item.ExitCode))
+		if strings.TrimSpace(item.LogPath) != "" {
+			builder.WriteString(fmt.Sprintf(" log=%s", item.LogPath))
+		}
+		builder.WriteString("\n")
+		if strings.TrimSpace(item.Error) != "" {
+			builder.WriteString("error: " + truncate(item.Error, 260) + "\n")
+		}
+		if strings.TrimSpace(item.OutputExcerpt) != "" {
+			builder.WriteString("out: " + truncate(item.OutputExcerpt, 520) + "\n")
+		}
 	}
 	return strings.TrimSpace(builder.String())
 }
@@ -2295,9 +2334,80 @@ func (r *Runner) recordActionArtifact(logPath string) {
 	r.lastActionLogPath = path
 }
 
+func (r *Runner) recordObservationFromResult(kind string, result exec.CommandResult, err error) {
+	command := strings.TrimSpace(result.Command)
+	if command == "" {
+		return
+	}
+	excerpt := firstLines(result.Output, 12)
+	errText := ""
+	if err != nil {
+		errText = err.Error()
+	}
+	r.recordObservationWithCommand(kind, command, result.Args, result.LogPath, excerpt, errText, exitCodeFromErr(err))
+}
+
+func (r *Runner) recordObservation(kind string, args []string, logPath string, outputExcerpt string, err error) {
+	errText := ""
+	if err != nil {
+		errText = err.Error()
+	}
+	r.recordObservationWithCommand(kind, kind, args, logPath, outputExcerpt, errText, exitCodeFromErr(err))
+}
+
+func (r *Runner) recordObservationWithCommand(kind string, command string, args []string, logPath string, outputExcerpt string, errText string, exitCode int) {
+	sessionDir := filepath.Join(r.cfg.Session.LogDir, r.sessionID)
+	manager := r.memoryManager(sessionDir)
+	_, _ = manager.RecordObservation(memory.Observation{
+		Time:          time.Now().UTC().Format(time.RFC3339),
+		Kind:          strings.TrimSpace(kind),
+		Command:       strings.TrimSpace(command),
+		Args:          args,
+		ExitCode:      exitCode,
+		Error:         strings.TrimSpace(errText),
+		LogPath:       strings.TrimSpace(logPath),
+		OutputExcerpt: strings.TrimSpace(outputExcerpt),
+	})
+}
+
 func (r *Runner) clearActionContext() {
 	r.lastActionLogPath = ""
 	r.lastBrowseLogPath = ""
+}
+
+func exitCodeFromErr(err error) int {
+	if err == nil {
+		return 0
+	}
+	if errors.Is(err, context.Canceled) {
+		return 130
+	}
+	if errors.Is(err, context.DeadlineExceeded) || strings.Contains(strings.ToLower(err.Error()), "timeout") {
+		return 124
+	}
+	var exitErr *goexec.ExitError
+	if errors.As(err, &exitErr) {
+		if exitErr.ProcessState != nil {
+			return exitErr.ProcessState.ExitCode()
+		}
+	}
+	lower := strings.ToLower(err.Error())
+	if idx := strings.LastIndex(lower, "exit status "); idx >= 0 {
+		tail := strings.TrimSpace(lower[idx+len("exit status "):])
+		end := len(tail)
+		for i, r := range tail {
+			if r < '0' || r > '9' {
+				end = i
+				break
+			}
+		}
+		if end > 0 {
+			if n, convErr := strconv.Atoi(tail[:end]); convErr == nil {
+				return n
+			}
+		}
+	}
+	return 1
 }
 
 func (r *Runner) updateKnownTargetFromText(text string) {
