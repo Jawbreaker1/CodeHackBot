@@ -137,15 +137,14 @@ func (r *Runner) buildAndRunTool(sessionDir, toolsRoot string, tool assist.ToolS
 
 	requireApproval := r.cfg.Permissions.Level == "default" && r.cfg.Permissions.RequireApproval
 	if requireApproval && !dryRun {
-		cmdLine := strings.TrimSpace(strings.Join(append([]string{tool.Run.Command}, tool.Run.Args...), " "))
-		prompt := fmt.Sprintf("Build tool '%s' (%s), write %d file(s) under %s, then run: %s?",
-			tool.Name, tool.Language, len(plannedFiles), toolsRoot, cmdLine)
+		prompt := fmt.Sprintf("Write tool '%s' (%s) files (%d) under %s%s?",
+			tool.Name, tool.Language, len(plannedFiles), toolsRoot, renderToolFilePreview(plannedFiles))
 		ok, err := r.confirm(prompt)
 		if err != nil {
 			return err
 		}
 		if !ok {
-			return fmt.Errorf("execution not approved")
+			return fmt.Errorf("write not approved")
 		}
 	}
 
@@ -198,6 +197,16 @@ func (r *Runner) buildAndRunTool(sessionDir, toolsRoot string, tool assist.ToolS
 	}
 
 	cmd, args := r.normalizeToolRun(tool.Run.Command, tool.Run.Args)
+	if requireApproval {
+		cmdLine := strings.TrimSpace(strings.Join(append([]string{cmd}, args...), " "))
+		ok, err := r.confirm(fmt.Sprintf("Run tool '%s': %s?", tool.Name, cmdLine))
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("execution not approved")
+		}
+	}
 	return r.executeToolRun(cmd, args)
 }
 
@@ -264,6 +273,29 @@ func (r *Runner) buildToolRecoveryGoal(tool assist.ToolSpec, runErr error) strin
 		}
 	}
 	builder.WriteString("Return JSON with type=tool. Modify files/run as needed. Keep changes minimal.")
+	return builder.String()
+}
+
+func renderToolFilePreview(paths []string) string {
+	if len(paths) == 0 {
+		return ""
+	}
+	max := 5
+	if len(paths) < max {
+		max = len(paths)
+	}
+	builder := strings.Builder{}
+	builder.WriteString(" (e.g. ")
+	for i := 0; i < max; i++ {
+		if i > 0 {
+			builder.WriteString(", ")
+		}
+		builder.WriteString(filepath.Base(paths[i]))
+	}
+	if len(paths) > max {
+		builder.WriteString(", ...")
+	}
+	builder.WriteString(")")
 	return builder.String()
 }
 

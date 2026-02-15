@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -175,5 +176,45 @@ func TestToolForgeAutoFixesWithLLMRecovery(t *testing.T) {
 	// We expect at least 2 entries: initial broken build + recovery build.
 	if strings.Count(string(manifest), "\"name\": \"demo\"") < 2 {
 		t.Fatalf("expected multiple manifest entries, got:\n%s", string(manifest))
+	}
+}
+
+func TestToolForgeApprovalsWriteThenRun(t *testing.T) {
+	cfg := config.Config{}
+	cfg.Session.LogDir = t.TempDir()
+	cfg.Permissions.Level = "default"
+	cfg.Permissions.RequireApproval = true
+	cfg.Tools.Shell.Enabled = true
+	cfg.Tools.Shell.TimeoutSeconds = 5
+
+	r := NewRunner(cfg, "session-tool-approve", "", "")
+	r.reader = bufio.NewReader(strings.NewReader("y\nn\n")) // approve write, deny run
+	sessionDir, err := r.ensureSessionScaffold()
+	if err != nil {
+		t.Fatalf("ensure scaffold: %v", err)
+	}
+
+	tool := assist.ToolSpec{
+		Language: "bash",
+		Name:     "demo",
+		Files:    []assist.ToolFile{{Path: "demo/run.sh", Content: "#!/bin/sh\necho ok\n"}},
+		Run:      assist.ToolRun{Command: "sh", Args: []string{"demo/run.sh"}},
+	}
+	err = r.executeToolSuggestion(tool, false)
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "not approved") {
+		t.Fatalf("expected not approved error, got: %v", err)
+	}
+
+	// File should be written, but no cmd log should exist for the run.
+	scriptPath := filepath.Join(sessionDir, "artifacts", "tools", "demo", "run.sh")
+	if _, statErr := os.Stat(scriptPath); statErr != nil {
+		t.Fatalf("expected script written: %v", statErr)
+	}
+	logDir := filepath.Join(sessionDir, "logs")
+	entries, _ := os.ReadDir(logDir)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "cmd-") {
+			t.Fatalf("expected no cmd logs when run denied")
+		}
 	}
 }
