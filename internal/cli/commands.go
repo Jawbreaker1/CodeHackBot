@@ -58,6 +58,8 @@ func (r *Runner) handleCommand(line string) error {
 		return r.handleReadFile(args)
 	case "ls", "list_dir":
 		return r.handleListDir(args)
+	case "write", "write_file":
+		return r.handleWriteFile(args)
 	case "summarize":
 		return r.handleSummarize(args)
 	case "run":

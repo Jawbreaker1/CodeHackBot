@@ -16,6 +16,7 @@ const (
 	listDirMaxEntries  = 250
 	listDirNameMaxLen  = 120
 	readFileLineBudget = 200
+	writeFileMaxBytes  = 512_000
 )
 
 func (r *Runner) handleReadFile(args []string) error {
@@ -63,6 +64,96 @@ func (r *Runner) handleReadFile(args []string) error {
 	r.recordActionArtifact(logPath)
 	r.recordObservation("read_file", []string{path}, logPath, truncate(excerpt, 900), nil)
 	r.maybeAutoSummarize(logPath, "read_file")
+	return nil
+}
+
+func (r *Runner) handleWriteFile(args []string) error {
+	if r.cfg.Permissions.Level == "readonly" {
+		return fmt.Errorf("readonly mode: write_file not permitted")
+	}
+	sessionDir, err := r.ensureSessionScaffold()
+	if err != nil {
+		return err
+	}
+	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
+		return fmt.Errorf("usage: /write <relative_path_under_tools_dir> [content]")
+	}
+
+	relPath := strings.TrimSpace(args[0])
+	content := ""
+	if len(args) > 1 {
+		// Allow multi-line content inside a single JSON arg.
+		content = strings.Join(args[1:], " ")
+	} else {
+		// Interactive mode for manual usage; end with '.' like /script.
+		r.logger.Printf("Enter file content. End with a single '.' line.")
+		lines := []string{}
+		for {
+			line, readErr := r.readLine("> ")
+			if readErr != nil && readErr != io.EOF {
+				return readErr
+			}
+			if strings.TrimSpace(line) == "." {
+				break
+			}
+			lines = append(lines, line)
+			if readErr == io.EOF {
+				break
+			}
+		}
+		content = strings.TrimRight(strings.Join(lines, "\n"), "\n") + "\n"
+	}
+	if strings.TrimSpace(content) == "" {
+		return fmt.Errorf("write_file: content is empty")
+	}
+	if len(content) > writeFileMaxBytes {
+		return fmt.Errorf("write_file: content too large (%d bytes > %d)", len(content), writeFileMaxBytes)
+	}
+
+	outPath, err := r.resolveToolWritePath(sessionDir, relPath)
+	if err != nil {
+		return err
+	}
+
+	requireApproval := r.cfg.Permissions.Level == "default" && r.cfg.Permissions.RequireApproval
+	if requireApproval {
+		ok, err := r.confirm(fmt.Sprintf("Write file: %s?", outPath))
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("write not approved")
+		}
+	}
+
+	r.setTask("write_file")
+	defer r.clearTask()
+	stopIndicator := r.startWorkingIndicator(newActivityWriter(r.liveWriter()))
+	defer stopIndicator()
+
+	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+		return fmt.Errorf("write_file mkdir: %w", err)
+	}
+	if err := os.WriteFile(outPath, []byte(content), 0o644); err != nil {
+		return fmt.Errorf("write_file: %w", err)
+	}
+
+	excerpt := content
+	if len(excerpt) > 2000 {
+		excerpt = excerpt[:2000] + "..."
+	}
+	logPath, logErr := writeFSLog(sessionDir, "write", fmt.Sprintf("Path: %s\nBytes: %d\n\n%s\n", outPath, len(content), excerpt))
+	if logErr != nil {
+		r.logger.Printf("write_file log save failed: %v", logErr)
+	}
+
+	fmt.Printf("Wrote: %s\n", outPath)
+	if logPath != "" {
+		fmt.Printf("Log saved: %s\n", logPath)
+	}
+	r.recordActionArtifact(logPath)
+	r.recordObservation("write_file", []string{outPath}, logPath, fmt.Sprintf("bytes=%d", len(content)), nil)
+	r.maybeAutoSummarize(logPath, "write_file")
 	return nil
 }
 
@@ -163,6 +254,24 @@ func (r *Runner) resolveAllowedPath(sessionDir, raw string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("path out of bounds: %s (allowed: session dir or current working dir)", raw)
+}
+
+func (r *Runner) resolveToolWritePath(sessionDir, raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", fmt.Errorf("path is empty")
+	}
+	if filepath.IsAbs(raw) {
+		return "", fmt.Errorf("write_file requires a relative path under the session tools dir (got absolute path)")
+	}
+	toolsRoot := filepath.Join(sessionDir, "artifacts", "tools")
+	candidate := raw
+	// Only allow relative paths under toolsRoot.
+	candidate = filepath.Clean(filepath.Join(toolsRoot, candidate))
+	if !pathWithinRoot(candidate, toolsRoot) {
+		return "", fmt.Errorf("write_file path out of bounds: %s (allowed under %s)", raw, toolsRoot)
+	}
+	return candidate, nil
 }
 
 func pathWithinRoot(path string, root string) bool {

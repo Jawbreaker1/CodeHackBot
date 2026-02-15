@@ -73,3 +73,36 @@ func TestReadFileAndListDirAreBoundedToSessionOrWD(t *testing.T) {
 		t.Fatalf("read session file: %v", err)
 	}
 }
+
+func TestWriteFileIsBoundedToSessionToolsDir(t *testing.T) {
+	cfg := config.Config{}
+	cfg.Session.LogDir = t.TempDir()
+	r := NewRunner(cfg, "session-write", "", "")
+	r.reader = bufio.NewReader(strings.NewReader(""))
+
+	sessionDir, err := r.ensureSessionScaffold()
+	if err != nil {
+		t.Fatalf("ensure scaffold: %v", err)
+	}
+
+	if err := r.handleWriteFile([]string{"demo/tool.py", "print('hi')\n"}); err != nil {
+		t.Fatalf("write_file: %v", err)
+	}
+
+	toolsRoot := filepath.Join(sessionDir, "artifacts", "tools")
+	outPath := filepath.Join(toolsRoot, "demo", "tool.py")
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read written file: %v", err)
+	}
+	if !strings.Contains(string(data), "print('hi')") {
+		t.Fatalf("unexpected written content: %s", string(data))
+	}
+
+	if err := r.handleWriteFile([]string{"../escape.txt", "nope"}); err == nil {
+		t.Fatalf("expected out-of-bounds error")
+	}
+	if err := r.handleWriteFile([]string{"/tmp/escape.txt", "nope"}); err == nil {
+		t.Fatalf("expected out-of-bounds error for absolute path")
+	}
+}
