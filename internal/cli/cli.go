@@ -712,6 +712,11 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 		fmt.Println(final)
 		r.appendConversation("Assistant", final)
 		return nil
+	case "tool":
+		if suggestion.Tool == nil {
+			return fmt.Errorf("assistant returned tool without tool spec")
+		}
+		return r.executeToolSuggestion(*suggestion.Tool, dryRun)
 	case "plan":
 		r.resetAssistLoopState()
 		return r.handlePlanSuggestion(suggestion, dryRun)
@@ -847,6 +852,12 @@ func (r *Runner) handleAssistCommandFailure(goal string, suggestion assist.Sugge
 	if err == nil {
 		return false
 	}
+	// If the user denied an approval prompt, don't try to "recover" automatically.
+	lowerErr := strings.ToLower(err.Error())
+	if strings.Contains(lowerErr, "not approved") || strings.Contains(lowerErr, "fetch not approved") || strings.Contains(lowerErr, "network access not approved") {
+		r.logger.Printf("Aborted by user.")
+		return true
+	}
 	var cmdErr commandError
 	if !errors.As(err, &cmdErr) {
 		cmdErr = commandError{
@@ -911,6 +922,16 @@ func (r *Runner) suggestAssistRecovery(goal string, suggestion assist.Suggestion
 	}
 	if recovery.Type == "plan" {
 		_ = r.handlePlanSuggestion(recovery, true)
+		return true
+	}
+	if recovery.Type == "tool" && recovery.Tool != nil {
+		r.logger.Printf("Recovery suggestion: tool %s (%s)", fallbackBlock(recovery.Tool.Name), fallbackBlock(recovery.Tool.Language))
+		if recovery.Tool.Purpose != "" {
+			r.logger.Printf("Recovery purpose: %s", recovery.Tool.Purpose)
+		}
+		if err := r.executeToolSuggestion(*recovery.Tool, false); err != nil {
+			r.logger.Printf("Recovery attempt failed: %v", err)
+		}
 		return true
 	}
 	if recovery.Type == "command" {

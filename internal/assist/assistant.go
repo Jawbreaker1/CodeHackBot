@@ -28,19 +28,38 @@ type Input struct {
 }
 
 type Suggestion struct {
-	Type     string   `json:"type"`
-	Command  string   `json:"command,omitempty"`
-	Args     []string `json:"args,omitempty"`
-	Question string   `json:"question,omitempty"`
-	Summary  string   `json:"summary,omitempty"`
-	Final    string   `json:"final,omitempty"`
-	Risk     string   `json:"risk,omitempty"`
-	Steps    []string `json:"steps,omitempty"`
-	Plan     string   `json:"plan,omitempty"`
+	Type     string    `json:"type"`
+	Command  string    `json:"command,omitempty"`
+	Args     []string  `json:"args,omitempty"`
+	Question string    `json:"question,omitempty"`
+	Summary  string    `json:"summary,omitempty"`
+	Final    string    `json:"final,omitempty"`
+	Risk     string    `json:"risk,omitempty"`
+	Steps    []string  `json:"steps,omitempty"`
+	Plan     string    `json:"plan,omitempty"`
+	Tool     *ToolSpec `json:"tool,omitempty"`
 }
 
 type Assistant interface {
 	Suggest(ctx context.Context, input Input) (Suggestion, error)
+}
+
+type ToolSpec struct {
+	Language string     `json:"language"`
+	Name     string     `json:"name"`
+	Purpose  string     `json:"purpose,omitempty"`
+	Files    []ToolFile `json:"files"`
+	Run      ToolRun    `json:"run"`
+}
+
+type ToolFile struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
+type ToolRun struct {
+	Command string   `json:"command"`
+	Args    []string `json:"args,omitempty"`
 }
 
 type FallbackAssistant struct{}
@@ -125,7 +144,7 @@ func (c ChainedAssistant) Suggest(ctx context.Context, input Input) (Suggestion,
 	return Suggestion{}, fmt.Errorf("no assistant available")
 }
 
-const assistSystemPrompt = "You are a security testing assistant operating in an authorized lab owned by the user. Respond with JSON only: {\"type\":\"command|question|noop|plan|complete\",\"command\":\"\",\"args\":[\"\"],\"question\":\"\",\"summary\":\"\",\"final\":\"\",\"risk\":\"low|medium|high\",\"steps\":[\"...\"],\"plan\":\"\"}. Provide one safe next action. Use type=plan with a short plan and 2-6 executable steps when the request is multi-step. Use type=complete when the goal is satisfied; put the final user-facing output in `final`. If Mode is execute-step, respond with type=command or type=question only (do not return type=plan or type=complete). If Mode is recover, propose a corrective next step that addresses the failure context (alternate command, adjusted args, or a question for missing info). If Mode is next-steps, return a short plan (1-3 steps) or a question; do not assume execution. The command must be a real executable or an internal command. You may use internal command \"browse\" with a single URL argument to fetch a web page (requires user approval). For command \"browse\", pass only one URL argument and no flags. You may use internal command \"parse_links\" (alias: \"links\") to extract and normalize links from an HTML file path; if no args are given, it uses the most recent browsed body. For \"parse_links\", you may optionally pass \"base=<url>\" to resolve relative links. You may use internal command \"read_file\" (alias: \"read\") to read a local file path, \"list_dir\" (alias: \"ls\") to list a directory, and \"write_file\" (alias: \"write\") to write a file under the session tools directory. For \"write_file\", pass args as: [\"relative/path/under/tools\", \"file content...\"]; do not attempt to write outside the tools directory. Prefer these internal commands over shelling out to cat/ls/echo when you need local artifacts. Prefer verbose flags when safe (-v/--verbose) so users see progress, except for \"browse\". When using bash/sh with -c or -lc, pass the script as one args item without surrounding outer quotes. Use playbooks only as inspiration; do not blindly follow a fixed sequence. Tailor steps to the specific goal, scope, target type, and available context. If the goal is broad (e.g., \"security perspective\"), ask 1-2 clarifying questions or produce a phased plan (recon, enumeration, assessment, validation) with clear gating for risky steps. Avoid repeating the same default tool chain unless it directly fits the request. If recent logs/observations already contain required data, analyze them directly; do not ask the user to paste logs and do not re-run the same command without a reason. If a browse step produced a Body-Path in observations, prefer reading/parsing that local artifact (e.g., read_file, parse_links) instead of re-fetching. For web recon, consider passive-first signals (DNS, headers, tech stack) but adapt tool choice to the target and the user’s intent. You can run shell commands locally in the working directory provided to inspect files or run tooling, including encrypted files the user owns. If access requires a password, ask for it; if asked to crack a password, proceed only when the user confirms authorization for that file. Do not use placeholders like \"scan\"; if you cannot provide a concrete command, return type=question. Stay within scope and avoid destructive actions unless explicitly requested."
+const assistSystemPrompt = "You are a security testing assistant operating in an authorized lab owned by the user. Respond with JSON only. Schema: {\"type\":\"command|question|noop|plan|complete|tool\",\"command\":\"\",\"args\":[\"\"],\"question\":\"\",\"summary\":\"\",\"final\":\"\",\"risk\":\"low|medium|high\",\"steps\":[\"...\"],\"plan\":\"\",\"tool\":{\"language\":\"python|bash\",\"name\":\"\",\"purpose\":\"\",\"files\":[{\"path\":\"relative/path\",\"content\":\"...\"}],\"run\":{\"command\":\"\",\"args\":[\"...\"]}}}. Provide one safe next action. Use type=plan with a short plan and 2-6 executable steps when the request is multi-step. Use type=complete when the goal is satisfied; put the final user-facing output in `final`. Use type=tool when you need to create a small helper program/script to proceed; include tool.files and tool.run. For tool.files.path, use paths relative to the session tools directory (do not attempt to write elsewhere). If Mode is execute-step, respond with type=command, type=tool, or type=question only (do not return type=plan or type=complete). If Mode is recover, propose a corrective next step that addresses the failure context (alternate command, adjusted args, a tool to fix parsing, or a question for missing info). If Mode is next-steps, return a short plan (1-3 steps) or a question; do not assume execution. The command must be a real executable or an internal command. You may use internal command \"browse\" with a single URL argument to fetch a web page (requires user approval). For command \"browse\", pass only one URL argument and no flags. You may use internal command \"parse_links\" (alias: \"links\") to extract and normalize links from an HTML file path; if no args are given, it uses the most recent browsed body. For \"parse_links\", you may optionally pass \"base=<url>\" to resolve relative links. You may use internal command \"read_file\" (alias: \"read\") to read a local file path, \"list_dir\" (alias: \"ls\") to list a directory, and \"write_file\" (alias: \"write\") to write a file under the session tools directory. Prefer these internal commands over shelling out to cat/ls/echo when you need local artifacts. Prefer verbose flags when safe (-v/--verbose) so users see progress, except for \"browse\". When using bash/sh with -c or -lc, pass the script as one args item without surrounding outer quotes. Use playbooks only as inspiration; do not blindly follow a fixed sequence. Tailor steps to the specific goal, scope, target type, and available context. Avoid repeating the same default tool chain unless it directly fits the request. If recent logs/observations already contain required data, analyze them directly; do not ask the user to paste logs and do not re-run the same command without a reason. If a browse step produced a Body-Path in observations, prefer reading/parsing that local artifact (e.g., read_file, parse_links) instead of re-fetching. For web recon, consider passive-first signals (DNS, headers, tech stack) but adapt tool choice to the target and the user’s intent. You can run shell commands locally in the working directory provided to inspect files or run tooling, including encrypted files the user owns. If access requires a password, ask for it; if asked to crack a password, proceed only when the user confirms authorization for that file. Do not use placeholders like \"scan\"; if you cannot provide a concrete command, return type=question. Stay within scope and avoid destructive actions unless explicitly requested."
 
 func buildPrompt(input Input) string {
 	builder := strings.Builder{}
@@ -252,6 +271,25 @@ func normalizeSuggestion(suggestion Suggestion) Suggestion {
 	suggestion.Risk = strings.ToLower(strings.TrimSpace(suggestion.Risk))
 	suggestion.Plan = strings.TrimSpace(suggestion.Plan)
 	suggestion.Steps = normalizeSteps(suggestion.Steps)
+	if suggestion.Tool != nil {
+		suggestion.Tool.Language = strings.ToLower(strings.TrimSpace(suggestion.Tool.Language))
+		suggestion.Tool.Name = strings.TrimSpace(suggestion.Tool.Name)
+		suggestion.Tool.Purpose = strings.TrimSpace(suggestion.Tool.Purpose)
+		suggestion.Tool.Run.Command = strings.TrimSpace(suggestion.Tool.Run.Command)
+		for i := range suggestion.Tool.Run.Args {
+			suggestion.Tool.Run.Args[i] = strings.TrimSpace(suggestion.Tool.Run.Args[i])
+		}
+		files := make([]ToolFile, 0, len(suggestion.Tool.Files))
+		for _, f := range suggestion.Tool.Files {
+			f.Path = strings.TrimSpace(f.Path)
+			// Keep content as-is; it may contain leading spaces/newlines.
+			if f.Path == "" {
+				continue
+			}
+			files = append(files, f)
+		}
+		suggestion.Tool.Files = files
+	}
 	if suggestion.Command != "" && len(suggestion.Args) == 0 {
 		parts := strings.Fields(suggestion.Command)
 		if len(parts) > 1 {
