@@ -107,6 +107,10 @@ func (r *Runner) handleBrowse(args []string) error {
 	if bodyErr != nil {
 		r.logger.Printf("Browse body save failed: %v", bodyErr)
 	}
+	if strings.TrimSpace(bodyPath) != "" {
+		r.lastBrowseBodyPath = bodyPath
+		r.lastBrowseURL = target
+	}
 	content := string(body)
 	title := extractTitle(content)
 	metaDescription := extractMetaDescription(content)

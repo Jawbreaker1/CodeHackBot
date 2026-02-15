@@ -42,9 +42,11 @@ type Runner struct {
 	lastAssistQuestion string
 	lastAssistQSeen    int
 
-	lastBrowseLogPath string
-	lastActionLogPath string
-	lastKnownTarget   string
+	lastBrowseLogPath  string
+	lastBrowseBodyPath string
+	lastBrowseURL      string
+	lastActionLogPath  string
+	lastKnownTarget    string
 
 	inputRenderLines int
 

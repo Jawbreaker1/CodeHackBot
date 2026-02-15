@@ -747,6 +747,9 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 		}
 		return r.handleBrowse(args)
 	}
+	if strings.EqualFold(suggestion.Command, "parse_links") || strings.EqualFold(suggestion.Command, "links") {
+		return r.handleParseLinks(suggestion.Args)
+	}
 	if strings.HasPrefix(strings.ToLower(suggestion.Command), "http") && len(suggestion.Args) == 0 {
 		return r.handleBrowse([]string{suggestion.Command})
 	}
