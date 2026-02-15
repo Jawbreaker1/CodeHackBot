@@ -88,3 +88,52 @@ func TestCrawlFetchesMultiplePagesAndWritesIndex(t *testing.T) {
 		t.Fatalf("expected saved pages")
 	}
 }
+
+func TestCrawlWritesSummaryWhenLLMAvailable(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<html><head><title>Home</title></head><body><a href="/a">A</a></body></html>`))
+	})
+	mux.HandleFunc("/a", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<html><head><title>A</title></head><body>ok</body></html>`))
+	})
+	webSrv := httptest.NewServer(mux)
+	t.Cleanup(webSrv.Close)
+
+	llmSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+		resp := map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"role": "assistant", "content": "summary-ok"}},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(llmSrv.Close)
+
+	cfg := config.Config{}
+	cfg.Session.LogDir = t.TempDir()
+	cfg.Network.AssumeOffline = true
+	cfg.LLM.BaseURL = llmSrv.URL
+	r := NewRunner(cfg, "session-crawl-sum", "", "")
+	r.reader = bufio.NewReader(strings.NewReader("y\n"))
+
+	if err := r.handleCrawl([]string{webSrv.URL, "max_pages=2"}); err != nil {
+		t.Fatalf("handleCrawl: %v", err)
+	}
+
+	sessionDir := filepath.Join(cfg.Session.LogDir, r.sessionID)
+	sumPath := filepath.Join(sessionDir, "artifacts", "web", "crawl-summary.md")
+	data, err := os.ReadFile(sumPath)
+	if err != nil {
+		t.Fatalf("read summary: %v", err)
+	}
+	if strings.TrimSpace(string(data)) != "summary-ok" {
+		t.Fatalf("unexpected summary: %q", string(data))
+	}
+}

@@ -12,6 +12,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Jawbreaker1/CodeHackBot/internal/llm"
+	"github.com/Jawbreaker1/CodeHackBot/internal/memory"
 )
 
 const (
@@ -217,6 +220,85 @@ func (r *Runner) handleCrawl(args []string) error {
 	r.recordActionArtifact(logPath)
 	r.recordObservation("crawl", []string{startURL, fmt.Sprintf("max_pages=%d", maxPages), fmt.Sprintf("max_depth=%d", maxDepth)}, logPath, fmt.Sprintf("pages=%d index=%s", len(index.Pages), indexPath), nil)
 	r.maybeAutoSummarize(logPath, "crawl")
+
+	// If LLM is available, produce an immediate crawl summary artifact so /assist can synthesize without re-fetching.
+	_ = r.maybeSummarizeCrawl(indexPath, len(index.Pages))
+	return nil
+}
+
+func (r *Runner) maybeSummarizeCrawl(indexPath string, pages int) error {
+	if pages <= 0 || strings.TrimSpace(indexPath) == "" {
+		return nil
+	}
+	if !r.llmAllowed() {
+		return nil
+	}
+	sessionDir, err := r.ensureSessionScaffold()
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(indexPath)
+	if err != nil {
+		return err
+	}
+	// Keep prompt bounded.
+	const maxIndexBytes = 24_000
+	if len(data) > maxIndexBytes {
+		data = data[:maxIndexBytes]
+	}
+
+	artifacts, _ := memory.EnsureArtifacts(sessionDir)
+	contextSummary := readFileTrimmed(artifacts.SummaryPath)
+	contextFacts := readFileTrimmed(artifacts.FactsPath)
+	contextFocus := readFileTrimmed(artifacts.FocusPath)
+
+	prompt := strings.Builder{}
+	prompt.WriteString("You are summarizing a bounded web crawl for an authorized security assessment.\n")
+	prompt.WriteString("Task: produce a concise summary of what the site is about and a security-relevant overview.\n")
+	prompt.WriteString("Include: tech stack hints, key sections/endpoints, any obvious issues (missing headers, exposed paths), unknowns, and 3 next concrete steps.\n\n")
+	prompt.WriteString("Crawl index (JSON):\n")
+	prompt.WriteString(string(data))
+	prompt.WriteString("\n\n")
+	if contextSummary != "" {
+		prompt.WriteString("Session summary:\n" + contextSummary + "\n\n")
+	}
+	if contextFacts != "" {
+		prompt.WriteString("Known facts:\n" + contextFacts + "\n\n")
+	}
+	if contextFocus != "" {
+		prompt.WriteString("Task foundation:\n" + contextFocus + "\n\n")
+	}
+
+	client := llm.NewLMStudioClient(r.cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	stopIndicator := r.startLLMIndicatorIfAllowed("crawl summarize")
+	defer stopIndicator()
+	resp, err := client.Chat(ctx, llm.ChatRequest{
+		Model:       r.cfg.LLM.Model,
+		Temperature: 0.2,
+		Messages: []llm.Message{
+			{Role: "system", Content: "Return a concise, actionable summary. Do not ask the user to paste files; use the provided crawl index."},
+			{Role: "user", Content: prompt.String()},
+		},
+	})
+	if err != nil {
+		r.recordLLMFailure(err)
+		return err
+	}
+	r.recordLLMSuccess()
+
+	outPath := filepath.Join(sessionDir, "artifacts", "web", "crawl-summary.md")
+	_ = os.MkdirAll(filepath.Dir(outPath), 0o755)
+	content := strings.TrimSpace(resp.Content)
+	if content == "" {
+		return nil
+	}
+	if err := os.WriteFile(outPath, []byte(content+"\n"), 0o644); err != nil {
+		return err
+	}
+	logPath, _ := writeFSLog(sessionDir, "crawl-summary", "Summary-Path: "+outPath+"\nIndex: "+indexPath+"\nPages: "+fmt.Sprintf("%d", pages)+"\n")
+	r.recordObservation("crawl_summary", []string{indexPath}, logPath, "summary="+outPath, nil)
 	return nil
 }
 
