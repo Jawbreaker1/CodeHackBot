@@ -3,7 +3,9 @@
     "name": "BirdHackBot",
     "model": "openai/gpt-oss-20b",
     "system_prompt": "prompts/system.md",
-    "max_steps": 6
+    "max_steps": 6,
+    "tool_max_fixes": 2,
+    "tool_max_files": 20
   },
   "llm": {
     "base_url": "http://192.168.50.213:1234/v1",

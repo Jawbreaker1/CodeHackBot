@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	toolForgeMaxFiles = 20
-	toolForgeMaxFixes = 2
+	toolForgeDefaultMaxFiles = 20
+	toolForgeDefaultMaxFixes = 2
 )
 
 type toolManifestEntry struct {
@@ -53,11 +53,16 @@ func (r *Runner) executeToolSuggestion(tool assist.ToolSpec, dryRun bool) error 
 	if len(tool.Files) == 0 {
 		return fmt.Errorf("tool forge: no files provided")
 	}
-	if len(tool.Files) > toolForgeMaxFiles {
-		return fmt.Errorf("tool forge: too many files (%d > %d)", len(tool.Files), toolForgeMaxFiles)
-	}
 	if strings.TrimSpace(tool.Run.Command) == "" {
 		return fmt.Errorf("tool forge: missing run.command")
+	}
+
+	maxFiles := toolForgeDefaultMaxFiles
+	if r.cfg.Agent.ToolMaxFiles > 0 {
+		maxFiles = r.cfg.Agent.ToolMaxFiles
+	}
+	if len(tool.Files) > maxFiles {
+		return fmt.Errorf("tool forge: too many files (%d > %d)", len(tool.Files), maxFiles)
 	}
 
 	toolsRoot := filepath.Join(sessionDir, "artifacts", "tools")
@@ -66,18 +71,22 @@ func (r *Runner) executeToolSuggestion(tool assist.ToolSpec, dryRun bool) error 
 	}
 
 	// Build -> run -> (optional) fix loop.
+	maxFixes := toolForgeDefaultMaxFixes
+	if r.cfg.Agent.ToolMaxFixes > 0 {
+		maxFixes = r.cfg.Agent.ToolMaxFixes
+	}
 	current := tool
 	var lastErr error
-	for attempt := 0; attempt <= toolForgeMaxFixes; attempt++ {
+	for attempt := 0; attempt <= maxFixes; attempt++ {
 		if attempt > 0 {
-			r.logger.Printf("Tool recovery attempt %d/%d", attempt, toolForgeMaxFixes)
+			r.logger.Printf("Tool recovery attempt %d/%d", attempt, maxFixes)
 		}
 		runErr := r.buildAndRunTool(sessionDir, toolsRoot, current, dryRun, attempt)
 		if runErr == nil {
 			return nil
 		}
 		lastErr = runErr
-		if dryRun || attempt >= toolForgeMaxFixes || !r.llmAllowed() {
+		if dryRun || attempt >= maxFixes || !r.llmAllowed() {
 			return lastErr
 		}
 
@@ -112,8 +121,12 @@ func (r *Runner) buildAndRunTool(sessionDir, toolsRoot string, tool assist.ToolS
 	if len(tool.Files) == 0 {
 		return fmt.Errorf("tool forge: no files provided")
 	}
-	if len(tool.Files) > toolForgeMaxFiles {
-		return fmt.Errorf("tool forge: too many files (%d > %d)", len(tool.Files), toolForgeMaxFiles)
+	maxFiles := toolForgeDefaultMaxFiles
+	if r.cfg.Agent.ToolMaxFiles > 0 {
+		maxFiles = r.cfg.Agent.ToolMaxFiles
+	}
+	if len(tool.Files) > maxFiles {
+		return fmt.Errorf("tool forge: too many files (%d > %d)", len(tool.Files), maxFiles)
 	}
 	if strings.TrimSpace(tool.Run.Command) == "" {
 		return fmt.Errorf("tool forge: missing run.command")
