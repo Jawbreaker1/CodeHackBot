@@ -79,3 +79,17 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
 
 ## Sprint 15 — Agent Default Mode
 - [x] Route plain text input to `/assist` (agent mode)
+
+## Sprint 16 — True Agent Loop (in progress)
+- [ ] Extend assistant protocol with explicit completion (`type=complete`) and richer observations (avoid `cat`-the-log loops).
+- [ ] Add step-level Observation plumbing (exit code + key output) and feed it back into each subsequent LLM call.
+- [ ] Add deterministic Finalize phase for goals like “create a report” (write report artifact every time).
+- [ ] Add agent-loop tests (complete handling, observation carry-forward, finalize artifact creation).
+
+## Sprint 17 — Tool Primitives (future)
+- [ ] Introduce first-class tools (fetch URL, parse links, read file, write file) to reduce fragile `bash -c` pipelines.
+- [ ] Migrate web recon to primitives + parsing (multi-page crawl with bounds).
+
+## Sprint 18 — Chat vs Act UX (future)
+- [ ] Lightweight “answer vs act” classification so normal conversation feels like Codex/Claude while still being agentic.
+- [ ] Reduce noise in non-verbose mode (only show task headers + key outputs).

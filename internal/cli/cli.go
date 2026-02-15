@@ -1244,6 +1244,9 @@ func (r *Runner) assistInput(sessionDir, goal, mode string) (assist.Input, error
 	history := r.readChatHistory(artifacts.ChatPath)
 	workingDir := r.currentWorkingDir()
 	recentLog := r.readRecentLogSnippet(artifacts)
+	if snippets := r.readRecentLogSnippets(artifacts, 3); snippets != "" {
+		recentLog = snippets
+	}
 	playbooks := r.playbookHints(goal)
 	planPath := filepath.Join(sessionDir, r.cfg.Session.PlanFilename)
 	inventoryPath := filepath.Join(sessionDir, r.cfg.Session.InventoryFilename)
@@ -1589,6 +1592,10 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 			r.maybeEmitGoalSummary(goal, dryRun)
 			return nil
 		}
+		if suggestion.Type == "complete" {
+			_ = r.executeAssistSuggestion(suggestion, dryRun)
+			return nil
+		}
 		if err := r.executeAssistSuggestion(suggestion, dryRun); err != nil {
 			if r.handleAssistCommandFailure(goal, suggestion, err) {
 				r.maybeEmitGoalSummary(goal, dryRun)
@@ -1601,6 +1608,10 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 		}
 		if suggestion.Type == "question" {
 			r.pendingAssistGoal = goal
+			return nil
+		}
+		if suggestion.Type == "complete" {
+			r.pendingAssistGoal = ""
 			return nil
 		}
 		if suggestion.Type == "command" {
@@ -1694,6 +1705,17 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 		if r.cfg.UI.Verbose {
 			r.logger.Printf("Assistant has no suggestion")
 		}
+		return nil
+	case "complete":
+		final := strings.TrimSpace(suggestion.Final)
+		if final == "" {
+			final = strings.TrimSpace(suggestion.Summary)
+		}
+		if final == "" {
+			final = "(completed)"
+		}
+		fmt.Println(final)
+		r.appendConversation("Assistant", final)
 		return nil
 	case "plan":
 		r.resetAssistLoopState()

@@ -56,6 +56,18 @@ func TestLLMAssistantParsesFencedJSON(t *testing.T) {
 	}
 }
 
+func TestLLMAssistantParsesComplete(t *testing.T) {
+	client := fakeClient{content: `{"type":"complete","final":"All done."}`}
+	assistant := LLMAssistant{Client: client}
+	suggestion, err := assistant.Suggest(context.Background(), Input{SessionID: "s"})
+	if err != nil {
+		t.Fatalf("suggest error: %v", err)
+	}
+	if suggestion.Type != "complete" || suggestion.Final != "All done." {
+		t.Fatalf("unexpected suggestion: %+v", suggestion)
+	}
+}
+
 func TestChainedAssistantFallback(t *testing.T) {
 	assistant := ChainedAssistant{
 		Primary:  LLMAssistant{Client: fakeClient{err: errors.New("down")}},
