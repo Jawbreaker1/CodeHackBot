@@ -18,6 +18,7 @@ import (
 
 const (
 	toolForgeMaxFiles = 20
+	toolForgeMaxFixes = 2
 )
 
 type toolManifestEntry struct {
@@ -60,6 +61,60 @@ func (r *Runner) executeToolSuggestion(tool assist.ToolSpec, dryRun bool) error 
 	toolsRoot := filepath.Join(sessionDir, "artifacts", "tools")
 	if err := os.MkdirAll(toolsRoot, 0o755); err != nil {
 		return fmt.Errorf("tool forge mkdir: %w", err)
+	}
+
+	// Build -> run -> (optional) fix loop.
+	current := tool
+	var lastErr error
+	for attempt := 0; attempt <= toolForgeMaxFixes; attempt++ {
+		if attempt > 0 {
+			r.logger.Printf("Tool recovery attempt %d/%d", attempt, toolForgeMaxFixes)
+		}
+		runErr := r.buildAndRunTool(sessionDir, toolsRoot, current, dryRun, attempt)
+		if runErr == nil {
+			return nil
+		}
+		lastErr = runErr
+		if dryRun || attempt >= toolForgeMaxFixes || !r.llmAllowed() {
+			return lastErr
+		}
+
+		// Ask the assistant for a corrected tool spec. This keeps the repair loop local and bounded.
+		recoveryGoal := r.buildToolRecoveryGoal(current, lastErr)
+		stopIndicator := r.startLLMIndicatorIfAllowed("tool recover")
+		recovery, err := r.getAssistSuggestion(recoveryGoal, "recover")
+		stopIndicator()
+		if err != nil {
+			r.logger.Printf("Tool recovery suggestion failed: %v", err)
+			return lastErr
+		}
+		if recovery.Type != "tool" || recovery.Tool == nil {
+			r.logger.Printf("Tool recovery returned %s; expected tool.", recovery.Type)
+			return lastErr
+		}
+		current = *recovery.Tool
+	}
+	return lastErr
+}
+
+func (r *Runner) buildAndRunTool(sessionDir, toolsRoot string, tool assist.ToolSpec, dryRun bool, attempt int) error {
+	tool.Language = strings.ToLower(strings.TrimSpace(tool.Language))
+	tool.Name = strings.TrimSpace(tool.Name)
+	tool.Purpose = strings.TrimSpace(tool.Purpose)
+	if tool.Language == "" {
+		tool.Language = "python"
+	}
+	if tool.Name == "" {
+		tool.Name = "tool"
+	}
+	if len(tool.Files) == 0 {
+		return fmt.Errorf("tool forge: no files provided")
+	}
+	if len(tool.Files) > toolForgeMaxFiles {
+		return fmt.Errorf("tool forge: too many files (%d > %d)", len(tool.Files), toolForgeMaxFiles)
+	}
+	if strings.TrimSpace(tool.Run.Command) == "" {
+		return fmt.Errorf("tool forge: missing run.command")
 	}
 
 	plannedFiles := make([]string, 0, len(tool.Files))
@@ -134,7 +189,7 @@ func (r *Runner) executeToolSuggestion(tool assist.ToolSpec, dryRun bool) error 
 
 	if toolLogPath != "" {
 		r.recordActionArtifact(toolLogPath)
-		r.recordObservation("tool_build", []string{tool.Name, tool.Language}, toolLogPath, fmt.Sprintf("files=%d", len(plannedFiles)), nil)
+		r.recordObservation("tool_build", []string{tool.Name, tool.Language, fmt.Sprintf("attempt=%d", attempt)}, toolLogPath, fmt.Sprintf("files=%d", len(plannedFiles)), nil)
 	}
 
 	if dryRun {
@@ -142,7 +197,74 @@ func (r *Runner) executeToolSuggestion(tool assist.ToolSpec, dryRun bool) error 
 		return nil
 	}
 
-	return r.executeToolRun(tool.Run.Command, tool.Run.Args)
+	cmd, args := r.normalizeToolRun(tool.Run.Command, tool.Run.Args)
+	return r.executeToolRun(cmd, args)
+}
+
+func (r *Runner) normalizeToolRun(command string, args []string) (string, []string) {
+	command = strings.TrimSpace(command)
+	outArgs := make([]string, 0, len(args))
+	sessionDir := filepath.Join(r.cfg.Session.LogDir, r.sessionID)
+	toolsRoot := filepath.Join(sessionDir, "artifacts", "tools")
+	for _, a := range args {
+		a = strings.TrimSpace(a)
+		if a == "" {
+			continue
+		}
+		a = strings.ReplaceAll(a, "{{TOOLS_DIR}}", toolsRoot)
+		a = strings.ReplaceAll(a, "$TOOLS_DIR", toolsRoot)
+		// If the argument is a relative path that exists under toolsRoot, make it absolute.
+		if !filepath.IsAbs(a) {
+			candidate := filepath.Join(toolsRoot, filepath.Clean(a))
+			if pathWithinRoot(candidate, toolsRoot) {
+				if _, err := os.Stat(candidate); err == nil {
+					a = candidate
+				}
+			}
+		}
+		outArgs = append(outArgs, a)
+	}
+	return command, outArgs
+}
+
+func (r *Runner) buildToolRecoveryGoal(tool assist.ToolSpec, runErr error) string {
+	builder := strings.Builder{}
+	builder.WriteString("The previous tool run failed. Provide a corrected tool spec (type=tool) that fixes the issue.\n")
+	if tool.Name != "" {
+		builder.WriteString("Tool name: " + tool.Name + "\n")
+	}
+	if tool.Language != "" {
+		builder.WriteString("Tool language: " + tool.Language + "\n")
+	}
+	if tool.Purpose != "" {
+		builder.WriteString("Tool purpose: " + tool.Purpose + "\n")
+	}
+	if strings.TrimSpace(tool.Run.Command) != "" {
+		builder.WriteString("Tool run: " + strings.TrimSpace(strings.Join(append([]string{tool.Run.Command}, tool.Run.Args...), " ")) + "\n")
+	}
+	if len(tool.Files) > 0 {
+		builder.WriteString("Tool files:\n")
+		for _, f := range tool.Files {
+			if strings.TrimSpace(f.Path) == "" {
+				continue
+			}
+			builder.WriteString("- " + f.Path + "\n")
+		}
+	}
+	if runErr != nil {
+		builder.WriteString("Error: " + runErr.Error() + "\n")
+		var cmdErr commandError
+		if errors.As(runErr, &cmdErr) {
+			if out := firstLines(cmdErr.Result.Output, 6); out != "" {
+				builder.WriteString("Output:\n" + out + "\n")
+			}
+			if strings.TrimSpace(cmdErr.Result.LogPath) != "" {
+				builder.WriteString("Log path: " + cmdErr.Result.LogPath + "\n")
+			}
+		}
+	}
+	builder.WriteString("Return JSON with type=tool. Modify files/run as needed. Keep changes minimal.")
+	return builder.String()
 }
 
 func renderToolLog(tool assist.ToolSpec, outFiles []string) string {

@@ -1140,10 +1140,36 @@ func buildRecoveryGoal(goal string, suggestion assist.Suggestion, cmdErr command
 	if goal != "" {
 		builder.WriteString("Original goal: " + goal + "\n")
 	}
-	builder.WriteString("Previous command failed.\n")
-	cmdLine := strings.TrimSpace(strings.Join(append([]string{suggestion.Command}, suggestion.Args...), " "))
-	if cmdLine != "" {
-		builder.WriteString("Command: " + cmdLine + "\n")
+	if strings.ToLower(strings.TrimSpace(suggestion.Type)) == "tool" && suggestion.Tool != nil {
+		builder.WriteString("Previous tool run failed.\n")
+		if suggestion.Tool.Name != "" {
+			builder.WriteString("Tool name: " + suggestion.Tool.Name + "\n")
+		}
+		if suggestion.Tool.Language != "" {
+			builder.WriteString("Tool language: " + suggestion.Tool.Language + "\n")
+		}
+		if suggestion.Tool.Purpose != "" {
+			builder.WriteString("Tool purpose: " + suggestion.Tool.Purpose + "\n")
+		}
+		runLine := strings.TrimSpace(strings.Join(append([]string{suggestion.Tool.Run.Command}, suggestion.Tool.Run.Args...), " "))
+		if runLine != "" {
+			builder.WriteString("Tool run: " + runLine + "\n")
+		}
+		if len(suggestion.Tool.Files) > 0 {
+			builder.WriteString("Tool files:\n")
+			for _, f := range suggestion.Tool.Files {
+				if strings.TrimSpace(f.Path) == "" {
+					continue
+				}
+				builder.WriteString("- " + f.Path + "\n")
+			}
+		}
+	} else {
+		builder.WriteString("Previous command failed.\n")
+		cmdLine := strings.TrimSpace(strings.Join(append([]string{suggestion.Command}, suggestion.Args...), " "))
+		if cmdLine != "" {
+			builder.WriteString("Command: " + cmdLine + "\n")
+		}
 	}
 	if cmdErr.Err != nil {
 		builder.WriteString("Error: " + cmdErr.Err.Error() + "\n")
