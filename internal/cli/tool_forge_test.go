@@ -218,3 +218,51 @@ func TestToolForgeApprovalsWriteThenRun(t *testing.T) {
 		}
 	}
 }
+
+func TestToolForgeReuseSkipsWriteApproval(t *testing.T) {
+	cfg := config.Config{}
+	cfg.Session.LogDir = t.TempDir()
+	cfg.Permissions.Level = "default"
+	cfg.Permissions.RequireApproval = true
+	cfg.Tools.Shell.Enabled = true
+	cfg.Tools.Shell.TimeoutSeconds = 5
+
+	r := NewRunner(cfg, "session-tool-reuse", "", "")
+	sessionDir, err := r.ensureSessionScaffold()
+	if err != nil {
+		t.Fatalf("ensure scaffold: %v", err)
+	}
+
+	tool := assist.ToolSpec{
+		Language: "bash",
+		Name:     "demo",
+		Files:    []assist.ToolFile{{Path: "demo/run.sh", Content: "#!/bin/sh\necho ok\n"}},
+		Run:      assist.ToolRun{Command: "sh", Args: []string{"demo/run.sh"}},
+	}
+
+	// First run: approve write+run.
+	r.reader = bufio.NewReader(strings.NewReader("y\ny\n"))
+	if err := r.executeToolSuggestion(tool, false); err != nil {
+		t.Fatalf("first executeToolSuggestion: %v", err)
+	}
+
+	// Second run: deny run. If it incorrectly asks for write approval again, we'd get "write not approved".
+	r.reader = bufio.NewReader(strings.NewReader("n\n"))
+	err = r.executeToolSuggestion(tool, false)
+	if err == nil {
+		t.Fatalf("expected not approved error")
+	}
+	lower := strings.ToLower(err.Error())
+	if strings.Contains(lower, "write not approved") {
+		t.Fatalf("unexpected write approval prompt on reuse; err=%v", err)
+	}
+	if !strings.Contains(lower, "not approved") {
+		t.Fatalf("expected not approved error, got: %v", err)
+	}
+
+	// Sanity: file still exists.
+	scriptPath := filepath.Join(sessionDir, "artifacts", "tools", "demo", "run.sh")
+	if _, statErr := os.Stat(scriptPath); statErr != nil {
+		t.Fatalf("expected script: %v", statErr)
+	}
+}

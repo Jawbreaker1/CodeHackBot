@@ -23,6 +23,8 @@ const (
 
 type toolManifestEntry struct {
 	Time     string            `json:"time"`
+	Event    string            `json:"event,omitempty"`
+	Attempt  int               `json:"attempt,omitempty"`
 	Name     string            `json:"name"`
 	Language string            `json:"language"`
 	Purpose  string            `json:"purpose,omitempty"`
@@ -136,7 +138,8 @@ func (r *Runner) buildAndRunTool(sessionDir, toolsRoot string, tool assist.ToolS
 	}
 
 	requireApproval := r.cfg.Permissions.Level == "default" && r.cfg.Permissions.RequireApproval
-	if requireApproval && !dryRun {
+	upToDate, upToDateReason := r.toolFilesUpToDate(sessionDir, tool.Files, hashes)
+	if requireApproval && !dryRun && !upToDate {
 		prompt := fmt.Sprintf("Write tool '%s' (%s) files (%d) under %s%s?",
 			tool.Name, tool.Language, len(plannedFiles), toolsRoot, renderToolFilePreview(plannedFiles))
 		ok, err := r.confirm(prompt)
@@ -155,28 +158,40 @@ func (r *Runner) buildAndRunTool(sessionDir, toolsRoot string, tool assist.ToolS
 
 	toolLogPath := ""
 	if !dryRun {
-		for _, f := range tool.Files {
-			if strings.TrimSpace(f.Path) == "" {
-				continue
-			}
-			outPath, err := r.resolveToolWritePath(sessionDir, f.Path)
-			if err != nil {
-				return err
-			}
-			if len(f.Content) > writeFileMaxBytes {
-				return fmt.Errorf("tool forge: file too large: %s (%d bytes > %d)", f.Path, len(f.Content), writeFileMaxBytes)
-			}
-			if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
-				return fmt.Errorf("tool forge mkdir: %w", err)
-			}
-			if err := os.WriteFile(outPath, []byte(f.Content), 0o644); err != nil {
-				return fmt.Errorf("tool forge write: %w", err)
+		if !upToDate {
+			for _, f := range tool.Files {
+				if strings.TrimSpace(f.Path) == "" {
+					continue
+				}
+				outPath, err := r.resolveToolWritePath(sessionDir, f.Path)
+				if err != nil {
+					return err
+				}
+				if len(f.Content) > writeFileMaxBytes {
+					return fmt.Errorf("tool forge: file too large: %s (%d bytes > %d)", f.Path, len(f.Content), writeFileMaxBytes)
+				}
+				if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+					return fmt.Errorf("tool forge mkdir: %w", err)
+				}
+				if err := os.WriteFile(outPath, []byte(f.Content), 0o644); err != nil {
+					return fmt.Errorf("tool forge write: %w", err)
+				}
 			}
 		}
 
-		toolLogPath, _ = writeFSLog(sessionDir, "tool", renderToolLog(tool, plannedFiles))
+		logPrefix := "tool"
+		if upToDate {
+			logPrefix = "tool-reuse"
+		}
+		toolLogPath, _ = writeFSLog(sessionDir, logPrefix, renderToolLog(tool, plannedFiles)+renderToolReuseNote(upToDate, upToDateReason))
+		event := "build"
+		if upToDate {
+			event = "reuse"
+		}
 		_ = r.appendToolManifest(sessionDir, toolManifestEntry{
 			Time:     time.Now().UTC().Format(time.RFC3339),
+			Event:    event,
+			Attempt:  attempt,
 			Name:     tool.Name,
 			Language: tool.Language,
 			Purpose:  tool.Purpose,
@@ -188,7 +203,11 @@ func (r *Runner) buildAndRunTool(sessionDir, toolsRoot string, tool assist.ToolS
 
 	if toolLogPath != "" {
 		r.recordActionArtifact(toolLogPath)
-		r.recordObservation("tool_build", []string{tool.Name, tool.Language, fmt.Sprintf("attempt=%d", attempt)}, toolLogPath, fmt.Sprintf("files=%d", len(plannedFiles)), nil)
+		kind := "tool_build"
+		if upToDate {
+			kind = "tool_reuse"
+		}
+		r.recordObservation(kind, []string{tool.Name, tool.Language, fmt.Sprintf("attempt=%d", attempt)}, toolLogPath, fmt.Sprintf("files=%d", len(plannedFiles)), nil)
 	}
 
 	if dryRun {
@@ -236,6 +255,38 @@ func (r *Runner) normalizeToolRun(command string, args []string) (string, []stri
 	return command, outArgs
 }
 
+func (r *Runner) toolFilesUpToDate(sessionDir string, files []assist.ToolFile, desiredHashes map[string]string) (bool, string) {
+	if len(files) == 0 {
+		return false, "no files"
+	}
+	if len(desiredHashes) == 0 {
+		return false, "no hashes"
+	}
+	for _, f := range files {
+		if strings.TrimSpace(f.Path) == "" {
+			continue
+		}
+		outPath, err := r.resolveToolWritePath(sessionDir, f.Path)
+		if err != nil {
+			return false, "invalid path"
+		}
+		want := strings.TrimSpace(desiredHashes[outPath])
+		if want == "" {
+			return false, "missing desired hash"
+		}
+		data, err := os.ReadFile(outPath)
+		if err != nil {
+			return false, "missing file"
+		}
+		sum := sha256.Sum256(data)
+		got := hex.EncodeToString(sum[:])
+		if got != want {
+			return false, "content changed"
+		}
+	}
+	return true, "match"
+}
+
 func (r *Runner) buildToolRecoveryGoal(tool assist.ToolSpec, runErr error) string {
 	builder := strings.Builder{}
 	builder.WriteString("The previous tool run failed. Provide a corrected tool spec (type=tool) that fixes the issue.\n")
@@ -274,6 +325,16 @@ func (r *Runner) buildToolRecoveryGoal(tool assist.ToolSpec, runErr error) strin
 	}
 	builder.WriteString("Return JSON with type=tool. Modify files/run as needed. Keep changes minimal.")
 	return builder.String()
+}
+
+func renderToolReuseNote(upToDate bool, reason string) string {
+	if !upToDate {
+		return ""
+	}
+	if strings.TrimSpace(reason) == "" {
+		reason = "match"
+	}
+	return "\nReuse: true (" + reason + ")\n"
 }
 
 func renderToolFilePreview(paths []string) string {
