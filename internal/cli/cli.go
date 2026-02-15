@@ -727,6 +727,9 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 			return fmt.Errorf("assistant returned empty command")
 		}
 		suggestion.Args = normalizeShellScriptArgs(suggestion.Command, suggestion.Args)
+		if script, ok := extractShellScript(suggestion.Command, suggestion.Args); ok && looksLikeFragileShellPipeline(script) {
+			return fmt.Errorf("fragile shell pipeline blocked: prefer internal tools (/crawl, /browse, /parse_links, /read_file, /list_dir) or return type=tool to build a helper instead of bash pipelines")
+		}
 	default:
 		return fmt.Errorf("assistant returned unknown type: %s", suggestion.Type)
 	}
@@ -1241,6 +1244,42 @@ func normalizeShellScriptArgs(command string, args []string) []string {
 		}
 	}
 	return []string{flag, script}
+}
+
+func extractShellScript(command string, args []string) (string, bool) {
+	cmd := strings.ToLower(strings.TrimSpace(command))
+	if cmd != "bash" && cmd != "sh" && cmd != "zsh" {
+		return "", false
+	}
+	if len(args) < 2 {
+		return "", false
+	}
+	flag := strings.TrimSpace(args[0])
+	if flag != "-c" && flag != "-lc" {
+		return "", false
+	}
+	return strings.TrimSpace(strings.Join(args[1:], " ")), true
+}
+
+func looksLikeFragileShellPipeline(script string) bool {
+	script = strings.ToLower(strings.TrimSpace(script))
+	if script == "" {
+		return false
+	}
+	// Only block multi-command/pipeline shells; single commands are fine.
+	if !strings.Contains(script, "|") && !strings.Contains(script, "&&") && !strings.Contains(script, ";") {
+		return false
+	}
+	// We mainly want to avoid brittle web parsing pipelines.
+	hasHTTP := strings.Contains(script, "curl ") || strings.Contains(script, "wget ") || strings.Contains(script, "http://") || strings.Contains(script, "https://")
+	if !hasHTTP {
+		return false
+	}
+	hasTextFilters := strings.Contains(script, "grep ") || strings.Contains(script, "sed ") || strings.Contains(script, "awk ") || strings.Contains(script, "cut ") || strings.Contains(script, "sort ")
+	if !hasTextFilters {
+		return false
+	}
+	return true
 }
 
 func firstLines(text string, maxLines int) string {
