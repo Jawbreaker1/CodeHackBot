@@ -750,6 +750,12 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 	if strings.EqualFold(suggestion.Command, "parse_links") || strings.EqualFold(suggestion.Command, "links") {
 		return r.handleParseLinks(suggestion.Args)
 	}
+	if strings.EqualFold(suggestion.Command, "read_file") || strings.EqualFold(suggestion.Command, "read") {
+		return r.handleReadFile(suggestion.Args)
+	}
+	if strings.EqualFold(suggestion.Command, "list_dir") || strings.EqualFold(suggestion.Command, "ls") {
+		return r.handleListDir(suggestion.Args)
+	}
 	if strings.HasPrefix(strings.ToLower(suggestion.Command), "http") && len(suggestion.Args) == 0 {
 		return r.handleBrowse([]string{suggestion.Command})
 	}

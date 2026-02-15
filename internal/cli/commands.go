@@ -54,6 +54,10 @@ func (r *Runner) handleCommand(line string) error {
 		return r.handleBrowse(args)
 	case "links", "parse_links":
 		return r.handleParseLinks(args)
+	case "read", "read_file":
+		return r.handleReadFile(args)
+	case "ls", "list_dir":
+		return r.handleListDir(args)
 	case "summarize":
 		return r.handleSummarize(args)
 	case "run":
