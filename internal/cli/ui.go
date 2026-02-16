@@ -5,15 +5,9 @@ import (
 	"io"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/exec"
-)
-
-const (
-	llmIndicatorDelay    = 700 * time.Millisecond
-	llmIndicatorInterval = 5 * time.Second
 )
 
 func (r *Runner) confirm(prompt string) (bool, error) {
@@ -99,43 +93,11 @@ func (e commandError) Unwrap() error {
 
 func (r *Runner) startLLMIndicator(label string) func() {
 	r.setLLMStatus(label)
-	if !r.isTTY() {
-		return func() {
-			r.clearLLMStatus()
-		}
+	if r.isTTY() {
+		fmt.Printf("LLM %s ...\n", label)
 	}
-	stop := make(chan struct{})
-	done := make(chan struct{})
-	var once sync.Once
-	go func() {
-		defer close(done)
-		timer := time.NewTimer(llmIndicatorDelay)
-		defer timer.Stop()
-		select {
-		case <-stop:
-			return
-		case <-timer.C:
-		}
-		start := time.Now()
-		fmt.Printf("LLM %s ... (%s)\n", label, formatElapsed(time.Since(start)))
-		ticker := time.NewTicker(llmIndicatorInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-stop:
-				return
-			case <-ticker.C:
-				elapsed := formatElapsed(time.Since(start))
-				fmt.Printf("LLM %s ... (%s)\n", label, elapsed)
-			}
-		}
-	}()
 	return func() {
-		once.Do(func() {
-			close(stop)
-			<-done
-			r.clearLLMStatus()
-		})
+		r.clearLLMStatus()
 	}
 }
 
