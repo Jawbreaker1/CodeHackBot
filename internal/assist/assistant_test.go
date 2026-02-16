@@ -97,6 +97,22 @@ func TestLLMAssistantParsesComplete(t *testing.T) {
 	}
 }
 
+func TestLLMAssistantReturnsParseErrorWithRawContent(t *testing.T) {
+	client := fakeClient{content: "I cannot help with that request."}
+	assistant := LLMAssistant{Client: client}
+	_, err := assistant.Suggest(context.Background(), Input{SessionID: "s"})
+	if err == nil {
+		t.Fatalf("expected parse error")
+	}
+	var parseErr SuggestionParseError
+	if !errors.As(err, &parseErr) {
+		t.Fatalf("expected SuggestionParseError, got %T (%v)", err, err)
+	}
+	if !strings.Contains(parseErr.Raw, "cannot help") {
+		t.Fatalf("expected raw refusal to be preserved, got %q", parseErr.Raw)
+	}
+}
+
 func TestChainedAssistantFallback(t *testing.T) {
 	assistant := ChainedAssistant{
 		Primary:  LLMAssistant{Client: fakeClient{err: errors.New("down")}},

@@ -89,6 +89,7 @@ type guardedAssistant struct {
 	allow     func() bool
 	onSuccess func()
 	onFailure func(error)
+	onFallback func(error)
 	primary   assist.Assistant
 	fallback  assist.Assistant
 }
@@ -103,6 +104,9 @@ func (g guardedAssistant) Suggest(ctx context.Context, input assist.Input) (assi
 			g.onFailure(err)
 		}
 		if g.fallback != nil {
+			if g.onFallback != nil {
+				g.onFallback(err)
+			}
 			return g.fallback.Suggest(ctx, input)
 		}
 		return assist.Suggestion{}, err
@@ -113,6 +117,9 @@ func (g guardedAssistant) Suggest(ctx context.Context, input assist.Input) (assi
 			g.onFailure(err)
 		}
 		if g.fallback != nil {
+			if g.onFallback != nil {
+				g.onFallback(err)
+			}
 			return g.fallback.Suggest(ctx, input)
 		}
 		return assist.Suggestion{}, err

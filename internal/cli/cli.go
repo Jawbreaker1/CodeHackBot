@@ -467,8 +467,29 @@ func (r *Runner) assistGenerator() assist.Assistant {
 		allow:     r.llmAllowed,
 		onSuccess: r.recordLLMSuccess,
 		onFailure: r.recordLLMFailure,
+		onFallback: func(err error) {
+			r.logAssistFallbackCause(err)
+		},
 		primary:   llmAssistant,
 		fallback:  fallback,
+	}
+}
+
+func (r *Runner) logAssistFallbackCause(err error) {
+	if err == nil {
+		return
+	}
+	if !r.cfg.UI.Verbose {
+		r.logger.Printf("LLM response unusable; fallback assistant used. Run /verbose on for details.")
+		return
+	}
+	r.logger.Printf("LLM fallback reason: %v", err)
+	var parseErr assist.SuggestionParseError
+	if errors.As(err, &parseErr) {
+		raw := collapseWhitespace(strings.TrimSpace(parseErr.Raw))
+		if raw != "" {
+			r.logger.Printf("LLM raw response: %s", truncate(raw, 500))
+		}
 	}
 }
 

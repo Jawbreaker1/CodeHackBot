@@ -64,6 +64,24 @@ type ToolRun struct {
 	Args    []string `json:"args,omitempty"`
 }
 
+// SuggestionParseError captures LLM outputs that were returned successfully but
+// could not be parsed into the expected JSON suggestion schema.
+type SuggestionParseError struct {
+	Raw string
+	Err error
+}
+
+func (e SuggestionParseError) Error() string {
+	if e.Err == nil {
+		return "parse suggestion json"
+	}
+	return fmt.Sprintf("parse suggestion json: %v", e.Err)
+}
+
+func (e SuggestionParseError) Unwrap() error {
+	return e.Err
+}
+
 type FallbackAssistant struct{}
 
 func (FallbackAssistant) Suggest(_ context.Context, input Input) (Suggestion, error) {
@@ -189,7 +207,7 @@ func (a LLMAssistant) Suggest(ctx context.Context, input Input) (Suggestion, err
 				Risk:    "low",
 			}), nil
 		}
-		return Suggestion{}, fmt.Errorf("parse suggestion json: %w", err)
+		return Suggestion{}, SuggestionParseError{Raw: resp.Content, Err: err}
 	}
 	return normalizeSuggestion(suggestion), nil
 }
@@ -375,6 +393,9 @@ func looksLikeShellCommand(line string) bool {
 		return false
 	}
 	for _, r := range first {
+		if unicode.IsUpper(r) {
+			return false
+		}
 		if unicode.IsLetter(r) || unicode.IsDigit(r) {
 			continue
 		}
