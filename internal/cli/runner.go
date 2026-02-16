@@ -16,6 +16,14 @@ import (
 	"github.com/Jawbreaker1/CodeHackBot/internal/session"
 )
 
+const (
+	logoANSIReset  = "\x1b[0m"
+	logoANSIName   = "\x1b[38;5;220m"
+	logoANSIBlueA  = "\x1b[38;5;39m"
+	logoANSIBlueB  = "\x1b[38;5;45m"
+	logoANSIBlueC  = "\x1b[38;5;51m"
+)
+
 type Runner struct {
 	cfg               config.Config
 	sessionID         string
@@ -197,5 +205,29 @@ func (r *Runner) printLogo() {
 	if err != nil {
 		return
 	}
-	fmt.Println(string(data))
+	logo := string(data)
+	logo = colorizeLogo(logo, r.isTTY())
+	fmt.Println(logo)
+}
+
+func colorizeLogo(logo string, enabled bool) string {
+	if !enabled || strings.TrimSpace(logo) == "" {
+		return logo
+	}
+	lines := strings.Split(strings.ReplaceAll(logo, "\r\n", "\n"), "\n")
+	palette := []string{logoANSIBlueA, logoANSIBlueB, logoANSIBlueC}
+	colorIdx := 0
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.EqualFold(trimmed, "BirdHackBot") {
+			lines[i] = logoANSIName + line + logoANSIReset
+			continue
+		}
+		lines[i] = palette[colorIdx%len(palette)] + line + logoANSIReset
+		colorIdx++
+	}
+	return strings.Join(lines, "\n")
 }
