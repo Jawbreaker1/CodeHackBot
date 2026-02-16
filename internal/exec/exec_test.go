@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"runtime"
 	"strings"
@@ -135,5 +136,35 @@ func TestRunCommandExtendsTimeoutWhenOutputContinues(t *testing.T) {
 	}
 	if !strings.Contains(result.Output, "tick") {
 		t.Fatalf("expected output, got %q", result.Output)
+	}
+}
+
+func TestRunCommandCancelStopsChildProcessGroup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skip on windows: process-group behavior differs")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runner := Runner{
+		Permissions: PermissionAll,
+		Timeout:     5 * time.Second,
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := runner.RunCommandWithContext(ctx, "sh", "-c", "(while true; do sleep 1; done) & wait")
+		done <- err
+	}()
+	time.Sleep(150 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatalf("expected cancel error")
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("command did not stop after cancellation")
 	}
 }

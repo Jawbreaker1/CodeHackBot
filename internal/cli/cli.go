@@ -533,6 +533,7 @@ func (r *Runner) handleAssistGoal(goal string, dryRun bool) error {
 		r.updateKnownTargetFromText(trimmedGoal)
 		r.updateTaskFoundation(trimmedGoal)
 		r.pendingAssistGoal = ""
+		r.pendingAssistQ = ""
 		r.resetAssistLoopState()
 	}
 	if !dryRun && isSummaryIntent(trimmedGoal) && strings.TrimSpace(r.lastActionLogPath) != "" {
@@ -647,7 +648,7 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 			return nil
 		}
 		if err := r.executeAssistSuggestion(suggestion, dryRun); err != nil {
-			if isAssistRepeatedCommandGuard(err) {
+			if isAssistRepeatedGuard(err) {
 				if !dryRun {
 					if r.cfg.UI.Verbose {
 						r.logger.Printf("Repeated step detected; requesting an alternative action.")
@@ -676,11 +677,13 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 		}
 		if suggestion.Type == "complete" {
 			r.pendingAssistGoal = ""
+			r.pendingAssistQ = ""
 			return nil
 		}
 		if suggestion.Type == "command" {
 			lastCommand = suggestion
 			r.pendingAssistGoal = ""
+			r.pendingAssistQ = ""
 		}
 		stepsRun++
 		stepMode = "execute-step"
@@ -767,15 +770,22 @@ func (r *Runner) handleAssistNoop(goal string, dryRun bool) error {
 		r.pendingAssistGoal = goal
 	} else if suggestion.Type == "command" {
 		r.pendingAssistGoal = ""
+		r.pendingAssistQ = ""
 	}
 	return nil
 }
 
 func (r *Runner) handleAssistFollowUp(answer string) error {
 	goal := strings.TrimSpace(r.pendingAssistGoal)
+	prevQuestion := strings.TrimSpace(r.pendingAssistQ)
 	r.pendingAssistGoal = ""
+	r.pendingAssistQ = ""
 	if goal == "" {
 		return nil
+	}
+	answer = strings.TrimSpace(answer)
+	if answer != "" {
+		r.updateKnownTargetFromText(answer)
 	}
 	if shouldStartBaselineScan(answer) && strings.TrimSpace(r.lastKnownTarget) != "" {
 		target := r.bestKnownTarget()
@@ -784,7 +794,14 @@ func (r *Runner) handleAssistFollowUp(answer string) error {
 			return r.handleRun([]string{"nmap", "-sV", "-Pn", "--top-ports", "100", target})
 		}
 	}
-	combined := fmt.Sprintf("Original goal: %s\nUser answer to previous assistant question: %s\nContinue the task using available tools.", goal, strings.TrimSpace(answer))
+	combined := fmt.Sprintf("Original goal: %s\nUser answer to previous assistant question: %s\nContinue the task using available tools.", goal, answer)
+	if prevQuestion != "" {
+		combined += fmt.Sprintf("\nAssistant previous question: %s", prevQuestion)
+		combined += "\nDo not repeat the same clarifying question if the answer already resolves it; pick a concrete next action."
+	}
+	if shouldUseDefaultChoice(answer, prevQuestion) {
+		combined += "\nUser explicitly chose the default option. Select a safe default available in the current environment and proceed."
+	}
 	if target := strings.TrimSpace(r.lastKnownTarget); target != "" {
 		combined += fmt.Sprintf("\nCurrent remembered target: %s", target)
 	}
@@ -819,6 +836,7 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 			fmt.Println(normalizeAssistantOutput(suggestion.Question))
 		}
 		r.appendConversation("Assistant", normalizeAssistantOutput(suggestion.Question))
+		r.pendingAssistQ = suggestion.Question
 		return nil
 	case "noop":
 		if r.cfg.UI.Verbose {
@@ -836,6 +854,8 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 		final = normalizeAssistantOutput(final)
 		fmt.Println(final)
 		r.appendConversation("Assistant", final)
+		r.pendingAssistGoal = ""
+		r.pendingAssistQ = ""
 		return nil
 	case "tool":
 		if suggestion.Tool == nil {
@@ -873,6 +893,7 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 	if err := r.guardAssistCommandLoop(suggestion.Command, suggestion.Args); err != nil {
 		return err
 	}
+	r.pendingAssistQ = ""
 	if strings.EqualFold(suggestion.Command, "browse") {
 		args, err := sanitizeBrowseArgs(suggestion.Args)
 		if err != nil {
@@ -1573,7 +1594,7 @@ func (r *Runner) guardAssistQuestionLoop(question string) error {
 		r.lastAssistQuestion = key
 		r.lastAssistQSeen = 1
 	}
-	const maxSameQuestionInRow = 2
+	const maxSameQuestionInRow = 1
 	if r.lastAssistQSeen > maxSameQuestionInRow {
 		return fmt.Errorf("assistant loop guard: repeated question blocked")
 	}
@@ -1942,11 +1963,39 @@ func isBenignNoMatchError(err error) bool {
 	}
 }
 
-func isAssistRepeatedCommandGuard(err error) bool {
+func isAssistRepeatedGuard(err error) bool {
 	if err == nil {
 		return false
 	}
-	return strings.Contains(strings.ToLower(err.Error()), "assistant loop guard: repeated command blocked")
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "assistant loop guard: repeated command blocked") ||
+		strings.Contains(lower, "assistant loop guard: repeated question blocked")
+}
+
+func shouldUseDefaultChoice(answer, question string) bool {
+	answer = strings.ToLower(strings.TrimSpace(answer))
+	question = strings.ToLower(strings.TrimSpace(question))
+	if answer == "" || question == "" {
+		return false
+	}
+	defaultSignals := []string{"default", "go ahead", "proceed", "use that", "continue", "yes"}
+	hasDefault := false
+	for _, signal := range defaultSignals {
+		if strings.Contains(answer, signal) {
+			hasDefault = true
+			break
+		}
+	}
+	if !hasDefault {
+		return false
+	}
+	optionSignals := []string{"default", "option", "wordlist", "password list", "profile", "mode"}
+	for _, signal := range optionSignals {
+		if strings.Contains(question, signal) {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeAssistantOutput(text string) string {

@@ -33,7 +33,7 @@ func startInterruptWatcher() (<-chan struct{}, func(), error) {
 			case <-done:
 				return
 			case <-sigCh:
-				cancelCh <- struct{}{}
+				notifyInterrupt(cancelCh)
 				return
 			}
 		}
@@ -88,7 +88,7 @@ func startKeyWatcher(cancelCh chan<- struct{}, done <-chan struct{}) error {
 			}
 			n, err := tty.Read(buf)
 			if n > 0 && (buf[0] == escKey || buf[0] == ctrlCKey) {
-				cancelCh <- struct{}{}
+				notifyInterrupt(cancelCh)
 				return
 			}
 			if err != nil {
@@ -102,4 +102,11 @@ func startKeyWatcher(cancelCh chan<- struct{}, done <-chan struct{}) error {
 	}()
 
 	return nil
+}
+
+func notifyInterrupt(cancelCh chan<- struct{}) {
+	select {
+	case cancelCh <- struct{}{}:
+	default:
+	}
 }

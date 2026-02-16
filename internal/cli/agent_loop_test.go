@@ -239,3 +239,124 @@ func TestAssistRepeatedCommandGuardRequestsAlternativeAndContinues(t *testing.T)
 		t.Fatalf("expected at least 4 llm calls, got %d", calls)
 	}
 }
+
+func TestAssistFollowUpCarriesPreviousQuestionAndAnswer(t *testing.T) {
+	var call int32
+	var secondBody string
+	const question = "Should I proceed with a default wordlist?"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		n := atomic.AddInt32(&call, 1)
+		if n == 2 {
+			secondBody = string(body)
+		}
+		content := `{"type":"complete","final":"done"}`
+		if n == 1 {
+			content = `{"type":"question","question":"` + question + `"}`
+		}
+		resp := map[string]any{
+			"choices": []map[string]any{
+				{
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": content,
+					},
+				},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := config.Config{}
+	cfg.Session.LogDir = t.TempDir()
+	cfg.LLM.BaseURL = srv.URL
+	cfg.Permissions.Level = "all"
+	r := NewRunner(cfg, "session-followup-context", "", "")
+
+	if err := r.handleAssistAgentic("crack the zip in this folder", false, ""); err != nil {
+		t.Fatalf("initial assist: %v", err)
+	}
+	if err := r.handleAssistFollowUp("go ahead with default"); err != nil {
+		t.Fatalf("follow-up assist: %v", err)
+	}
+
+	if !strings.Contains(secondBody, "Assistant previous question: "+question) {
+		t.Fatalf("expected previous question in follow-up prompt body:\n%s", secondBody)
+	}
+	if !strings.Contains(secondBody, "User answer to previous assistant question: go ahead with default") {
+		t.Fatalf("expected user follow-up answer in prompt body:\n%s", secondBody)
+	}
+	if !strings.Contains(secondBody, "User explicitly chose the default option.") {
+		t.Fatalf("expected default-choice hint in prompt body:\n%s", secondBody)
+	}
+}
+
+func TestAssistRepeatedQuestionGuardRequestsAlternativeAndContinues(t *testing.T) {
+	var calls int32
+	const question = "Should I proceed with a default wordlist?"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+		n := atomic.AddInt32(&calls, 1)
+		content := `{"type":"complete","final":"done"}`
+		switch n {
+		case 1, 2:
+			content = `{"type":"question","question":"` + question + `"}`
+		case 3:
+			content = `{"type":"complete","final":"done"}`
+		}
+		resp := map[string]any{
+			"choices": []map[string]any{
+				{
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": content,
+					},
+				},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := config.Config{}
+	cfg.Session.LogDir = t.TempDir()
+	cfg.LLM.BaseURL = srv.URL
+	cfg.Permissions.Level = "all"
+	r := NewRunner(cfg, "session-repeat-question-guard", "", "")
+
+	orig := os.Stdout
+	rOut, wOut, _ := os.Pipe()
+	os.Stdout = wOut
+	t.Cleanup(func() {
+		os.Stdout = orig
+	})
+
+	if err := r.handleAssistAgentic("crack the zip in this folder", false, ""); err != nil {
+		t.Fatalf("initial assist: %v", err)
+	}
+	if err := r.handleAssistFollowUp("go ahead with default"); err != nil {
+		t.Fatalf("follow-up assist: %v", err)
+	}
+
+	_ = wOut.Close()
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, rOut)
+	out := buf.String()
+	if !strings.Contains(out, "Repeated step detected; asking assistant for an alternative action.") {
+		t.Fatalf("expected repeated-step recovery message, got:\n%s", out)
+	}
+	if !strings.Contains(out, "done") {
+		t.Fatalf("expected completion after repeated-question recovery, got:\n%s", out)
+	}
+	if atomic.LoadInt32(&calls) < 3 {
+		t.Fatalf("expected at least 3 llm calls, got %d", calls)
+	}
+}

@@ -75,6 +75,7 @@ func (r *Runner) RunCommandWithContext(ctx context.Context, command string, args
 	defer cancel()
 
 	cmd := exec.CommandContext(context.Background(), command, args...)
+	configureCommandProcess(cmd)
 	var output string
 	output, err := runWithStreamingWithIdleTimeout(ctx, cmd, r.LiveWriter, r.Timeout, r.Now)
 	result := CommandResult{
@@ -142,36 +143,37 @@ func runWithStreamingWithIdleTimeout(parentCtx context.Context, cmd *exec.Cmd, l
 	}()
 
 	idleTimedOut := atomic.Bool{}
+	var terminateOnce sync.Once
+	terminate := func() {
+		terminateOnce.Do(func() { terminateCommandProcess(cmd) })
+	}
 	stopMonitor := make(chan struct{})
 	var monitorWG sync.WaitGroup
-	if idleTimeout > 0 {
-		monitorWG.Add(1)
-		go func() {
-			defer monitorWG.Done()
-			ticker := time.NewTicker(250 * time.Millisecond)
+	monitorWG.Add(1)
+	go func() {
+		defer monitorWG.Done()
+		var ticker *time.Ticker
+		if idleTimeout > 0 {
+			ticker = time.NewTicker(250 * time.Millisecond)
 			defer ticker.Stop()
-			for {
-				select {
-				case <-stopMonitor:
+		}
+		for {
+			select {
+			case <-stopMonitor:
+				return
+			case <-parentCtx.Done():
+				terminate()
+				return
+			case <-tickerC(ticker):
+				last := time.Unix(0, lastOutput.Load())
+				if now().Sub(last) > idleTimeout {
+					idleTimedOut.Store(true)
+					terminate()
 					return
-				case <-parentCtx.Done():
-					if cmd.Process != nil {
-						_ = cmd.Process.Kill()
-					}
-					return
-				case <-ticker.C:
-					last := time.Unix(0, lastOutput.Load())
-					if now().Sub(last) > idleTimeout {
-						idleTimedOut.Store(true)
-						if cmd.Process != nil {
-							_ = cmd.Process.Kill()
-						}
-						return
-					}
 				}
 			}
-		}()
-	}
+		}
+	}()
 
 	waitErr := cmd.Wait()
 	close(stopMonitor)
@@ -191,6 +193,13 @@ type streamWriter struct {
 	live       io.Writer
 	mu         *sync.Mutex
 	onActivity func()
+}
+
+func tickerC(t *time.Ticker) <-chan time.Time {
+	if t == nil {
+		return nil
+	}
+	return t.C
 }
 
 func (w streamWriter) Write(p []byte) (int, error) {

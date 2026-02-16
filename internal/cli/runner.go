@@ -44,6 +44,7 @@ type Runner struct {
 	llmLabel          string
 	llmStarted        time.Time
 	pendingAssistGoal string
+	pendingAssistQ    string
 
 	lastAssistCmdKey   string
 	lastAssistCmdSeen  int
@@ -105,6 +106,7 @@ func (r *Runner) Run() error {
 			continue
 		}
 		if r.pendingAssistGoal != "" {
+			r.appendConversation("User", line)
 			if err := r.handleAssistFollowUp(line); err != nil {
 				r.logger.Printf("Assist follow-up error: %v", err)
 			}
