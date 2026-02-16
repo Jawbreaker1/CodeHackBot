@@ -24,6 +24,9 @@ func (r *Runner) shouldAttemptGoalEvaluation(goal string) bool {
 	if goal == "" {
 		return false
 	}
+	if isWriteCreationIntent(goal) {
+		return false
+	}
 	if strings.TrimSpace(r.lastActionLogPath) == "" {
 		return false
 	}

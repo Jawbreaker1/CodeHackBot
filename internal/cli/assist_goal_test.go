@@ -44,3 +44,15 @@ func TestEnrichAssistGoalIncludesArtifactForRecoveryModes(t *testing.T) {
 		t.Fatalf("expected recovery goal to include log path: %q", got)
 	}
 }
+
+func TestRecoveryDirectiveForWriteGoalAfterListDir(t *testing.T) {
+	cfg := config.Config{}
+	cfg.Session.LogDir = t.TempDir()
+	runner := NewRunner(cfg, "session-recover-write", "", "")
+	runner.recordObservationWithCommand("list_dir", "list_dir", []string{"."}, "", "entries=10", "", 0)
+
+	got := runner.recoveryDirectiveForGoal("create syve.md report in owasp format", "recover")
+	if !strings.Contains(got, "create/write action") {
+		t.Fatalf("expected write-action recovery directive, got %q", got)
+	}
+}
