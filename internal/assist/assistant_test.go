@@ -145,3 +145,18 @@ func TestNormalizeSuggestionSplitsBashScriptPreservingQuotes(t *testing.T) {
 		t.Fatalf("unexpected script arg: %q", suggestion.Args[1])
 	}
 }
+
+func TestExtractJSONFromChannelWrappedContent(t *testing.T) {
+	raw := `<channel>final <constrain>json<message>{"type":"complete","final":"ok"}`
+	got := extractJSON(raw)
+	if got != `{"type":"complete","final":"ok"}` {
+		t.Fatalf("unexpected json extraction: %q", got)
+	}
+}
+
+func TestParseSimpleCommandIgnoresChannelEnvelope(t *testing.T) {
+	raw := `<channel>final <constrain>json<message>{"type":"tool","tool":{"name":"x"}}`
+	if got := parseSimpleCommand(raw); got != "" {
+		t.Fatalf("expected no command, got %q", got)
+	}
+}

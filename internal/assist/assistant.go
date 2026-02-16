@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"unicode"
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/llm"
 )
@@ -244,12 +245,54 @@ func extractJSON(content string) string {
 		trimmed = strings.TrimSuffix(trimmed, "```")
 		trimmed = strings.TrimSpace(trimmed)
 	}
-	start := strings.Index(trimmed, "{")
-	end := strings.LastIndex(trimmed, "}")
-	if start >= 0 && end > start {
-		return trimmed[start : end+1]
+	if obj, ok := extractJSONObject(trimmed); ok {
+		return obj
 	}
 	return trimmed
+}
+
+func extractJSONObject(text string) (string, bool) {
+	start := -1
+	depth := 0
+	inString := false
+	escape := false
+	for i, r := range text {
+		if start == -1 {
+			if r == '{' {
+				start = i
+				depth = 1
+				inString = false
+				escape = false
+			}
+			continue
+		}
+		if inString {
+			if escape {
+				escape = false
+				continue
+			}
+			if r == '\\' {
+				escape = true
+				continue
+			}
+			if r == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch r {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return strings.TrimSpace(text[start : i+1]), true
+			}
+		}
+	}
+	return "", false
 }
 
 func parseSimpleCommand(content string) string {
@@ -269,6 +312,9 @@ func parseSimpleCommand(content string) string {
 		if strings.HasPrefix(line, "#") {
 			continue
 		}
+		if strings.HasPrefix(line, "<") || strings.Contains(strings.ToLower(line), "<channel") || strings.Contains(strings.ToLower(line), "<message") {
+			continue
+		}
 		if strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* ") {
 			line = strings.TrimSpace(line[2:])
 		}
@@ -280,7 +326,29 @@ func parseSimpleCommand(content string) string {
 }
 
 func looksLikeShellCommand(line string) bool {
+	line = strings.TrimSpace(line)
 	if line == "" {
+		return false
+	}
+	first := line
+	if idx := strings.IndexAny(line, " \t"); idx > 0 {
+		first = line[:idx]
+	}
+	if first == "" || strings.HasPrefix(first, "<") {
+		return false
+	}
+	for _, r := range first {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			continue
+		}
+		switch r {
+		case '/', '.', '_', '-', ':':
+			continue
+		default:
+			return false
+		}
+	}
+	if strings.Contains(line, "json<message") {
 		return false
 	}
 	if strings.Contains(line, " ") {
