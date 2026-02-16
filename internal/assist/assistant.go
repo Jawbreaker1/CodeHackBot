@@ -95,7 +95,7 @@ func (FallbackAssistant) Suggest(_ context.Context, input Input) (Suggestion, er
 	if isLocalFileGoal(input.Goal) {
 		return normalizeSuggestion(Suggestion{
 			Type:     "question",
-			Question: "LLM is unavailable. For local file analysis, share the exact file path/name (for example `./secret.zip`) and any known password or wordlist path, and I will run the next step.",
+			Question: "The primary LLM response was unavailable or unusable. For local file analysis, share the exact file path/name (for example `./secret.zip`) and any known password or wordlist path, and I will run the next step.",
 			Summary:  "Awaiting local file details.",
 			Risk:     "low",
 		}), nil

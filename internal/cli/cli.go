@@ -468,7 +468,11 @@ func (r *Runner) assistGenerator() assist.Assistant {
 	return guardedAssistant{
 		allow:     r.llmAllowed,
 		onSuccess: r.recordLLMSuccess,
-		onFailure: r.recordLLMFailure,
+		onFailure: func(err error) {
+			if shouldCountLLMFailure(err) {
+				r.recordLLMFailure(err)
+			}
+		},
 		onFallback: func(err error) {
 			r.logAssistFallbackCause(err)
 		},
@@ -493,6 +497,16 @@ func (r *Runner) logAssistFallbackCause(err error) {
 			r.logger.Printf("LLM raw response: %s", truncate(raw, 500))
 		}
 	}
+}
+
+func shouldCountLLMFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Parse/format errors mean we reached the model but got unusable output.
+	// Do not trip cooldown for transport-level guardrails on these.
+	var parseErr assist.SuggestionParseError
+	return !errors.As(err, &parseErr)
 }
 
 func (r *Runner) getAssistSuggestion(goal string, mode string) (assist.Suggestion, error) {
