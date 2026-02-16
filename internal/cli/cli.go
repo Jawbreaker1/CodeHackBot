@@ -629,6 +629,7 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 		if suggestion.Type == "noop" && strings.TrimSpace(goal) != "" {
 			return r.handleAssistNoop(goal, dryRun)
 		}
+		r.announceAssistStep(stepsRun+1, maxSteps, suggestion)
 		if suggestion.Type == "plan" {
 			if err := r.handlePlanSuggestion(suggestion, dryRun); err != nil {
 				r.maybeFinalizeReport(goal, dryRun)
@@ -669,6 +670,61 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 		}
 		stepsRun++
 		stepMode = "execute-step"
+	}
+}
+
+func (r *Runner) announceAssistStep(stepNum, maxSteps int, suggestion assist.Suggestion) {
+	if r.cfg.UI.Verbose || suggestion.Type == "noop" {
+		return
+	}
+	desc := assistStepDescription(suggestion)
+	if desc == "" {
+		return
+	}
+	if maxSteps > 0 {
+		fmt.Printf("Step %d/%d: %s\n", stepNum, maxSteps, desc)
+		return
+	}
+	fmt.Printf("Step %d: %s\n", stepNum, desc)
+}
+
+func assistStepDescription(suggestion assist.Suggestion) string {
+	if text := collapseWhitespace(strings.TrimSpace(suggestion.Summary)); text != "" {
+		return truncate(text, 140)
+	}
+	switch suggestion.Type {
+	case "command":
+		cmdLine := strings.TrimSpace(strings.Join(append([]string{suggestion.Command}, suggestion.Args...), " "))
+		if cmdLine == "" {
+			return "running command"
+		}
+		return "running: " + truncate(cmdLine, 140)
+	case "tool":
+		if suggestion.Tool == nil {
+			return "building helper tool"
+		}
+		parts := []string{"building tool"}
+		if name := strings.TrimSpace(suggestion.Tool.Name); name != "" {
+			parts = append(parts, name)
+		}
+		if purpose := collapseWhitespace(strings.TrimSpace(suggestion.Tool.Purpose)); purpose != "" {
+			parts = append(parts, "for "+truncate(purpose, 90))
+		}
+		return strings.Join(parts, " ")
+	case "question":
+		if q := collapseWhitespace(strings.TrimSpace(suggestion.Question)); q != "" {
+			return "needs input: " + truncate(q, 120)
+		}
+		return "needs user input"
+	case "plan":
+		if len(suggestion.Steps) > 0 {
+			return fmt.Sprintf("proposed plan with %d step(s)", len(suggestion.Steps))
+		}
+		return "proposed plan"
+	case "complete":
+		return "goal completed"
+	default:
+		return ""
 	}
 }
 
