@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	neturl "net/url"
 	"os"
 	goexec "os/exec"
@@ -1148,6 +1150,11 @@ func assistFailureHint(suggestion assist.Suggestion, cmdErr commandError) string
 			return "WHOIS typically only supports root domains (e.g., systemverification.com), not subdomains."
 		}
 	}
+	if command == "fcrackzip" {
+		if strings.Contains(outputLower, "rockyou.txt: no such file or directory") || strings.Contains(errLower, "rockyou.txt: no such file or directory") {
+			return "Kali often ships rockyou as /usr/share/wordlists/rockyou.txt.gz. Extract it or use that gz source to create a local wordlist file."
+		}
+	}
 	if strings.Contains(errLower, "executable file not found") || strings.Contains(errLower, "not found") {
 		return "Tool not available in PATH. Install it or update your tool inventory."
 	}
@@ -1156,9 +1163,17 @@ func assistFailureHint(suggestion assist.Suggestion, cmdErr commandError) string
 
 func (r *Runner) tryAssistRecovery(suggestion assist.Suggestion, cmdErr commandError) bool {
 	command := strings.ToLower(strings.TrimSpace(suggestion.Command))
-	if command != "whois" {
+	switch command {
+	case "whois":
+		return r.tryWhoisRecovery(cmdErr)
+	case "fcrackzip":
+		return r.tryFcrackzipWordlistRecovery(cmdErr)
+	default:
 		return false
 	}
+}
+
+func (r *Runner) tryWhoisRecovery(cmdErr commandError) bool {
 	if len(cmdErr.Result.Args) == 0 {
 		return false
 	}
@@ -1176,6 +1191,102 @@ func (r *Runner) tryAssistRecovery(suggestion assist.Suggestion, cmdErr commandE
 		r.logger.Printf("Retry failed: %v", retryErr)
 	}
 	return true
+}
+
+func (r *Runner) tryFcrackzipWordlistRecovery(cmdErr commandError) bool {
+	args := append([]string{}, cmdErr.Result.Args...)
+	if len(args) == 0 {
+		return false
+	}
+	wordlistIdx, wordlistArg, ok := fcrackzipWordlistArg(args)
+	if !ok {
+		return false
+	}
+	if _, err := os.Stat(wordlistArg); err == nil {
+		return false
+	}
+	combined := strings.ToLower(cmdErr.Result.Output)
+	if cmdErr.Err != nil {
+		combined += "\n" + strings.ToLower(cmdErr.Err.Error())
+	}
+	if !strings.Contains(combined, "no such file or directory") {
+		return false
+	}
+	gzSource := strings.TrimSpace(wordlistArg + ".gz")
+	if _, err := os.Stat(gzSource); err != nil {
+		// Common Kali location fallback.
+		gzSource = "/usr/share/wordlists/rockyou.txt.gz"
+		if _, err := os.Stat(gzSource); err != nil {
+			return false
+		}
+	}
+	sessionDir, err := r.ensureSessionScaffold()
+	if err != nil {
+		r.logger.Printf("Recovery setup failed: %v", err)
+		return false
+	}
+	outDir := filepath.Join(sessionDir, "artifacts", "wordlists")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		r.logger.Printf("Recovery setup failed: %v", err)
+		return false
+	}
+	extracted := filepath.Join(outDir, "rockyou.txt")
+	if _, statErr := os.Stat(extracted); statErr != nil {
+		if extractErr := extractGzipFile(gzSource, extracted); extractErr != nil {
+			r.logger.Printf("Recovery extraction failed: %v", extractErr)
+			return false
+		}
+	}
+	if strings.HasPrefix(args[wordlistIdx], "-p") && args[wordlistIdx] != "-p" {
+		args[wordlistIdx] = "-p" + extracted
+	} else {
+		args[wordlistIdx] = extracted
+	}
+	r.logger.Printf("Retrying fcrackzip with recovered wordlist: %s", extracted)
+	if retryErr := r.handleRun(append([]string{"fcrackzip"}, args...)); retryErr != nil {
+		r.logger.Printf("Retry failed: %v", retryErr)
+	}
+	return true
+}
+
+func fcrackzipWordlistArg(args []string) (int, string, bool) {
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-p" {
+			if i+1 < len(args) {
+				return i + 1, strings.TrimSpace(args[i+1]), true
+			}
+			return -1, "", false
+		}
+		if strings.HasPrefix(args[i], "-p") && len(args[i]) > 2 {
+			return i, strings.TrimSpace(args[i][2:]), true
+		}
+	}
+	return -1, "", false
+}
+
+func extractGzipFile(srcPath, dstPath string) error {
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+
+	reader, err := gzip.NewReader(src)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+
+	dst, err := os.Create(dstPath)
+	if err != nil {
+		return err
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, reader); err != nil {
+		return err
+	}
+	return nil
 }
 
 func buildRecoveryGoal(goal string, suggestion assist.Suggestion, cmdErr commandError) string {
