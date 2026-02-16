@@ -13,7 +13,7 @@ import (
 
 const (
 	llmIndicatorDelay    = 700 * time.Millisecond
-	llmIndicatorInterval = 200 * time.Millisecond
+	llmIndicatorInterval = 5 * time.Second
 )
 
 func (r *Runner) confirm(prompt string) (bool, error) {
@@ -116,20 +116,17 @@ func (r *Runner) startLLMIndicator(label string) func() {
 			return
 		case <-timer.C:
 		}
-		frames := []string{"-", "\\", "|", "/"}
-		idx := 0
 		start := time.Now()
+		fmt.Printf("LLM %s ... (%s)\n", label, formatElapsed(time.Since(start)))
 		ticker := time.NewTicker(llmIndicatorInterval)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-stop:
-				fmt.Print("\r\x1b[2K")
 				return
 			case <-ticker.C:
 				elapsed := formatElapsed(time.Since(start))
-				fmt.Printf("\rLLM %s %s (%s)", label, frames[idx], elapsed)
-				idx = (idx + 1) % len(frames)
+				fmt.Printf("LLM %s ... (%s)\n", label, elapsed)
 			}
 		}
 	}()
@@ -172,6 +169,13 @@ func (r *Runner) llmStatus() (bool, string, time.Time) {
 	r.llmMu.Lock()
 	defer r.llmMu.Unlock()
 	return r.llmInFlight, r.llmLabel, r.llmStarted
+}
+
+func (r *Runner) ensureTTYLineBreak() {
+	if !r.isTTY() {
+		return
+	}
+	fmt.Print("\r\n")
 }
 
 func (r *Runner) isTTY() bool {

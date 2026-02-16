@@ -3,6 +3,7 @@ package cli
 import (
 	"io"
 	"os"
+	"strings"
 	"sync"
 
 	"golang.org/x/term"
@@ -16,9 +17,8 @@ func (r *Runner) liveWriter() io.Writer {
 }
 
 type ttyWriter struct {
-	out    *os.File
-	mu     sync.Mutex
-	prevCR bool
+	out *os.File
+	mu  sync.Mutex
 }
 
 func (w *ttyWriter) Write(p []byte) (int, error) {
@@ -29,15 +29,26 @@ func (w *ttyWriter) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 
-	buf := make([]byte, 0, len(p))
-	for _, b := range p {
-		if b == '\n' && !w.prevCR {
-			buf = append(buf, '\r')
-		}
-		buf = append(buf, b)
-		w.prevCR = b == '\r'
-	}
+	buf := normalizeTTYBytes(p)
 
 	_, err := w.out.Write(buf)
 	return len(p), err
+}
+
+func normalizeTTYBytes(p []byte) []byte {
+	if len(p) == 0 {
+		return nil
+	}
+	normalized := strings.ReplaceAll(string(p), "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+
+	out := make([]byte, 0, len(normalized)*2)
+	for i := 0; i < len(normalized); i++ {
+		if normalized[i] == '\n' {
+			out = append(out, '\r', '\n')
+			continue
+		}
+		out = append(out, normalized[i])
+	}
+	return out
 }

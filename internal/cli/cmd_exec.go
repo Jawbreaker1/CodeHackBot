@@ -79,6 +79,7 @@ func (r *Runner) handleRun(args []string) error {
 	if stopInterrupt != nil {
 		stopInterrupt()
 	}
+	r.ensureTTYLineBreak()
 	if result.LogPath != "" {
 		r.logger.Printf("Log saved: %s", result.LogPath)
 		r.recordActionArtifact(result.LogPath)
@@ -207,6 +208,7 @@ func (r *Runner) handleMSF(args []string) error {
 	if stopInterrupt != nil {
 		stopInterrupt()
 	}
+	r.ensureTTYLineBreak()
 	if result.LogPath != "" {
 		r.logger.Printf("Log saved: %s", result.LogPath)
 		r.recordActionArtifact(result.LogPath)

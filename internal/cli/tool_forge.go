@@ -481,6 +481,7 @@ func (r *Runner) executeToolRun(command string, args []string) error {
 	if stopInterrupt != nil {
 		stopInterrupt()
 	}
+	r.ensureTTYLineBreak()
 	if result.LogPath != "" {
 		r.logger.Printf("Log saved: %s", result.LogPath)
 		r.recordActionArtifact(result.LogPath)
