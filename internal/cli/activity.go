@@ -3,12 +3,16 @@ package cli
 import (
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
-const workingIndicatorDelay = 5 * time.Second
+const (
+	workingIndicatorInitialDelay = 2 * time.Second
+	workingIndicatorInterval     = 5 * time.Second
+)
 
 type activityWriter struct {
 	base      io.Writer
@@ -36,10 +40,23 @@ func (w *activityWriter) HasOutput() bool {
 	return w.seen.Load()
 }
 
+func (w *activityWriter) LastWriteTime() time.Time {
+	if w == nil {
+		return time.Time{}
+	}
+	ns := w.lastWrite.Load()
+	if ns <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, ns)
+}
+
 func (r *Runner) startWorkingIndicator(writer *activityWriter) func() {
 	if writer == nil || !r.isTTY() {
 		return func() {}
 	}
+	task := strings.TrimSpace(r.currentTask)
+	started := time.Now()
 	stop := make(chan struct{})
 	var once sync.Once
 	stopFn := func() {
@@ -48,16 +65,46 @@ func (r *Runner) startWorkingIndicator(writer *activityWriter) func() {
 		})
 	}
 	go func() {
-		timer := time.NewTimer(workingIndicatorDelay)
+		timer := time.NewTimer(workingIndicatorInitialDelay)
 		defer timer.Stop()
-		select {
-		case <-stop:
-			return
-		case <-timer.C:
-			if !writer.HasOutput() {
-				fmt.Println("... working (no output yet)")
+		ticker := time.NewTicker(workingIndicatorInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-timer.C:
+				if msg := workingIndicatorMessage(task, started, time.Now(), writer.HasOutput(), writer.LastWriteTime()); msg != "" {
+					fmt.Println(msg)
+				}
+			case <-ticker.C:
+				if msg := workingIndicatorMessage(task, started, time.Now(), writer.HasOutput(), writer.LastWriteTime()); msg != "" {
+					fmt.Println(msg)
+				}
 			}
 		}
 	}()
 	return stopFn
+}
+
+func workingIndicatorMessage(task string, started, now time.Time, hasOutput bool, lastOutput time.Time) string {
+	task = strings.TrimSpace(task)
+	scope := ""
+	if task != "" {
+		scope = " on " + task
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	if started.IsZero() {
+		started = now
+	}
+	elapsed := formatElapsed(now.Sub(started))
+	if !hasOutput {
+		return fmt.Sprintf("... still working%s (%s elapsed, no output yet)", scope, elapsed)
+	}
+	if !lastOutput.IsZero() && now.Sub(lastOutput) >= workingIndicatorInterval {
+		return fmt.Sprintf("... still working%s (%s elapsed, waiting for output)", scope, elapsed)
+	}
+	return ""
 }

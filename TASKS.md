@@ -114,6 +114,13 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
   - [x] Observation carry-forward: tool outputs influence the next assistant step.
   - [x] Bounded crawl: never exceeds page/byte limits; produces crawl index + artifacts + summary artifact.
 
+## Sprint 17.1 — Agentic Control Refinement (in progress)
+- [x] Step 1: Add a generic controller-side goal evaluator that inspects latest artifacts and decides done/continue (avoid task-specific hardcoding).
+- [x] Step 2: Canonicalize action signatures for loop detection (aliases and semantically equivalent actions should count as repeats).
+- [x] Step 3: Separate recovery retries from progress-step budget (retry loops should not consume the full execution budget).
+- [x] Step 4: Refine fallback assistant behavior to be domain-aware (local-file/web/network) without defaulting to scan-only prompts.
+- [x] Step 5: Add focused tests for each refinement and keep `go test ./...` + `go build ./cmd/birdhackbot` green.
+
 ## Sprint 18 — Chat vs Act UX (future)
 - [ ] Lightweight “answer vs act” classification so normal conversation feels like Codex/Claude while still being agentic.
 - [ ] Reduce noise in non-verbose mode (only show task headers + key outputs).

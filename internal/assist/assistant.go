@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"unicode"
 
@@ -92,7 +93,26 @@ func (FallbackAssistant) Suggest(_ context.Context, input Input) (Suggestion, er
 			Risk:  "low",
 		}), nil
 	}
+	if path := extractLikelyPath(input.Goal); path != "" && isPathActionGoal(input.Goal) {
+		return normalizeSuggestion(Suggestion{
+			Type:    "command",
+			Command: "read_file",
+			Args:    []string{path},
+			Summary: "Read the referenced local file to continue.",
+			Risk:    "low",
+		}), nil
+	}
 	if isLocalFileGoal(input.Goal) {
+		lowerGoal := strings.ToLower(strings.TrimSpace(input.Goal))
+		if strings.Contains(lowerGoal, "folder") || strings.Contains(lowerGoal, "directory") || strings.Contains(lowerGoal, "current") {
+			return normalizeSuggestion(Suggestion{
+				Type:    "command",
+				Command: "list_dir",
+				Args:    []string{"."},
+				Summary: "List current directory to locate the target file.",
+				Risk:    "low",
+			}), nil
+		}
 		return normalizeSuggestion(Suggestion{
 			Type:     "question",
 			Question: "The primary LLM response was unavailable or unusable. For local file analysis, share the exact file path/name (for example `./secret.zip`) and any known password or wordlist path, and I will run the next step.",
@@ -100,11 +120,20 @@ func (FallbackAssistant) Suggest(_ context.Context, input Input) (Suggestion, er
 			Risk:     "low",
 		}), nil
 	}
+	if url, ok := extractWebTarget(input.Goal); ok {
+		return normalizeSuggestion(Suggestion{
+			Type:    "command",
+			Command: "browse",
+			Args:    []string{url},
+			Summary: "Fetch the target URL for analysis.",
+			Risk:    "low",
+		}), nil
+	}
 	if len(input.Targets) == 0 {
 		return normalizeSuggestion(Suggestion{
 			Type:     "question",
-			Question: "No targets found. Provide target IPs/hostnames before running a scan.",
-			Summary:  "Awaiting targets.",
+			Question: "I need one concrete target to continue. Share an IP/hostname/URL or a local file path.",
+			Summary:  "Awaiting actionable target.",
 			Risk:     "low",
 		}), nil
 	}
@@ -115,6 +144,84 @@ func (FallbackAssistant) Suggest(_ context.Context, input Input) (Suggestion, er
 		Summary: "Run a safe service/version scan on the primary target.",
 		Risk:    "low",
 	}), nil
+}
+
+func extractLikelyPath(goal string) string {
+	tokens := strings.Fields(goal)
+	for _, token := range tokens {
+		candidate := strings.Trim(token, "\"'()[]{}<>,;:")
+		if candidate == "" {
+			continue
+		}
+		if strings.HasPrefix(candidate, "./") || strings.HasPrefix(candidate, "../") || strings.HasPrefix(candidate, "/") {
+			return filepath.Clean(candidate)
+		}
+		if strings.Contains(candidate, "/") && strings.Contains(candidate, ".") {
+			return filepath.Clean(candidate)
+		}
+		if strings.Contains(candidate, ".") && !strings.Contains(candidate, "://") {
+			ext := strings.ToLower(filepath.Ext(candidate))
+			switch ext {
+			case ".zip", ".txt", ".md", ".json", ".log", ".csv", ".xml", ".html":
+				return candidate
+			}
+		}
+	}
+	return ""
+}
+
+func isPathActionGoal(goal string) bool {
+	lower := strings.ToLower(strings.TrimSpace(goal))
+	if lower == "" {
+		return false
+	}
+	hints := []string{
+		"read", "open", "show", "check", "inspect", "analyze", "summarize", "extract", "crack", "decrypt",
+	}
+	for _, hint := range hints {
+		if strings.Contains(lower, hint) {
+			return true
+		}
+	}
+	return false
+}
+
+func extractWebTarget(goal string) (string, bool) {
+	lowerGoal := strings.ToLower(strings.TrimSpace(goal))
+	webHint := strings.Contains(lowerGoal, "http") ||
+		strings.Contains(lowerGoal, "url") ||
+		strings.Contains(lowerGoal, "website") ||
+		strings.Contains(lowerGoal, "web ") ||
+		strings.Contains(lowerGoal, "site") ||
+		strings.Contains(lowerGoal, "domain")
+
+	tokens := strings.Fields(goal)
+	for _, token := range tokens {
+		candidate := strings.Trim(token, "\"'()[]{}<>,;:")
+		if candidate == "" {
+			continue
+		}
+		lower := strings.ToLower(candidate)
+		if strings.Contains(lower, "://") {
+			return candidate, true
+		}
+		if strings.HasPrefix(lower, "www.") {
+			return candidate, true
+		}
+		if strings.Contains(lower, ".") && !strings.Contains(lower, "/") && webHint && containsLetter(lower) {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
+func containsLetter(text string) bool {
+	for _, r := range text {
+		if unicode.IsLetter(r) {
+			return true
+		}
+	}
+	return false
 }
 
 func isConversationalGoal(goal string) bool {
@@ -282,7 +389,7 @@ func (c ChainedAssistant) Suggest(ctx context.Context, input Input) (Suggestion,
 	return Suggestion{}, fmt.Errorf("no assistant available")
 }
 
-const assistSystemPrompt = "You are BirdHackBot, a security testing assistant operating in an authorized lab owned by the user. Never claim to be Claude, OpenAI, Anthropic, or any other assistant identity. Respond with JSON only. Schema: {\"type\":\"command|question|noop|plan|complete|tool\",\"command\":\"\",\"args\":[\"\"],\"question\":\"\",\"summary\":\"\",\"final\":\"\",\"risk\":\"low|medium|high\",\"steps\":[\"...\"],\"plan\":\"\",\"tool\":{\"language\":\"python|bash\",\"name\":\"\",\"purpose\":\"\",\"files\":[{\"path\":\"relative/path\",\"content\":\"...\"}],\"run\":{\"command\":\"\",\"args\":[\"...\"]}}}. Provide one safe next action when action is needed. If the user is asking a purely informational question or greeting, respond with type=complete and put the answer in `final` (no command). Use type=plan with a short plan and 2-6 executable steps when the request is multi-step. Use type=complete when the goal is satisfied; put the final user-facing output in `final`. Use type=tool when you need to create a small helper program/script to proceed; include tool.files and tool.run. For tool.files.path, use paths relative to the session tools directory (do not attempt to write elsewhere). If Mode is execute-step, respond with type=command, type=tool, or type=question only (do not return type=plan or type=complete). If Mode is recover, propose a corrective next step that addresses the failure context (alternate command, adjusted args, a tool to fix parsing, or a question for missing info). If Mode is next-steps, return a short plan (1-3 steps) or a question; do not assume execution. The command must be a real executable or an internal command. You may use internal command \"browse\" with a single URL argument to fetch a web page (requires user approval). For command \"browse\", pass only one URL argument and no flags. You may use internal command \"crawl\" with a start URL and optional bounds (e.g., \"max_pages=10\", \"max_depth=2\", \"same_host=true\") to fetch multiple pages with a single approval and persist artifacts; prefer crawl over repeated browse when you need multiple pages. You may use internal command \"parse_links\" (alias: \"links\") to extract and normalize links from an HTML file path; if no args are given, it uses the most recent browsed body. For \"parse_links\", you may optionally pass \"base=<url>\" to resolve relative links. You may use internal command \"read_file\" (alias: \"read\") to read a local file path, \"list_dir\" (alias: \"ls\") to list a directory, and \"write_file\" (alias: \"write\") to write a file under the session tools directory. Prefer these internal commands over shelling out to cat/ls/echo when you need local artifacts. Prefer verbose flags when safe (-v/--verbose) so users see progress, except for \"browse\" and \"crawl\". When using bash/sh with -c or -lc, pass the script as one args item without surrounding outer quotes. Use playbooks only as inspiration; do not blindly follow a fixed sequence. Tailor steps to the specific goal, scope, target type, and available context. Avoid repeating the same default tool chain unless it directly fits the request. If recent logs/observations already contain required data, analyze them directly; do not ask the user to paste logs and do not re-run the same command without a reason. If a browse/crawl step produced body artifact paths in observations, prefer reading/parsing local artifacts (e.g., read_file, parse_links) instead of re-fetching. For web recon, consider passive-first signals (DNS, headers, tech stack) but adapt tool choice to the target and the user’s intent. You can run shell commands locally in the working directory provided to inspect files or run tooling, including encrypted files the user owns. If access requires a password, ask for it; if asked to crack a password, proceed only when the user confirms authorization for that file. Do not use placeholders like \"scan\"; if you cannot provide a concrete command, return type=question. Stay within scope and avoid destructive actions unless explicitly requested."
+const assistSystemPrompt = "You are BirdHackBot, a security testing assistant operating in an authorized lab owned by the user. Never claim to be Claude, OpenAI, Anthropic, or any other assistant identity. Respond with JSON only. Schema: {\"type\":\"command|question|noop|plan|complete|tool\",\"command\":\"\",\"args\":[\"\"],\"question\":\"\",\"summary\":\"\",\"final\":\"\",\"risk\":\"low|medium|high\",\"steps\":[\"...\"],\"plan\":\"\",\"tool\":{\"language\":\"python|bash\",\"name\":\"\",\"purpose\":\"\",\"files\":[{\"path\":\"relative/path\",\"content\":\"...\"}],\"run\":{\"command\":\"\",\"args\":[\"...\"]}}}. Provide one safe next action when action is needed. If the user is asking a purely informational question or greeting, respond with type=complete and put the answer in `final` (no command). Use type=plan with a short plan and 2-6 executable steps when the request is multi-step. Use type=complete when the goal is satisfied; put the final user-facing output in `final`. Use type=tool when you need to create a small helper program/script to proceed; include tool.files and tool.run. For tool.files.path, use paths relative to the session tools directory (do not attempt to write elsewhere). If Mode is execute-step, prefer type=command, type=tool, or type=question for the next action; return type=complete immediately when the goal has been satisfied by prior step output. Do not return type=plan in execute-step mode. If Mode is recover, propose a corrective next step that addresses the failure context (alternate command, adjusted args, a tool to fix parsing, or a question for missing info). If Mode is next-steps, return a short plan (1-3 steps) or a question; do not assume execution. The command must be a real executable or an internal command. You may use internal command \"browse\" with a single URL argument to fetch a web page (requires user approval). For command \"browse\", pass only one URL argument and no flags. You may use internal command \"crawl\" with a start URL and optional bounds (e.g., \"max_pages=10\", \"max_depth=2\", \"same_host=true\") to fetch multiple pages with a single approval and persist artifacts; prefer crawl over repeated browse when you need multiple pages. You may use internal command \"parse_links\" (alias: \"links\") to extract and normalize links from an HTML file path; if no args are given, it uses the most recent browsed body. For \"parse_links\", you may optionally pass \"base=<url>\" to resolve relative links. You may use internal command \"read_file\" (alias: \"read\") to read a local file path, \"list_dir\" (alias: \"ls\") to list a directory, and \"write_file\" (alias: \"write\") to write a file under the session tools directory. Prefer these internal commands over shelling out to cat/ls/echo when you need local artifacts. Prefer verbose flags when safe (-v/--verbose) so users see progress, except for \"browse\" and \"crawl\". When using bash/sh with -c or -lc, pass the script as one args item without surrounding outer quotes. Use playbooks only as inspiration; do not blindly follow a fixed sequence. Tailor steps to the specific goal, scope, target type, and available context. Avoid repeating the same default tool chain unless it directly fits the request. If recent logs/observations already contain required data, analyze them directly; do not ask the user to paste logs and do not re-run the same command without a reason. If a browse/crawl step produced body artifact paths in observations, prefer reading/parsing local artifacts (e.g., read_file, parse_links) instead of re-fetching. For web recon, consider passive-first signals (DNS, headers, tech stack) but adapt tool choice to the target and the user’s intent. You can run shell commands locally in the working directory provided to inspect files or run tooling, including encrypted files the user owns. If access requires a password, ask for it; if asked to crack a password, proceed only when the user confirms authorization for that file. Do not use placeholders like \"scan\"; if you cannot provide a concrete command, return type=question. Stay within scope and avoid destructive actions unless explicitly requested."
 
 func buildPrompt(input Input) string {
 	builder := strings.Builder{}

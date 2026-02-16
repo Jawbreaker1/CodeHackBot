@@ -222,7 +222,7 @@ func TestAssistRepeatedCommandGuardRequestsAlternativeAndContinues(t *testing.T)
 		os.Stdout = orig
 	})
 
-	if err := r.handleAssistAgentic("list files in this directory", false, ""); err != nil {
+	if err := r.handleAssistAgentic("perform local recon task", false, ""); err != nil {
 		t.Fatalf("handleAssistAgentic: %v", err)
 	}
 	_ = wOut.Close()
@@ -358,5 +358,174 @@ func TestAssistRepeatedQuestionGuardRequestsAlternativeAndContinues(t *testing.T
 	}
 	if atomic.LoadInt32(&calls) < 3 {
 		t.Fatalf("expected at least 3 llm calls, got %d", calls)
+	}
+}
+
+func TestAssistConcludesZipPresenceFromArtifactImmediately(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+		n := atomic.AddInt32(&calls, 1)
+		content := `{"done":true,"answer":"Yes, secret.zip exists in the directory.","confidence":"high"}`
+		if n == 1 {
+			content = `{"type":"command","command":"ls","args":["-la"],"summary":"check files"}`
+		}
+		resp := map[string]any{
+			"choices": []map[string]any{
+				{
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": content,
+					},
+				},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := config.Config{}
+	cfg.Session.LogDir = t.TempDir()
+	cfg.LLM.BaseURL = srv.URL
+	cfg.Permissions.Level = "all"
+	r := NewRunner(cfg, "session-max-steps-zip", "", "")
+
+	wd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(wd, "secret.zip"), []byte("demo"), 0o644); err != nil {
+		t.Fatalf("write secret.zip: %v", err)
+	}
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(wd); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWD) })
+
+	orig := os.Stdout
+	rOut, wOut, _ := os.Pipe()
+	os.Stdout = wOut
+	t.Cleanup(func() {
+		os.Stdout = orig
+	})
+
+	if err := r.handleAssistAgentic("check if there is a .zip file in this folder", false, ""); err != nil {
+		t.Fatalf("assist error: %v", err)
+	}
+	_ = wOut.Close()
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, rOut)
+	out := buf.String()
+	if !strings.Contains(out, "Yes, secret.zip exists in the directory.") {
+		t.Fatalf("expected evaluator conclusion, got:\n%s", out)
+	}
+	if atomic.LoadInt32(&calls) != 2 {
+		t.Fatalf("expected 2 llm calls (assist + eval), got %d", calls)
+	}
+}
+
+func TestAssistRepeatedCommandLoopPausesForGuidance(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+		atomic.AddInt32(&calls, 1)
+		resp := map[string]any{
+			"choices": []map[string]any{
+				{
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": `{"type":"command","command":"ls","args":["-la"],"summary":"check files"}`,
+					},
+				},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := config.Config{}
+	cfg.Session.LogDir = t.TempDir()
+	cfg.LLM.BaseURL = srv.URL
+	cfg.Permissions.Level = "all"
+	cfg.Agent.MaxSteps = 8
+	r := NewRunner(cfg, "session-repeat-loop-pause", "", "")
+
+	orig := os.Stdout
+	rOut, wOut, _ := os.Pipe()
+	os.Stdout = wOut
+	t.Cleanup(func() {
+		os.Stdout = orig
+	})
+
+	if err := r.handleAssistAgentic("list files in this directory and keep going", false, ""); err != nil {
+		t.Fatalf("assist error: %v", err)
+	}
+	_ = wOut.Close()
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, rOut)
+	out := buf.String()
+	if !strings.Contains(out, "Repeated step loop detected. Pausing for guidance") {
+		t.Fatalf("expected repeated-loop pause, got:\n%s", out)
+	}
+	if strings.TrimSpace(r.pendingAssistGoal) == "" {
+		t.Fatalf("expected pendingAssistGoal to be set for follow-up")
+	}
+}
+
+func TestAssistRepeatedLoopDoesNotConsumeStepBudget(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+		atomic.AddInt32(&calls, 1)
+		resp := map[string]any{
+			"choices": []map[string]any{
+				{
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": `{"type":"command","command":"ls","args":["-la"],"summary":"check files"}`,
+					},
+				},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := config.Config{}
+	cfg.Session.LogDir = t.TempDir()
+	cfg.LLM.BaseURL = srv.URL
+	cfg.Permissions.Level = "all"
+	cfg.Agent.MaxSteps = 3
+	r := NewRunner(cfg, "session-repeat-budget", "", "")
+
+	orig := os.Stdout
+	rOut, wOut, _ := os.Pipe()
+	os.Stdout = wOut
+	t.Cleanup(func() {
+		os.Stdout = orig
+	})
+
+	if err := r.handleAssistAgentic("perform local recon task", false, ""); err != nil {
+		t.Fatalf("assist error: %v", err)
+	}
+	_ = wOut.Close()
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, rOut)
+	out := buf.String()
+	if !strings.Contains(out, "Repeated step loop detected. Pausing for guidance") {
+		t.Fatalf("expected loop pause, got:\n%s", out)
+	}
+	if strings.Contains(out, "Reached max steps") {
+		t.Fatalf("expected pause before max-steps exhaustion, got:\n%s", out)
 	}
 }

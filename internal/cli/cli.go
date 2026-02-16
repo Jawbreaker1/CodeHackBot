@@ -598,12 +598,20 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 
 	maxSteps := r.assistMaxSteps()
 	stepsRun := 0
+	repeatedGuardHits := 0
 	stepMode := mode
 	lastCommand := assist.Suggestion{}
 	for {
 		if maxSteps > 0 && stepsRun >= maxSteps {
 			if r.cfg.UI.Verbose {
 				r.logger.Printf("Reached max steps (%d).", maxSteps)
+			}
+				if !dryRun {
+					if r.tryConcludeGoalFromArtifacts(goal) {
+						r.maybeFinalizeReport(goal, dryRun)
+						return nil
+					}
+					fmt.Println("Reached max steps without a final answer. Suggesting next steps.")
 			}
 			if !dryRun && lastCommand.Type == "command" {
 				r.maybeSuggestNextSteps(goal, lastCommand)
@@ -648,18 +656,30 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 			return nil
 		}
 		if err := r.executeAssistSuggestion(suggestion, dryRun); err != nil {
-			if isAssistRepeatedGuard(err) {
-				if !dryRun {
-					if r.cfg.UI.Verbose {
-						r.logger.Printf("Repeated step detected; requesting an alternative action.")
-					} else {
-						fmt.Println("Repeated step detected; asking assistant for an alternative action.")
+				if isAssistRepeatedGuard(err) {
+					if !dryRun && r.tryConcludeGoalFromArtifacts(goal) {
+						r.maybeFinalizeReport(goal, dryRun)
+						return nil
 					}
+				repeatedGuardHits++
+				if repeatedGuardHits >= 2 {
+					msg := "Repeated step loop detected. Pausing for guidance: share the exact next action/target and I will continue."
+					fmt.Println(msg)
+					r.appendConversation("Assistant", msg)
+					r.pendingAssistGoal = goal
+					r.pendingAssistQ = msg
+					return nil
 				}
-				stepMode = "recover"
-				stepsRun++
-				continue
-			}
+					if !dryRun {
+						if r.cfg.UI.Verbose {
+							r.logger.Printf("Repeated step detected; requesting an alternative action.")
+						} else {
+							fmt.Println("Repeated step detected; asking assistant for an alternative action.")
+						}
+					}
+					stepMode = "recover"
+					continue
+				}
 			if r.handleAssistCommandFailure(goal, suggestion, err) {
 				r.maybeEmitGoalSummary(goal, dryRun)
 				r.maybeFinalizeReport(goal, dryRun)
@@ -668,9 +688,14 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 			r.maybeFinalizeReport(goal, dryRun)
 			return err
 		}
-		if dryRun {
-			return nil
-		}
+			if dryRun {
+				return nil
+			}
+			repeatedGuardHits = 0
+			if (suggestion.Type == "command" || suggestion.Type == "tool") && r.tryConcludeGoalFromArtifacts(goal) {
+				r.maybeFinalizeReport(goal, dryRun)
+				return nil
+			}
 		if suggestion.Type == "question" {
 			r.pendingAssistGoal = goal
 			return nil
@@ -1567,7 +1592,7 @@ func (r *Runner) resetAssistLoopState() {
 }
 
 func (r *Runner) guardAssistCommandLoop(command string, args []string) error {
-	key := strings.ToLower(strings.TrimSpace(command)) + "\x1f" + strings.Join(args, "\x1f")
+	key := canonicalAssistActionKey(command, args)
 	if key == r.lastAssistCmdKey {
 		r.lastAssistCmdSeen++
 	} else {

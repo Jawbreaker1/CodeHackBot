@@ -71,10 +71,55 @@ func TestFallbackAssistantLocalFileGoalWithoutTargets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fallback error: %v", err)
 	}
+	if suggestion.Type != "command" {
+		t.Fatalf("expected command, got %s", suggestion.Type)
+	}
+	if suggestion.Command != "list_dir" {
+		t.Fatalf("expected list_dir command, got %q", suggestion.Command)
+	}
+}
+
+func TestFallbackAssistantLocalFileGoalWithPathUsesReadFile(t *testing.T) {
+	suggestion, err := (FallbackAssistant{}).Suggest(context.Background(), Input{
+		Goal: "Read ./artifacts/secret.txt and summarize it.",
+	})
+	if err != nil {
+		t.Fatalf("fallback error: %v", err)
+	}
+	if suggestion.Type != "command" || suggestion.Command != "read_file" {
+		t.Fatalf("unexpected suggestion: %+v", suggestion)
+	}
+	if len(suggestion.Args) == 0 || suggestion.Args[0] != "artifacts/secret.txt" {
+		t.Fatalf("unexpected args: %v", suggestion.Args)
+	}
+}
+
+func TestFallbackAssistantWebGoalUsesBrowse(t *testing.T) {
+	suggestion, err := (FallbackAssistant{}).Suggest(context.Background(), Input{
+		Goal: "Investigate www.systemverification.com from a security perspective",
+	})
+	if err != nil {
+		t.Fatalf("fallback error: %v", err)
+	}
+	if suggestion.Type != "command" || suggestion.Command != "browse" {
+		t.Fatalf("unexpected suggestion: %+v", suggestion)
+	}
+	if len(suggestion.Args) == 0 || !strings.Contains(suggestion.Args[0], "systemverification.com") {
+		t.Fatalf("unexpected browse args: %v", suggestion.Args)
+	}
+}
+
+func TestFallbackAssistantNoTargetsAsksGenericTargetQuestion(t *testing.T) {
+	suggestion, err := (FallbackAssistant{}).Suggest(context.Background(), Input{
+		Goal: "continue",
+	})
+	if err != nil {
+		t.Fatalf("fallback error: %v", err)
+	}
 	if suggestion.Type != "question" {
 		t.Fatalf("expected question, got %s", suggestion.Type)
 	}
-	if suggestion.Question == "" || !strings.Contains(strings.ToLower(suggestion.Question), "file") {
+	if !strings.Contains(strings.ToLower(suggestion.Question), "ip/hostname/url") {
 		t.Fatalf("unexpected question: %q", suggestion.Question)
 	}
 }
@@ -249,5 +294,11 @@ func TestParseSimpleCommandIgnoresChannelEnvelope(t *testing.T) {
 	raw := `<channel>final <constrain>json<message>{"type":"tool","tool":{"name":"x"}}`
 	if got := parseSimpleCommand(raw); got != "" {
 		t.Fatalf("expected no command, got %q", got)
+	}
+}
+
+func TestAssistSystemPromptAllowsCompleteInExecuteStepMode(t *testing.T) {
+	if !strings.Contains(assistSystemPrompt, "return type=complete immediately when the goal has been satisfied") {
+		t.Fatalf("execute-step completion guidance missing from system prompt")
 	}
 }

@@ -1,0 +1,39 @@
+package cli
+
+import (
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestWorkingIndicatorMessageNoOutput(t *testing.T) {
+	started := time.Date(2026, 2, 16, 12, 0, 0, 0, time.UTC)
+	now := started.Add(7 * time.Second)
+	msg := workingIndicatorMessage("run bash", started, now, false, time.Time{})
+	if !strings.Contains(msg, "no output yet") {
+		t.Fatalf("expected no-output hint, got %q", msg)
+	}
+	if !strings.Contains(msg, "run bash") {
+		t.Fatalf("expected task in message, got %q", msg)
+	}
+}
+
+func TestWorkingIndicatorMessageStalledOutput(t *testing.T) {
+	started := time.Date(2026, 2, 16, 12, 0, 0, 0, time.UTC)
+	now := started.Add(14 * time.Second)
+	lastOutput := started.Add(6 * time.Second)
+	msg := workingIndicatorMessage("tool", started, now, true, lastOutput)
+	if !strings.Contains(msg, "waiting for output") {
+		t.Fatalf("expected waiting-for-output hint, got %q", msg)
+	}
+}
+
+func TestWorkingIndicatorMessageSuppressesWhenOutputIsRecent(t *testing.T) {
+	started := time.Date(2026, 2, 16, 12, 0, 0, 0, time.UTC)
+	now := started.Add(9 * time.Second)
+	lastOutput := started.Add(8 * time.Second)
+	msg := workingIndicatorMessage("tool", started, now, true, lastOutput)
+	if msg != "" {
+		t.Fatalf("expected empty message for recent output, got %q", msg)
+	}
+}
