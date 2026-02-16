@@ -272,6 +272,7 @@ func (r *Runner) handleResume() error {
 }
 
 func (r *Runner) handleStop() error {
+	r.restoreTTYLayout()
 	sessionDir := filepath.Join(r.cfg.Session.LogDir, r.sessionID)
 	if _, err := os.Stat(sessionDir); err != nil {
 		if os.IsNotExist(err) {

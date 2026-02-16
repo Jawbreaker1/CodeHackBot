@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	goexec "os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -138,6 +140,17 @@ func (r *Runner) ensureTTYLineBreak() {
 		return
 	}
 	fmt.Print("\r\n")
+}
+
+func (r *Runner) restoreTTYLayout() {
+	if !r.isTTY() {
+		return
+	}
+	// Reset styles, ensure cursor is visible, and re-enable line wrap.
+	fmt.Print("\x1b[0m\x1b[?25h\x1b[?7h\r")
+	if runtime.GOOS != "windows" {
+		_ = goexec.Command("stty", "sane").Run()
+	}
 }
 
 func (r *Runner) isTTY() bool {

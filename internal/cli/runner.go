@@ -98,6 +98,7 @@ func (r *Runner) Run() error {
 	r.printLogo()
 	r.logger.Printf("BirdHackBot interactive mode. Type /help for commands.")
 	for {
+		r.restoreTTYLayout()
 		line, err := r.readLine(r.prompt())
 		if err != nil && err != io.EOF {
 			return err

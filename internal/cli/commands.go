@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"os"
+	"io"
 	"strings"
 )
 
@@ -77,7 +77,7 @@ func (r *Runner) handleCommand(line string) error {
 		return nil
 	case "exit", "quit":
 		r.Stop()
-		os.Exit(0)
+		return io.EOF
 	default:
 		r.logger.Printf("Unknown command: /%s", cmd)
 	}
