@@ -10,9 +10,11 @@ import (
 	"os"
 	goexec "os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/assist"
 	"github.com/Jawbreaker1/CodeHackBot/internal/exec"
@@ -1931,7 +1933,83 @@ func isBenignNoMatchError(err error) bool {
 func normalizeAssistantOutput(text string) string {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\r", "\n")
-	return strings.TrimSpace(text)
+	text = ansiEscapePattern.ReplaceAllString(text, "")
+	text = strings.ReplaceAll(text, "\t", "    ")
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return text
+	}
+	width := 0
+	if isTerminalStdout() {
+		width = terminalWidth() - 2
+	}
+	return wrapTextForTerminal(text, width)
+}
+
+var ansiEscapePattern = regexp.MustCompile("\x1b\\[[0-9;?]*[ -/]*[@-~]")
+
+func wrapTextForTerminal(text string, width int) string {
+	if width < 10 {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimRightFunc(line, unicode.IsSpace)
+		if line == "" {
+			out = append(out, "")
+			continue
+		}
+		out = append(out, wrapLine(line, width)...)
+	}
+	return strings.TrimSpace(strings.Join(out, "\n"))
+}
+
+func wrapLine(line string, width int) []string {
+	if width < 10 {
+		return []string{line}
+	}
+	runes := []rune(line)
+	if len(runes) <= width {
+		return []string{line}
+	}
+	out := []string{}
+	for len(runes) > width {
+		cut := width
+		for i := width; i > 0; i-- {
+			if unicode.IsSpace(runes[i-1]) {
+				cut = i
+				break
+			}
+		}
+		if cut == 0 {
+			cut = width
+		}
+		segment := strings.TrimRightFunc(string(runes[:cut]), unicode.IsSpace)
+		if segment != "" {
+			out = append(out, segment)
+		}
+		runes = trimLeadingSpaceRunes(runes[cut:])
+	}
+	if len(runes) > 0 {
+		out = append(out, string(runes))
+	}
+	return out
+}
+
+func trimLeadingSpaceRunes(r []rune) []rune {
+	for len(r) > 0 && unicode.IsSpace(r[0]) {
+		r = r[1:]
+	}
+	return r
+}
+
+func isTerminalStdout() bool {
+	info, err := os.Stdout.Stat()
+	if err != nil {
+		return false
+	}
+	return (info.Mode() & os.ModeCharDevice) != 0
 }
 
 func looksLikeChat(text string) bool {

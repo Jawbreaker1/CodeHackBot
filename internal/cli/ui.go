@@ -94,7 +94,7 @@ func (e commandError) Unwrap() error {
 func (r *Runner) startLLMIndicator(label string) func() {
 	r.setLLMStatus(label)
 	if r.isTTY() {
-		fmt.Printf("LLM %s ...\n", label)
+		fmt.Printf("\nLLM %s ...\n", label)
 	}
 	return func() {
 		r.clearLLMStatus()
