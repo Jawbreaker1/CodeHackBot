@@ -23,6 +23,24 @@ func (f fakeClient) Chat(_ context.Context, _ llm.ChatRequest) (llm.ChatResponse
 	return llm.ChatResponse{Content: f.content}, nil
 }
 
+type scriptedClient struct {
+	contents []string
+	errs     []error
+	calls    int
+}
+
+func (s *scriptedClient) Chat(_ context.Context, _ llm.ChatRequest) (llm.ChatResponse, error) {
+	idx := s.calls
+	s.calls++
+	if idx < len(s.errs) && s.errs[idx] != nil {
+		return llm.ChatResponse{}, s.errs[idx]
+	}
+	if idx < len(s.contents) {
+		return llm.ChatResponse{Content: s.contents[idx]}, nil
+	}
+	return llm.ChatResponse{Content: ""}, nil
+}
+
 func TestFallbackAssistantQuestion(t *testing.T) {
 	suggestion, err := (FallbackAssistant{}).Suggest(context.Background(), Input{})
 	if err != nil {
@@ -113,6 +131,26 @@ func TestLLMAssistantReturnsParseErrorWithRawContent(t *testing.T) {
 	}
 }
 
+func TestLLMAssistantRepairRetryParsesSecondResponse(t *testing.T) {
+	client := &scriptedClient{
+		contents: []string{
+			"I cannot help with that request.",
+			`{"type":"command","command":"ls","args":["-la"]}`,
+		},
+	}
+	assistant := LLMAssistant{Client: client}
+	suggestion, err := assistant.Suggest(context.Background(), Input{SessionID: "s", Goal: "list files"})
+	if err != nil {
+		t.Fatalf("suggest error: %v", err)
+	}
+	if suggestion.Type != "command" || suggestion.Command != "ls" {
+		t.Fatalf("unexpected suggestion: %+v", suggestion)
+	}
+	if client.calls != 2 {
+		t.Fatalf("expected 2 model calls, got %d", client.calls)
+	}
+}
+
 func TestChainedAssistantFallback(t *testing.T) {
 	assistant := ChainedAssistant{
 		Primary:  LLMAssistant{Client: fakeClient{err: errors.New("down")}},
@@ -175,6 +213,27 @@ func TestNormalizeSuggestionSplitsBashScriptPreservingQuotes(t *testing.T) {
 	}
 	if suggestion.Args[1] != "echo hi | grep hi" {
 		t.Fatalf("unexpected script arg: %q", suggestion.Args[1])
+	}
+}
+
+func TestNormalizeSuggestionMapsRecoverToCommand(t *testing.T) {
+	suggestion := normalizeSuggestion(Suggestion{
+		Type:    "recover",
+		Command: "whois",
+		Args:    []string{"example.com"},
+	})
+	if suggestion.Type != "command" {
+		t.Fatalf("expected command, got %s", suggestion.Type)
+	}
+}
+
+func TestNormalizeSuggestionMapsUnknownTypeByPayload(t *testing.T) {
+	suggestion := normalizeSuggestion(Suggestion{
+		Type:     "analysis",
+		Question: "Need target?",
+	})
+	if suggestion.Type != "question" {
+		t.Fatalf("expected question, got %s", suggestion.Type)
 	}
 }
 

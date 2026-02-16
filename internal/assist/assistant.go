@@ -195,10 +195,49 @@ func (a LLMAssistant) Suggest(ctx context.Context, input Input) (Suggestion, err
 	if err != nil {
 		return Suggestion{}, err
 	}
-	raw := extractJSON(resp.Content)
+	suggestion, parseErr := parseSuggestionResponse(resp.Content)
+	if parseErr == nil {
+		return suggestion, nil
+	}
+
+	// One strict repair retry improves reliability on models that sometimes
+	// answer in prose or wrap JSON in extra text.
+	repairReq := llm.ChatRequest{
+		Model:       strings.TrimSpace(a.Model),
+		Temperature: 0,
+		Messages: []llm.Message{
+			{
+				Role: "system",
+				Content: "Return a single JSON object only, no prose, no markdown fences, no extra keys. " +
+					"Allowed schema keys: type,command,args,question,summary,final,risk,steps,plan,tool.",
+			},
+			{
+				Role:    "user",
+				Content: buildRepairPrompt(input, resp.Content),
+			},
+		},
+	}
+	repairResp, repairErr := a.Client.Chat(ctx, repairReq)
+	if repairErr == nil {
+		repaired, repairedErr := parseSuggestionResponse(repairResp.Content)
+		if repairedErr == nil {
+			return repaired, nil
+		}
+		return Suggestion{}, SuggestionParseError{
+			Raw: strings.TrimSpace(resp.Content) + "\n---repair-attempt---\n" + strings.TrimSpace(repairResp.Content),
+			Err: repairedErr.Err,
+		}
+	}
+	// Prefer parse error classification here so fallback reason is accurate and
+	// parse-only failures do not trigger cooldown.
+	return Suggestion{}, parseErr
+}
+
+func parseSuggestionResponse(content string) (Suggestion, *SuggestionParseError) {
+	raw := extractJSON(content)
 	var suggestion Suggestion
 	if err := json.Unmarshal([]byte(raw), &suggestion); err != nil {
-		fallback := parseSimpleCommand(resp.Content)
+		fallback := parseSimpleCommand(content)
 		if fallback != "" {
 			return normalizeSuggestion(Suggestion{
 				Type:    "command",
@@ -207,9 +246,22 @@ func (a LLMAssistant) Suggest(ctx context.Context, input Input) (Suggestion, err
 				Risk:    "low",
 			}), nil
 		}
-		return Suggestion{}, SuggestionParseError{Raw: resp.Content, Err: err}
+		parseErr := SuggestionParseError{Raw: content, Err: err}
+		return Suggestion{}, &parseErr
 	}
 	return normalizeSuggestion(suggestion), nil
+}
+
+func buildRepairPrompt(input Input, previous string) string {
+	builder := strings.Builder{}
+	builder.WriteString("You previously returned an invalid response for this task.\n")
+	builder.WriteString("Return ONLY one JSON object with the required schema.\n\n")
+	builder.WriteString("User intent:\n")
+	builder.WriteString(strings.TrimSpace(input.Goal))
+	builder.WriteString("\n\nPrevious response:\n")
+	builder.WriteString(strings.TrimSpace(previous))
+	builder.WriteString("\n")
+	return builder.String()
 }
 
 type ChainedAssistant struct {
@@ -430,6 +482,7 @@ func normalizeSuggestion(suggestion Suggestion) Suggestion {
 	suggestion.Risk = strings.ToLower(strings.TrimSpace(suggestion.Risk))
 	suggestion.Plan = strings.TrimSpace(suggestion.Plan)
 	suggestion.Steps = normalizeSteps(suggestion.Steps)
+	suggestion = normalizeSuggestionType(suggestion)
 	// Some models return a full shell invocation in `command` (e.g. `bash -lc '<script>'`).
 	// Do a targeted split that preserves the script argument instead of strings.Fields(),
 	// which would destroy quoting and frequently yields "unexpected EOF" failures.
@@ -462,6 +515,49 @@ func normalizeSuggestion(suggestion Suggestion) Suggestion {
 	}
 	if suggestion.Command != "" && len(suggestion.Args) == 0 {
 		suggestion = splitDashCommandIfNeeded(suggestion)
+	}
+	return suggestion
+}
+
+func normalizeSuggestionType(suggestion Suggestion) Suggestion {
+	allowed := map[string]struct{}{
+		"command": {}, "question": {}, "noop": {}, "plan": {}, "complete": {}, "tool": {},
+	}
+	if _, ok := allowed[suggestion.Type]; ok {
+		return suggestion
+	}
+	// Compatibility mapping for model variants.
+	if suggestion.Type == "recover" {
+		switch {
+		case suggestion.Tool != nil:
+			suggestion.Type = "tool"
+		case suggestion.Command != "":
+			suggestion.Type = "command"
+		case suggestion.Question != "":
+			suggestion.Type = "question"
+		case len(suggestion.Steps) > 0 || suggestion.Plan != "":
+			suggestion.Type = "plan"
+		case suggestion.Final != "" || suggestion.Summary != "":
+			suggestion.Type = "complete"
+		default:
+			suggestion.Type = "noop"
+		}
+		return suggestion
+	}
+	// Generic fallback mapping for other unknown types.
+	switch {
+	case suggestion.Tool != nil:
+		suggestion.Type = "tool"
+	case suggestion.Command != "":
+		suggestion.Type = "command"
+	case suggestion.Question != "":
+		suggestion.Type = "question"
+	case len(suggestion.Steps) > 0 || suggestion.Plan != "":
+		suggestion.Type = "plan"
+	case suggestion.Final != "" || suggestion.Summary != "":
+		suggestion.Type = "complete"
+	default:
+		suggestion.Type = "noop"
 	}
 	return suggestion
 }
