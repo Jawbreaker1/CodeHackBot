@@ -34,7 +34,7 @@
 
 ## Execution Environment & Access
 - Initial access modes: local terminal execution and/or SSH into the Kali VM.
-- Future option: add an API-driven control plane to support orchestration of multiple agents.
+- Future option: add an orchestrator control plane that can start/stop multiple BirdHackBot workers in parallel.
 
 ## Scope Enforcement
 - Scope is enforced for `/run` and replayed commands using `scope.networks`, `scope.targets`, and `scope.deny_targets`.
@@ -56,7 +56,42 @@
 - Script generation should be template-first; ad-hoc scripts must be saved under session artifacts with command + output captured.
 
 ## Roadmap Notes
-- Orchestrator layer for multi-agent coordination is a possible later task; not required for the first usable version.
+- Add an orchestrator layer after MVP stabilization; design must remain generic (task graph driven), not tied to one scenario.
+
+## Orchestrator Model (Future)
+- Planning is mandatory at orchestrator level: convert user intent into a task graph with scope, constraints, success criteria, and stop criteria.
+- Split work by strategy (parallel lanes) instead of hardcoding one command sequence.
+- Workers remain standard BirdHackBot instances and execute leased tasks.
+- Orchestrator continuously merges worker evidence, updates global state, and replans when blockers/findings appear.
+- Orchestrator must broadcast stop/kill to all workers and enforce scope/permission guardrails centrally.
+
+## Worker Communication (Future)
+- Use structured contracts for orchestration:
+  - `plan.json`: global plan + dependency graph.
+  - `task.json`: unit of work with lease owner and timeout.
+  - `event.jsonl`: streaming worker progress/heartbeat/errors.
+  - `artifact.json` and `finding.json`: normalized evidence outputs.
+- MVP transport should be file-based under `sessions/<id>/orchestrator/` to avoid early infra overhead.
+- API transport (for remote orchestration) is a later extension once contracts stabilize.
+
+## Dynamic Worker Deployment (Future)
+- Orchestrator should spawn workers on demand based on plan fan-out and system capacity.
+- Each worker gets a strategy profile and isolated session workspace.
+- Duplicate prevention: task IDs must be idempotent; only one active lease per task at a time.
+- Rebalancing support: reclaim stalled leases and reassign tasks without losing evidence lineage.
+
+## Orchestrator UI Direction (Future)
+- Add a top-layer web dashboard for multi-agent visibility and control.
+- Primary use cases: run overview, worker status, task graph progress, evidence review, and emergency controls.
+- UI should consume the same orchestrator contracts (`plan.json`, `task.json`, `event.jsonl`, `artifact.json`, `finding.json`) to avoid separate logic paths.
+
+## UI Framework Decision
+- Frontend: React + TypeScript + Vite.
+- Backend API layer: Go (same repository/runtime) with WebSocket or SSE for live status streams.
+- Rationale:
+  - Strong ecosystem for real-time dashboards and graph/state-heavy UIs.
+  - Fits local-first operation and can be packaged with the existing Go runtime.
+  - Keeps orchestration logic in Go while allowing a responsive operator interface.
 
 ## Prompting & Behavior
 - Maintain a dedicated behavior/system prompt so the LLM’s purpose, safety rules, and workflow are explicit.

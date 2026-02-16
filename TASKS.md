@@ -124,3 +124,48 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
 ## Sprint 18 — Chat vs Act UX (future)
 - [ ] Lightweight “answer vs act” classification so normal conversation feels like Codex/Claude while still being agentic.
 - [ ] Reduce noise in non-verbose mode (only show task headers + key outputs).
+
+## Sprint 19 — Orchestrator Foundation (future)
+- [ ] Define orchestrator-first planning phase (mandatory) that converts a user goal into a task graph with:
+  - [ ] scope and constraints
+  - [ ] success and stop criteria
+  - [ ] dependencies and parallelizable branches
+- [ ] Define worker communication contracts (JSON schemas):
+  - [ ] `plan.json` (global plan + graph)
+  - [ ] `task.json` (leaseable unit of work)
+  - [ ] `event.jsonl` (heartbeat/progress/error updates)
+  - [ ] `artifact.json` and `finding.json` (outputs + confidence)
+- [ ] Implement MVP communication channel as file-based events/artifacts under session directories (API transport later).
+- [ ] Implement dynamic worker deployment:
+  - [ ] spawn BirdHackBot workers on demand
+  - [ ] assign different strategy profiles per worker
+  - [ ] support graceful stop and orchestrator broadcast kill
+- [ ] Implement sync + replan loop:
+  - [ ] merge worker evidence into global state
+  - [ ] prevent duplicates with task leases and idempotent task IDs
+  - [ ] trigger replanning when blockers/findings appear
+- [ ] Add orchestrator simulation tests with mocked workers:
+  - [ ] parallel task execution
+  - [ ] cancellation propagation
+  - [ ] deterministic evidence merge
+
+## Sprint 20 — Orchestrator UI (future)
+- [ ] Framework decision (locked):
+  - [ ] Frontend: React + TypeScript + Vite
+  - [ ] Backend API: existing Go codebase with WebSocket/SSE stream endpoints
+- [ ] Implement local dashboard shell:
+  - [ ] Runs view (active/completed orchestrator runs)
+  - [ ] Agents view (worker status, heartbeat, current task, elapsed time)
+  - [ ] Plan graph view (queued/running/blocked/completed nodes)
+  - [ ] Evidence view (artifacts/findings timeline)
+- [ ] Control actions:
+  - [ ] pause/resume/stop run
+  - [ ] stop single worker
+  - [ ] broadcast kill to all workers
+- [ ] Live communication:
+  - [ ] stream `event.jsonl` updates into UI
+  - [ ] highlight stale workers and failed tasks in real time
+- [ ] Tests:
+  - [ ] backend API contract tests
+  - [ ] frontend component tests for critical state transitions
+  - [ ] e2e smoke test for one orchestrated run lifecycle

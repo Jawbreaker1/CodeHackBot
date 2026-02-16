@@ -20,7 +20,9 @@ The goal is simple: help teams find real security weaknesses earlier, with clear
 - Agentic CLI workflow: the assistant can plan, execute, recover, and continue toward a goal.
 - Dynamic context and memory: keeps track of prior actions, evidence, and conversation during long sessions.
 - Permission and safety modes: `readonly`, `default` (approval required), and `all` for sandboxed lab use.
-- Built-in execution tools: local command execution, file primitives, browsing/crawling helpers, and tool-forge support.
+- On-demand tool creation: can generate, run, and refine Python/Bash helper tools as needed for the current task.
+- Built-in execution tools: local command execution, file primitives, browsing/crawling helpers, and reusable per-session tool artifacts.
+- Metasploit-aware guidance: can query Metasploit modules during a session to identify relevant vulnerability/exploit paths on the fly.
 - Evidence-first logging: session artifacts, command logs, and reproducible outputs.
 - Report support: structured findings and security reporting workflows.
 
