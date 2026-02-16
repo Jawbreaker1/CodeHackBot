@@ -17,11 +17,11 @@ import (
 )
 
 const (
-	logoANSIReset  = "\x1b[0m"
-	logoANSIName   = "\x1b[38;5;220m"
-	logoANSIBlueA  = "\x1b[38;5;39m"
-	logoANSIBlueB  = "\x1b[38;5;45m"
-	logoANSIBlueC  = "\x1b[38;5;51m"
+	logoANSIReset = "\x1b[0m"
+	logoANSIName  = "\x1b[38;5;220m"
+	logoANSIBlueA = "\x1b[38;5;39m"
+	logoANSIBlueB = "\x1b[38;5;45m"
+	logoANSIBlueC = "\x1b[38;5;51m"
 )
 
 type Runner struct {
@@ -56,10 +56,24 @@ type Runner struct {
 	lastBrowseURL      string
 	lastActionLogPath  string
 	lastKnownTarget    string
+	assistRuntime      assistRuntimeStatus
 
 	inputRenderLines int
 
 	llmGuard llm.Guard
+}
+
+type assistRuntimeStatus struct {
+	Active      bool
+	Goal        string
+	Step        int
+	Remaining   int
+	CurrentCap  int
+	HardCap     int
+	Extensions  int
+	Stalls      int
+	LastReason  string
+	CurrentMode string
 }
 
 func NewRunner(cfg config.Config, sessionID, defaultConfigPath, profilePath string) *Runner {

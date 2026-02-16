@@ -479,8 +479,8 @@ func (r *Runner) assistGenerator() assist.Assistant {
 		onFallback: func(err error) {
 			r.logAssistFallbackCause(err)
 		},
-		primary:   llmAssistant,
-		fallback:  fallback,
+		primary:  llmAssistant,
+		fallback: fallback,
 	}
 }
 
@@ -596,22 +596,24 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 		}
 	}
 
-	maxSteps := r.assistMaxSteps()
-	stepsRun := 0
+	budget := newAssistBudget(goal, r.assistMaxSteps())
+	r.startAssistRuntime(goal, mode, budget)
+	defer r.clearAssistRuntime()
 	repeatedGuardHits := 0
 	stepMode := mode
 	lastCommand := assist.Suggestion{}
 	for {
-		if maxSteps > 0 && stepsRun >= maxSteps {
+		r.updateAssistRuntime(stepMode, budget)
+		if budget.exhausted() {
 			if r.cfg.UI.Verbose {
-				r.logger.Printf("Reached max steps (%d).", maxSteps)
+				r.logger.Printf("Reached step budget (%d/%d).", budget.used, budget.currentCap)
 			}
-				if !dryRun {
-					if r.tryConcludeGoalFromArtifacts(goal) {
-						r.maybeFinalizeReport(goal, dryRun)
-						return nil
-					}
-					fmt.Println("Reached max steps without a final answer. Suggesting next steps.")
+			if !dryRun {
+				if r.tryConcludeGoalFromArtifacts(goal) {
+					r.maybeFinalizeReport(goal, dryRun)
+					return nil
+				}
+				fmt.Println("Reached dynamic step budget without a final answer. Suggesting next steps.")
 			}
 			if !dryRun && lastCommand.Type == "command" {
 				r.maybeSuggestNextSteps(goal, lastCommand)
@@ -620,16 +622,17 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 			r.maybeFinalizeReport(goal, dryRun)
 			return nil
 		}
+		stepNum, maxSteps := budget.stepLabel()
 		if r.cfg.UI.Verbose {
 			if maxSteps > 0 {
-				r.logger.Printf("Assistant step %d/%d", stepsRun+1, maxSteps)
+				r.logger.Printf("Assistant step %d/%d", stepNum, maxSteps)
 			} else {
-				r.logger.Printf("Assistant step %d", stepsRun+1)
+				r.logger.Printf("Assistant step %d", stepNum)
 			}
 		}
 		label := "assist"
 		if maxSteps > 0 {
-			label = fmt.Sprintf("assist %d/%d", stepsRun+1, maxSteps)
+			label = fmt.Sprintf("assist %d/%d", stepNum, maxSteps)
 		}
 		stopIndicator := r.startLLMIndicatorIfAllowed(label)
 		suggestion, err := r.getAssistSuggestion(goal, stepMode)
@@ -638,10 +641,16 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 			return err
 		}
 		if suggestion.Type == "noop" && strings.TrimSpace(goal) != "" {
+			budget.consume("noop -> clarify")
+			budget.onStall("noop suggestion")
+			r.updateAssistRuntime("recover", budget)
 			return r.handleAssistNoop(goal, dryRun)
 		}
-		r.announceAssistStep(stepsRun+1, maxSteps, suggestion)
+		r.announceAssistStep(stepNum, maxSteps, suggestion)
 		if suggestion.Type == "plan" {
+			budget.consume("plan returned")
+			budget.onProgress("assistant returned executable plan")
+			r.updateAssistRuntime(stepMode, budget)
 			if err := r.handlePlanSuggestion(suggestion, dryRun); err != nil {
 				r.maybeFinalizeReport(goal, dryRun)
 				return err
@@ -651,17 +660,27 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 			return nil
 		}
 		if suggestion.Type == "complete" {
+			budget.consume("goal completed")
+			budget.onProgress("assistant completion")
+			r.updateAssistRuntime(stepMode, budget)
 			_ = r.executeAssistSuggestion(suggestion, dryRun)
 			r.maybeFinalizeReport(goal, dryRun)
 			return nil
 		}
+		beforeObs := r.latestObservationSignature()
+		actionKey := ""
+		if suggestion.Type == "command" {
+			actionKey = canonicalAssistActionKey(suggestion.Command, suggestion.Args)
+		}
 		if err := r.executeAssistSuggestion(suggestion, dryRun); err != nil {
-				if isAssistRepeatedGuard(err) {
-					if !dryRun && r.tryConcludeGoalFromArtifacts(goal) {
-						r.maybeFinalizeReport(goal, dryRun)
-						return nil
-					}
+			if isAssistRepeatedGuard(err) {
+				if !dryRun && r.tryConcludeGoalFromArtifacts(goal) {
+					r.maybeFinalizeReport(goal, dryRun)
+					return nil
+				}
 				repeatedGuardHits++
+				budget.onStall("repeated step blocked")
+				r.updateAssistRuntime("recover", budget)
 				if repeatedGuardHits >= 2 {
 					msg := "Repeated step loop detected. Pausing for guidance: share the exact next action/target and I will continue."
 					fmt.Println(msg)
@@ -670,16 +689,19 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 					r.pendingAssistQ = msg
 					return nil
 				}
-					if !dryRun {
-						if r.cfg.UI.Verbose {
-							r.logger.Printf("Repeated step detected; requesting an alternative action.")
-						} else {
-							fmt.Println("Repeated step detected; asking assistant for an alternative action.")
-						}
+				if !dryRun {
+					if r.cfg.UI.Verbose {
+						r.logger.Printf("Repeated step detected; requesting an alternative action.")
+					} else {
+						fmt.Println("Repeated step detected; asking assistant for an alternative action.")
 					}
-					stepMode = "recover"
-					continue
 				}
+				stepMode = "recover"
+				continue
+			}
+			budget.consume("step failed")
+			budget.onStall("step execution failed")
+			r.updateAssistRuntime("recover", budget)
 			if r.handleAssistCommandFailure(goal, suggestion, err) {
 				r.maybeEmitGoalSummary(goal, dryRun)
 				r.maybeFinalizeReport(goal, dryRun)
@@ -688,14 +710,29 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 			r.maybeFinalizeReport(goal, dryRun)
 			return err
 		}
-			if dryRun {
-				return nil
+		if dryRun {
+			return nil
+		}
+		repeatedGuardHits = 0
+		budget.consume("step executed")
+		switch suggestion.Type {
+		case "question":
+			budget.onProgress("awaiting user input")
+		case "command", "tool":
+			afterObs := r.latestObservationSignature()
+			if progressed, reason := budget.trackProgress(actionKey, beforeObs, afterObs); progressed {
+				budget.onProgress(reason)
+			} else {
+				budget.onStall(reason)
 			}
-			repeatedGuardHits = 0
-			if (suggestion.Type == "command" || suggestion.Type == "tool") && r.tryConcludeGoalFromArtifacts(goal) {
-				r.maybeFinalizeReport(goal, dryRun)
-				return nil
-			}
+		default:
+			budget.onStall("no measurable progress")
+		}
+		r.updateAssistRuntime(stepMode, budget)
+		if (suggestion.Type == "command" || suggestion.Type == "tool") && r.tryConcludeGoalFromArtifacts(goal) {
+			r.maybeFinalizeReport(goal, dryRun)
+			return nil
+		}
 		if suggestion.Type == "question" {
 			r.pendingAssistGoal = goal
 			return nil
@@ -710,7 +747,6 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 			r.pendingAssistGoal = ""
 			r.pendingAssistQ = ""
 		}
-		stepsRun++
 		stepMode = "execute-step"
 	}
 }

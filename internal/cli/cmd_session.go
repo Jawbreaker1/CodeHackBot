@@ -141,12 +141,20 @@ func (r *Runner) handleStatus() {
 			r.logger.Printf("Status: idle")
 			r.logger.Printf("LLM: %s", llmState)
 			r.logger.Printf("LLM model: %s", statusValueOrFallback(strings.TrimSpace(r.cfg.LLM.Model), "(unset)"))
+			if r.assistRuntime.Active {
+				r.logger.Printf("Assist budget: step=%d remaining=%d cap=%d hard=%d ext=%d stalls=%d mode=%s", r.assistRuntime.Step, r.assistRuntime.Remaining, r.assistRuntime.CurrentCap, r.assistRuntime.HardCap, r.assistRuntime.Extensions, r.assistRuntime.Stalls, statusValueOrFallback(r.assistRuntime.CurrentMode, "(none)"))
+				r.logger.Printf("Assist reason: %s", statusValueOrFallback(r.assistRuntime.LastReason, "(none)"))
+			}
 			return
 		}
 		r.logger.Printf("Status: idle")
 		r.logger.Printf("LLM: %s (%s)", label, formatElapsed(time.Since(started)))
 		r.logger.Printf("LLM state: %s", llmState)
 		r.logger.Printf("LLM model: %s", statusValueOrFallback(strings.TrimSpace(r.cfg.LLM.Model), "(unset)"))
+		if r.assistRuntime.Active {
+			r.logger.Printf("Assist budget: step=%d remaining=%d cap=%d hard=%d ext=%d stalls=%d mode=%s", r.assistRuntime.Step, r.assistRuntime.Remaining, r.assistRuntime.CurrentCap, r.assistRuntime.HardCap, r.assistRuntime.Extensions, r.assistRuntime.Stalls, statusValueOrFallback(r.assistRuntime.CurrentMode, "(none)"))
+			r.logger.Printf("Assist reason: %s", statusValueOrFallback(r.assistRuntime.LastReason, "(none)"))
+		}
 		return
 	}
 	elapsed := formatElapsed(time.Since(r.currentTaskStart))
@@ -156,6 +164,10 @@ func (r *Runner) handleStatus() {
 	}
 	r.logger.Printf("LLM state: %s", llmState)
 	r.logger.Printf("LLM model: %s", statusValueOrFallback(strings.TrimSpace(r.cfg.LLM.Model), "(unset)"))
+	if r.assistRuntime.Active {
+		r.logger.Printf("Assist budget: step=%d remaining=%d cap=%d hard=%d ext=%d stalls=%d mode=%s", r.assistRuntime.Step, r.assistRuntime.Remaining, r.assistRuntime.CurrentCap, r.assistRuntime.HardCap, r.assistRuntime.Extensions, r.assistRuntime.Stalls, statusValueOrFallback(r.assistRuntime.CurrentMode, "(none)"))
+		r.logger.Printf("Assist reason: %s", statusValueOrFallback(r.assistRuntime.LastReason, "(none)"))
+	}
 }
 
 func statusValueOrFallback(value, fallback string) string {
