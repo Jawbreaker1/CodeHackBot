@@ -140,11 +140,13 @@ func (r *Runner) handleStatus() {
 		if !active {
 			r.logger.Printf("Status: idle")
 			r.logger.Printf("LLM: %s", llmState)
+			r.logger.Printf("LLM model: %s", statusValueOrFallback(strings.TrimSpace(r.cfg.LLM.Model), "(unset)"))
 			return
 		}
 		r.logger.Printf("Status: idle")
 		r.logger.Printf("LLM: %s (%s)", label, formatElapsed(time.Since(started)))
 		r.logger.Printf("LLM state: %s", llmState)
+		r.logger.Printf("LLM model: %s", statusValueOrFallback(strings.TrimSpace(r.cfg.LLM.Model), "(unset)"))
 		return
 	}
 	elapsed := formatElapsed(time.Since(r.currentTaskStart))
@@ -153,6 +155,14 @@ func (r *Runner) handleStatus() {
 		r.logger.Printf("LLM: %s (%s)", label, formatElapsed(time.Since(started)))
 	}
 	r.logger.Printf("LLM state: %s", llmState)
+	r.logger.Printf("LLM model: %s", statusValueOrFallback(strings.TrimSpace(r.cfg.LLM.Model), "(unset)"))
+}
+
+func statusValueOrFallback(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }
 
 func (r *Runner) handleSummarize(args []string) error {

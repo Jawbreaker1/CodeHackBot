@@ -106,3 +106,14 @@ func TestWriteFileIsBoundedToSessionToolsDir(t *testing.T) {
 		t.Fatalf("expected out-of-bounds error for absolute path")
 	}
 }
+
+func TestListDirTargetIgnoresFlagArgs(t *testing.T) {
+	got := listDirTarget([]string{"-la"})
+	if got != "." {
+		t.Fatalf("expected '.', got %q", got)
+	}
+	got = listDirTarget([]string{"--all", "docs"})
+	if got != "docs" {
+		t.Fatalf("expected docs, got %q", got)
+	}
+}

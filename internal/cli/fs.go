@@ -162,10 +162,7 @@ func (r *Runner) handleListDir(args []string) error {
 	if err != nil {
 		return err
 	}
-	target := "."
-	if len(args) > 0 && strings.TrimSpace(args[0]) != "" {
-		target = args[0]
-	}
+	target := listDirTarget(args)
 	path, err := r.resolveAllowedPath(sessionDir, target)
 	if err != nil {
 		return err
@@ -226,6 +223,23 @@ func (r *Runner) handleListDir(args []string) error {
 	r.recordObservation("list_dir", []string{path}, logPath, fmt.Sprintf("entries=%d", len(names)), nil)
 	r.maybeAutoSummarize(logPath, "list_dir")
 	return nil
+}
+
+func listDirTarget(args []string) string {
+	target := "."
+	for _, arg := range args {
+		arg = strings.TrimSpace(arg)
+		if arg == "" {
+			continue
+		}
+		// Ignore ls-style flags (-la, --all) and keep bounded dir listing semantics.
+		if isFlagLike(arg) {
+			continue
+		}
+		target = arg
+		break
+	}
+	return target
 }
 
 func (r *Runner) resolveAllowedPath(sessionDir, raw string) (string, error) {
