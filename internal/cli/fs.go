@@ -173,6 +173,29 @@ func (r *Runner) handleListDir(args []string) error {
 	stopIndicator := r.startWorkingIndicator(newActivityWriter(r.liveWriter()))
 	defer stopIndicator()
 
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("list_dir: %w", err)
+	}
+	if !info.IsDir() {
+		content := renderListFileLog(path, info)
+		logPath, logErr := writeFSLog(sessionDir, "ls", content)
+		if logErr != nil {
+			r.logger.Printf("list_dir log save failed: %v", logErr)
+		}
+		fmt.Printf("Path: %s\n", path)
+		if logPath != "" {
+			fmt.Printf("Log saved: %s\n", logPath)
+		}
+		fmt.Println("Entry:")
+		fmt.Printf("- %s (%d bytes)\n", filepath.Base(path), info.Size())
+
+		r.recordActionArtifact(logPath)
+		r.recordObservation("list_dir", []string{path}, logPath, fmt.Sprintf("file=%s bytes=%d", filepath.Base(path), info.Size()), nil)
+		r.maybeAutoSummarize(logPath, "list_dir")
+		return nil
+	}
+
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		return fmt.Errorf("list_dir: %w", err)
@@ -223,6 +246,18 @@ func (r *Runner) handleListDir(args []string) error {
 	r.recordObservation("list_dir", []string{path}, logPath, fmt.Sprintf("entries=%d", len(names)), nil)
 	r.maybeAutoSummarize(logPath, "list_dir")
 	return nil
+}
+
+func renderListFileLog(path string, info os.FileInfo) string {
+	var buf bytes.Buffer
+	_, _ = fmt.Fprintf(&buf, "Path: %s\nType: file\nName: %s\nBytes: %d\nMode: %s\nModified: %s\n",
+		path,
+		info.Name(),
+		info.Size(),
+		info.Mode().String(),
+		info.ModTime().UTC().Format(time.RFC3339),
+	)
+	return buf.String()
 }
 
 func listDirTarget(args []string) string {

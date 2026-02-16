@@ -117,3 +117,41 @@ func TestListDirTargetIgnoresFlagArgs(t *testing.T) {
 		t.Fatalf("expected docs, got %q", got)
 	}
 }
+
+func TestHandleListDirSupportsFileTarget(t *testing.T) {
+	cfg := config.Config{}
+	cfg.Session.LogDir = t.TempDir()
+	r := NewRunner(cfg, "session-list-file", "", "")
+	r.reader = bufio.NewReader(strings.NewReader(""))
+
+	if _, err := r.ensureSessionScaffold(); err != nil {
+		t.Fatalf("ensure scaffold: %v", err)
+	}
+
+	wd := t.TempDir()
+	origWD, _ := os.Getwd()
+	_ = os.Chdir(wd)
+	t.Cleanup(func() { _ = os.Chdir(origWD) })
+
+	filePath := filepath.Join(wd, "secret.zip")
+	if err := os.WriteFile(filePath, []byte("zip-bytes"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	orig := os.Stdout
+	rOut, wOut, _ := os.Pipe()
+	os.Stdout = wOut
+	t.Cleanup(func() { os.Stdout = orig })
+
+	if err := r.handleListDir([]string{"secret.zip"}); err != nil {
+		t.Fatalf("list_dir on file target failed: %v", err)
+	}
+
+	_ = wOut.Close()
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, rOut)
+	out := buf.String()
+	if !strings.Contains(out, "Entry:") || !strings.Contains(out, "secret.zip") {
+		t.Fatalf("expected file entry output, got:\n%s", out)
+	}
+}
