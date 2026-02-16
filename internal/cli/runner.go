@@ -121,15 +121,23 @@ func (r *Runner) Run() error {
 			continue
 		}
 		if r.pendingAssistGoal != "" {
-			r.appendConversation("User", line)
-			if err := r.handleAssistFollowUp(line); err != nil {
-				r.logger.Printf("Assist follow-up error: %v", err)
+			if shouldTreatPendingInputAsNewGoal(line, r.pendingAssistQ) {
+				if r.cfg.UI.Verbose {
+					r.logger.Printf("Treating input as a new goal; cancelled pending follow-up.")
+				}
+				r.pendingAssistGoal = ""
+				r.pendingAssistQ = ""
+			} else {
+				r.appendConversation("User", line)
+				if err := r.handleAssistFollowUp(line); err != nil {
+					r.logger.Printf("Assist follow-up error: %v", err)
+				}
+				if err == io.EOF {
+					r.Stop()
+					return nil
+				}
+				continue
 			}
-			if err == io.EOF {
-				r.Stop()
-				return nil
-			}
-			continue
 		}
 		if r.planWizardActive() {
 			if err := r.handlePlanWizardInput(line); err != nil {

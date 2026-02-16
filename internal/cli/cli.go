@@ -1737,6 +1737,14 @@ func (r *Runner) enrichAssistGoal(goal, mode string) string {
 		return goal
 	}
 	directive := r.recoveryDirectiveForGoal(goal, mode)
+	if mode == "recover" && strings.TrimSpace(r.lastAssistCmdKey) != "" {
+		repeatDirective := "Recovery directive: previous command was blocked as repeated (" + strings.TrimSpace(r.lastAssistCmdKey) + "). Propose a different next action; do not repeat that same command."
+		if strings.TrimSpace(directive) == "" {
+			directive = repeatDirective
+		} else {
+			directive = strings.TrimSpace(directive) + "\n" + repeatDirective
+		}
+	}
 	path := strings.TrimSpace(r.lastActionLogPath)
 	if path == "" && directive == "" {
 		return goal
@@ -2215,6 +2223,65 @@ func isAssistRepeatedGuard(err error) bool {
 	lower := strings.ToLower(err.Error())
 	return strings.Contains(lower, "assistant loop guard: repeated command blocked") ||
 		strings.Contains(lower, "assistant loop guard: repeated question blocked")
+}
+
+func shouldTreatPendingInputAsNewGoal(answer, question string) bool {
+	answer = strings.TrimSpace(answer)
+	if answer == "" {
+		return false
+	}
+	if isLikelyFollowUpAnswer(answer, question) {
+		return false
+	}
+	return true
+}
+
+func isLikelyFollowUpAnswer(answer, question string) bool {
+	answer = strings.TrimSpace(answer)
+	if answer == "" {
+		return false
+	}
+	lower := strings.ToLower(answer)
+	if shouldUseDefaultChoice(answer, question) {
+		return true
+	}
+	switch lower {
+	case "y", "yes", "n", "no", "ok", "okay", "continue", "proceed", "go ahead", "stop", "skip":
+		return true
+	}
+	if extractFirstURL(answer) != "" || extractHostLikeToken(answer) != "" {
+		return true
+	}
+	if looksLikePathOrFilename(answer) {
+		return true
+	}
+	// Short phrases are often direct answers to a clarifying question.
+	if !strings.Contains(answer, "?") && len(strings.Fields(answer)) <= 5 {
+		return true
+	}
+	return false
+}
+
+func looksLikePathOrFilename(text string) bool {
+	token := strings.TrimSpace(text)
+	if token == "" {
+		return false
+	}
+	token = strings.Trim(token, "\"'`")
+	if strings.HasPrefix(token, "/") || strings.HasPrefix(token, "./") || strings.HasPrefix(token, "../") {
+		return true
+	}
+	if strings.Contains(token, "/") {
+		return true
+	}
+	base := filepath.Base(token)
+	ext := strings.ToLower(filepath.Ext(base))
+	switch ext {
+	case ".md", ".txt", ".json", ".yaml", ".yml", ".zip", ".log", ".csv", ".xml", ".html":
+		return true
+	default:
+		return false
+	}
 }
 
 func shouldUseDefaultChoice(answer, question string) bool {
