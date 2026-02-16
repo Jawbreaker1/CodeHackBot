@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os/exec"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/llm"
@@ -42,6 +43,21 @@ func TestFallbackAssistantConversationalGoal(t *testing.T) {
 	}
 	if suggestion.Final == "" {
 		t.Fatalf("expected final response")
+	}
+}
+
+func TestFallbackAssistantLocalFileGoalWithoutTargets(t *testing.T) {
+	suggestion, err := (FallbackAssistant{}).Suggest(context.Background(), Input{
+		Goal: "There is a password protected zip file in this folder. Crack it and show contents.",
+	})
+	if err != nil {
+		t.Fatalf("fallback error: %v", err)
+	}
+	if suggestion.Type != "question" {
+		t.Fatalf("expected question, got %s", suggestion.Type)
+	}
+	if suggestion.Question == "" || !strings.Contains(strings.ToLower(suggestion.Question), "file") {
+		t.Fatalf("unexpected question: %q", suggestion.Question)
 	}
 }
 

@@ -74,6 +74,14 @@ func (FallbackAssistant) Suggest(_ context.Context, input Input) (Suggestion, er
 			Risk:  "low",
 		}), nil
 	}
+	if isLocalFileGoal(input.Goal) {
+		return normalizeSuggestion(Suggestion{
+			Type:     "question",
+			Question: "LLM is unavailable. For local file analysis, share the exact file path/name (for example `./secret.zip`) and any known password or wordlist path, and I will run the next step.",
+			Summary:  "Awaiting local file details.",
+			Risk:     "low",
+		}), nil
+	}
 	if len(input.Targets) == 0 {
 		return normalizeSuggestion(Suggestion{
 			Type:     "question",
@@ -107,6 +115,35 @@ func isConversationalGoal(goal string) bool {
 	}
 	for _, prefix := range prefixes {
 		if strings.HasPrefix(goal, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func isLocalFileGoal(goal string) bool {
+	goal = strings.TrimSpace(strings.ToLower(goal))
+	if goal == "" {
+		return false
+	}
+	fileHints := []string{
+		".zip", ".7z", ".tar", ".gz", "file", "folder", "directory", "path", "readme", "current folder", "this folder",
+	}
+	actionHints := []string{
+		"open", "read", "show", "list", "inspect", "extract", "content", "contents", "password", "crack", "decrypt",
+	}
+	hasFileHint := false
+	for _, hint := range fileHints {
+		if strings.Contains(goal, hint) {
+			hasFileHint = true
+			break
+		}
+	}
+	if !hasFileHint {
+		return false
+	}
+	for _, hint := range actionHints {
+		if strings.Contains(goal, hint) {
 			return true
 		}
 	}
