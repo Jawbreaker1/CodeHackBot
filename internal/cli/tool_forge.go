@@ -263,7 +263,33 @@ func (r *Runner) normalizeToolRun(command string, args []string) (string, []stri
 		}
 		outArgs = append(outArgs, a)
 	}
+	if isPythonExec(command) && !containsExactArg(outArgs, "-u") {
+		outArgs = append([]string{"-u"}, outArgs...)
+	}
 	return command, outArgs
+}
+
+func isPythonExec(command string) bool {
+	command = strings.ToLower(strings.TrimSpace(filepath.Base(command)))
+	switch command {
+	case "python", "python3", "python3.10", "python3.11", "python3.12", "python3.13":
+		return true
+	default:
+		return false
+	}
+}
+
+func containsExactArg(args []string, needle string) bool {
+	needle = strings.TrimSpace(needle)
+	if needle == "" {
+		return false
+	}
+	for _, arg := range args {
+		if strings.TrimSpace(arg) == needle {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Runner) toolFilesUpToDate(sessionDir string, files []assist.ToolFile, desiredHashes map[string]string) (bool, string) {
@@ -472,6 +498,9 @@ func (r *Runner) executeToolRun(command string, args []string) error {
 		ScopeTargets:     r.cfg.Scope.Targets,
 		ScopeDenyTargets: r.cfg.Scope.DenyTargets,
 		LiveWriter:       liveWriter,
+	}
+	if !r.cfg.UI.Verbose {
+		r.logger.Printf("Running tool command: %s (idle timeout %s)", strings.TrimSpace(strings.Join(append([]string{command}, args...), " ")), timeout)
 	}
 
 	result, err := runner.RunCommandWithContext(ctx, command, args...)

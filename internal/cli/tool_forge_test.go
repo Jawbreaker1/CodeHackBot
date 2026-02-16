@@ -266,3 +266,40 @@ func TestToolForgeReuseSkipsWriteApproval(t *testing.T) {
 		t.Fatalf("expected script: %v", statErr)
 	}
 }
+
+func TestNormalizeToolRunAddsPythonUnbufferedFlag(t *testing.T) {
+	cfg := config.Config{}
+	cfg.Session.LogDir = t.TempDir()
+	r := NewRunner(cfg, "session-tool-norm", "", "")
+	if _, err := r.ensureSessionScaffold(); err != nil {
+		t.Fatalf("ensure scaffold: %v", err)
+	}
+
+	cmd, args := r.normalizeToolRun("python3", []string{"tool.py", "--target", "secret.zip"})
+	if cmd != "python3" {
+		t.Fatalf("unexpected command: %q", cmd)
+	}
+	if len(args) == 0 || args[0] != "-u" {
+		t.Fatalf("expected -u as first arg, got %v", args)
+	}
+}
+
+func TestNormalizeToolRunKeepsExistingPythonUnbufferedFlag(t *testing.T) {
+	cfg := config.Config{}
+	cfg.Session.LogDir = t.TempDir()
+	r := NewRunner(cfg, "session-tool-norm-existing", "", "")
+	if _, err := r.ensureSessionScaffold(); err != nil {
+		t.Fatalf("ensure scaffold: %v", err)
+	}
+
+	_, args := r.normalizeToolRun("python3", []string{"-u", "tool.py"})
+	count := 0
+	for _, arg := range args {
+		if arg == "-u" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly one -u flag, got %d in %v", count, args)
+	}
+}
