@@ -55,6 +55,7 @@ type Runner struct {
 	lastBrowseBodyPath string
 	lastBrowseURL      string
 	lastActionLogPath  string
+	lastSuccessLogPath string
 	lastKnownTarget    string
 	assistRuntime      assistRuntimeStatus
 

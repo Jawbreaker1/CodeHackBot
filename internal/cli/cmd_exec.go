@@ -17,7 +17,7 @@ func (r *Runner) handleRun(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: /run <command> [args...]")
 	}
-	r.setTask(fmt.Sprintf("run %s", args[0]))
+	r.setTask(formatWorkingCommandTask("run", args[0], args[1:]))
 	defer r.clearTask()
 	if !r.cfg.Tools.Shell.Enabled {
 		return fmt.Errorf("shell execution disabled by config")

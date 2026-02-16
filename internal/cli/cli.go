@@ -536,11 +536,13 @@ func (r *Runner) handleAssistGoal(goal string, dryRun bool) error {
 		r.pendingAssistQ = ""
 		r.resetAssistLoopState()
 	}
-	if !dryRun && isSummaryIntent(trimmedGoal) && strings.TrimSpace(r.lastActionLogPath) != "" {
-		if r.cfg.UI.Verbose {
-			r.logger.Printf("Using latest artifact for summary: %s", r.lastActionLogPath)
+	if !dryRun && isSummaryIntent(trimmedGoal) {
+		if artifactPath := r.summaryArtifactPath(trimmedGoal); artifactPath != "" {
+			if r.cfg.UI.Verbose {
+				r.logger.Printf("Using artifact for summary: %s", artifactPath)
+			}
+			return r.summarizeFromLatestArtifact(trimmedGoal)
 		}
-		return r.summarizeFromLatestArtifact(trimmedGoal)
 	}
 	return r.handleAssistGoalWithMode(goal, dryRun, "")
 }
@@ -715,6 +717,7 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 		}
 		repeatedGuardHits = 0
 		budget.consume("step executed")
+		nextMode := "execute-step"
 		switch suggestion.Type {
 		case "question":
 			budget.onProgress("awaiting user input")
@@ -724,6 +727,10 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 				budget.onProgress(reason)
 			} else {
 				budget.onStall(reason)
+				nextMode = "recover"
+				if r.cfg.UI.Verbose {
+					r.logger.Printf("No new evidence from step; requesting an alternative action.")
+				}
 			}
 		default:
 			budget.onStall("no measurable progress")
@@ -747,7 +754,7 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 			r.pendingAssistGoal = ""
 			r.pendingAssistQ = ""
 		}
-		stepMode = "execute-step"
+		stepMode = nextMode
 	}
 }
 
@@ -1227,7 +1234,7 @@ func (r *Runner) maybeEmitGoalSummary(goal string, dryRun bool) {
 	if !isSummaryIntent(goal) {
 		return
 	}
-	if strings.TrimSpace(r.lastActionLogPath) == "" {
+	if strings.TrimSpace(r.summaryArtifactPath(goal)) == "" {
 		return
 	}
 	if err := r.summarizeFromLatestArtifact(goal); err != nil && r.cfg.UI.Verbose {
@@ -1236,13 +1243,14 @@ func (r *Runner) maybeEmitGoalSummary(goal string, dryRun bool) {
 }
 
 func (r *Runner) summarizeFromLatestArtifact(goal string) error {
-	if strings.TrimSpace(goal) == "" || strings.TrimSpace(r.lastActionLogPath) == "" {
+	goal = strings.TrimSpace(goal)
+	artifactPath := strings.TrimSpace(r.summaryArtifactPath(goal))
+	if goal == "" || artifactPath == "" {
 		return nil
 	}
 	if !r.llmAllowed() {
 		return nil
 	}
-	artifactPath := r.lastActionLogPath
 	data, err := os.ReadFile(artifactPath)
 	if err != nil {
 		return fmt.Errorf("read latest artifact: %w", err)
@@ -1771,6 +1779,7 @@ func (r *Runner) recordObservation(kind string, args []string, logPath string, o
 }
 
 func (r *Runner) recordObservationWithCommand(kind string, command string, args []string, logPath string, outputExcerpt string, errText string, exitCode int) {
+	logPath = strings.TrimSpace(logPath)
 	sessionDir := filepath.Join(r.cfg.Session.LogDir, r.sessionID)
 	manager := r.memoryManager(sessionDir)
 	_, _ = manager.RecordObservation(memory.Observation{
@@ -1780,13 +1789,17 @@ func (r *Runner) recordObservationWithCommand(kind string, command string, args 
 		Args:          args,
 		ExitCode:      exitCode,
 		Error:         strings.TrimSpace(errText),
-		LogPath:       strings.TrimSpace(logPath),
+		LogPath:       logPath,
 		OutputExcerpt: strings.TrimSpace(outputExcerpt),
 	})
+	if logPath != "" && exitCode == 0 {
+		r.lastSuccessLogPath = logPath
+	}
 }
 
 func (r *Runner) clearActionContext() {
 	r.lastActionLogPath = ""
+	r.lastSuccessLogPath = ""
 	r.lastBrowseLogPath = ""
 }
 
@@ -1965,6 +1978,89 @@ func isSummaryIntent(goal string) bool {
 		}
 	}
 	return false
+}
+
+func isFailureSummaryIntent(goal string) bool {
+	goal = strings.ToLower(strings.TrimSpace(goal))
+	if goal == "" {
+		return false
+	}
+	hints := []string{
+		"fail", "failed", "failure", "error", "didn't", "didnt", "couldn't", "couldnt",
+		"why not", "what went wrong", "issue",
+	}
+	for _, hint := range hints {
+		if strings.Contains(goal, hint) {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Runner) summaryArtifactPath(goal string) string {
+	lastAction := strings.TrimSpace(r.lastActionLogPath)
+	lastSuccess := strings.TrimSpace(r.lastSuccessLogPath)
+	if isFailureSummaryIntent(goal) {
+		if fileExists(lastAction) {
+			return lastAction
+		}
+	}
+	if fileExists(lastSuccess) {
+		return lastSuccess
+	}
+	if fileExists(lastAction) {
+		return lastAction
+	}
+	successFromState, latestFromState := r.recentObservationLogPaths()
+	if !isFailureSummaryIntent(goal) && fileExists(successFromState) {
+		return successFromState
+	}
+	if fileExists(latestFromState) {
+		return latestFromState
+	}
+	return ""
+}
+
+func (r *Runner) recentObservationLogPaths() (string, string) {
+	sessionDir := filepath.Join(r.cfg.Session.LogDir, r.sessionID)
+	artifacts, err := memory.EnsureArtifacts(sessionDir)
+	if err != nil {
+		return "", ""
+	}
+	state, err := memory.LoadState(artifacts.StatePath)
+	if err != nil || len(state.RecentObservations) == 0 {
+		return "", ""
+	}
+	latest := ""
+	success := ""
+	for i := len(state.RecentObservations) - 1; i >= 0; i-- {
+		obs := state.RecentObservations[i]
+		logPath := strings.TrimSpace(obs.LogPath)
+		if !fileExists(logPath) {
+			continue
+		}
+		if latest == "" {
+			latest = logPath
+		}
+		if success == "" && obs.ExitCode == 0 {
+			success = logPath
+		}
+		if latest != "" && success != "" {
+			break
+		}
+	}
+	return success, latest
+}
+
+func fileExists(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return !info.IsDir()
 }
 
 func shouldStartBaselineScan(answer string) bool {

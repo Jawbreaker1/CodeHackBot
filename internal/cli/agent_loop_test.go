@@ -462,7 +462,7 @@ func TestAssistRepeatedCommandLoopPausesForGuidance(t *testing.T) {
 		os.Stdout = orig
 	})
 
-	if err := r.handleAssistAgentic("list files in this directory and keep going", false, ""); err != nil {
+	if err := r.handleAssistAgentic("perform local recon task and keep going", false, ""); err != nil {
 		t.Fatalf("assist error: %v", err)
 	}
 	_ = wOut.Close()
@@ -525,5 +525,65 @@ func TestAssistRepeatedLoopDoesNotConsumeStepBudget(t *testing.T) {
 	}
 	if strings.Contains(out, "Reached max steps") {
 		t.Fatalf("expected pause before max-steps exhaustion, got:\n%s", out)
+	}
+}
+
+func TestAssistNoProgressSwitchesToRecoverMode(t *testing.T) {
+	var calls int32
+	var requestBodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		requestBodies = append(requestBodies, string(body))
+		n := atomic.AddInt32(&calls, 1)
+		content := `{"type":"complete","final":"done"}`
+		if n <= 2 {
+			content = `{"type":"command","command":"ls","args":["-la"],"summary":"check files"}`
+		}
+		resp := map[string]any{
+			"choices": []map[string]any{
+				{
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": content,
+					},
+				},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := config.Config{}
+	cfg.Session.LogDir = t.TempDir()
+	cfg.LLM.BaseURL = srv.URL
+	cfg.Permissions.Level = "all"
+	r := NewRunner(cfg, "session-recover-mode", "", "")
+
+	orig := os.Stdout
+	rOut, wOut, _ := os.Pipe()
+	os.Stdout = wOut
+	t.Cleanup(func() {
+		os.Stdout = orig
+	})
+
+	if err := r.handleAssistAgentic("perform local recon task and keep going", false, ""); err != nil {
+		t.Fatalf("assist error: %v", err)
+	}
+	_ = wOut.Close()
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, rOut)
+	if !strings.Contains(buf.String(), "done") {
+		t.Fatalf("expected completion output, got:\n%s", buf.String())
+	}
+	if atomic.LoadInt32(&calls) < 3 {
+		t.Fatalf("expected at least 3 calls, got %d", calls)
+	}
+	joined := strings.Join(requestBodies, "\n---\n")
+	if !strings.Contains(joined, "Mode:\\nrecover\\n") {
+		t.Fatalf("expected recover mode after repeated no-progress step; requests:\n%s", joined)
 	}
 }

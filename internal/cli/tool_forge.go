@@ -456,7 +456,7 @@ func (r *Runner) executeToolRun(command string, args []string) error {
 
 	liveWriter := r.liveWriter()
 	activityWriter := newActivityWriter(liveWriter)
-	stopIndicator := r.startWorkingIndicator(activityWriter)
+	stopIndicator := r.startWorkingIndicatorWithTask(activityWriter, formatWorkingCommandTask("tool", command, args))
 	defer stopIndicator()
 	if activityWriter != nil {
 		liveWriter = activityWriter

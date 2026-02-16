@@ -12,6 +12,7 @@ import (
 const (
 	workingIndicatorInitialDelay = 2 * time.Second
 	workingIndicatorInterval     = 5 * time.Second
+	workingIndicatorTaskMaxRunes = 96
 )
 
 type activityWriter struct {
@@ -64,10 +65,14 @@ func (w *activityWriter) writeStatusLine(msg string) {
 }
 
 func (r *Runner) startWorkingIndicator(writer *activityWriter) func() {
+	return r.startWorkingIndicatorWithTask(writer, r.currentTask)
+}
+
+func (r *Runner) startWorkingIndicatorWithTask(writer *activityWriter, taskLabel string) func() {
 	if writer == nil || !r.isTTY() {
 		return func() {}
 	}
-	task := strings.TrimSpace(r.currentTask)
+	task := strings.TrimSpace(taskLabel)
 	started := time.Now()
 	stop := make(chan struct{})
 	var once sync.Once
@@ -97,6 +102,37 @@ func (r *Runner) startWorkingIndicator(writer *activityWriter) func() {
 		}
 	}()
 	return stopFn
+}
+
+func formatWorkingCommandTask(prefix, command string, args []string) string {
+	parts := make([]string, 0, 2+len(args))
+	prefix = strings.TrimSpace(prefix)
+	if prefix != "" {
+		parts = append(parts, prefix)
+	}
+	command = strings.TrimSpace(command)
+	if command != "" {
+		parts = append(parts, command)
+	}
+	for _, arg := range args {
+		arg = strings.TrimSpace(arg)
+		if arg == "" {
+			continue
+		}
+		parts = append(parts, arg)
+	}
+	task := strings.TrimSpace(strings.Join(parts, " "))
+	if task == "" {
+		return ""
+	}
+	runes := []rune(task)
+	if len(runes) <= workingIndicatorTaskMaxRunes {
+		return task
+	}
+	if workingIndicatorTaskMaxRunes <= 3 {
+		return string(runes[:workingIndicatorTaskMaxRunes])
+	}
+	return string(runes[:workingIndicatorTaskMaxRunes-3]) + "..."
 }
 
 func workingIndicatorMessage(task string, started, now time.Time, hasOutput bool, lastOutput time.Time) string {

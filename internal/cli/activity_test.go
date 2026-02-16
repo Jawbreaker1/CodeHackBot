@@ -55,3 +55,22 @@ func TestActivityWriterStatusLineDoesNotMarkOutputSeen(t *testing.T) {
 		t.Fatalf("expected trailing newline, got %q", got)
 	}
 }
+
+func TestFormatWorkingCommandTaskIncludesArgs(t *testing.T) {
+	got := formatWorkingCommandTask("tool", "curl", []string{"-I", "https://example.com"})
+	want := "tool curl -I https://example.com"
+	if got != want {
+		t.Fatalf("unexpected task label:\n got: %q\nwant: %q", got, want)
+	}
+}
+
+func TestFormatWorkingCommandTaskTruncates(t *testing.T) {
+	args := []string{strings.Repeat("a", 300)}
+	got := formatWorkingCommandTask("tool", "bash", args)
+	if len([]rune(got)) > workingIndicatorTaskMaxRunes {
+		t.Fatalf("task label too long: %d", len([]rune(got)))
+	}
+	if !strings.HasSuffix(got, "...") {
+		t.Fatalf("expected ellipsis for truncated task label, got %q", got)
+	}
+}
