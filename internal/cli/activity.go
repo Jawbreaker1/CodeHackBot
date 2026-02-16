@@ -51,6 +51,18 @@ func (w *activityWriter) LastWriteTime() time.Time {
 	return time.Unix(0, ns)
 }
 
+func (w *activityWriter) writeStatusLine(msg string) {
+	if w == nil || w.base == nil {
+		return
+	}
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		return
+	}
+	// Prefix with a line break so the status line doesn't get appended mid-line.
+	_, _ = w.base.Write([]byte("\n" + msg + "\n"))
+}
+
 func (r *Runner) startWorkingIndicator(writer *activityWriter) func() {
 	if writer == nil || !r.isTTY() {
 		return func() {}
@@ -75,11 +87,11 @@ func (r *Runner) startWorkingIndicator(writer *activityWriter) func() {
 				return
 			case <-timer.C:
 				if msg := workingIndicatorMessage(task, started, time.Now(), writer.HasOutput(), writer.LastWriteTime()); msg != "" {
-					fmt.Println(msg)
+					writer.writeStatusLine(msg)
 				}
 			case <-ticker.C:
 				if msg := workingIndicatorMessage(task, started, time.Now(), writer.HasOutput(), writer.LastWriteTime()); msg != "" {
-					fmt.Println(msg)
+					writer.writeStatusLine(msg)
 				}
 			}
 		}

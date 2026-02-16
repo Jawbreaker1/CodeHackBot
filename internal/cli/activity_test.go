@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 	"time"
@@ -35,5 +36,22 @@ func TestWorkingIndicatorMessageSuppressesWhenOutputIsRecent(t *testing.T) {
 	msg := workingIndicatorMessage("tool", started, now, true, lastOutput)
 	if msg != "" {
 		t.Fatalf("expected empty message for recent output, got %q", msg)
+	}
+}
+
+func TestActivityWriterStatusLineDoesNotMarkOutputSeen(t *testing.T) {
+	var buf bytes.Buffer
+	writer := newActivityWriter(&buf)
+	writer.writeStatusLine("... still working on tool (00:10 elapsed, no output yet)")
+
+	if writer.HasOutput() {
+		t.Fatalf("status line must not mark command output as seen")
+	}
+	got := buf.String()
+	if !strings.HasPrefix(got, "\n... still working") {
+		t.Fatalf("unexpected status line prefix: %q", got)
+	}
+	if !strings.HasSuffix(got, ")\n") {
+		t.Fatalf("expected trailing newline, got %q", got)
 	}
 }

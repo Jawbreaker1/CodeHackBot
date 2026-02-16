@@ -166,8 +166,6 @@ func (r *Runner) buildAndRunTool(sessionDir, toolsRoot string, tool assist.ToolS
 
 	r.setTask("tool")
 	defer r.clearTask()
-	stopIndicator := r.startWorkingIndicator(newActivityWriter(r.liveWriter()))
-	defer stopIndicator()
 
 	toolLogPath := ""
 	if !dryRun {
