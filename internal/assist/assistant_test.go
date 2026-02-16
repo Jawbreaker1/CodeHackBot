@@ -32,6 +32,19 @@ func TestFallbackAssistantQuestion(t *testing.T) {
 	}
 }
 
+func TestFallbackAssistantConversationalGoal(t *testing.T) {
+	suggestion, err := (FallbackAssistant{}).Suggest(context.Background(), Input{Goal: "Hello what can you help me with?"})
+	if err != nil {
+		t.Fatalf("fallback error: %v", err)
+	}
+	if suggestion.Type != "complete" {
+		t.Fatalf("expected complete, got %s", suggestion.Type)
+	}
+	if suggestion.Final == "" {
+		t.Fatalf("expected final response")
+	}
+}
+
 func TestLLMAssistantParsesJSON(t *testing.T) {
 	client := fakeClient{content: `{"type":"command","command":"echo","args":["hi"]}`}
 	assistant := LLMAssistant{Client: client}

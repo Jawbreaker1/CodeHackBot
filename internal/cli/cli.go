@@ -508,6 +508,16 @@ func (r *Runner) handleAssistGoalWithMode(goal string, dryRun bool, mode string)
 	if r.cfg.Permissions.Level == "readonly" {
 		return fmt.Errorf("readonly mode: assist not permitted")
 	}
+	if !r.llmAllowed() && r.cfg.UI.Verbose {
+		switch {
+		case !r.llmAvailable():
+			r.logger.Printf("LLM unavailable; check llm.base_url or network config.")
+		case !r.llmGuard.DisabledUntil().IsZero():
+			r.logger.Printf("LLM cooldown active until %s; using fallback assistant.", r.llmGuard.DisabledUntil().Format(time.RFC3339))
+		default:
+			r.logger.Printf("LLM unavailable; using fallback assistant.")
+		}
+	}
 	if mode == "execute-step" {
 		return r.handleAssistSingleStep(goal, dryRun, mode)
 	}

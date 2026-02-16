@@ -66,6 +66,13 @@ type ToolRun struct {
 type FallbackAssistant struct{}
 
 func (FallbackAssistant) Suggest(_ context.Context, input Input) (Suggestion, error) {
+	if isConversationalGoal(input.Goal) {
+		return normalizeSuggestion(Suggestion{
+			Type:  "complete",
+			Final: "I can help with authorized lab security testing: recon, scanning, controlled validation, artifact analysis, and report drafting. Share a target (IP/host/URL/path) and goal, and I will plan and execute step by step.",
+			Risk:  "low",
+		}), nil
+	}
 	if len(input.Targets) == 0 {
 		return normalizeSuggestion(Suggestion{
 			Type:     "question",
@@ -81,6 +88,28 @@ func (FallbackAssistant) Suggest(_ context.Context, input Input) (Suggestion, er
 		Summary: "Run a safe service/version scan on the primary target.",
 		Risk:    "low",
 	}), nil
+}
+
+func isConversationalGoal(goal string) bool {
+	goal = strings.TrimSpace(strings.ToLower(goal))
+	if goal == "" {
+		return false
+	}
+	if strings.Contains(goal, "?") {
+		if strings.Contains(goal, "scan") || strings.Contains(goal, "exploit") || strings.Contains(goal, "run ") {
+			return false
+		}
+		return true
+	}
+	prefixes := []string{
+		"hello", "hi", "hey", "thanks", "thank you", "who are you", "what can you help", "help me understand",
+	}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(goal, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 type LLMAssistant struct {

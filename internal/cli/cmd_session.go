@@ -129,13 +129,22 @@ func (r *Runner) handleLedger(args []string) error {
 
 func (r *Runner) handleStatus() {
 	active, label, started := r.llmStatus()
+	llmConfigured := strings.TrimSpace(r.cfg.LLM.BaseURL) != ""
+	llmState := "ready"
+	if !llmConfigured {
+		llmState = "not configured"
+	} else if until := r.llmGuard.DisabledUntil(); !until.IsZero() && !r.llmGuard.Allow() {
+		llmState = fmt.Sprintf("cooldown until %s", until.Format(time.RFC3339))
+	}
 	if r.currentTask == "" {
 		if !active {
 			r.logger.Printf("Status: idle")
+			r.logger.Printf("LLM: %s", llmState)
 			return
 		}
 		r.logger.Printf("Status: idle")
 		r.logger.Printf("LLM: %s (%s)", label, formatElapsed(time.Since(started)))
+		r.logger.Printf("LLM state: %s", llmState)
 		return
 	}
 	elapsed := formatElapsed(time.Since(r.currentTaskStart))
@@ -143,6 +152,7 @@ func (r *Runner) handleStatus() {
 	if active {
 		r.logger.Printf("LLM: %s (%s)", label, formatElapsed(time.Since(started)))
 	}
+	r.logger.Printf("LLM state: %s", llmState)
 }
 
 func (r *Runner) handleSummarize(args []string) error {
