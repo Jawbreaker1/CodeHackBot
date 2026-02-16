@@ -103,3 +103,37 @@ func TestRunCommandWithContextCancel(t *testing.T) {
 		t.Fatalf("expected canceled error")
 	}
 }
+
+func TestRunCommandIdleTimeout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skip on windows: sh may not be available")
+	}
+	runner := Runner{
+		Permissions: PermissionAll,
+		Timeout:     200 * time.Millisecond,
+	}
+	_, err := runner.RunCommand("sh", "-c", "sleep 1")
+	if err == nil {
+		t.Fatalf("expected timeout error")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "timeout") {
+		t.Fatalf("expected timeout error, got %v", err)
+	}
+}
+
+func TestRunCommandExtendsTimeoutWhenOutputContinues(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skip on windows: sh may not be available")
+	}
+	runner := Runner{
+		Permissions: PermissionAll,
+		Timeout:     120 * time.Millisecond,
+	}
+	result, err := runner.RunCommand("sh", "-c", "i=0; while [ $i -lt 8 ]; do echo tick; i=$((i+1)); sleep 0.05; done")
+	if err != nil {
+		t.Fatalf("expected success with active output, got %v", err)
+	}
+	if !strings.Contains(result.Output, "tick") {
+		t.Fatalf("expected output, got %q", result.Output)
+	}
+}

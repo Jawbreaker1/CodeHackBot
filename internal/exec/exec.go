@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -69,26 +71,21 @@ func (r *Runner) RunCommandWithContext(ctx context.Context, command string, args
 		r.LogDir = "sessions"
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, r.Timeout)
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, command, args...)
+	cmd := exec.CommandContext(context.Background(), command, args...)
 	var output string
-	var err error
-	if r.LiveWriter != nil {
-		output, err = runWithStreaming(cmd, r.LiveWriter)
-	} else {
-		var combined []byte
-		combined, err = cmd.CombinedOutput()
-		output = string(combined)
-	}
+	output, err := runWithStreamingWithIdleTimeout(ctx, cmd, r.LiveWriter, r.Timeout, r.Now)
 	result := CommandResult{
 		Command: command,
 		Args:    args,
 		Output:  strings.TrimSpace(output),
 		Error:   err,
 	}
-	if ctx.Err() == context.DeadlineExceeded {
+	if errors.Is(err, errIdleTimeout) {
+		result.Error = fmt.Errorf("command idle timeout after %s", r.Timeout)
+	} else if ctx.Err() == context.DeadlineExceeded {
 		result.Error = fmt.Errorf("command timeout after %s", r.Timeout)
 	}
 
@@ -103,7 +100,13 @@ func (r *Runner) RunCommand(command string, args ...string) (CommandResult, erro
 	return r.RunCommandWithContext(context.Background(), command, args...)
 }
 
-func runWithStreaming(cmd *exec.Cmd, live io.Writer) (string, error) {
+var errIdleTimeout = errors.New("idle timeout")
+
+func runWithStreamingWithIdleTimeout(parentCtx context.Context, cmd *exec.Cmd, live io.Writer, idleTimeout time.Duration, now func() time.Time) (string, error) {
+	if now == nil {
+		now = time.Now
+	}
+
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", err
@@ -118,10 +121,13 @@ func runWithStreaming(cmd *exec.Cmd, live io.Writer) (string, error) {
 
 	var buf bytes.Buffer
 	var mu sync.Mutex
+	var lastOutput atomic.Int64
+	lastOutput.Store(now().UnixNano())
 	writer := streamWriter{
-		buf:  &buf,
-		live: live,
-		mu:   &mu,
+		buf:        &buf,
+		live:       live,
+		mu:         &mu,
+		onActivity: func() { lastOutput.Store(now().UnixNano()) },
 	}
 
 	var wg sync.WaitGroup
@@ -135,15 +141,56 @@ func runWithStreaming(cmd *exec.Cmd, live io.Writer) (string, error) {
 		_, _ = io.Copy(writer, stderr)
 	}()
 
+	idleTimedOut := atomic.Bool{}
+	stopMonitor := make(chan struct{})
+	var monitorWG sync.WaitGroup
+	if idleTimeout > 0 {
+		monitorWG.Add(1)
+		go func() {
+			defer monitorWG.Done()
+			ticker := time.NewTicker(250 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-stopMonitor:
+					return
+				case <-parentCtx.Done():
+					if cmd.Process != nil {
+						_ = cmd.Process.Kill()
+					}
+					return
+				case <-ticker.C:
+					last := time.Unix(0, lastOutput.Load())
+					if now().Sub(last) > idleTimeout {
+						idleTimedOut.Store(true)
+						if cmd.Process != nil {
+							_ = cmd.Process.Kill()
+						}
+						return
+					}
+				}
+			}
+		}()
+	}
+
 	waitErr := cmd.Wait()
+	close(stopMonitor)
+	monitorWG.Wait()
 	wg.Wait()
+	if idleTimedOut.Load() {
+		return buf.String(), errIdleTimeout
+	}
+	if parentCtx.Err() != nil {
+		return buf.String(), parentCtx.Err()
+	}
 	return buf.String(), waitErr
 }
 
 type streamWriter struct {
-	buf  *bytes.Buffer
-	live io.Writer
-	mu   *sync.Mutex
+	buf        *bytes.Buffer
+	live       io.Writer
+	mu         *sync.Mutex
+	onActivity func()
 }
 
 func (w streamWriter) Write(p []byte) (int, error) {
@@ -151,6 +198,9 @@ func (w streamWriter) Write(p []byte) (int, error) {
 	defer w.mu.Unlock()
 	if w.live != nil {
 		_, _ = w.live.Write(p)
+	}
+	if w.onActivity != nil {
+		w.onActivity()
 	}
 	return w.buf.Write(p)
 }
