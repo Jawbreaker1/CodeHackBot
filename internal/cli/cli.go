@@ -62,7 +62,6 @@ func (r *Runner) handleAsk(text string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	stopIndicator := r.startLLMIndicatorIfAllowed("ask")
-	defer stopIndicator()
 	resp, err := client.Chat(ctx, llm.ChatRequest{
 		Model:       r.cfg.LLM.Model,
 		Temperature: 0.2,
@@ -77,6 +76,7 @@ func (r *Runner) handleAsk(text string) error {
 			},
 		},
 	})
+	stopIndicator()
 	if err != nil {
 		r.recordLLMFailure(err)
 		return err
@@ -85,8 +85,9 @@ func (r *Runner) handleAsk(text string) error {
 	if r.cfg.UI.Verbose {
 		r.logger.Printf("Assistant response:")
 	}
-	fmt.Println(resp.Content)
-	r.appendConversation("Assistant", resp.Content)
+	msg := normalizeAssistantOutput(resp.Content)
+	fmt.Println(msg)
+	r.appendConversation("Assistant", msg)
 	return nil
 }
 
@@ -563,8 +564,8 @@ func (r *Runner) handleAssistGoalWithMode(goal string, dryRun bool, mode string)
 
 func (r *Runner) handleAssistSingleStep(goal string, dryRun bool, mode string) error {
 	stopIndicator := r.startLLMIndicatorIfAllowed("assist")
-	defer stopIndicator()
 	suggestion, err := r.getAssistSuggestion(goal, mode)
+	stopIndicator()
 	if err != nil {
 		return err
 	}
@@ -674,8 +675,8 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 func (r *Runner) handleAssistNoop(goal string, dryRun bool) error {
 	clarifyGoal := fmt.Sprintf("Original goal: %s\nThe previous suggestion was noop. Provide one concrete next step. If details are missing, ask one concise clarifying question.", goal)
 	stopIndicator := r.startLLMIndicatorIfAllowed("assist clarify")
-	defer stopIndicator()
 	suggestion, err := r.getAssistSuggestion(clarifyGoal, "recover")
+	stopIndicator()
 	if err != nil {
 		r.pendingAssistGoal = goal
 		fmt.Println("I need one more detail to continue. Share what target/path/url to act on.")
@@ -745,9 +746,9 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 				r.logger.Printf("Summary: %s", suggestion.Summary)
 			}
 		} else {
-			fmt.Println(suggestion.Question)
+			fmt.Println(normalizeAssistantOutput(suggestion.Question))
 		}
-		r.appendConversation("Assistant", suggestion.Question)
+		r.appendConversation("Assistant", normalizeAssistantOutput(suggestion.Question))
 		return nil
 	case "noop":
 		if r.cfg.UI.Verbose {
@@ -762,6 +763,7 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 		if final == "" {
 			final = "(completed)"
 		}
+		final = normalizeAssistantOutput(final)
 		fmt.Println(final)
 		r.appendConversation("Assistant", final)
 		return nil
@@ -1127,7 +1129,6 @@ func (r *Runner) summarizeFromLatestArtifact(goal string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	stopIndicator := r.startLLMIndicatorIfAllowed("summary")
-	defer stopIndicator()
 	resp, err := client.Chat(ctx, llm.ChatRequest{
 		Model:       r.cfg.LLM.Model,
 		Temperature: 0.2,
@@ -1142,13 +1143,15 @@ func (r *Runner) summarizeFromLatestArtifact(goal string) error {
 			},
 		},
 	})
+	stopIndicator()
 	if err != nil {
 		r.recordLLMFailure(err)
 		return err
 	}
 	r.recordLLMSuccess()
-	fmt.Println(resp.Content)
-	r.appendConversation("Assistant", resp.Content)
+	text := normalizeAssistantOutput(resp.Content)
+	fmt.Println(text)
+	r.appendConversation("Assistant", text)
 	return nil
 }
 
@@ -1867,6 +1870,12 @@ func isBenignNoMatchError(err error) bool {
 	default:
 		return false
 	}
+}
+
+func normalizeAssistantOutput(text string) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	return strings.TrimSpace(text)
 }
 
 func looksLikeChat(text string) bool {

@@ -186,10 +186,11 @@ func (r *Runner) handleSummarize(args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	stopIndicator := r.startLLMIndicatorIfAllowed("summarize")
-	defer stopIndicator()
 	if err := manager.Summarize(ctx, summarizer, reason); err != nil {
+		stopIndicator()
 		return err
 	}
+	stopIndicator()
 	r.logger.Printf("Summary updated")
 	return nil
 }

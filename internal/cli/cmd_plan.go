@@ -98,8 +98,8 @@ func (r *Runner) handlePlanAuto(reason string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	stopIndicator := r.startLLMIndicatorIfAllowed("plan")
-	defer stopIndicator()
 	content, err := planner.Plan(ctx, input)
+	stopIndicator()
 	if err != nil {
 		return err
 	}
@@ -131,8 +131,8 @@ func (r *Runner) handleNext(_ []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	stopIndicator := r.startLLMIndicatorIfAllowed("next")
-	defer stopIndicator()
 	steps, err := planner.Next(ctx, input)
+	stopIndicator()
 	if err != nil {
 		return err
 	}
@@ -176,8 +176,8 @@ func (r *Runner) handleExecute(args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	stopIndicator := r.startLLMIndicatorIfAllowed("next")
-	defer stopIndicator()
 	steps, err := planner.Next(ctx, input)
+	stopIndicator()
 	if err != nil {
 		return err
 	}
