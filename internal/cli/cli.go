@@ -647,6 +647,18 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 			return nil
 		}
 		if err := r.executeAssistSuggestion(suggestion, dryRun); err != nil {
+			if isAssistRepeatedCommandGuard(err) {
+				if !dryRun {
+					if r.cfg.UI.Verbose {
+						r.logger.Printf("Repeated step detected; requesting an alternative action.")
+					} else {
+						fmt.Println("Repeated step detected; asking assistant for an alternative action.")
+					}
+				}
+				stepMode = "recover"
+				stepsRun++
+				continue
+			}
 			if r.handleAssistCommandFailure(goal, suggestion, err) {
 				r.maybeEmitGoalSummary(goal, dryRun)
 				r.maybeFinalizeReport(goal, dryRun)
@@ -1928,6 +1940,13 @@ func isBenignNoMatchError(err error) bool {
 	default:
 		return false
 	}
+}
+
+func isAssistRepeatedCommandGuard(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "assistant loop guard: repeated command blocked")
 }
 
 func normalizeAssistantOutput(text string) string {

@@ -179,3 +179,63 @@ func TestAssistCompleteFinalizesReportArtifact(t *testing.T) {
 		t.Fatalf("expected archived report copy")
 	}
 }
+
+func TestAssistRepeatedCommandGuardRequestsAlternativeAndContinues(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+		n := atomic.AddInt32(&calls, 1)
+		content := `{"type":"complete","final":"done"}`
+		switch n {
+		case 1, 2, 3:
+			content = `{"type":"command","command":"ls","args":["-la"],"summary":"list files"}`
+		case 4:
+			content = `{"type":"complete","final":"done"}`
+		}
+		resp := map[string]any{
+			"choices": []map[string]any{
+				{
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": content,
+					},
+				},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := config.Config{}
+	cfg.Session.LogDir = t.TempDir()
+	cfg.LLM.BaseURL = srv.URL
+	cfg.Permissions.Level = "all"
+	r := NewRunner(cfg, "session-repeat-guard", "", "")
+
+	orig := os.Stdout
+	rOut, wOut, _ := os.Pipe()
+	os.Stdout = wOut
+	t.Cleanup(func() {
+		os.Stdout = orig
+	})
+
+	if err := r.handleAssistAgentic("list files in this directory", false, ""); err != nil {
+		t.Fatalf("handleAssistAgentic: %v", err)
+	}
+	_ = wOut.Close()
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, rOut)
+	out := buf.String()
+	if !strings.Contains(out, "Repeated step detected; asking assistant for an alternative action.") {
+		t.Fatalf("expected repeated-step recovery message, got:\n%s", out)
+	}
+	if !strings.Contains(out, "done") {
+		t.Fatalf("expected completion after recovery, got:\n%s", out)
+	}
+	if atomic.LoadInt32(&calls) < 4 {
+		t.Fatalf("expected at least 4 llm calls, got %d", calls)
+	}
+}
