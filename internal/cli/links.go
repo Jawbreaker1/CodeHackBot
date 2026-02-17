@@ -87,16 +87,16 @@ func (r *Runner) handleParseLinks(args []string) error {
 		return err
 	}
 
-	fmt.Printf("Links found: %d\n", len(links))
-	fmt.Printf("Links saved: %s\n", outPath)
-	fmt.Printf("Log saved: %s\n", logPath)
+	safePrintf("Links found: %d\n", len(links))
+	safePrintf("Links saved: %s\n", outPath)
+	safePrintf("Log saved: %s\n", logPath)
 	if len(links) > 0 {
-		fmt.Printf("Top links:\n")
+		safePrintf("Top links:\n")
 		for i, link := range links {
 			if i >= 20 {
 				break
 			}
-			fmt.Printf("- %s\n", link)
+			safePrintf("- %s\n", link)
 		}
 	}
 

@@ -52,13 +52,13 @@ func (r *Runner) handleReadFile(args []string) error {
 		r.logger.Printf("read_file log save failed: %v", logErr)
 	}
 
-	fmt.Printf("Path: %s\n", path)
+	safePrintf("Path: %s\n", path)
 	if logPath != "" {
-		fmt.Printf("Log saved: %s\n", logPath)
+		safePrintf("Log saved: %s\n", logPath)
 	}
 	if strings.TrimSpace(excerpt) != "" {
-		fmt.Println("Excerpt:")
-		fmt.Println(excerpt)
+		safePrintln("Excerpt:")
+		safePrintln(excerpt)
 	}
 
 	r.recordActionArtifact(logPath)
@@ -147,9 +147,9 @@ func (r *Runner) handleWriteFile(args []string) error {
 		r.logger.Printf("write_file log save failed: %v", logErr)
 	}
 
-	fmt.Printf("Wrote: %s\n", outPath)
+	safePrintf("Wrote: %s\n", outPath)
 	if logPath != "" {
-		fmt.Printf("Log saved: %s\n", logPath)
+		safePrintf("Log saved: %s\n", logPath)
 	}
 	r.recordActionArtifact(logPath)
 	r.recordObservation("write_file", []string{outPath}, logPath, fmt.Sprintf("bytes=%d", len(content)), nil)
@@ -183,12 +183,12 @@ func (r *Runner) handleListDir(args []string) error {
 		if logErr != nil {
 			r.logger.Printf("list_dir log save failed: %v", logErr)
 		}
-		fmt.Printf("Path: %s\n", path)
+		safePrintf("Path: %s\n", path)
 		if logPath != "" {
-			fmt.Printf("Log saved: %s\n", logPath)
+			safePrintf("Log saved: %s\n", logPath)
 		}
-		fmt.Println("Entry:")
-		fmt.Printf("- %s (%d bytes)\n", filepath.Base(path), info.Size())
+		safePrintln("Entry:")
+		safePrintf("- %s (%d bytes)\n", filepath.Base(path), info.Size())
 
 		r.recordActionArtifact(logPath)
 		r.recordObservation("list_dir", []string{path}, logPath, fmt.Sprintf("file=%s bytes=%d", filepath.Base(path), info.Size()), nil)
@@ -227,18 +227,18 @@ func (r *Runner) handleListDir(args []string) error {
 		r.logger.Printf("list_dir log save failed: %v", logErr)
 	}
 
-	fmt.Printf("Path: %s\n", path)
+	safePrintf("Path: %s\n", path)
 	if logPath != "" {
-		fmt.Printf("Log saved: %s\n", logPath)
+		safePrintf("Log saved: %s\n", logPath)
 	}
 	if len(names) > 0 {
-		fmt.Println("Entries:")
+		safePrintln("Entries:")
 		for i, name := range names {
 			if i >= 60 {
-				fmt.Println("...")
+				safePrintln("...")
 				break
 			}
-			fmt.Println("- " + name)
+			safePrintln("- " + name)
 		}
 	}
 

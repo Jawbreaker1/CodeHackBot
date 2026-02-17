@@ -222,7 +222,7 @@ func (r *Runner) buildAndRunTool(sessionDir, toolsRoot string, tool assist.ToolS
 	}
 
 	if dryRun {
-		fmt.Printf("Tool (dry-run): %s (%s)\n", tool.Name, tool.Language)
+		safePrintf("Tool (dry-run): %s (%s)\n", tool.Name, tool.Language)
 		return nil
 	}
 
@@ -494,6 +494,7 @@ func (r *Runner) executeToolRun(command string, args []string) error {
 		LogDir:           filepath.Join(r.cfg.Session.LogDir, r.sessionID, "logs"),
 		Timeout:          timeout,
 		Reader:           r.reader,
+		PromptWriter:     r.outputWriter(),
 		ScopeNetworks:    r.cfg.Scope.Networks,
 		ScopeTargets:     r.cfg.Scope.Targets,
 		ScopeDenyTargets: r.cfg.Scope.DenyTargets,
@@ -516,7 +517,7 @@ func (r *Runner) executeToolRun(command string, args []string) error {
 	r.recordObservationFromResult("tool_run", result, err)
 	r.maybeAutoSummarize(result.LogPath, "tool_run")
 
-	fmt.Print(renderExecSummary(r.currentTask, command, args, time.Since(start), result.LogPath, "disabled", result.Output, err))
+	safePrint(renderExecSummary(r.currentTask, command, args, time.Since(start), result.LogPath, "disabled", result.Output, err))
 	if err != nil {
 		if wasCanceled {
 			r.logger.Printf("Interrupted. What should I do differently?")

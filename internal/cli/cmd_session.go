@@ -68,7 +68,7 @@ func (r *Runner) handleInit(args []string) error {
 		}
 		r.logger.Printf("Inventory captured")
 	}
-	fmt.Print(renderInitSummary(r.currentTask, sessionDir, sessionConfigPath, createInventory))
+	safePrint(renderInitSummary(r.currentTask, sessionDir, sessionConfigPath, createInventory))
 	return nil
 }
 

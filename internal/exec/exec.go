@@ -31,6 +31,7 @@ type Runner struct {
 	LogDir           string
 	Timeout          time.Duration
 	Reader           *bufio.Reader
+	PromptWriter     io.Writer
 	Now              func() time.Time
 	ScopeNetworks    []string
 	ScopeTargets     []string
@@ -249,8 +250,12 @@ func (r *Runner) confirm(prompt string) (bool, error) {
 	if reader == nil {
 		reader = bufio.NewReader(os.Stdin)
 	}
+	writer := r.PromptWriter
+	if writer == nil {
+		writer = os.Stdout
+	}
 	for {
-		fmt.Printf("%s [y/N]: ", prompt)
+		_, _ = fmt.Fprintf(writer, "%s [y/N]: ", prompt)
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			return false, err

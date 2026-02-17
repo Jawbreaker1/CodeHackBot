@@ -4,7 +4,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"sync"
 
 	"golang.org/x/term"
 )
@@ -18,12 +17,11 @@ func (r *Runner) liveWriter() io.Writer {
 
 type ttyWriter struct {
 	out *os.File
-	mu  sync.Mutex
 }
 
 func (w *ttyWriter) Write(p []byte) (int, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
+	outputMu.Lock()
+	defer outputMu.Unlock()
 
 	if w.out == nil {
 		return len(p), nil

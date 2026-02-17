@@ -88,7 +88,7 @@ func (r *Runner) handleAsk(text string) error {
 		r.logger.Printf("Assistant response:")
 	}
 	msg := normalizeAssistantOutput(resp.Content)
-	fmt.Println(msg)
+	safePrintln(msg)
 	r.appendConversation("Assistant", msg)
 	return nil
 }
@@ -615,7 +615,7 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 					r.maybeFinalizeReport(goal, dryRun)
 					return nil
 				}
-				fmt.Println("Reached dynamic step budget without a final answer. Suggesting next steps.")
+				safePrintln("Reached dynamic step budget without a final answer. Suggesting next steps.")
 			}
 			if !dryRun && lastCommand.Type == "command" {
 				r.maybeSuggestNextSteps(goal, lastCommand)
@@ -685,7 +685,7 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 				r.updateAssistRuntime("recover", budget)
 				if repeatedGuardHits >= 2 {
 					msg := "Repeated step loop detected. Pausing for guidance: share the exact next action/target and I will continue."
-					fmt.Println(msg)
+					safePrintln(msg)
 					r.appendConversation("Assistant", msg)
 					r.pendingAssistGoal = goal
 					r.pendingAssistQ = msg
@@ -695,7 +695,7 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 					if r.cfg.UI.Verbose {
 						r.logger.Printf("Repeated step detected; requesting an alternative action.")
 					} else {
-						fmt.Println("Repeated step detected; asking assistant for an alternative action.")
+						safePrintln("Repeated step detected; asking assistant for an alternative action.")
 					}
 				}
 				stepMode = "recover"
@@ -777,10 +777,10 @@ func (r *Runner) announceAssistStep(stepNum, maxSteps int, suggestion assist.Sug
 		return
 	}
 	if maxSteps > 0 {
-		fmt.Printf("Step %d/%d: %s\n", stepNum, maxSteps, desc)
+		safePrintf("Step %d/%d: %s\n", stepNum, maxSteps, desc)
 		return
 	}
-	fmt.Printf("Step %d: %s\n", stepNum, desc)
+	safePrintf("Step %d: %s\n", stepNum, desc)
 }
 
 func assistStepDescription(suggestion assist.Suggestion) string {
@@ -830,12 +830,12 @@ func (r *Runner) handleAssistNoop(goal string, dryRun bool) error {
 	stopIndicator()
 	if err != nil {
 		r.pendingAssistGoal = goal
-		fmt.Println("I need one more detail to continue. Share what target/path/url to act on.")
+		safePrintln("I need one more detail to continue. Share what target/path/url to act on.")
 		return nil
 	}
 	if suggestion.Type == "noop" {
 		r.pendingAssistGoal = goal
-		fmt.Println("I need one more detail to continue. Share what target/path/url to act on.")
+		safePrintln("I need one more detail to continue. Share what target/path/url to act on.")
 		return nil
 	}
 	if err := r.executeAssistSuggestion(suggestion, dryRun); err != nil {
@@ -919,7 +919,7 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 				r.logger.Printf("Summary: %s", suggestion.Summary)
 			}
 		} else {
-			fmt.Println(normalizeAssistantOutput(suggestion.Question))
+			safePrintln(normalizeAssistantOutput(suggestion.Question))
 		}
 		r.appendConversation("Assistant", normalizeAssistantOutput(suggestion.Question))
 		r.pendingAssistQ = suggestion.Question
@@ -938,7 +938,7 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 			final = "(completed)"
 		}
 		final = normalizeAssistantOutput(final)
-		fmt.Println(final)
+		safePrintln(final)
 		r.appendConversation("Assistant", final)
 		r.pendingAssistGoal = ""
 		r.pendingAssistQ = ""
@@ -1038,19 +1038,19 @@ func (r *Runner) handlePlanSuggestion(suggestion assist.Suggestion, dryRun bool)
 		}
 	}
 	if planText != "" {
-		fmt.Println("Plan:")
-		fmt.Println(planText)
+		safePrintln("Plan:")
+		safePrintln(planText)
 		r.appendConversation("Assistant", planText)
 	}
 	if len(suggestion.Steps) > 0 {
-		fmt.Println("Plan steps:")
+		safePrintln("Plan steps:")
 		steps := suggestion.Steps
 		maxSteps := r.assistMaxSteps()
 		if maxSteps > 0 && len(steps) > maxSteps {
 			steps = steps[:maxSteps]
 		}
 		for i, step := range steps {
-			fmt.Printf("%d) %s\n", i+1, step)
+			safePrintf("%d) %s\n", i+1, step)
 		}
 		r.appendConversation("Assistant", "Plan steps: "+strings.Join(steps, " | "))
 		suggestion.Steps = steps
@@ -1151,7 +1151,7 @@ func (r *Runner) suggestAssistRecovery(goal string, suggestion assist.Suggestion
 		return true
 	}
 	if recovery.Type == "question" {
-		fmt.Println(recovery.Question)
+		safePrintln(recovery.Question)
 		r.appendConversation("Assistant", recovery.Question)
 		if strings.TrimSpace(goal) != "" {
 			r.pendingAssistGoal = goal
@@ -1207,7 +1207,7 @@ func (r *Runner) maybeSuggestNextSteps(goal string, lastSuggestion assist.Sugges
 	switch next.Type {
 	case "question":
 		if next.Question != "" {
-			fmt.Println(next.Question)
+			safePrintln(next.Question)
 			r.appendConversation("Assistant", next.Question)
 			if strings.TrimSpace(goal) != "" {
 				r.pendingAssistGoal = goal
@@ -1216,25 +1216,25 @@ func (r *Runner) maybeSuggestNextSteps(goal string, lastSuggestion assist.Sugges
 	case "plan":
 		steps := next.Steps
 		if len(steps) == 0 && next.Plan != "" {
-			fmt.Println("Possible next steps:")
-			fmt.Println(next.Plan)
+			safePrintln("Possible next steps:")
+			safePrintln(next.Plan)
 			r.appendConversation("Assistant", "Possible next steps: "+next.Plan)
 			return
 		}
 		if len(steps) > 0 {
-			fmt.Println("Possible next steps:")
+			safePrintln("Possible next steps:")
 			for i, step := range steps {
-				fmt.Printf("%d) %s\n", i+1, step)
+				safePrintf("%d) %s\n", i+1, step)
 			}
 			r.appendConversation("Assistant", "Possible next steps: "+strings.Join(steps, " | "))
 		}
 	case "command":
 		cmdLine := strings.TrimSpace(strings.Join(append([]string{next.Command}, next.Args...), " "))
 		if cmdLine != "" {
-			fmt.Printf("Suggested next command: %s\n", cmdLine)
+			safePrintf("Suggested next command: %s\n", cmdLine)
 		}
 		if next.Summary != "" {
-			fmt.Printf("Why: %s\n", next.Summary)
+			safePrintf("Why: %s\n", next.Summary)
 		}
 		r.appendConversation("Assistant", fmt.Sprintf("Suggested next command: %s", cmdLine))
 	default:
@@ -1328,7 +1328,7 @@ func (r *Runner) summarizeFromLatestArtifact(goal string) error {
 	}
 	r.recordLLMSuccess()
 	text := normalizeAssistantOutput(resp.Content)
-	fmt.Println(text)
+	safePrintln(text)
 	r.appendConversation("Assistant", text)
 	return nil
 }

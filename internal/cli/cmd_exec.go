@@ -53,6 +53,7 @@ func (r *Runner) handleRun(args []string) error {
 		LogDir:           filepath.Join(r.cfg.Session.LogDir, r.sessionID, "logs"),
 		Timeout:          timeout,
 		Reader:           r.reader,
+		PromptWriter:     r.outputWriter(),
 		ScopeNetworks:    r.cfg.Scope.Networks,
 		ScopeTargets:     r.cfg.Scope.Targets,
 		ScopeDenyTargets: r.cfg.Scope.DenyTargets,
@@ -100,7 +101,7 @@ func (r *Runner) handleRun(args []string) error {
 			}
 		}
 	}
-	fmt.Print(renderExecSummary(r.currentTask, args[0], args[1:], time.Since(start), result.LogPath, ledgerStatus, result.Output, err))
+	safePrint(renderExecSummary(r.currentTask, args[0], args[1:], time.Since(start), result.LogPath, ledgerStatus, result.Output, err))
 	if err != nil {
 		if wasCanceled {
 			err = fmt.Errorf("command interrupted")
@@ -197,6 +198,7 @@ func (r *Runner) handleMSF(args []string) error {
 		LogDir:           filepath.Join(r.cfg.Session.LogDir, r.sessionID, "logs"),
 		Timeout:          2 * time.Minute,
 		Reader:           r.reader,
+		PromptWriter:     r.outputWriter(),
 		ScopeNetworks:    r.cfg.Scope.Networks,
 		ScopeTargets:     r.cfg.Scope.Targets,
 		ScopeDenyTargets: r.cfg.Scope.DenyTargets,
@@ -216,7 +218,7 @@ func (r *Runner) handleMSF(args []string) error {
 	r.recordObservationFromResult("msf", result, err)
 	r.maybeAutoSummarize(result.LogPath, "msf")
 
-	fmt.Print(renderExecSummary(r.currentTask, "msfconsole", cmdArgs, time.Since(start), result.LogPath, "disabled", result.Output, err))
+	safePrint(renderExecSummary(r.currentTask, "msfconsole", cmdArgs, time.Since(start), result.LogPath, "disabled", result.Output, err))
 	if err != nil {
 		if wasCanceled {
 			r.logger.Printf("Interrupted. What should I do differently?")

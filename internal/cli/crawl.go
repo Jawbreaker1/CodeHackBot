@@ -211,10 +211,10 @@ func (r *Runner) handleCrawl(args []string) error {
 	}
 	logPath, _ := writeFSLog(sessionDir, "crawl", logText.String())
 
-	fmt.Printf("Crawl complete: %d page(s)\n", len(index.Pages))
-	fmt.Printf("Index: %s\n", indexPath)
+	safePrintf("Crawl complete: %d page(s)\n", len(index.Pages))
+	safePrintf("Index: %s\n", indexPath)
 	if logPath != "" {
-		fmt.Printf("Log saved: %s\n", logPath)
+		safePrintf("Log saved: %s\n", logPath)
 	}
 
 	r.recordActionArtifact(logPath)

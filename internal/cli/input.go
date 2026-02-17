@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -19,7 +18,7 @@ func (r *Runner) readLine(prompt string) (string, error) {
 		return r.readLineInteractive(prompt)
 	}
 	if prompt != "" {
-		fmt.Print(prompt)
+		safePrint(prompt)
 	}
 	line, err := r.reader.ReadString('\n')
 	if err != nil && err != io.EOF {
@@ -32,7 +31,7 @@ func (r *Runner) readLineInteractive(prompt string) (string, error) {
 	fd := int(os.Stdin.Fd())
 	if !term.IsTerminal(fd) {
 		if prompt != "" {
-			fmt.Print(prompt)
+			safePrint(prompt)
 		}
 		line, err := r.reader.ReadString('\n')
 		if err != nil && err != io.EOF {
@@ -44,7 +43,7 @@ func (r *Runner) readLineInteractive(prompt string) (string, error) {
 	state, err := term.MakeRaw(fd)
 	if err != nil {
 		if prompt != "" {
-			fmt.Print(prompt)
+			safePrint(prompt)
 		}
 		line, readErr := r.reader.ReadString('\n')
 		if readErr != nil && readErr != io.EOF {
@@ -70,7 +69,7 @@ func (r *Runner) readLineInteractive(prompt string) (string, error) {
 		}
 		switch b {
 		case '\r', '\n':
-			fmt.Print("\r\n")
+			safePrint("\r\n")
 			r.inputRenderLines = 0
 			line := strings.TrimSpace(string(buf))
 			if recordHistory && line != "" {
@@ -82,14 +81,14 @@ func (r *Runner) readLineInteractive(prompt string) (string, error) {
 			r.historyScratch = ""
 			return line, nil
 		case 0x03:
-			fmt.Print("\r\n")
+			safePrint("\r\n")
 			r.inputRenderLines = 0
 			r.historyIndex = -1
 			r.historyScratch = ""
 			return "", io.EOF
 		case 0x04:
 			if len(buf) == 0 {
-				fmt.Print("\r\n")
+				safePrint("\r\n")
 				r.inputRenderLines = 0
 				r.historyIndex = -1
 				r.historyScratch = ""
@@ -152,7 +151,7 @@ func (r *Runner) readLineInteractive(prompt string) (string, error) {
 
 func (r *Runner) redrawInputLine(prompt string, buf []byte) {
 	r.clearInputRender()
-	fmt.Printf("%s%s%s%s", inputLineStyleStart, prompt, string(buf), inputLineStyleReset)
+	safePrintf("%s%s%s%s", inputLineStyleStart, prompt, string(buf), inputLineStyleReset)
 	r.inputRenderLines = visualLineCount(prompt+string(buf), terminalWidth())
 }
 
@@ -161,12 +160,12 @@ func (r *Runner) clearInputRender() {
 		return
 	}
 	for i := 0; i < r.inputRenderLines; i++ {
-		fmt.Print("\r\x1b[2K")
+		safePrint("\r\x1b[2K")
 		if i < r.inputRenderLines-1 {
-			fmt.Print("\x1b[1A")
+			safePrint("\x1b[1A")
 		}
 	}
-	fmt.Print("\r")
+	safePrint("\r")
 }
 
 func terminalWidth() int {

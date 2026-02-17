@@ -82,10 +82,11 @@ func NewRunner(cfg config.Config, sessionID, defaultConfigPath, profilePath stri
 	if cfg.UI.Verbose {
 		prefix = fmt.Sprintf("[session:%s] ", sessionID)
 	}
+	out := newSynchronizedOutputWriter(os.Stdout)
 	return &Runner{
 		cfg:               cfg,
 		sessionID:         sessionID,
-		logger:            log.New(os.Stdout, prefix, 0),
+		logger:            log.New(out, prefix, 0),
 		reader:            bufio.NewReader(os.Stdin),
 		defaultConfigPath: defaultConfigPath,
 		profilePath:       profilePath,
@@ -233,7 +234,7 @@ func (r *Runner) printLogo() {
 	}
 	logo := string(data)
 	logo = colorizeLogo(logo, r.isTTY())
-	fmt.Println(logo)
+	safePrintln(logo)
 }
 
 func colorizeLogo(logo string, enabled bool) string {

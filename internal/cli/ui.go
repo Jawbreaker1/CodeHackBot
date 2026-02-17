@@ -96,7 +96,7 @@ func (e commandError) Unwrap() error {
 func (r *Runner) startLLMIndicator(label string) func() {
 	r.setLLMStatus(label)
 	if r.isTTY() {
-		fmt.Printf("\nLLM %s ...\n", label)
+		safePrintf("\nLLM %s ...\n", label)
 	}
 	return func() {
 		r.clearLLMStatus()
@@ -139,7 +139,7 @@ func (r *Runner) ensureTTYLineBreak() {
 	if !r.isTTY() {
 		return
 	}
-	fmt.Print("\r\n")
+	safePrint("\r\n")
 }
 
 func (r *Runner) restoreTTYLayout() {
@@ -147,7 +147,7 @@ func (r *Runner) restoreTTYLayout() {
 		return
 	}
 	// Reset styles, ensure cursor is visible, and re-enable line wrap.
-	fmt.Print("\x1b[0m\x1b[?25h\x1b[?7h\r")
+	safePrint("\x1b[0m\x1b[?25h\x1b[?7h\r")
 	if runtime.GOOS != "windows" {
 		_ = goexec.Command("stty", "sane").Run()
 	}

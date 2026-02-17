@@ -135,7 +135,7 @@ func (r *Runner) finalizePlanWizard() error {
 		return err
 	}
 	r.logger.Printf("Plan updated: %s", planPath)
-	fmt.Println(finalPlan)
+	safePrintln(finalPlan)
 	return nil
 }
 

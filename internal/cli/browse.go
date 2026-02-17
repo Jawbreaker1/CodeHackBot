@@ -118,22 +118,22 @@ func (r *Runner) handleBrowse(args []string) error {
 	text := collapseWhitespace(stripHTML(stripScriptsAndStyles(content)))
 	snippet := truncate(text, 2000)
 
-	fmt.Printf("URL: %s\n", target)
+	safePrintf("URL: %s\n", target)
 	if title != "" {
-		fmt.Printf("Title: %s\n", title)
+		safePrintf("Title: %s\n", title)
 	}
 	if metaDescription != "" {
-		fmt.Printf("Meta description: %s\n", metaDescription)
+		safePrintf("Meta description: %s\n", metaDescription)
 	}
 	if len(headings) > 0 {
-		fmt.Printf("Headings: %s\n", strings.Join(headings, " | "))
+		safePrintf("Headings: %s\n", strings.Join(headings, " | "))
 	}
-	fmt.Printf("Status: %d\n", resp.StatusCode)
+	safePrintf("Status: %d\n", resp.StatusCode)
 	if strings.TrimSpace(bodyPath) != "" {
-		fmt.Printf("Body saved: %s\n", bodyPath)
+		safePrintf("Body saved: %s\n", bodyPath)
 	}
 	if snippet != "" {
-		fmt.Printf("Snippet:\n%s\n", snippet)
+		safePrintf("Snippet:\n%s\n", snippet)
 	}
 
 	logPath, err := writeBrowseLog(sessionDir, target, resp.StatusCode, resp.Header.Get("Content-Type"), title, metaDescription, headings, snippet, bodyPath)
