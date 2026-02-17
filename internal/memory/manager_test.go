@@ -45,6 +45,35 @@ func TestRecordLogUpdatesState(t *testing.T) {
 	}
 }
 
+func TestRecordLogDuplicatePathDoesNotAdvanceStepWindow(t *testing.T) {
+	temp := t.TempDir()
+	manager := Manager{
+		SessionDir:       temp,
+		MaxRecentOutputs: 5,
+	}
+	logPath := filepath.Join(temp, "logs", "chat.log")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		t.Fatalf("mkdir logs: %v", err)
+	}
+	if err := os.WriteFile(logPath, []byte("line1"), 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+	state, err := manager.RecordLog(logPath)
+	if err != nil {
+		t.Fatalf("RecordLog error: %v", err)
+	}
+	if state.StepsSinceSummary != 1 {
+		t.Fatalf("expected step window 1 after first record, got %d", state.StepsSinceSummary)
+	}
+	state, err = manager.RecordLog(logPath)
+	if err != nil {
+		t.Fatalf("RecordLog error: %v", err)
+	}
+	if state.StepsSinceSummary != 1 {
+		t.Fatalf("expected duplicate path to keep step window at 1, got %d", state.StepsSinceSummary)
+	}
+}
+
 func TestShouldSummarize(t *testing.T) {
 	manager := Manager{
 		MaxRecentOutputs:   10,

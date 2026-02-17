@@ -38,8 +38,11 @@ func (m Manager) RecordLog(logPath string) (State, error) {
 		return State{}, err
 	}
 	if logPath != "" {
+		before := len(state.RecentLogs)
 		state.RecentLogs = appendUnique(state.RecentLogs, logPath)
-		state.StepsSinceSummary++
+		if len(state.RecentLogs) > before {
+			state.StepsSinceSummary++
+		}
 		if m.MaxRecentOutputs > 0 && len(state.RecentLogs) > m.MaxRecentOutputs {
 			state.RecentLogs = state.RecentLogs[len(state.RecentLogs)-m.MaxRecentOutputs:]
 		}
