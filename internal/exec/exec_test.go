@@ -89,6 +89,31 @@ func TestRunCommandStreaming(t *testing.T) {
 	}
 }
 
+func TestRunCommandNormalizesCarriageReturns(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skip on windows: sh may not be available")
+	}
+	var live bytes.Buffer
+	runner := Runner{
+		Permissions: PermissionAll,
+		LogDir:      t.TempDir(),
+		LiveWriter:  &live,
+	}
+	result, err := runner.RunCommand("sh", "-c", "printf 'alpha\\rbeta\\n'")
+	if err != nil {
+		t.Fatalf("RunCommand error: %v", err)
+	}
+	if strings.Contains(result.Output, "\r") {
+		t.Fatalf("expected sanitized output without carriage returns, got %q", result.Output)
+	}
+	if strings.Contains(live.String(), "\r") {
+		t.Fatalf("expected sanitized live output without carriage returns, got %q", live.String())
+	}
+	if !strings.Contains(result.Output, "alpha\nbeta") {
+		t.Fatalf("expected normalized newline output, got %q", result.Output)
+	}
+}
+
 func TestRunCommandWithContextCancel(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("skip on windows: sleep may not be available")

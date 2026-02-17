@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -203,15 +204,30 @@ func tickerC(t *time.Ticker) <-chan time.Time {
 }
 
 func (w streamWriter) Write(p []byte) (int, error) {
+	clean := sanitizeOutputChunk(p)
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.live != nil {
-		_, _ = w.live.Write(p)
+		_, _ = w.live.Write(clean)
 	}
 	if w.onActivity != nil {
 		w.onActivity()
 	}
-	return w.buf.Write(p)
+	_, _ = w.buf.Write(clean)
+	return len(p), nil
+}
+
+var ansiEscapes = regexp.MustCompile("\x1b\\[[0-9;?]*[ -/]*[@-~]")
+
+func sanitizeOutputChunk(p []byte) []byte {
+	if len(p) == 0 {
+		return p
+	}
+	text := string(p)
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	text = ansiEscapes.ReplaceAllString(text, "")
+	return []byte(text)
 }
 
 func (r *Runner) writeLog(result CommandResult) (string, error) {

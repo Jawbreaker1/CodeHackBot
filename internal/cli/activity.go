@@ -17,6 +17,7 @@ const (
 
 type activityWriter struct {
 	base      io.Writer
+	mu        sync.Mutex
 	seen      atomic.Bool
 	lastWrite atomic.Int64
 }
@@ -29,6 +30,8 @@ func newActivityWriter(base io.Writer) *activityWriter {
 }
 
 func (w *activityWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	w.seen.Store(true)
 	w.lastWrite.Store(time.Now().UnixNano())
 	return w.base.Write(p)
@@ -60,6 +63,8 @@ func (w *activityWriter) writeStatusLine(msg string) {
 	if msg == "" {
 		return
 	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	// Prefix with a line break so the status line doesn't get appended mid-line.
 	_, _ = w.base.Write([]byte("\n" + msg + "\n"))
 }
