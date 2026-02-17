@@ -120,6 +120,16 @@ func TestSummarizeFallback(t *testing.T) {
 	if _, err := manager.RecordLog(logPath); err != nil {
 		t.Fatalf("RecordLog error: %v", err)
 	}
+	if _, err := manager.RecordObservation(Observation{
+		Time:          "now",
+		Kind:          "run",
+		Command:       "echo",
+		Args:          []string{"hi"},
+		ExitCode:      0,
+		OutputExcerpt: "hi",
+	}); err != nil {
+		t.Fatalf("RecordObservation error: %v", err)
+	}
 	if err := manager.Summarize(context.Background(), FallbackSummarizer{}, "manual"); err != nil {
 		t.Fatalf("Summarize error: %v", err)
 	}
@@ -130,5 +140,16 @@ func TestSummarizeFallback(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "Summary") {
 		t.Fatalf("expected summary content")
+	}
+	statePath := filepath.Join(sessionDir, StateFilename)
+	state, err := LoadState(statePath)
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if len(state.RecentLogs) != 0 {
+		t.Fatalf("expected recent logs to reset after summarize")
+	}
+	if len(state.RecentObservations) != 0 {
+		t.Fatalf("expected recent observations to reset after summarize")
 	}
 }

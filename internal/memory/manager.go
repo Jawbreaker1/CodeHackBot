@@ -142,6 +142,7 @@ func (m Manager) Summarize(ctx context.Context, summarizer Summarizer, reason st
 	state.LastSummaryAt = time.Now().UTC().Format(time.RFC3339)
 	state.LastSummaryHash = hashLines(append(summaryLines, mergedFacts...))
 	state.RecentLogs = nil
+	state.RecentObservations = nil
 	if err := SaveState(artifacts.StatePath, state); err != nil {
 		return err
 	}
