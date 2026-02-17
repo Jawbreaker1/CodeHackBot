@@ -155,6 +155,9 @@ func (r *Runner) redrawInputLine(prompt string, buf []byte, statusLine string) {
 	status := padOrTrimSingleLine(statusLine, terminalWidth())
 	withOutputLock(func() {
 		r.clearInputRenderLocked()
+		if r.inputRenderLines == 2 {
+			_, _ = fmt.Fprint(os.Stdout, "\x1b[1A\r")
+		}
 		_, _ = fmt.Fprintf(os.Stdout, "%s%s\x1b[K%s\n", inputLineStyleStart, input, inputLineStyleReset)
 		_, _ = fmt.Fprintf(os.Stdout, "%s%s\x1b[K%s", statusLineStyleStart, status, inputLineStyleReset)
 	})
