@@ -73,9 +73,7 @@ func (r *Runner) readLineInteractive(prompt string) (string, error) {
 		}
 		switch b {
 		case '\r', '\n':
-			r.clearInputRender()
-			safePrint("\r\n")
-			r.inputRenderLines = 0
+			r.finishInputRenderLine()
 			line := strings.TrimSpace(string(buf))
 			if recordHistory && line != "" {
 				if len(r.history) == 0 || r.history[len(r.history)-1] != line {
@@ -86,17 +84,13 @@ func (r *Runner) readLineInteractive(prompt string) (string, error) {
 			r.historyScratch = ""
 			return line, nil
 		case 0x03:
-			r.clearInputRender()
-			safePrint("\r\n")
-			r.inputRenderLines = 0
+			r.finishInputRenderLine()
 			r.historyIndex = -1
 			r.historyScratch = ""
 			return "", io.EOF
 		case 0x04:
 			if len(buf) == 0 {
-				r.clearInputRender()
-				safePrint("\r\n")
-				r.inputRenderLines = 0
+				r.finishInputRenderLine()
 				r.historyIndex = -1
 				r.historyScratch = ""
 				return "", io.EOF
@@ -256,4 +250,16 @@ func maxDisplayColumns(width int) int {
 
 func displayWidth(text string) int {
 	return utf8.RuneCountInString(text)
+}
+
+func (r *Runner) finishInputRenderLine() {
+	withOutputLock(func() {
+		lines := r.inputRenderLines
+		r.clearInputRenderLocked()
+		if lines > 1 {
+			_, _ = fmt.Fprintf(os.Stdout, "\x1b[%dB\r", lines-1)
+		}
+		_, _ = fmt.Fprint(os.Stdout, "\r\n")
+		r.inputRenderLines = 0
+	})
 }
