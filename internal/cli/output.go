@@ -9,6 +9,12 @@ import (
 
 var outputMu sync.Mutex
 
+func withOutputLock(fn func()) {
+	outputMu.Lock()
+	defer outputMu.Unlock()
+	fn()
+}
+
 type synchronizedOutputWriter struct {
 	out io.Writer
 }

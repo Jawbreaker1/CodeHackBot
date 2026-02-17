@@ -24,3 +24,27 @@ func TestVisualLineCount(t *testing.T) {
 		})
 	}
 }
+
+func TestFitSingleLine(t *testing.T) {
+	got := fitSingleLine("BirdHackBot> this is a long command", 16)
+	if got == "" {
+		t.Fatalf("expected non-empty fitted line")
+	}
+	if len([]rune(got)) > maxDisplayColumns(16) {
+		t.Fatalf("fitted line too long: %q", got)
+	}
+	if got[:3] != "..." {
+		t.Fatalf("expected ellipsis prefix, got %q", got)
+	}
+}
+
+func TestPadOrTrimSingleLine(t *testing.T) {
+	got := padOrTrimSingleLine("ctx:10%", 20)
+	if len([]rune(got)) != maxDisplayColumns(20) {
+		t.Fatalf("unexpected padded width: %d", len([]rune(got)))
+	}
+	trimmed := padOrTrimSingleLine("this is an extremely long status line", 12)
+	if len([]rune(trimmed)) > maxDisplayColumns(12) {
+		t.Fatalf("trimmed line exceeds width: %q", trimmed)
+	}
+}

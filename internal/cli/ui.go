@@ -42,6 +42,34 @@ func (r *Runner) prompt() string {
 	return fmt.Sprintf("BirdHackBot[%s %s]> ", r.currentTask, elapsed)
 }
 
+func (r *Runner) promptStatusLine() string {
+	task := "idle"
+	if strings.TrimSpace(r.currentTask) != "" {
+		task = strings.TrimSpace(r.currentTask)
+	}
+	mode := "default"
+	if strings.TrimSpace(r.currentMode) != "" {
+		mode = strings.TrimSpace(r.currentMode)
+	}
+	llmState := "ready"
+	if !r.llmAllowed() {
+		if !r.llmAvailable() {
+			llmState = "offline"
+		} else {
+			llmState = "cooldown"
+		}
+	}
+	model := strings.TrimSpace(r.cfg.LLM.Model)
+	if model == "" {
+		model = "(unset)"
+	}
+	contextState := "off"
+	if usage, err := r.contextUsageSnapshot(); err == nil && usage.enabled() {
+		contextState = fmt.Sprintf("%d%%", usage.OverallPercent)
+	}
+	return fmt.Sprintf(" mode:%s | task:%s | llm:%s | model:%s | ctx:%s ", mode, task, llmState, model, contextState)
+}
+
 func (r *Runner) setTask(task string) {
 	r.currentTask = task
 	r.currentTaskStart = time.Now()

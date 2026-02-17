@@ -1,16 +1,19 @@
 package cli
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"strings"
+	"unicode/utf8"
 
 	"golang.org/x/term"
 )
 
 const (
-	inputLineStyleStart = "\x1b[48;5;236m\x1b[38;5;252m"
-	inputLineStyleReset = "\x1b[0m"
+	inputLineStyleStart  = "\x1b[48;5;236m\x1b[38;5;252m"
+	statusLineStyleStart = "\x1b[48;5;238m\x1b[38;5;250m"
+	inputLineStyleReset  = "\x1b[0m"
 )
 
 func (r *Runner) readLine(prompt string) (string, error) {
@@ -59,8 +62,9 @@ func (r *Runner) readLineInteractive(prompt string) (string, error) {
 	recordHistory := strings.HasPrefix(prompt, "BirdHackBot")
 	r.historyIndex = -1
 	r.historyScratch = ""
+	statusLine := r.promptStatusLine()
 
-	r.redrawInputLine(prompt, buf)
+	r.redrawInputLine(prompt, buf, statusLine)
 
 	for {
 		b, readErr := r.reader.ReadByte()
@@ -69,6 +73,7 @@ func (r *Runner) readLineInteractive(prompt string) (string, error) {
 		}
 		switch b {
 		case '\r', '\n':
+			r.clearInputRender()
 			safePrint("\r\n")
 			r.inputRenderLines = 0
 			line := strings.TrimSpace(string(buf))
@@ -81,6 +86,7 @@ func (r *Runner) readLineInteractive(prompt string) (string, error) {
 			r.historyScratch = ""
 			return line, nil
 		case 0x03:
+			r.clearInputRender()
 			safePrint("\r\n")
 			r.inputRenderLines = 0
 			r.historyIndex = -1
@@ -88,6 +94,7 @@ func (r *Runner) readLineInteractive(prompt string) (string, error) {
 			return "", io.EOF
 		case 0x04:
 			if len(buf) == 0 {
+				r.clearInputRender()
 				safePrint("\r\n")
 				r.inputRenderLines = 0
 				r.historyIndex = -1
@@ -97,7 +104,7 @@ func (r *Runner) readLineInteractive(prompt string) (string, error) {
 		case 0x7f, 0x08:
 			if len(buf) > 0 {
 				buf = buf[:len(buf)-1]
-				r.redrawInputLine(prompt, buf)
+				r.redrawInputLine(prompt, buf, statusLine)
 			}
 			continue
 		case 0x1b:
@@ -124,7 +131,7 @@ func (r *Runner) readLineInteractive(prompt string) (string, error) {
 					r.historyIndex--
 				}
 				buf = []byte(r.history[r.historyIndex])
-				r.redrawInputLine(prompt, buf)
+				r.redrawInputLine(prompt, buf, statusLine)
 			case 'B':
 				if r.historyIndex == -1 {
 					continue
@@ -137,35 +144,54 @@ func (r *Runner) readLineInteractive(prompt string) (string, error) {
 					buf = []byte(r.historyScratch)
 					r.historyScratch = ""
 				}
-				r.redrawInputLine(prompt, buf)
+				r.redrawInputLine(prompt, buf, statusLine)
 			}
 			continue
 		default:
 			if b >= 32 && b != 127 {
 				buf = append(buf, b)
-				r.redrawInputLine(prompt, buf)
+				r.redrawInputLine(prompt, buf, statusLine)
 			}
 		}
 	}
 }
 
-func (r *Runner) redrawInputLine(prompt string, buf []byte) {
-	r.clearInputRender()
-	safePrintf("%s%s%s%s", inputLineStyleStart, prompt, string(buf), inputLineStyleReset)
-	r.inputRenderLines = visualLineCount(prompt+string(buf), terminalWidth())
+func (r *Runner) redrawInputLine(prompt string, buf []byte, statusLine string) {
+	input := fitSingleLine(prompt+string(buf), terminalWidth())
+	status := padOrTrimSingleLine(statusLine, terminalWidth())
+	withOutputLock(func() {
+		r.clearInputRenderLocked()
+		_, _ = fmt.Fprintf(os.Stdout, "%s%s\x1b[K%s", inputLineStyleStart, input, inputLineStyleReset)
+		_, _ = fmt.Fprint(os.Stdout, "\x1b[s")
+		_, _ = fmt.Fprintf(os.Stdout, "\x1b[1B\r%s%s\x1b[K%s", statusLineStyleStart, status, inputLineStyleReset)
+		_, _ = fmt.Fprint(os.Stdout, "\x1b[u")
+	})
+	r.inputRenderLines = 2
 }
 
 func (r *Runner) clearInputRender() {
+	withOutputLock(func() {
+		r.clearInputRenderLocked()
+	})
+}
+
+func (r *Runner) clearInputRenderLocked() {
 	if r.inputRenderLines <= 0 {
 		return
 	}
+	if r.inputRenderLines == 2 {
+		_, _ = fmt.Fprint(os.Stdout, "\r\x1b[2K")
+		_, _ = fmt.Fprint(os.Stdout, "\x1b[1B\r\x1b[2K")
+		_, _ = fmt.Fprint(os.Stdout, "\x1b[1A\r")
+		return
+	}
 	for i := 0; i < r.inputRenderLines; i++ {
-		safePrint("\r\x1b[2K")
+		_, _ = fmt.Fprint(os.Stdout, "\r\x1b[2K")
 		if i < r.inputRenderLines-1 {
-			safePrint("\x1b[1A")
+			_, _ = fmt.Fprint(os.Stdout, "\x1b[1A")
 		}
 	}
-	safePrint("\r")
+	_, _ = fmt.Fprint(os.Stdout, "\r")
 }
 
 func terminalWidth() int {
@@ -192,4 +218,36 @@ func visualLineCount(text string, width int) int {
 		return 1
 	}
 	return lines
+}
+
+func fitSingleLine(text string, width int) string {
+	max := maxDisplayColumns(width)
+	runes := []rune(text)
+	if len(runes) <= max {
+		return string(runes)
+	}
+	if max <= 3 {
+		return string(runes[len(runes)-max:])
+	}
+	return "..." + string(runes[len(runes)-(max-3):])
+}
+
+func padOrTrimSingleLine(text string, width int) string {
+	max := maxDisplayColumns(width)
+	line := fitSingleLine(strings.TrimSpace(text), width)
+	runeCount := utf8.RuneCountInString(line)
+	if runeCount >= max {
+		return line
+	}
+	return line + strings.Repeat(" ", max-runeCount)
+}
+
+func maxDisplayColumns(width int) int {
+	if width <= 0 {
+		width = 80
+	}
+	if width > 1 {
+		return width - 1
+	}
+	return 1
 }
