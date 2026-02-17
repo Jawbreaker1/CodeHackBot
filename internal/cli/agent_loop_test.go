@@ -294,6 +294,112 @@ func TestAssistFollowUpCarriesPreviousQuestionAndAnswer(t *testing.T) {
 	}
 }
 
+func TestAssistAutoContinuesDefaultQuestionWithoutUserInput(t *testing.T) {
+	var calls int32
+	var secondBody string
+	const question = "Should I proceed with a default wordlist?"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		n := atomic.AddInt32(&calls, 1)
+		if n == 2 {
+			secondBody = string(body)
+		}
+		content := `{"type":"complete","final":"done"}`
+		if n == 1 {
+			content = `{"type":"question","question":"` + question + `"}`
+		}
+		resp := map[string]any{
+			"choices": []map[string]any{
+				{
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": content,
+					},
+				},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := config.Config{}
+	cfg.Session.LogDir = t.TempDir()
+	cfg.LLM.BaseURL = srv.URL
+	cfg.Permissions.Level = "all"
+	r := NewRunner(cfg, "session-followup-autocontinue", "", "")
+
+	orig := os.Stdout
+	rOut, wOut, _ := os.Pipe()
+	os.Stdout = wOut
+	t.Cleanup(func() {
+		os.Stdout = orig
+	})
+
+	if err := r.handleAssistAgentic("crack the zip in this folder", false, ""); err != nil {
+		t.Fatalf("assist error: %v", err)
+	}
+	_ = wOut.Close()
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, rOut)
+	out := buf.String()
+	if !strings.Contains(out, "done") {
+		t.Fatalf("expected completion output, got:\n%s", out)
+	}
+	if strings.TrimSpace(r.pendingAssistGoal) != "" {
+		t.Fatalf("did not expect paused pending goal")
+	}
+	if atomic.LoadInt32(&calls) < 2 {
+		t.Fatalf("expected auto-follow-up call, got %d", calls)
+	}
+	if !strings.Contains(secondBody, "User answer to previous assistant question: go ahead with default") {
+		t.Fatalf("expected synthesized follow-up answer in prompt body:\n%s", secondBody)
+	}
+}
+
+func TestAssistQuestionPausesWhenSpecificInputRequired(t *testing.T) {
+	var calls int32
+	const question = "Which file path should I use?"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+		atomic.AddInt32(&calls, 1)
+		resp := map[string]any{
+			"choices": []map[string]any{
+				{
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": `{"type":"question","question":"` + question + `"}`,
+					},
+				},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := config.Config{}
+	cfg.Session.LogDir = t.TempDir()
+	cfg.LLM.BaseURL = srv.URL
+	cfg.Permissions.Level = "all"
+	r := NewRunner(cfg, "session-followup-pause", "", "")
+
+	if err := r.handleAssistAgentic("read that file", false, ""); err != nil {
+		t.Fatalf("assist error: %v", err)
+	}
+	if strings.TrimSpace(r.pendingAssistGoal) == "" {
+		t.Fatalf("expected pending goal for user follow-up")
+	}
+	if atomic.LoadInt32(&calls) != 1 {
+		t.Fatalf("expected single llm call with pause, got %d", calls)
+	}
+}
+
 func TestAssistRepeatedQuestionGuardRequestsAlternativeAndContinues(t *testing.T) {
 	var calls int32
 	const question = "Should I proceed with a default wordlist?"

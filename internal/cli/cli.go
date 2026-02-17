@@ -741,6 +741,16 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 			return nil
 		}
 		if suggestion.Type == "question" {
+			if autoAnswer, ok := autoAssistFollowUpAnswer(suggestion.Question); ok {
+				if r.cfg.UI.Verbose {
+					r.logger.Printf("Auto-answering assistant question: %s", autoAnswer)
+				}
+				goal = r.composeAssistFollowUpGoal(goal, suggestion.Question, autoAnswer)
+				r.pendingAssistGoal = ""
+				r.pendingAssistQ = ""
+				stepMode = "follow-up"
+				continue
+			}
 			r.pendingAssistGoal = goal
 			return nil
 		}
@@ -862,12 +872,17 @@ func (r *Runner) handleAssistFollowUp(answer string) error {
 			return r.handleRun([]string{"nmap", "-sV", "-Pn", "--top-ports", "100", target})
 		}
 	}
+	combined := r.composeAssistFollowUpGoal(goal, prevQuestion, answer)
+	return r.handleAssistGoalWithMode(combined, false, "follow-up")
+}
+
+func (r *Runner) composeAssistFollowUpGoal(goal, previousQuestion, answer string) string {
 	combined := fmt.Sprintf("Original goal: %s\nUser answer to previous assistant question: %s\nContinue the task using available tools.", goal, answer)
-	if prevQuestion != "" {
-		combined += fmt.Sprintf("\nAssistant previous question: %s", prevQuestion)
+	if strings.TrimSpace(previousQuestion) != "" {
+		combined += fmt.Sprintf("\nAssistant previous question: %s", previousQuestion)
 		combined += "\nDo not repeat the same clarifying question if the answer already resolves it; pick a concrete next action."
 	}
-	if shouldUseDefaultChoice(answer, prevQuestion) {
+	if shouldUseDefaultChoice(answer, previousQuestion) {
 		combined += "\nUser explicitly chose the default option. Select a safe default available in the current environment and proceed."
 	}
 	if indicatesMissingCreation(answer) && isWriteCreationIntent(goal) {
@@ -876,7 +891,7 @@ func (r *Runner) handleAssistFollowUp(answer string) error {
 	if target := strings.TrimSpace(r.lastKnownTarget); target != "" {
 		combined += fmt.Sprintf("\nCurrent remembered target: %s", target)
 	}
-	return r.handleAssistGoalWithMode(combined, false, "follow-up")
+	return combined
 }
 
 func (r *Runner) assistMaxSteps() int {
@@ -2308,6 +2323,31 @@ func shouldUseDefaultChoice(answer, question string) bool {
 		}
 	}
 	return false
+}
+
+func autoAssistFollowUpAnswer(question string) (string, bool) {
+	question = strings.ToLower(strings.TrimSpace(question))
+	if question == "" {
+		return "", false
+	}
+	requiresSpecificInput := []string{
+		"which file", "file path", "path", "target", "ip", "hostname", "url", "password",
+		"wordlist path", "token", "credential", "username", "scope", "authorization",
+	}
+	for _, hint := range requiresSpecificInput {
+		if strings.Contains(question, hint) {
+			return "", false
+		}
+	}
+	autoContinueHints := []string{
+		"default", "proceed", "continue", "go ahead", "do you want me", "should i", "run now", "start now",
+	}
+	for _, hint := range autoContinueHints {
+		if strings.Contains(question, hint) {
+			return "go ahead with default", true
+		}
+	}
+	return "", false
 }
 
 func normalizeAssistantOutput(text string) string {
