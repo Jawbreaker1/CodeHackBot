@@ -28,10 +28,16 @@ func (r *Runner) handleCommand(line string) error {
 	case "verbose":
 		return r.handleVerbose(args)
 	case "context":
-		if len(args) > 0 && strings.ToLower(args[0]) == "show" {
+		if len(args) > 0 && (strings.ToLower(args[0]) == "show" || strings.ToLower(args[0]) == "usage") {
 			return r.handleContextShow()
 		}
 		r.logger.Printf("Context: max_recent=%d summarize_every=%d summarize_at=%d%%", r.cfg.Context.MaxRecentOutputs, r.cfg.Context.SummarizeEvery, r.cfg.Context.SummarizeAtPercent)
+		usage, err := r.contextUsageSnapshot()
+		if err == nil {
+			r.logger.Printf("Context usage: %s", usage.statusLine())
+		} else if r.cfg.UI.Verbose {
+			r.logger.Printf("Context usage unavailable: %v", err)
+		}
 	case "ledger":
 		return r.handleLedger(args)
 	case "status":

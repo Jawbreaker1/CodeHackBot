@@ -219,7 +219,7 @@ func (r *Runner) Stop() {
 }
 
 func (r *Runner) printHelp() {
-	r.logger.Printf("Commands: /init /permissions /verbose /context [/show] /ledger /status /plan /next /execute /assist /script /clean /ask /browse /crawl /links /read /ls /write /summarize /run /msf /report /resume /stop /exit")
+	r.logger.Printf("Commands: /init /permissions /verbose /context [/show|usage] /ledger /status /plan /next /execute /assist /script /clean /ask /browse /crawl /links /read /ls /write /summarize /run /msf /report /resume /stop /exit")
 	r.logger.Printf("Example: /permissions readonly")
 	r.logger.Printf("Plain text routes to /assist. Use /ask for explicit non-agentic chat.")
 	r.logger.Printf("/plan starts guided planning; /plan done or /plan cancel ends it.")

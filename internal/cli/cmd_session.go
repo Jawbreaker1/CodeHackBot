@@ -128,6 +128,7 @@ func (r *Runner) handleLedger(args []string) error {
 }
 
 func (r *Runner) handleStatus() {
+	usage, usageErr := r.contextUsageSnapshot()
 	active, label, started := r.llmStatus()
 	llmConfigured := strings.TrimSpace(r.cfg.LLM.BaseURL) != ""
 	llmState := "ready"
@@ -145,6 +146,7 @@ func (r *Runner) handleStatus() {
 				r.logger.Printf("Assist budget: step=%d remaining=%d cap=%d hard=%d ext=%d stalls=%d mode=%s", r.assistRuntime.Step, r.assistRuntime.Remaining, r.assistRuntime.CurrentCap, r.assistRuntime.HardCap, r.assistRuntime.Extensions, r.assistRuntime.Stalls, statusValueOrFallback(r.assistRuntime.CurrentMode, "(none)"))
 				r.logger.Printf("Assist reason: %s", statusValueOrFallback(r.assistRuntime.LastReason, "(none)"))
 			}
+			r.logContextUsage(usage, usageErr)
 			return
 		}
 		r.logger.Printf("Status: idle")
@@ -155,6 +157,7 @@ func (r *Runner) handleStatus() {
 			r.logger.Printf("Assist budget: step=%d remaining=%d cap=%d hard=%d ext=%d stalls=%d mode=%s", r.assistRuntime.Step, r.assistRuntime.Remaining, r.assistRuntime.CurrentCap, r.assistRuntime.HardCap, r.assistRuntime.Extensions, r.assistRuntime.Stalls, statusValueOrFallback(r.assistRuntime.CurrentMode, "(none)"))
 			r.logger.Printf("Assist reason: %s", statusValueOrFallback(r.assistRuntime.LastReason, "(none)"))
 		}
+		r.logContextUsage(usage, usageErr)
 		return
 	}
 	elapsed := formatElapsed(time.Since(r.currentTaskStart))
@@ -167,6 +170,17 @@ func (r *Runner) handleStatus() {
 	if r.assistRuntime.Active {
 		r.logger.Printf("Assist budget: step=%d remaining=%d cap=%d hard=%d ext=%d stalls=%d mode=%s", r.assistRuntime.Step, r.assistRuntime.Remaining, r.assistRuntime.CurrentCap, r.assistRuntime.HardCap, r.assistRuntime.Extensions, r.assistRuntime.Stalls, statusValueOrFallback(r.assistRuntime.CurrentMode, "(none)"))
 		r.logger.Printf("Assist reason: %s", statusValueOrFallback(r.assistRuntime.LastReason, "(none)"))
+	}
+	r.logContextUsage(usage, usageErr)
+}
+
+func (r *Runner) logContextUsage(usage contextUsage, usageErr error) {
+	if usageErr == nil {
+		r.logger.Printf("Context usage: %s", usage.statusLine())
+		return
+	}
+	if r.cfg.UI.Verbose {
+		r.logger.Printf("Context usage unavailable: %v", usageErr)
 	}
 }
 
@@ -220,11 +234,15 @@ func (r *Runner) handleContextShow() error {
 	facts := readFileTrimmed(artifacts.FactsPath)
 	focus := readFileTrimmed(artifacts.FocusPath)
 	state, _ := memory.LoadState(artifacts.StatePath)
+	usage := buildContextUsage(r.cfg, state, countNonEmptyFileLines(artifacts.ChatPath))
 
 	r.logger.Printf("Context Summary:\n%s", fallbackBlock(summary))
 	r.logger.Printf("Known Facts:\n%s", fallbackBlock(facts))
 	r.logger.Printf("Focus:\n%s", fallbackBlock(focus))
 	r.logger.Printf("Context State: steps_since_summary=%d recent_logs=%d last_summary_at=%s", state.StepsSinceSummary, len(state.RecentLogs), state.LastSummaryAt)
+	r.logger.Printf("Context Usage: %s", usage.statusLine())
+	r.logger.Printf("Context Buckets: logs=%s observations=%s chat=%s", usage.Logs.label(), usage.Observed.label(), usage.Chat.label())
+	r.logger.Printf("Context Auto-Summary: steps=%s recent_logs=%s (%s)", usage.StepWindow.label(), usage.LogWindow.label(), usage.summarizeRemainingLine())
 	return nil
 }
 
