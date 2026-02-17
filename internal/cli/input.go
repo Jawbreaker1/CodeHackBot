@@ -156,7 +156,7 @@ func (r *Runner) redrawInputLine(prompt string, buf []byte, statusLine string) {
 	withOutputLock(func() {
 		r.clearInputRenderLocked()
 		_, _ = fmt.Fprintf(os.Stdout, "%s%s\x1b[K%s", inputLineStyleStart, input, inputLineStyleReset)
-		_, _ = fmt.Fprintf(os.Stdout, "\n%s%s\x1b[K%s", statusLineStyleStart, status, inputLineStyleReset)
+		_, _ = fmt.Fprintf(os.Stdout, "\r\n%s%s\x1b[K%s", statusLineStyleStart, status, inputLineStyleReset)
 		_, _ = fmt.Fprint(os.Stdout, "\x1b[1A\r")
 		if cols := displayWidth(input); cols > 0 {
 			_, _ = fmt.Fprintf(os.Stdout, "\x1b[%dC", cols)
