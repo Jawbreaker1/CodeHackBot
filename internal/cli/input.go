@@ -157,10 +157,6 @@ func (r *Runner) redrawInputLine(prompt string, buf []byte, statusLine string) {
 		r.clearInputRenderLocked()
 		_, _ = fmt.Fprintf(os.Stdout, "%s%s\x1b[K%s\n", inputLineStyleStart, input, inputLineStyleReset)
 		_, _ = fmt.Fprintf(os.Stdout, "%s%s\x1b[K%s", statusLineStyleStart, status, inputLineStyleReset)
-		_, _ = fmt.Fprint(os.Stdout, "\x1b[1A\r")
-		if cols := displayWidth(input); cols > 0 {
-			_, _ = fmt.Fprintf(os.Stdout, "\x1b[%dC", cols)
-		}
 	})
 	r.inputRenderLines = 2
 }
@@ -176,9 +172,11 @@ func (r *Runner) clearInputRenderLocked() {
 		return
 	}
 	if r.inputRenderLines == 2 {
+		// Renderer leaves the cursor on the status line. Clear status first,
+		// then input line above, and return to status row.
 		_, _ = fmt.Fprint(os.Stdout, "\r\x1b[2K")
-		_, _ = fmt.Fprint(os.Stdout, "\x1b[1B\r\x1b[2K")
-		_, _ = fmt.Fprint(os.Stdout, "\x1b[1A\r")
+		_, _ = fmt.Fprint(os.Stdout, "\x1b[1A\r\x1b[2K")
+		_, _ = fmt.Fprint(os.Stdout, "\x1b[1B\r")
 		return
 	}
 	for i := 0; i < r.inputRenderLines; i++ {
@@ -248,17 +246,9 @@ func maxDisplayColumns(width int) int {
 	return 1
 }
 
-func displayWidth(text string) int {
-	return utf8.RuneCountInString(text)
-}
-
 func (r *Runner) finishInputRenderLine() {
 	withOutputLock(func() {
-		lines := r.inputRenderLines
 		r.clearInputRenderLocked()
-		if lines > 1 {
-			_, _ = fmt.Fprintf(os.Stdout, "\x1b[%dB\r", lines-1)
-		}
 		_, _ = fmt.Fprint(os.Stdout, "\r\n")
 		r.inputRenderLines = 0
 	})
