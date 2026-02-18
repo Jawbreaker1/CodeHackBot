@@ -131,6 +131,50 @@ Minimum session outputs:
   - `approval_expired`.
 - Goal: preserve human control without stalling automation or creating false timeout failures.
 
+### Task State Machine Policy (MVP)
+- Task lifecycle is explicit and transition-validated:
+  - `queued -> leased -> running -> completed`
+  - `queued -> leased -> running -> failed`
+  - `queued -> leased -> running -> blocked`
+  - `queued -> leased -> running -> awaiting_approval -> running`
+  - `queued -> leased -> running -> canceled`
+- Invalid direct jumps are rejected (for example `queued -> completed`, `blocked -> running` without requeue).
+- Retry rules:
+  - retries are only allowed from `failed` with retryable reason,
+  - retry transition is `failed -> queued` with `attempt + 1`,
+  - retries are bounded by configured max attempts.
+- Blocked rules:
+  - `approval_timeout`, `missing_prereq`, `scope_denied` are `blocked` outcomes (not `failed`).
+- Idempotency:
+  - each lease execution uses a stable idempotency key (`run_id + task_id + attempt + lease_id`) to prevent duplicate side effects after restarts.
+- Crash/restart reconciliation:
+  - on orchestrator startup, tasks in `leased`/`running`/`awaiting_approval` are reconciled via PID + heartbeat checks,
+  - stale or orphaned leases are moved through deterministic recovery path (`requeue`, `blocked`, or `failed` with reason).
+
+### Worker-Orchestrator Communication Protocol (MVP)
+- Transport is file-based only for MVP (single Kali VM runtime, no network transport/API dependency).
+- Primary channel is append-only `event.jsonl` under orchestrator run directory.
+- Required event envelope fields:
+  - `event_id`
+  - `run_id`
+  - `worker_id`
+  - `task_id` (or empty for run-level events)
+  - `seq` (monotonic per worker)
+  - `ts` (RFC3339/UTC)
+  - `type`
+  - `payload` (typed object)
+- Task handoff contract:
+  - orchestrator writes lease/task assignment artifact,
+  - worker must emit `task_started` within startup SLA or lease is reclaimed.
+- Write durability/safety:
+  - workers and orchestrator use atomic write pattern (`*.tmp` + rename),
+  - never emit partial JSON objects to event stream.
+- Ordering and dedupe:
+  - ordering is guaranteed per worker by `seq`,
+  - orchestrator deduplicates by `event_id` and ignores duplicates.
+- Recovery semantics:
+  - orchestrator can rebuild in-memory state by replaying `event.jsonl` deterministically on restart.
+
 ### Plan and Task Contracts
 - `plan.json` (global):
   - run metadata, scope/constraints, success criteria, stop criteria, max parallelism.

@@ -136,8 +136,18 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
   - [ ] `finding.json`
   - [ ] approval event structs (`approval_requested`, `approval_granted`, `approval_denied`, `approval_expired`)
 - [ ] Add file-based run directory layout: `sessions/<run-id>/orchestrator/{plan,task,event,artifact,finding}/`.
+- [ ] Lock file-based transport protocol (single-host MVP):
+  - [ ] append-only `event.jsonl` envelope with required fields (`event_id`, `run_id`, `worker_id`, `task_id`, `seq`, `ts`, `type`, `payload`)
+  - [ ] per-worker monotonic `seq`
+  - [ ] dedupe by `event_id`
+  - [ ] deterministic replay to rebuild orchestrator state
+- [ ] Implement task handoff SLA:
+  - [ ] orchestrator lease write -> worker must emit `task_started` within configured startup window
+  - [ ] reclaim lease on missed startup SLA
+- [ ] Implement atomic file-write helpers for orchestrator artifacts/events (`tmp + rename`).
 - [ ] Add CLI commands for orchestrator MVP: `start`, `status`, `workers`, `events`, `stop`.
 - [ ] Add tests for schema round-trip and backward-compatible parsing.
+  - [ ] add tests for event ordering, dedupe, and replay reconstruction.
 
 ## Sprint 20 — Worker Lifecycle + Scheduler (planned)
 - [ ] Implement subprocess worker launcher (spawn new `birdhackbot` workers on demand).
@@ -146,6 +156,10 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
   - [ ] cleanup of idle/completed workers
   - [ ] failed worker recovery path
 - [ ] Implement dependency-aware scheduler with configurable `max_workers`.
+- [ ] Implement explicit task state machine with transition validator:
+  - [ ] states: `queued`, `leased`, `running`, `awaiting_approval`, `completed`, `failed`, `blocked`, `canceled`
+  - [ ] reject invalid transitions with typed errors
+  - [ ] retry transition policy (`failed -> queued`, retryable-only, bounded attempts)
 - [ ] Implement lease + heartbeat flow:
   - [ ] lease acquisition/release
   - [ ] heartbeat every `5s`
@@ -172,6 +186,11 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
   - [ ] no false timeout while approval is pending
   - [ ] approval expiry marks task blocked (not failed)
   - [ ] scoped approval reuse works for task/session scopes
+- [ ] Add task-state-machine tests:
+  - [ ] valid transition matrix
+  - [ ] invalid transition rejection
+  - [ ] blocked vs failed reason mapping
+  - [ ] restart reconciliation for `leased`/`running`/`awaiting_approval`
 
 ## Sprint 21 — Evidence Merge + Replan Loop (planned)
 - [ ] Implement finding/artifact ingestion pipeline from worker events.
