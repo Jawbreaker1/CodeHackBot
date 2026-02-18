@@ -75,6 +75,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runReport(rest[1:], stdout, stderr)
 	case "stop":
 		return runStop(rest[1:], stdout, stderr)
+	case "tui":
+		return runTUI(rest[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown command: %s\n", rest[0])
 		printUsage(stderr)
@@ -480,5 +482,5 @@ func runStop(args []string, stdout, stderr io.Writer) int {
 
 func printUsage(stderr io.Writer) {
 	fmt.Fprintln(stderr, "usage: birdhackbot-orchestrator <command> [flags]")
-	fmt.Fprintln(stderr, "commands: start, run, status, workers, events, approvals, approve, deny, worker-stop, report, stop")
+	fmt.Fprintln(stderr, "commands: start, run, status, workers, events, approvals, approve, deny, worker-stop, report, stop, tui")
 }

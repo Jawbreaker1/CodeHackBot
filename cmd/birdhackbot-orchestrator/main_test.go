@@ -335,6 +335,118 @@ func TestRunToReportProductionWorkerMode(t *testing.T) {
 	}
 }
 
+func TestRunApprovalToCompletionProductionWorkerMode(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not available in PATH")
+	}
+
+	base := t.TempDir()
+	planPath := filepath.Join(base, "plan-run-approval-worker-mode.json")
+	cmdName, cmdArgs := workerShellEchoCommand("worker-mode-approval-ok")
+	runID := "run-cli-worker-approval"
+	plan := orchestrator.RunPlan{
+		RunID:           runID,
+		Scope:           orchestrator.Scope{Targets: []string{"127.0.0.1"}},
+		Constraints:     []string{"local_only"},
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks: []orchestrator.TaskSpec{
+			{
+				TaskID:            "t1",
+				Goal:              "run production worker approval flow",
+				Targets:           []string{"127.0.0.1"},
+				DoneWhen:          []string{"done"},
+				FailWhen:          []string{"timeout"},
+				ExpectedArtifacts: []string{"command_log"},
+				RiskLevel:         string(orchestrator.RiskActiveProbe),
+				Action: orchestrator.TaskAction{
+					Type:    "command",
+					Command: cmdName,
+					Args:    cmdArgs,
+				},
+				Budget: orchestrator.TaskBudget{
+					MaxSteps:     2,
+					MaxToolCalls: 2,
+					MaxRuntime:   5 * time.Second,
+				},
+			},
+		},
+	}
+	writePlanFile(t, planPath, plan)
+
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	if code := run([]string{"start", "--sessions-dir", base, "--plan", planPath}, &out, &errOut); code != 0 {
+		t.Fatalf("start failed: code=%d err=%s", code, errOut.String())
+	}
+
+	repoRoot := testRepoRoot(t)
+	binPath := buildBirdHackBotBinary(t, repoRoot, base)
+
+	runArgs := []string{
+		"run",
+		"--sessions-dir", base,
+		"--run", runID,
+		"--worker-cmd", binPath,
+		"--worker-arg", "worker",
+		"--permissions", "default",
+		"--tick", "20ms",
+		"--startup-timeout", "1s",
+		"--stale-timeout", "1s",
+		"--soft-stall-grace", "1s",
+		"--max-attempts", "1",
+	}
+	var runOut bytes.Buffer
+	var runErr bytes.Buffer
+	codeCh := make(chan int, 1)
+	go func() {
+		codeCh <- run(runArgs, &runOut, &runErr)
+	}()
+
+	manager := orchestrator.NewManager(base)
+	approvalID := waitForApprovalID(t, manager, runID, 5*time.Second)
+
+	var approveOut bytes.Buffer
+	var approveErr bytes.Buffer
+	if code := run([]string{
+		"approve",
+		"--sessions-dir", base,
+		"--run", runID,
+		"--approval", approvalID,
+		"--scope", "task",
+		"--actor", "tester",
+		"--reason", "approved for test",
+	}, &approveOut, &approveErr); code != 0 {
+		t.Fatalf("approve failed: code=%d err=%s", code, approveErr.String())
+	}
+
+	select {
+	case code := <-codeCh:
+		if code != 0 {
+			t.Fatalf("run failed: code=%d err=%s", code, runErr.String())
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatalf("timed out waiting for run completion")
+	}
+
+	reportPath := filepath.Join(base, "run-approval-report.md")
+	var reportOut bytes.Buffer
+	var reportErr bytes.Buffer
+	if code := run([]string{"report", "--sessions-dir", base, "--run", runID, "--out", reportPath}, &reportOut, &reportErr); code != 0 {
+		t.Fatalf("report failed: code=%d err=%s", code, reportErr.String())
+	}
+	data, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(string(data)), "task action completed") {
+		t.Fatalf("expected report to include worker completion finding")
+	}
+}
+
 func TestApprovalCommands(t *testing.T) {
 	t.Parallel()
 
@@ -881,4 +993,18 @@ func buildBirdHackBotBinary(t *testing.T, repoRoot, outDir string) string {
 		t.Fatalf("build birdhackbot: %v\n%s", err, string(output))
 	}
 	return binPath
+}
+
+func waitForApprovalID(t *testing.T, manager *orchestrator.Manager, runID string, timeout time.Duration) string {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		pending, err := manager.PendingApprovals(runID)
+		if err == nil && len(pending) > 0 && strings.TrimSpace(pending[0].ApprovalID) != "" {
+			return pending[0].ApprovalID
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for pending approval on run %s", runID)
+	return ""
 }

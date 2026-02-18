@@ -21,7 +21,9 @@ All authorization/scope constraints in `AGENTS.md` are mandatory.
 ## Build, Test, and Local Run
 - `go test ./...` — run full test suite.
 - `go build ./cmd/birdhackbot` — build CLI binary.
+- `go build ./cmd/birdhackbot-orchestrator` — build orchestrator binary.
 - `go run ./cmd/birdhackbot --profile <name>` — run directly with optional profile.
+- `./birdhackbot-orchestrator tui --sessions-dir sessions --run <run-id>` — interactive orchestrator TUI (status, workers, approvals, events, prompt commands).
 - `./birdhackbot --resume <session-id>` — continue an interrupted session.
 - `./birdhackbot --replay <session-id>` — replay `sessions/<id>/replay.txt` with current scope/permissions.
 

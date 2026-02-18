@@ -233,9 +233,10 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
   - [ ] Frontend: React + TypeScript + Vite
   - [ ] Backend API: existing Go codebase with WebSocket/SSE stream endpoints
 - [ ] Terminal TUI mode (Codex-like operator cockpit):
-  - [ ] static status bar (run id, mode, risk, active tools, context/budget usage)
+  - [x] static status bar (run id, mode, risk, active tools, context/budget usage)
+  - [x] command prompt line (interactive action input at bottom of TUI)
   - [ ] pipeline stage row (recon -> hypothesis -> verify -> report) with current-step summary
-  - [ ] multi-agent pane (state, heartbeat age, current task, last tool, queue depth)
+  - [x] multi-agent pane (state, heartbeat age, current task, last tool, queue depth)
   - [ ] approval pane with keyboard actions (approve/deny) and risk metadata
   - [ ] evidence/log tail pane with bounded scroll + filter
   - [ ] stable render loop (no ghost lines), resize-safe redraw, ANSI fallback support
@@ -256,24 +257,24 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
   - [ ] frontend component tests for critical state transitions
   - [ ] e2e smoke test for one orchestrated run lifecycle
 
-## Sprint 23 — Production Worker Mode + Kali Deployment (planned)
-- [ ] Implement production worker mode in `birdhackbot` (non-test helper):
+## Sprint 23 — Production Worker Mode + Kali Deployment (done)
+- [x] Implement production worker mode in `birdhackbot` (non-test helper):
   - [x] add `birdhackbot worker` command with orchestrator task inputs via env/flags
   - [x] emit lifecycle events: `task_started`, `task_progress`, `task_artifact`, `task_finding`, `task_completed`/`task_failed`
   - [x] guarantee monotonic per-worker sequencing and idempotent re-runs
-- [ ] Define worker task contract and execution protocol:
+- [x] Define worker task contract and execution protocol:
   - [x] task payload schema for goal/targets/budgets/constraints/risk tier
   - [x] explicit completion contract (required artifacts/findings + status reason)
   - [x] standardized failure reasons for replan engine compatibility
-- [ ] Integrate real tool execution path for worker mode:
+- [x] Integrate real tool execution path for worker mode:
   - [x] scoped command execution with approval/risk-tier checks
   - [x] structured evidence emission (logs/artifacts/findings metadata)
   - [x] timeout and kill-switch semantics (SIGINT/SIGTERM + child process cleanup)
-- [ ] End-user orchestration runbook for Kali:
+- [x] End-user orchestration runbook for Kali:
   - [x] operator setup doc (build, config, permissions, scope profile)
   - [x] start/run/approval/stop/report command examples
   - [x] troubleshooting guide for approvals, stale workers, and replan triggers
-- [ ] Acceptance tests for real end-user workflow:
-  - [ ] e2e `start -> run -> approvals -> completion -> report` using production worker mode
-  - [ ] gated integration test on Kali toolchain (network-safe lab profile)
-  - [ ] regression test that standalone interactive `birdhackbot` behavior remains unchanged
+- [x] Acceptance tests for real end-user workflow:
+  - [x] e2e `start -> run -> approvals -> completion -> report` using production worker mode
+  - [x] gated integration test on Kali toolchain (network-safe lab profile)
+  - [x] regression test that standalone interactive `birdhackbot` behavior remains unchanged
