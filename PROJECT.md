@@ -131,6 +131,33 @@ Minimum session outputs:
   - `approval_expired`.
 - Goal: preserve human control without stalling automation or creating false timeout failures.
 
+### Risk Tier and Approval Matrix (MVP)
+- Every task/tool action is tagged with one risk tier. Tier controls approval behavior and defaults.
+- Tier definitions (locked):
+  - `recon_readonly`: passive or read-only intelligence gathering (DNS lookups, banner/version reads, local file reads, metadata collection). No state change on target.
+  - `active_probe`: direct probing/enumeration that actively touches targets (port scans, directory discovery, protocol negotiation, safe fuzzing). Intended non-destructive but can increase load/noise.
+  - `exploit_controlled`: controlled exploit validation to prove a finding with minimal-impact payloads and explicit scope target.
+  - `priv_esc`: privilege-escalation attempts after foothold to validate lateral/vertical impact in-scope.
+  - `disruptive`: DoS, persistence, destructive actions, or real data exfiltration. Prohibited by default.
+- Approval matrix by permission mode:
+  - `readonly`:
+    - allow: `recon_readonly`
+    - deny: `active_probe`, `exploit_controlled`, `priv_esc`, `disruptive`
+  - `default`:
+    - auto-allow: `recon_readonly`
+    - per-action approval: `active_probe`, `exploit_controlled`, `priv_esc`
+    - deny by default: `disruptive` (requires explicit session opt-in + documented approval)
+  - `all`:
+    - pre-approved within scope: `recon_readonly`, `active_probe`, `exploit_controlled`
+    - high-risk confirmation or session pre-approval required: `priv_esc`
+    - deny by default: `disruptive` unless explicit session opt-in is set
+- Session pre-approvals are scoped and expiring:
+  - scope: once, task, or session
+  - must never override target scope restrictions
+  - each grant/deny is auditable (actor, reason, scope, expiry).
+- Hard guardrails:
+  - out-of-scope target actions are always denied, regardless of permission mode or pre-approval.
+
 ### Task State Machine Policy (MVP)
 - Task lifecycle is explicit and transition-validated:
   - `queued -> leased -> running -> completed`
@@ -174,6 +201,34 @@ Minimum session outputs:
   - orchestrator deduplicates by `event_id` and ignores duplicates.
 - Recovery semantics:
   - orchestrator can rebuild in-memory state by replaying `event.jsonl` deterministically on restart.
+
+### Planning and Replanning Policy (MVP)
+- Plan-first gate is mandatory:
+  - no worker execution starts before a run plan exists with scope, constraints, success criteria, and stop criteria.
+- Task quality contract is mandatory before lease:
+  - `done_when`,
+  - `fail_when`,
+  - `expected_artifacts`,
+  - `risk_level`,
+  - execution budget (`max_steps`, `max_tool_calls`, `max_runtime`).
+- Budget model:
+  - each task has local execution budget,
+  - run has global budget ceiling to prevent unbounded exploration.
+- Replan triggers (must be explicit and machine-detectable):
+  - repeated-step loop detection,
+  - approval denied/expired,
+  - required artifact missing after retries,
+  - stale lease recovery or worker crash.
+- Replan outcomes are bounded and explicit:
+  - refine existing task,
+  - split task into smaller tasks,
+  - terminate task as `blocked`/`failed` with reason.
+- Silent infinite retries are prohibited; each replan consumes bounded budget and emits reasoned events.
+- End-of-task output contract:
+  - `result` status,
+  - `summary`,
+  - `evidence_refs`,
+  - `next_suggested_tasks`.
 
 ### Plan and Task Contracts
 - `plan.json` (global):

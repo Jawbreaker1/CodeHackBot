@@ -148,6 +148,9 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
 - [ ] Add CLI commands for orchestrator MVP: `start`, `status`, `workers`, `events`, `stop`.
 - [ ] Add tests for schema round-trip and backward-compatible parsing.
   - [ ] add tests for event ordering, dedupe, and replay reconstruction.
+- [ ] Implement plan-first validation:
+  - [ ] reject `start` when scope/constraints/success/stop criteria are missing
+  - [ ] validate task quality fields before lease (`done_when`, `fail_when`, `expected_artifacts`, `risk_level`, budgets)
 
 ## Sprint 20 — Worker Lifecycle + Scheduler (planned)
 - [ ] Implement subprocess worker launcher (spawn new `birdhackbot` workers on demand).
@@ -170,6 +173,15 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
   - [ ] workers emit `approval_requested` events instead of blocking on stdin
   - [ ] queue + resolution flow for approve/deny/expire
   - [ ] approval scopes: once, task, session (never outside existing scope/permissions)
+- [ ] Implement risk-tier policy engine:
+  - [ ] classify actions into `recon_readonly`, `active_probe`, `exploit_controlled`, `priv_esc`, `disruptive`
+  - [ ] enforce permission-mode matrix (`readonly`, `default`, `all`) against tier
+  - [ ] deny out-of-scope targets before approval flow
+  - [ ] enforce `disruptive` deny-by-default unless explicit session opt-in is present
+- [ ] Implement session pre-approval grants with expiry:
+  - [ ] scopes: once/task/session
+  - [ ] attach actor, reason, expiry metadata
+  - [ ] never widen scope beyond run/session scope constraints
 - [ ] Implement timer semantics for `awaiting_approval`:
   - [ ] pause execution timeout while waiting
   - [ ] pause lease stale timer while waiting
@@ -186,6 +198,9 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
   - [ ] no false timeout while approval is pending
   - [ ] approval expiry marks task blocked (not failed)
   - [ ] scoped approval reuse works for task/session scopes
+  - [ ] risk-tier matrix tests (mode x tier expected decision)
+  - [ ] disruptive-action default deny tests
+  - [ ] out-of-scope action deny-before-approval tests
 - [ ] Add task-state-machine tests:
   - [ ] valid transition matrix
   - [ ] invalid transition rejection
@@ -197,10 +212,18 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
 - [ ] Add deterministic dedupe key for findings (`target + type + location + normalized title`).
 - [ ] Implement confidence/source-aware conflict handling (retain conflicting evidence).
 - [ ] Implement orchestrator state updater + replan triggers on blockers/findings.
+- [ ] Implement replan policy engine with bounded outcomes:
+  - [ ] trigger on repeated-step loops
+  - [ ] trigger on approval denied/expired
+  - [ ] trigger on missing required artifacts after retries
+  - [ ] trigger on stale lease/worker crash recovery
+  - [ ] outcomes: refine task, split task, or terminate with explicit reason
+- [ ] Enforce no-silent-retry rule (every replan/retry decision emits explicit event).
 - [ ] Add report assembly from merged findings + artifact links.
 - [ ] Add end-to-end orchestrator test:
   - [ ] run start -> worker fan-out -> evidence merge -> run completion
   - [ ] regression test that standalone `birdhackbot` behavior remains unchanged.
+  - [ ] budget guard test (`max_steps`/`max_tool_calls`/`max_runtime`) and deterministic stop on exhaustion.
 
 ## Sprint 22 — Orchestrator UI (future)
 - [ ] Framework decision (locked):
