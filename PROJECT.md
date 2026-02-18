@@ -78,3 +78,72 @@ Minimum session outputs:
 - Continue hardening the generic agent loop (recovery, progress detection, anti-loop behavior).
 - Improve report quality/templates (OWASP + NIS2-aligned output structure).
 - Prepare orchestrator contracts (`plan/task/event/artifact/finding`) for multi-agent future work.
+
+## Orchestrator Decisions (Locked for MVP)
+### Binary and Runtime Boundary
+- Orchestrator is a separate binary (`cmd/birdhackbot-orchestrator`), not a mode flag in `birdhackbot`.
+- Worker agent remains independently runnable as today; orchestrator must never be required for single-agent usage.
+- Shared logic stays in `internal/*` packages; binaries differ only at orchestration/control layer.
+
+### Worker Launch Model
+- Orchestrator launches new worker processes on demand (subprocess model), each with isolated session workspace.
+- MVP does not attach to already-running worker sessions.
+- Orchestrator is responsible for worker lifecycle:
+  - start workers for leased tasks,
+  - stop workers when task completes or lease expires,
+  - cleanup idle/failed workers and close session metadata.
+- Isolation means artifact/log/work-session separation, not OS-level chroot/jail:
+  - worker writes default to `sessions/<worker-session-id>/...`
+  - worker still uses system tools from normal PATH (`nmap`, `msfconsole`, `python3`, etc.)
+  - orchestrator may pass write allowlists but must not expand scope.
+
+### Worker Liveness and Stall Policy (MVP)
+- Worker heartbeat is emitted concurrently (background goroutine) while task execution is in progress.
+- Liveness signals used by orchestrator:
+  - process alive check (PID still running),
+  - heartbeat events in `event.jsonl`,
+  - progress events (step/action updates).
+- Locked defaults:
+  - heartbeat interval: `5s`
+  - stale timeout: `20s`
+  - soft-stall grace: `30s`
+  - retries per task: `2`
+  - retry backoff: `5s`, then `15s`
+
+### Plan and Task Contracts
+- `plan.json` (global):
+  - run metadata, scope/constraints, success criteria, stop criteria, max parallelism.
+  - task list with `task_id`, `title`, `goal`, `depends_on`, `priority`, `strategy`.
+- `task.json` (per task/lease):
+  - `task_id`, `lease_id`, `worker_id`, `status`, `attempt`, `started_at`, `deadline`.
+- `event.jsonl` (append-only):
+  - canonical events: `run_started`, `task_leased`, `task_started`, `task_progress`, `task_artifact`, `task_finding`, `task_failed`, `task_completed`, `worker_started`, `worker_stopped`, `run_stopped`, `run_completed`.
+- `artifact.json` / `finding.json`:
+  - normalized outputs for evidence merge and report generation.
+
+### Scheduler Policy (MVP)
+- Queue + dependency-aware scheduler with configurable `max_workers`.
+- Lease/heartbeat model:
+  - lease timeout and heartbeat interval per task,
+  - reclaim task on stale lease,
+  - bounded retries with backoff.
+- Scheduling is strategy-driven (parallel lanes), not tool-specific hardcoded flows.
+
+### Stop and Safety Semantics
+- Global stop broadcasts to all workers.
+- Per-worker stop is supported.
+- Stop sequence:
+  - soft cancel request,
+  - timed SIGTERM,
+  - final SIGKILL if still running.
+- Worker-side scope and permission gates remain enforced locally; orchestrator may only tighten limits.
+
+### Evidence Merge Policy
+- Findings deduplicated by stable key (`target + finding_type + location + normalized_title`).
+- Conflicting findings are retained with confidence/source metadata (never silently dropped).
+- Final report is generated from merged findings + linked artifacts/log paths.
+
+### Interface Plan
+- MVP interface is CLI-only for orchestrator.
+- Future GUI will consume the same event/contracts via API adapter; no orchestration logic in UI layer.
+- Core orchestrator engine must remain headless and reusable by both CLI and future web server.

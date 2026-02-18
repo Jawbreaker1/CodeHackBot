@@ -125,31 +125,52 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
 - [ ] Lightweight “answer vs act” classification so normal conversation feels like Codex/Claude while still being agentic.
 - [ ] Reduce noise in non-verbose mode (only show task headers + key outputs).
 
-## Sprint 19 — Orchestrator Foundation (future)
-- [ ] Define orchestrator-first planning phase (mandatory) that converts a user goal into a task graph with:
-  - [ ] scope and constraints
-  - [ ] success and stop criteria
-  - [ ] dependencies and parallelizable branches
-- [ ] Define worker communication contracts (JSON schemas):
-  - [ ] `plan.json` (global plan + graph)
-  - [ ] `task.json` (leaseable unit of work)
-  - [ ] `event.jsonl` (heartbeat/progress/error updates)
-  - [ ] `artifact.json` and `finding.json` (outputs + confidence)
-- [ ] Implement MVP communication channel as file-based events/artifacts under session directories (API transport later).
-- [ ] Implement dynamic worker deployment:
-  - [ ] spawn BirdHackBot workers on demand
-  - [ ] assign different strategy profiles per worker
-  - [ ] support graceful stop and orchestrator broadcast kill
-- [ ] Implement sync + replan loop:
-  - [ ] merge worker evidence into global state
-  - [ ] prevent duplicates with task leases and idempotent task IDs
-  - [ ] trigger replanning when blockers/findings appear
-- [ ] Add orchestrator simulation tests with mocked workers:
-  - [ ] parallel task execution
-  - [ ] cancellation propagation
-  - [ ] deterministic evidence merge
+## Sprint 19 — Orchestrator Contracts + Binary Skeleton (planned)
+- [ ] Add separate orchestrator binary scaffold: `cmd/birdhackbot-orchestrator`.
+- [ ] Create orchestrator package boundary (`internal/orchestrator/*`) with headless engine interfaces.
+- [ ] Implement JSON schemas + validators:
+  - [ ] `plan.json`
+  - [ ] `task.json`
+  - [ ] `event.jsonl` event structs
+  - [ ] `artifact.json`
+  - [ ] `finding.json`
+- [ ] Add file-based run directory layout: `sessions/<run-id>/orchestrator/{plan,task,event,artifact,finding}/`.
+- [ ] Add CLI commands for orchestrator MVP: `start`, `status`, `workers`, `events`, `stop`.
+- [ ] Add tests for schema round-trip and backward-compatible parsing.
 
-## Sprint 20 — Orchestrator UI (future)
+## Sprint 20 — Worker Lifecycle + Scheduler (planned)
+- [ ] Implement subprocess worker launcher (spawn new `birdhackbot` workers on demand).
+- [ ] Implement worker lifecycle manager:
+  - [ ] `worker_started` / `worker_stopped` events
+  - [ ] cleanup of idle/completed workers
+  - [ ] failed worker recovery path
+- [ ] Implement dependency-aware scheduler with configurable `max_workers`.
+- [ ] Implement lease + heartbeat flow:
+  - [ ] lease acquisition/release
+  - [ ] heartbeat every `5s`
+  - [ ] stale lease detection + reclaim at `20s`
+  - [ ] soft-stall grace handling at `30s`
+  - [ ] bounded retries (`2`) with backoff (`5s`, `15s`)
+- [ ] Enforce stop semantics:
+  - [ ] global broadcast stop
+  - [ ] per-worker stop
+  - [ ] SIGTERM -> SIGKILL escalation timeout
+- [ ] Validate worker isolation behavior:
+  - [ ] per-worker session/artifact directory isolation
+  - [ ] confirm normal PATH tool execution works outside session directories
+- [ ] Add scheduler simulation tests (parallelism, reclaim, retry, stop propagation).
+
+## Sprint 21 — Evidence Merge + Replan Loop (planned)
+- [ ] Implement finding/artifact ingestion pipeline from worker events.
+- [ ] Add deterministic dedupe key for findings (`target + type + location + normalized title`).
+- [ ] Implement confidence/source-aware conflict handling (retain conflicting evidence).
+- [ ] Implement orchestrator state updater + replan triggers on blockers/findings.
+- [ ] Add report assembly from merged findings + artifact links.
+- [ ] Add end-to-end orchestrator test:
+  - [ ] run start -> worker fan-out -> evidence merge -> run completion
+  - [ ] regression test that standalone `birdhackbot` behavior remains unchanged.
+
+## Sprint 22 — Orchestrator UI (future)
 - [ ] Framework decision (locked):
   - [ ] Frontend: React + TypeScript + Vite
   - [ ] Backend API: existing Go codebase with WebSocket/SSE stream endpoints
