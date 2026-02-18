@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"fmt"
 	"net"
+	"regexp"
 	"strings"
 )
 
@@ -12,6 +13,11 @@ var privateCIDRAliases = map[string][]string{
 	"loopback": {"127.0.0.0/8"},
 	"local":    {"127.0.0.0/8"},
 }
+
+var (
+	scopeIPv4CIDRPattern = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}/\d{1,2}\b`)
+	scopeIPv4Pattern     = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
+)
 
 type ScopePolicy struct {
 	allowIPs      []net.IP
@@ -75,6 +81,15 @@ func (p *ScopePolicy) ValidateTaskTargets(task TaskSpec) error {
 		return fmt.Errorf("scope violation: %s", strings.Join(violations, "; "))
 	}
 	return nil
+}
+
+func (p *ScopePolicy) ValidateCommandTargets(command string, args []string) error {
+	targets := p.extractTargets(command, args)
+	if len(targets) == 0 {
+		return nil
+	}
+	task := TaskSpec{Targets: targets}
+	return p.ValidateTaskTargets(task)
 }
 
 func (p *ScopePolicy) loadAllow(entries []string) {
@@ -144,6 +159,45 @@ func containsLower(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func (p *ScopePolicy) extractTargets(command string, args []string) []string {
+	seen := map[string]struct{}{}
+	add := func(value string) {
+		v := strings.ToLower(strings.TrimSpace(value))
+		if v == "" {
+			return
+		}
+		seen[v] = struct{}{}
+	}
+	candidates := append([]string{command}, args...)
+	for _, token := range candidates {
+		lower := strings.ToLower(token)
+		if strings.Contains(lower, "localhost") {
+			add("localhost")
+		}
+		for _, match := range scopeIPv4CIDRPattern.FindAllString(token, -1) {
+			add(match)
+		}
+		for _, match := range scopeIPv4Pattern.FindAllString(token, -1) {
+			add(match)
+		}
+		for _, literal := range p.allowLiterals {
+			if literal != "" && strings.Contains(lower, literal) {
+				add(literal)
+			}
+		}
+		for _, literal := range p.denyLiterals {
+			if literal != "" && strings.Contains(lower, literal) {
+				add(literal)
+			}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for target := range seen {
+		out = append(out, target)
+	}
+	return out
 }
 
 func matchIP(ip net.IP, ips []net.IP, nets []*net.IPNet) bool {

@@ -15,7 +15,7 @@ All authorization/scope constraints in `AGENTS.md` are mandatory.
 - `internal/llm/`: LMStudio-compatible chat client + failure/cooldown guard.
 - `internal/report/`, `internal/msf/`, `internal/plan/`, `internal/replay/`, `internal/session/`: reporting, metasploit search parsing, planning, replay, session scaffolding.
 - `config/default.json` (+ optional `config/profiles/*.json`): runtime behavior and thresholds.
-- `docs/playbooks/` and `docs/tooling/`: operator/playbook guidance (inspiration, not rigid scripts).
+- `docs/playbooks/`, `docs/tooling/`, `docs/runbooks/`: playbooks, tool references, and operator runbooks.
 - `sessions/<id>/`: per-session evidence and memory artifacts.
 
 ## Build, Test, and Local Run

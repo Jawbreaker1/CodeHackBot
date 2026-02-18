@@ -12,6 +12,7 @@ import (
 	"github.com/Jawbreaker1/CodeHackBot/internal/cli"
 	"github.com/Jawbreaker1/CodeHackBot/internal/config"
 	"github.com/Jawbreaker1/CodeHackBot/internal/exec"
+	"github.com/Jawbreaker1/CodeHackBot/internal/orchestrator"
 	"github.com/Jawbreaker1/CodeHackBot/internal/replay"
 	"github.com/Jawbreaker1/CodeHackBot/internal/session"
 )
@@ -19,6 +20,10 @@ import (
 const version = "0.0.0-dev"
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "worker" {
+		os.Exit(runWorkerMode(os.Args[2:]))
+	}
+
 	var (
 		showVersion bool
 		replayID    string
@@ -159,4 +164,31 @@ func main() {
 	if err := runner.Run(); err != nil {
 		log.Fatalf("CLI exited: %v", err)
 	}
+}
+
+func runWorkerMode(args []string) int {
+	cfg := orchestrator.ParseWorkerRunConfig(os.Getenv)
+
+	fs := flag.NewFlagSet("worker", flag.ContinueOnError)
+	fs.StringVar(&cfg.SessionsDir, "sessions-dir", valueOrDefault(cfg.SessionsDir, "sessions"), "sessions base directory")
+	fs.StringVar(&cfg.RunID, "run-id", cfg.RunID, "orchestrator run id")
+	fs.StringVar(&cfg.TaskID, "task-id", cfg.TaskID, "orchestrator task id")
+	fs.StringVar(&cfg.WorkerID, "worker-id", cfg.WorkerID, "orchestrator worker id")
+	fs.IntVar(&cfg.Attempt, "attempt", cfg.Attempt, "orchestrator task attempt")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if err := orchestrator.RunWorkerTask(cfg); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "worker failed: %v\n", err)
+		return 1
+	}
+	_, _ = fmt.Fprintf(os.Stdout, "worker completed: run=%s task=%s\n", cfg.RunID, cfg.TaskID)
+	return 0
+}
+
+func valueOrDefault(value, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
 }

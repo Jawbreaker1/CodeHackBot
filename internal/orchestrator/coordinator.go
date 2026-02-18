@@ -193,6 +193,10 @@ func (c *Coordinator) StopAll(grace time.Duration) error {
 }
 
 func (c *Coordinator) handleWorkerExits() error {
+	events, err := c.manager.Events(c.runID, 0)
+	if err != nil {
+		return err
+	}
 	exits := c.workers.DrainCompleted(c.runID)
 	for _, exit := range exits {
 		taskID := c.workerToTask[exit.WorkerID]
@@ -202,16 +206,23 @@ func (c *Coordinator) handleWorkerExits() error {
 		delete(c.workerToTask, exit.WorkerID)
 
 		if exit.Failed {
-			if err := c.manager.EmitEvent(c.runID, orchestratorWorkerID, taskID, EventTypeTaskFailed, map[string]any{
-				"reason":    "worker_exit",
-				"error":     exit.ErrorMsg,
-				"attempts":  exit.Attempts,
-				"worker_id": exit.WorkerID,
-			}); err != nil {
-				return err
+			reason := "worker_exit"
+			retryable := true
+			if workerReason, ok := latestWorkerFailureReason(events, taskID, WorkerSignalID(exit.WorkerID)); ok {
+				reason = workerReason
+				retryable = retryableWorkerFailureReason(workerReason)
+			} else {
+				if err := c.manager.EmitEvent(c.runID, orchestratorWorkerID, taskID, EventTypeTaskFailed, map[string]any{
+					"reason":    reason,
+					"error":     exit.ErrorMsg,
+					"attempts":  exit.Attempts,
+					"worker_id": exit.WorkerID,
+				}); err != nil {
+					return err
+				}
 			}
-			if err := c.markFailedWithReplan(taskID, "worker_exit", true, map[string]any{
-				"reason":    "worker_exit",
+			if err := c.markFailedWithReplan(taskID, reason, retryable, map[string]any{
+				"reason":    reason,
 				"worker_id": exit.WorkerID,
 			}); err != nil {
 				return err
@@ -226,11 +237,13 @@ func (c *Coordinator) handleWorkerExits() error {
 			continue
 		}
 
-		if err := c.manager.EmitEvent(c.runID, orchestratorWorkerID, taskID, EventTypeTaskCompleted, map[string]any{
-			"attempts":  exit.Attempts,
-			"worker_id": exit.WorkerID,
-		}); err != nil {
-			return err
+		if !hasWorkerTaskCompleted(events, taskID, WorkerSignalID(exit.WorkerID)) {
+			if err := c.manager.EmitEvent(c.runID, orchestratorWorkerID, taskID, EventTypeTaskCompleted, map[string]any{
+				"attempts":  exit.Attempts,
+				"worker_id": exit.WorkerID,
+			}); err != nil {
+				return err
+			}
 		}
 		if err := c.scheduler.MarkCompleted(taskID); err != nil {
 			return err
@@ -855,6 +868,8 @@ func (c *Coordinator) handleEventDrivenReplanTriggers() error {
 				trigger = "repeated_step_loop"
 			case "stale_lease", "worker_exit", "startup_sla_missed", "worker_reconcile_stale":
 				trigger = "worker_recovery"
+			case WorkerFailureCommandFailed, WorkerFailureCommandTimeout:
+				trigger = "execution_failure"
 			case "budget_exhausted":
 				trigger = "budget_exhausted"
 			}
@@ -1041,5 +1056,43 @@ func payloadInt(v any) (int, bool) {
 		return int(i), true
 	default:
 		return 0, false
+	}
+}
+
+func latestWorkerFailureReason(events []EventEnvelope, taskID, workerID string) (string, bool) {
+	for i := len(events) - 1; i >= 0; i-- {
+		event := events[i]
+		if event.Type != EventTypeTaskFailed || event.TaskID != taskID || event.WorkerID != workerID {
+			continue
+		}
+		payload := map[string]any{}
+		if len(event.Payload) > 0 {
+			_ = json.Unmarshal(event.Payload, &payload)
+		}
+		reason := toString(payload["reason"])
+		if reason == "" {
+			reason = "worker_exit"
+		}
+		return reason, true
+	}
+	return "", false
+}
+
+func hasWorkerTaskCompleted(events []EventEnvelope, taskID, workerID string) bool {
+	for i := len(events) - 1; i >= 0; i-- {
+		event := events[i]
+		if event.TaskID == taskID && event.WorkerID == workerID && event.Type == EventTypeTaskCompleted {
+			return true
+		}
+	}
+	return false
+}
+
+func retryableWorkerFailureReason(reason string) bool {
+	switch reason {
+	case WorkerFailureScopeDenied, WorkerFailurePolicyDenied, WorkerFailurePolicyInvalid, WorkerFailureInvalidTaskAction, WorkerFailureCommandInterrupted:
+		return false
+	default:
+		return true
 	}
 }

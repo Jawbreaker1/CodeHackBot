@@ -58,3 +58,31 @@ func TestValidateEventEnvelope(t *testing.T) {
 		t.Fatalf("expected valid event, got %v", err)
 	}
 }
+
+func TestValidateTaskSpec_RejectsInvalidAction(t *testing.T) {
+	t.Parallel()
+
+	task := TaskSpec{
+		TaskID:            "t1",
+		Goal:              "test",
+		DoneWhen:          []string{"d"},
+		FailWhen:          []string{"f"},
+		ExpectedArtifacts: []string{"a"},
+		RiskLevel:         "recon_readonly",
+		Action: TaskAction{
+			Type: "python",
+		},
+		Budget: TaskBudget{
+			MaxSteps:     1,
+			MaxToolCalls: 1,
+			MaxRuntime:   time.Second,
+		},
+	}
+	err := ValidateTaskSpec(task)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, ErrInvalidTask) {
+		t.Fatalf("expected ErrInvalidTask, got %v", err)
+	}
+}

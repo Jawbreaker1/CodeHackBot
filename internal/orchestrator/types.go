@@ -57,11 +57,20 @@ type TaskSpec struct {
 	DependsOn         []string   `json:"depends_on,omitempty"`
 	Priority          int        `json:"priority,omitempty"`
 	Strategy          string     `json:"strategy,omitempty"`
+	Action            TaskAction `json:"action,omitempty"`
 	DoneWhen          []string   `json:"done_when"`
 	FailWhen          []string   `json:"fail_when"`
 	ExpectedArtifacts []string   `json:"expected_artifacts"`
 	RiskLevel         string     `json:"risk_level"`
 	Budget            TaskBudget `json:"budget"`
+}
+
+type TaskAction struct {
+	Type           string   `json:"type,omitempty"`
+	Command        string   `json:"command,omitempty"`
+	Args           []string `json:"args,omitempty"`
+	WorkingDir     string   `json:"working_dir,omitempty"`
+	TimeoutSeconds int      `json:"timeout_seconds,omitempty"`
 }
 
 type TaskBudget struct {

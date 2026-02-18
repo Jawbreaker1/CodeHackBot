@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -166,6 +168,170 @@ func TestRunCommandExecutesPlan(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "run completed: run-cli-loop") {
 		t.Fatalf("unexpected run output: %q", out.String())
+	}
+}
+
+func TestRunCommandExecutesProductionWorkerMode(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not available in PATH")
+	}
+
+	base := t.TempDir()
+	planPath := filepath.Join(base, "plan-run-worker-mode.json")
+	cmdName, cmdArgs := workerShellEchoCommand("worker-mode-plan-ok")
+	plan := orchestrator.RunPlan{
+		RunID:           "run-cli-worker-mode",
+		Scope:           orchestrator.Scope{Targets: []string{"127.0.0.1"}},
+		Constraints:     []string{"local_only"},
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks: []orchestrator.TaskSpec{
+			{
+				TaskID:            "t1",
+				Goal:              "run production worker",
+				DoneWhen:          []string{"done"},
+				FailWhen:          []string{"timeout"},
+				ExpectedArtifacts: []string{"command_log"},
+				RiskLevel:         string(orchestrator.RiskReconReadonly),
+				Action: orchestrator.TaskAction{
+					Type:    "command",
+					Command: cmdName,
+					Args:    cmdArgs,
+				},
+				Budget: orchestrator.TaskBudget{
+					MaxSteps:     2,
+					MaxToolCalls: 2,
+					MaxRuntime:   5 * time.Second,
+				},
+			},
+		},
+	}
+	writePlanFile(t, planPath, plan)
+
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	if code := run([]string{"start", "--sessions-dir", base, "--plan", planPath}, &out, &errOut); code != 0 {
+		t.Fatalf("start failed: code=%d err=%s", code, errOut.String())
+	}
+
+	repoRoot := testRepoRoot(t)
+	binPath := buildBirdHackBotBinary(t, repoRoot, base)
+
+	out.Reset()
+	errOut.Reset()
+	args := []string{
+		"run",
+		"--sessions-dir", base,
+		"--run", "run-cli-worker-mode",
+		"--worker-cmd", binPath,
+		"--worker-arg", "worker",
+		"--tick", "20ms",
+		"--startup-timeout", "1s",
+		"--stale-timeout", "1s",
+		"--soft-stall-grace", "1s",
+		"--max-attempts", "1",
+	}
+	if code := run(args, &out, &errOut); code != 0 {
+		t.Fatalf("run failed: code=%d err=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "run completed: run-cli-worker-mode") {
+		t.Fatalf("unexpected run output: %q", out.String())
+	}
+
+	events, err := orchestrator.NewManager(base).Events("run-cli-worker-mode", 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if !hasEventType(events, orchestrator.EventTypeTaskArtifact) {
+		t.Fatalf("expected task_artifact event from worker mode")
+	}
+	if !hasEventType(events, orchestrator.EventTypeTaskFinding) {
+		t.Fatalf("expected task_finding event from worker mode")
+	}
+}
+
+func TestRunToReportProductionWorkerMode(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not available in PATH")
+	}
+
+	base := t.TempDir()
+	planPath := filepath.Join(base, "plan-run-report-worker-mode.json")
+	cmdName, cmdArgs := workerShellEchoCommand("worker-mode-report-ok")
+	plan := orchestrator.RunPlan{
+		RunID:           "run-cli-worker-report",
+		Scope:           orchestrator.Scope{Targets: []string{"127.0.0.1"}},
+		Constraints:     []string{"local_only"},
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks: []orchestrator.TaskSpec{
+			{
+				TaskID:            "t1",
+				Goal:              "run production worker and report",
+				DoneWhen:          []string{"done"},
+				FailWhen:          []string{"timeout"},
+				ExpectedArtifacts: []string{"command_log"},
+				RiskLevel:         string(orchestrator.RiskReconReadonly),
+				Action: orchestrator.TaskAction{
+					Type:    "command",
+					Command: cmdName,
+					Args:    cmdArgs,
+				},
+				Budget: orchestrator.TaskBudget{
+					MaxSteps:     2,
+					MaxToolCalls: 2,
+					MaxRuntime:   5 * time.Second,
+				},
+			},
+		},
+	}
+	writePlanFile(t, planPath, plan)
+
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	if code := run([]string{"start", "--sessions-dir", base, "--plan", planPath}, &out, &errOut); code != 0 {
+		t.Fatalf("start failed: code=%d err=%s", code, errOut.String())
+	}
+
+	repoRoot := testRepoRoot(t)
+	binPath := buildBirdHackBotBinary(t, repoRoot, base)
+
+	out.Reset()
+	errOut.Reset()
+	args := []string{
+		"run",
+		"--sessions-dir", base,
+		"--run", "run-cli-worker-report",
+		"--worker-cmd", binPath,
+		"--worker-arg", "worker",
+		"--tick", "20ms",
+		"--startup-timeout", "1s",
+		"--stale-timeout", "1s",
+		"--soft-stall-grace", "1s",
+		"--max-attempts", "1",
+	}
+	if code := run(args, &out, &errOut); code != 0 {
+		t.Fatalf("run failed: code=%d err=%s", code, errOut.String())
+	}
+
+	reportPath := filepath.Join(base, "report.md")
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"report", "--sessions-dir", base, "--run", "run-cli-worker-report", "--out", reportPath}, &out, &errOut); code != 0 {
+		t.Fatalf("report failed: code=%d err=%s", code, errOut.String())
+	}
+	data, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(string(data)), "task action completed") {
+		t.Fatalf("expected report to include worker finding")
 	}
 }
 
@@ -679,4 +845,40 @@ func hasReplanTrigger(events []orchestrator.EventEnvelope, trigger string) bool 
 func payloadString(v any) string {
 	s, _ := v.(string)
 	return s
+}
+
+func hasEventType(events []orchestrator.EventEnvelope, eventType string) bool {
+	for _, event := range events {
+		if event.Type == eventType {
+			return true
+		}
+	}
+	return false
+}
+
+func testRepoRoot(t *testing.T) string {
+	t.Helper()
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatalf("runtime.Caller failed")
+	}
+	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
+}
+
+func workerShellEchoCommand(message string) (string, []string) {
+	if runtime.GOOS == "windows" {
+		return "cmd", []string{"/C", "echo " + message}
+	}
+	return "sh", []string{"-c", "printf '%s\\n' " + message}
+}
+
+func buildBirdHackBotBinary(t *testing.T, repoRoot, outDir string) string {
+	t.Helper()
+	binPath := filepath.Join(outDir, "birdhackbot")
+	build := exec.Command("go", "build", "-o", binPath, "./cmd/birdhackbot")
+	build.Dir = repoRoot
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build birdhackbot: %v\n%s", err, string(output))
+	}
+	return binPath
 }

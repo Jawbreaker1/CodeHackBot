@@ -161,10 +161,13 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 		env := append([]string{}, os.Environ()...)
 		env = append(env, workerEnv...)
 		env = append(env,
+			"BIRDHACKBOT_ORCH_SESSIONS_DIR="+sessionsDir,
 			"BIRDHACKBOT_ORCH_RUN_ID="+runID,
 			"BIRDHACKBOT_ORCH_TASK_ID="+task.TaskID,
 			fmt.Sprintf("BIRDHACKBOT_ORCH_ATTEMPT=%d", attempt),
 			"BIRDHACKBOT_ORCH_WORKER_ID="+workerID,
+			"BIRDHACKBOT_ORCH_PERMISSION_MODE="+string(permissionMode),
+			fmt.Sprintf("BIRDHACKBOT_ORCH_DISRUPTIVE_OPT_IN=%t", disruptiveOptIn),
 		)
 		return orchestrator.WorkerSpec{
 			WorkerID: workerID,

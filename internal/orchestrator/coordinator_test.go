@@ -1197,6 +1197,76 @@ func TestCoordinator_ReplanTriggerWorkerRecovery(t *testing.T) {
 	}
 }
 
+func TestCoordinator_ReplanTriggerExecutionFailure(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-coord-replan-execution-failure"
+	manager := NewManager(base)
+	now := time.Now().UTC()
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	if err := AppendEventJSONL(manager.eventPath(runID), EventEnvelope{
+		EventID:  "e-run-start",
+		RunID:    runID,
+		WorkerID: orchestratorWorkerID,
+		Seq:      1,
+		TS:       now,
+		Type:     EventTypeRunStarted,
+	}); err != nil {
+		t.Fatalf("append run_started: %v", err)
+	}
+	if err := AppendEventJSONL(manager.eventPath(runID), EventEnvelope{
+		EventID:  "e-exec-fail",
+		RunID:    runID,
+		WorkerID: orchestratorWorkerID,
+		TaskID:   "t1",
+		Seq:      2,
+		TS:       now.Add(time.Second),
+		Type:     EventTypeTaskFailed,
+		Payload:  mustJSONRaw(map[string]any{"reason": WorkerFailureCommandTimeout}),
+	}); err != nil {
+		t.Fatalf("append command timeout fail: %v", err)
+	}
+	plan := RunPlan{
+		RunID:           runID,
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks:           []TaskSpec{task("t1", nil, 1)},
+	}
+	scheduler, _ := NewScheduler(plan, 1)
+	workers := NewWorkerManager(manager)
+	coord, err := NewCoordinator(runID, Scope{}, manager, workers, scheduler, 2, 2*time.Second, 4*time.Second, 3*time.Second, func(task TaskSpec, attempt int, workerID string) WorkerSpec {
+		return helperWorkerSpec(t, workerID, "ok")
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	if err := coord.Tick(); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	events, err := manager.Events(runID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if count := replanEventCount(events, "execution_failure"); count != 1 {
+		t.Fatalf("expected execution_failure trigger, got %d", count)
+	}
+}
+
+func TestRetryableWorkerFailureReason(t *testing.T) {
+	t.Parallel()
+
+	if retryableWorkerFailureReason(WorkerFailureCommandInterrupted) {
+		t.Fatalf("expected command_interrupted to be non-retryable")
+	}
+	if !retryableWorkerFailureReason(WorkerFailureCommandTimeout) {
+		t.Fatalf("expected command_timeout to be retryable")
+	}
+}
+
 func TestCoordinator_BudgetGuardExhaustsStepBudget(t *testing.T) {
 	t.Parallel()
 
