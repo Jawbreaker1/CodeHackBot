@@ -137,94 +137,96 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
   - [x] `finding.json`
   - [x] approval event structs (`approval_requested`, `approval_granted`, `approval_denied`, `approval_expired`)
 - [x] Add file-based run directory layout: `sessions/<run-id>/orchestrator/{plan,task,event,artifact,finding}/`.
-- [ ] Lock file-based transport protocol (single-host MVP):
-  - [ ] append-only `event.jsonl` envelope with required fields (`event_id`, `run_id`, `worker_id`, `task_id`, `seq`, `ts`, `type`, `payload`)
-  - [ ] per-worker monotonic `seq`
-  - [ ] dedupe by `event_id`
-  - [ ] deterministic replay to rebuild orchestrator state
-- [ ] Implement task handoff SLA:
-  - [ ] orchestrator lease write -> worker must emit `task_started` within configured startup window
-  - [ ] reclaim lease on missed startup SLA
+- [x] Lock file-based transport protocol (single-host MVP):
+  - [x] append-only `event.jsonl` envelope with required fields (`event_id`, `run_id`, `worker_id`, `task_id`, `seq`, `ts`, `type`, `payload`)
+  - [x] per-worker monotonic `seq`
+  - [x] dedupe by `event_id`
+  - [x] deterministic replay to rebuild orchestrator state
+- [x] Implement task handoff SLA:
+  - [x] orchestrator lease write -> worker must emit `task_started` within configured startup window
+  - [x] reclaim lease on missed startup SLA
 - [x] Implement atomic file-write helpers for orchestrator artifacts/events (`tmp + rename`).
-- [ ] Add CLI commands for orchestrator MVP: `start`, `status`, `workers`, `events`, `stop`.
+- [x] Add CLI commands for orchestrator MVP: `start`, `status`, `workers`, `events`, `stop`.
 - [x] Add tests for schema round-trip and backward-compatible parsing.
   - [x] add tests for event ordering, dedupe, and replay reconstruction.
-- [ ] Implement plan-first validation:
-  - [ ] reject `start` when scope/constraints/success/stop criteria are missing
-  - [ ] validate task quality fields before lease (`done_when`, `fail_when`, `expected_artifacts`, `risk_level`, budgets)
+- [x] Implement plan-first validation:
+  - [x] reject `start` when scope/constraints/success/stop criteria are missing
+  - [x] validate task quality fields before lease (`done_when`, `fail_when`, `expected_artifacts`, `risk_level`, budgets)
 
 ## Sprint 20 — Worker Lifecycle + Scheduler (planned)
-- [ ] Implement subprocess worker launcher (spawn new `birdhackbot` workers on demand).
+- [x] Implement subprocess worker launcher (spawn new `birdhackbot` workers on demand).
 - [ ] Implement worker lifecycle manager:
-  - [ ] `worker_started` / `worker_stopped` events
-  - [ ] cleanup of idle/completed workers
-  - [ ] failed worker recovery path
-- [ ] Implement dependency-aware scheduler with configurable `max_workers`.
+  - [x] `worker_started` / `worker_stopped` events
+  - [x] cleanup of idle/completed workers
+  - [x] failed worker recovery path
+- [x] Implement dependency-aware scheduler with configurable `max_workers`.
 - [ ] Implement explicit task state machine with transition validator:
-  - [ ] states: `queued`, `leased`, `running`, `awaiting_approval`, `completed`, `failed`, `blocked`, `canceled`
-  - [ ] reject invalid transitions with typed errors
-  - [ ] retry transition policy (`failed -> queued`, retryable-only, bounded attempts)
+  - [x] states: `queued`, `leased`, `running`, `awaiting_approval`, `completed`, `failed`, `blocked`, `canceled`
+  - [x] reject invalid transitions with typed errors
+  - [x] retry transition policy (`failed -> queued`, retryable-only, bounded attempts)
 - [ ] Implement lease + heartbeat flow:
-  - [ ] lease acquisition/release
-  - [ ] heartbeat every `5s`
-  - [ ] stale lease detection + reclaim at `20s`
-  - [ ] soft-stall grace handling at `30s`
-  - [ ] bounded retries (`2`) with backoff (`5s`, `15s`)
+  - [x] lease acquisition/release
+  - [x] heartbeat every `5s`
+  - [x] stale lease detection + reclaim at `20s`
+  - [x] soft-stall grace handling at `30s`
+  - [x] bounded retries (`2`) with backoff (`5s`, `15s`)
 - [ ] Implement centralized approval broker (orchestrator-owned):
-  - [ ] workers emit `approval_requested` events instead of blocking on stdin
-  - [ ] queue + resolution flow for approve/deny/expire
-  - [ ] approval scopes: once, task, session (never outside existing scope/permissions)
+  - [x] workers emit `approval_requested` events instead of blocking on stdin
+  - [x] queue + resolution flow for approve/deny/expire
+  - [x] approval scopes: once, task, session (never outside existing scope/permissions)
 - [ ] Implement risk-tier policy engine:
-  - [ ] classify actions into `recon_readonly`, `active_probe`, `exploit_controlled`, `priv_esc`, `disruptive`
-  - [ ] enforce permission-mode matrix (`readonly`, `default`, `all`) against tier
-  - [ ] deny out-of-scope targets before approval flow
-  - [ ] enforce `disruptive` deny-by-default unless explicit session opt-in is present
+  - [x] classify actions into `recon_readonly`, `active_probe`, `exploit_controlled`, `priv_esc`, `disruptive`
+  - [x] enforce permission-mode matrix (`readonly`, `default`, `all`) against tier
+  - [x] deny out-of-scope targets before approval flow
+  - [x] enforce `disruptive` deny-by-default unless explicit session opt-in is present
 - [ ] Implement session pre-approval grants with expiry:
-  - [ ] scopes: once/task/session
-  - [ ] attach actor, reason, expiry metadata
-  - [ ] never widen scope beyond run/session scope constraints
+  - [x] scopes: once/task/session
+  - [x] attach actor, reason, expiry metadata
+  - [x] never widen scope beyond run/session scope constraints
 - [ ] Implement timer semantics for `awaiting_approval`:
-  - [ ] pause execution timeout while waiting
-  - [ ] pause lease stale timer while waiting
-  - [ ] separate approval wait timeout (`45m` default) -> mark task `blocked` on expiry
-- [ ] Enforce stop semantics:
-  - [ ] global broadcast stop
-  - [ ] per-worker stop
-  - [ ] SIGTERM -> SIGKILL escalation timeout
+  - [x] pause execution timeout while waiting
+  - [x] pause lease stale timer while waiting
+  - [x] separate approval wait timeout (`45m` default) -> mark task `blocked` on expiry
+- [x] Enforce stop semantics:
+  - [x] global broadcast stop
+  - [x] per-worker stop
+  - [x] SIGTERM -> SIGKILL escalation timeout
+  - [x] orchestrator control commands (`worker-stop`, `stop`) emit stop-request events for the run loop
 - [ ] Validate worker isolation behavior:
-  - [ ] per-worker session/artifact directory isolation
-  - [ ] confirm normal PATH tool execution works outside session directories
-- [ ] Add scheduler simulation tests (parallelism, reclaim, retry, stop propagation).
+  - [x] per-worker session/artifact directory isolation
+  - [x] confirm normal PATH tool execution works outside session directories
+- [x] Add scheduler simulation tests (parallelism, reclaim, retry, stop propagation).
 - [ ] Add approval-flow tests:
-  - [ ] no false timeout while approval is pending
-  - [ ] approval expiry marks task blocked (not failed)
-  - [ ] scoped approval reuse works for task/session scopes
-  - [ ] risk-tier matrix tests (mode x tier expected decision)
-  - [ ] disruptive-action default deny tests
-  - [ ] out-of-scope action deny-before-approval tests
+  - [x] no false timeout while approval is pending
+  - [x] approval expiry marks task blocked (not failed)
+  - [x] scoped approval reuse works for task/session scopes
+  - [x] risk-tier matrix tests (mode x tier expected decision)
+  - [x] disruptive-action default deny tests
+  - [x] out-of-scope action deny-before-approval tests
 - [ ] Add task-state-machine tests:
-  - [ ] valid transition matrix
-  - [ ] invalid transition rejection
-  - [ ] blocked vs failed reason mapping
-  - [ ] restart reconciliation for `leased`/`running`/`awaiting_approval`
+  - [x] valid transition matrix
+  - [x] invalid transition rejection
+  - [x] blocked vs failed reason mapping
+  - [x] restart reconciliation for `leased`/`running`/`awaiting_approval`
 
 ## Sprint 21 — Evidence Merge + Replan Loop (planned)
-- [ ] Implement finding/artifact ingestion pipeline from worker events.
-- [ ] Add deterministic dedupe key for findings (`target + type + location + normalized title`).
-- [ ] Implement confidence/source-aware conflict handling (retain conflicting evidence).
-- [ ] Implement orchestrator state updater + replan triggers on blockers/findings.
-- [ ] Implement replan policy engine with bounded outcomes:
-  - [ ] trigger on repeated-step loops
-  - [ ] trigger on approval denied/expired
-  - [ ] trigger on missing required artifacts after retries
-  - [ ] trigger on stale lease/worker crash recovery
-  - [ ] outcomes: refine task, split task, or terminate with explicit reason
-- [ ] Enforce no-silent-retry rule (every replan/retry decision emits explicit event).
-- [ ] Add report assembly from merged findings + artifact links.
-- [ ] Add end-to-end orchestrator test:
-  - [ ] run start -> worker fan-out -> evidence merge -> run completion
-  - [ ] regression test that standalone `birdhackbot` behavior remains unchanged.
-  - [ ] budget guard test (`max_steps`/`max_tool_calls`/`max_runtime`) and deterministic stop on exhaustion.
+- [x] Implement finding/artifact ingestion pipeline from worker events.
+- [x] Add deterministic dedupe key for findings (`target + type + location + normalized title`).
+- [x] Implement confidence/source-aware conflict handling (retain conflicting evidence).
+- [x] Implement orchestrator state updater + replan triggers on blockers/findings.
+- [x] Implement replan policy engine with bounded outcomes:
+  - [x] trigger on repeated-step loops
+  - [x] trigger on approval denied/expired
+  - [x] trigger on missing required artifacts after retries
+  - [x] trigger on stale lease/worker crash recovery
+  - [x] outcomes: refine task, split task, or terminate with explicit reason
+- [x] Enforce no-silent-retry rule (every replan/retry decision emits explicit event).
+- [x] Add report assembly from merged findings + artifact links.
+- [x] Add end-to-end orchestrator test:
+  - [x] run start -> worker fan-out -> evidence merge -> run completion
+  - [x] regression test that standalone `birdhackbot` behavior remains unchanged.
+  - [x] budget guard test (`max_steps`/`max_tool_calls`/`max_runtime`) and deterministic stop on exhaustion.
+  - [x] env-gated integration scenario: create encrypted zip and validate solvable vs unsolved orchestrated outcomes.
 
 ## Sprint 22 — Orchestrator UI (future)
 - [ ] Framework decision (locked):

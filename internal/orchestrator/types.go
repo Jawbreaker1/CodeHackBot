@@ -6,22 +6,26 @@ import (
 )
 
 const (
-	EventTypeRunStarted        = "run_started"
-	EventTypeTaskLeased        = "task_leased"
-	EventTypeTaskStarted       = "task_started"
-	EventTypeTaskProgress      = "task_progress"
-	EventTypeTaskArtifact      = "task_artifact"
-	EventTypeTaskFinding       = "task_finding"
-	EventTypeTaskFailed        = "task_failed"
-	EventTypeTaskCompleted     = "task_completed"
-	EventTypeWorkerStarted     = "worker_started"
-	EventTypeWorkerStopped     = "worker_stopped"
-	EventTypeRunStopped        = "run_stopped"
-	EventTypeRunCompleted      = "run_completed"
-	EventTypeApprovalRequested = "approval_requested"
-	EventTypeApprovalGranted   = "approval_granted"
-	EventTypeApprovalDenied    = "approval_denied"
-	EventTypeApprovalExpired   = "approval_expired"
+	EventTypeRunStarted          = "run_started"
+	EventTypeTaskLeased          = "task_leased"
+	EventTypeTaskStarted         = "task_started"
+	EventTypeTaskProgress        = "task_progress"
+	EventTypeTaskArtifact        = "task_artifact"
+	EventTypeTaskFinding         = "task_finding"
+	EventTypeTaskFailed          = "task_failed"
+	EventTypeTaskCompleted       = "task_completed"
+	EventTypeWorkerStarted       = "worker_started"
+	EventTypeWorkerHeartbeat     = "worker_heartbeat"
+	EventTypeWorkerStopped       = "worker_stopped"
+	EventTypeRunStopped          = "run_stopped"
+	EventTypeRunCompleted        = "run_completed"
+	EventTypeRunStateUpdated     = "run_state_updated"
+	EventTypeRunReplanRequested  = "run_replan_requested"
+	EventTypeApprovalRequested   = "approval_requested"
+	EventTypeApprovalGranted     = "approval_granted"
+	EventTypeApprovalDenied      = "approval_denied"
+	EventTypeApprovalExpired     = "approval_expired"
+	EventTypeWorkerStopRequested = "worker_stop_requested"
 )
 
 type RunPlan struct {
@@ -49,6 +53,7 @@ type TaskSpec struct {
 	TaskID            string     `json:"task_id"`
 	Title             string     `json:"title"`
 	Goal              string     `json:"goal"`
+	Targets           []string   `json:"targets,omitempty"`
 	DependsOn         []string   `json:"depends_on,omitempty"`
 	Priority          int        `json:"priority,omitempty"`
 	Strategy          string     `json:"strategy,omitempty"`
@@ -94,6 +99,27 @@ type Finding struct {
 	Confidence  string            `json:"confidence"`
 	Evidence    []string          `json:"evidence,omitempty"`
 	Metadata    map[string]string `json:"metadata,omitempty"`
+	Sources     []FindingSource   `json:"sources,omitempty"`
+	Conflicts   []FindingConflict `json:"conflicts,omitempty"`
+}
+
+type FindingSource struct {
+	EventID    string    `json:"event_id"`
+	WorkerID   string    `json:"worker_id"`
+	TaskID     string    `json:"task_id"`
+	Source     string    `json:"source,omitempty"`
+	Severity   string    `json:"severity,omitempty"`
+	Confidence string    `json:"confidence,omitempty"`
+	TS         time.Time `json:"ts"`
+}
+
+type FindingConflict struct {
+	Field          string `json:"field"`
+	ExistingValue  string `json:"existing_value"`
+	IncomingValue  string `json:"incoming_value"`
+	IncomingEvent  string `json:"incoming_event"`
+	IncomingSource string `json:"incoming_source,omitempty"`
+	Resolution     string `json:"resolution"`
 }
 
 type EventEnvelope struct {

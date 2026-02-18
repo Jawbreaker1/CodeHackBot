@@ -110,3 +110,18 @@ func ValidateMonotonicSequences(events []EventEnvelope) error {
 	}
 	return nil
 }
+
+func readLease(path string) (TaskLease, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return TaskLease{}, fmt.Errorf("read lease %s: %w", path, err)
+	}
+	var lease TaskLease
+	if err := json.Unmarshal(data, &lease); err != nil {
+		return TaskLease{}, fmt.Errorf("parse lease %s: %w", path, err)
+	}
+	if err := ValidateTaskLease(lease); err != nil {
+		return TaskLease{}, fmt.Errorf("validate lease %s: %w", path, err)
+	}
+	return lease, nil
+}

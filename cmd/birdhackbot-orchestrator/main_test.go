@@ -1,0 +1,682 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Jawbreaker1/CodeHackBot/internal/orchestrator"
+)
+
+func TestRunStartStatusEventsStop(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	planPath := filepath.Join(base, "plan.json")
+	plan := orchestrator.RunPlan{
+		RunID:           "run-cli-1",
+		Scope:           orchestrator.Scope{Targets: []string{"192.168.50.10"}},
+		Constraints:     []string{"internal_only"},
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks: []orchestrator.TaskSpec{
+			{
+				TaskID:            "t1",
+				Goal:              "scan",
+				DoneWhen:          []string{"artifact"},
+				FailWhen:          []string{"timeout"},
+				ExpectedArtifacts: []string{"out.txt"},
+				RiskLevel:         "active_probe",
+				Budget: orchestrator.TaskBudget{
+					MaxSteps:     1,
+					MaxToolCalls: 1,
+					MaxRuntime:   time.Second,
+				},
+			},
+		},
+	}
+	writePlanFile(t, planPath, plan)
+
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+
+	code := run([]string{"start", "--sessions-dir", base, "--plan", planPath}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("start failed: code=%d err=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "run started: run-cli-1") {
+		t.Fatalf("unexpected start output: %q", out.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = run([]string{"status", "--sessions-dir", base, "--run", "run-cli-1", "--reclaim-startup"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("status failed: code=%d err=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "reclaimed_startup_leases: 0") {
+		t.Fatalf("unexpected reclaim output: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "state: running") {
+		t.Fatalf("unexpected status output: %q", out.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = run([]string{"events", "--sessions-dir", base, "--run", "run-cli-1"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("events failed: code=%d err=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), `"type":"run_started"`) {
+		t.Fatalf("unexpected events output: %q", out.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = run([]string{"stop", "--sessions-dir", base, "--run", "run-cli-1"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("stop failed: code=%d err=%s", code, errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = run([]string{"status", "--sessions-dir", base, "--run", "run-cli-1"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("status after stop failed: code=%d err=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "state: stopped") {
+		t.Fatalf("unexpected status output: %q", out.String())
+	}
+}
+
+func TestRunRejectsMissingRequiredFlags(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+
+	if code := run([]string{"start"}, &out, &errOut); code == 0 {
+		t.Fatalf("expected start failure without --plan")
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"status"}, &out, &errOut); code == 0 {
+		t.Fatalf("expected status failure without --run")
+	}
+}
+
+func TestRunCommandExecutesPlan(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	planPath := filepath.Join(base, "plan-run.json")
+	plan := orchestrator.RunPlan{
+		RunID:           "run-cli-loop",
+		Scope:           orchestrator.Scope{Targets: []string{"192.168.50.10"}},
+		Constraints:     []string{"internal_only"},
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks: []orchestrator.TaskSpec{
+			{
+				TaskID:            "t1",
+				Goal:              "collect",
+				DoneWhen:          []string{"done"},
+				FailWhen:          []string{"timeout"},
+				ExpectedArtifacts: []string{"out.txt"},
+				RiskLevel:         string(orchestrator.RiskReconReadonly),
+				Budget: orchestrator.TaskBudget{
+					MaxSteps:     1,
+					MaxToolCalls: 1,
+					MaxRuntime:   time.Second,
+				},
+			},
+		},
+	}
+	writePlanFile(t, planPath, plan)
+
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	if code := run([]string{"start", "--sessions-dir", base, "--plan", planPath}, &out, &errOut); code != 0 {
+		t.Fatalf("start failed: code=%d err=%s", code, errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	args := []string{
+		"run",
+		"--sessions-dir", base,
+		"--run", "run-cli-loop",
+		"--worker-cmd", os.Args[0],
+		"--worker-arg", "-test.run=TestHelperProcessOrchestratorWorker",
+		"--worker-arg", "worker-ok",
+		"--worker-env", "GO_WANT_HELPER_PROCESS=1",
+		"--tick", "20ms",
+		"--startup-timeout", "1s",
+		"--stale-timeout", "1s",
+		"--soft-stall-grace", "1s",
+	}
+	if code := run(args, &out, &errOut); code != 0 {
+		t.Fatalf("run failed: code=%d err=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "run completed: run-cli-loop") {
+		t.Fatalf("unexpected run output: %q", out.String())
+	}
+}
+
+func TestApprovalCommands(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	planPath := filepath.Join(base, "plan-approval.json")
+	plan := orchestrator.RunPlan{
+		RunID:           "run-cli-approval",
+		Scope:           orchestrator.Scope{Targets: []string{"192.168.50.10"}},
+		Constraints:     []string{"internal_only"},
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks: []orchestrator.TaskSpec{
+			{
+				TaskID:            "t1",
+				Goal:              "scan",
+				DoneWhen:          []string{"artifact"},
+				FailWhen:          []string{"timeout"},
+				ExpectedArtifacts: []string{"out.txt"},
+				RiskLevel:         string(orchestrator.RiskActiveProbe),
+				Budget: orchestrator.TaskBudget{
+					MaxSteps:     1,
+					MaxToolCalls: 1,
+					MaxRuntime:   time.Second,
+				},
+			},
+		},
+	}
+	writePlanFile(t, planPath, plan)
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	if code := run([]string{"start", "--sessions-dir", base, "--plan", planPath}, &out, &errOut); code != 0 {
+		t.Fatalf("start failed: code=%d err=%s", code, errOut.String())
+	}
+
+	manager := orchestrator.NewManager(base)
+	if err := manager.EmitEvent("run-cli-approval", "orchestrator", "t1", orchestrator.EventTypeApprovalRequested, map[string]any{
+		"approval_id": "apr-1",
+		"tier":        string(orchestrator.RiskActiveProbe),
+		"reason":      "requires approval",
+		"expires_at":  time.Now().Add(time.Minute).UTC().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("EmitEvent approval requested: %v", err)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"approvals", "--sessions-dir", base, "--run", "run-cli-approval"}, &out, &errOut); code != 0 {
+		t.Fatalf("approvals failed: code=%d err=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), `"approval_id":"apr-1"`) {
+		t.Fatalf("unexpected approvals output: %q", out.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"approve", "--sessions-dir", base, "--run", "run-cli-approval", "--approval", "apr-1", "--scope", "task", "--actor", "tester", "--reason", "ok"}, &out, &errOut); code != 0 {
+		t.Fatalf("approve failed: code=%d err=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "approved: apr-1") {
+		t.Fatalf("unexpected approve output: %q", out.String())
+	}
+}
+
+func TestWorkerStopCommand(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	planPath := filepath.Join(base, "plan-worker-stop.json")
+	plan := orchestrator.RunPlan{
+		RunID:           "run-cli-worker-stop",
+		Scope:           orchestrator.Scope{Targets: []string{"192.168.50.10"}},
+		Constraints:     []string{"internal_only"},
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks: []orchestrator.TaskSpec{
+			{
+				TaskID:            "t1",
+				Goal:              "scan",
+				DoneWhen:          []string{"artifact"},
+				FailWhen:          []string{"timeout"},
+				ExpectedArtifacts: []string{"out.txt"},
+				RiskLevel:         string(orchestrator.RiskReconReadonly),
+				Budget: orchestrator.TaskBudget{
+					MaxSteps:     1,
+					MaxToolCalls: 1,
+					MaxRuntime:   time.Second,
+				},
+			},
+		},
+	}
+	writePlanFile(t, planPath, plan)
+
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	if code := run([]string{"start", "--sessions-dir", base, "--plan", planPath}, &out, &errOut); code != 0 {
+		t.Fatalf("start failed: code=%d err=%s", code, errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"worker-stop", "--sessions-dir", base, "--run", "run-cli-worker-stop", "--worker", "worker-t1-a1", "--actor", "tester", "--reason", "manual stop"}, &out, &errOut); code != 0 {
+		t.Fatalf("worker-stop failed: code=%d err=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "worker stop requested") {
+		t.Fatalf("unexpected worker-stop output: %q", out.String())
+	}
+
+	events, err := orchestrator.NewManager(base).Events("run-cli-worker-stop", 0)
+	if err != nil {
+		t.Fatalf("events: %v", err)
+	}
+	found := false
+	for _, e := range events {
+		if e.Type == orchestrator.EventTypeWorkerStopRequested {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected worker_stop_requested event")
+	}
+}
+
+func TestReportCommand(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	planPath := filepath.Join(base, "plan-report.json")
+	plan := orchestrator.RunPlan{
+		RunID:           "run-cli-report",
+		Scope:           orchestrator.Scope{Targets: []string{"192.168.50.10"}},
+		Constraints:     []string{"internal_only"},
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks: []orchestrator.TaskSpec{
+			{
+				TaskID:            "t1",
+				Goal:              "scan",
+				DoneWhen:          []string{"artifact"},
+				FailWhen:          []string{"timeout"},
+				ExpectedArtifacts: []string{"out.txt"},
+				RiskLevel:         string(orchestrator.RiskReconReadonly),
+				Budget: orchestrator.TaskBudget{
+					MaxSteps:     1,
+					MaxToolCalls: 1,
+					MaxRuntime:   time.Second,
+				},
+			},
+		},
+	}
+	writePlanFile(t, planPath, plan)
+
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	if code := run([]string{"start", "--sessions-dir", base, "--plan", planPath}, &out, &errOut); code != 0 {
+		t.Fatalf("start failed: code=%d err=%s", code, errOut.String())
+	}
+
+	manager := orchestrator.NewManager(base)
+	if err := manager.EmitEvent("run-cli-report", "worker-1", "t1", orchestrator.EventTypeTaskArtifact, map[string]any{
+		"type":  "log",
+		"title": "scan output",
+		"path":  "sessions/run-cli-report/logs/scan.log",
+	}); err != nil {
+		t.Fatalf("emit artifact: %v", err)
+	}
+	if err := manager.EmitEvent("run-cli-report", "worker-1", "t1", orchestrator.EventTypeTaskFinding, map[string]any{
+		"target":       "192.168.50.10",
+		"finding_type": "open_port",
+		"title":        "SSH open",
+		"location":     "22/tcp",
+		"severity":     "low",
+		"confidence":   "high",
+	}); err != nil {
+		t.Fatalf("emit finding: %v", err)
+	}
+	if _, err := manager.IngestEvidence("run-cli-report"); err != nil {
+		t.Fatalf("ingest evidence: %v", err)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	reportPath := filepath.Join(base, "out-report.md")
+	if code := run([]string{"report", "--sessions-dir", base, "--run", "run-cli-report", "--out", reportPath}, &out, &errOut); code != 0 {
+		t.Fatalf("report failed: code=%d err=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "report written:") {
+		t.Fatalf("unexpected report output: %q", out.String())
+	}
+	if _, err := os.Stat(reportPath); err != nil {
+		t.Fatalf("expected report file at %s: %v", reportPath, err)
+	}
+}
+
+func TestRunEndToEndLifecycleFanoutEvidenceAndReport(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	planPath := filepath.Join(base, "plan-e2e.json")
+	plan := orchestrator.RunPlan{
+		RunID:           "run-cli-e2e",
+		Scope:           orchestrator.Scope{Targets: []string{"192.168.50.10"}},
+		Constraints:     []string{"internal_only"},
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  2,
+		Tasks: []orchestrator.TaskSpec{
+			{
+				TaskID:            "t1",
+				Goal:              "collect-one",
+				DoneWhen:          []string{"done"},
+				FailWhen:          []string{"timeout"},
+				ExpectedArtifacts: []string{"t1.log"},
+				RiskLevel:         string(orchestrator.RiskReconReadonly),
+				Budget: orchestrator.TaskBudget{
+					MaxSteps:     10,
+					MaxToolCalls: 10,
+					MaxRuntime:   30 * time.Second,
+				},
+			},
+			{
+				TaskID:            "t2",
+				Goal:              "collect-two",
+				DoneWhen:          []string{"done"},
+				FailWhen:          []string{"timeout"},
+				ExpectedArtifacts: []string{"t2.log"},
+				RiskLevel:         string(orchestrator.RiskReconReadonly),
+				Budget: orchestrator.TaskBudget{
+					MaxSteps:     10,
+					MaxToolCalls: 10,
+					MaxRuntime:   30 * time.Second,
+				},
+			},
+		},
+	}
+	writePlanFile(t, planPath, plan)
+
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	if code := run([]string{"start", "--sessions-dir", base, "--plan", planPath}, &out, &errOut); code != 0 {
+		t.Fatalf("start failed: code=%d err=%s", code, errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	runArgs := []string{
+		"run",
+		"--sessions-dir", base,
+		"--run", "run-cli-e2e",
+		"--worker-cmd", os.Args[0],
+		"--worker-arg", "-test.run=TestHelperProcessOrchestratorWorker",
+		"--worker-arg", "worker-evidence",
+		"--worker-env", "GO_WANT_HELPER_PROCESS=1",
+		"--worker-env", "TEST_SESSIONS_DIR=" + base,
+		"--tick", "20ms",
+		"--startup-timeout", "2s",
+		"--stale-timeout", "2s",
+		"--soft-stall-grace", "2s",
+	}
+	if code := run(runArgs, &out, &errOut); code != 0 {
+		t.Fatalf("run failed: code=%d err=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "run completed: run-cli-e2e") {
+		t.Fatalf("unexpected run output: %q", out.String())
+	}
+
+	manager := orchestrator.NewManager(base)
+	status, err := manager.Status("run-cli-e2e")
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if status.State != "completed" {
+		t.Fatalf("expected completed run state, got %s", status.State)
+	}
+	findings, err := manager.ListFindings("run-cli-e2e")
+	if err != nil {
+		t.Fatalf("ListFindings: %v", err)
+	}
+	if len(findings) < 2 {
+		t.Fatalf("expected merged findings from fan-out workers, got %d", len(findings))
+	}
+
+	out.Reset()
+	errOut.Reset()
+	reportPath := filepath.Join(base, "run-e2e-report.md")
+	if code := run([]string{"report", "--sessions-dir", base, "--run", "run-cli-e2e", "--out", reportPath}, &out, &errOut); code != 0 {
+		t.Fatalf("report failed: code=%d err=%s", code, errOut.String())
+	}
+	data, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "finding-t1") || !strings.Contains(content, "finding-t2") {
+		t.Fatalf("report missing fan-out finding details:\n%s", content)
+	}
+}
+
+func TestRunBudgetGuardStopsOnStepExhaustion(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	planPath := filepath.Join(base, "plan-budget.json")
+	plan := orchestrator.RunPlan{
+		RunID:           "run-cli-budget",
+		Scope:           orchestrator.Scope{Targets: []string{"192.168.50.10"}},
+		Constraints:     []string{"internal_only"},
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks: []orchestrator.TaskSpec{
+			{
+				TaskID:            "t1",
+				Goal:              "budget-test",
+				DoneWhen:          []string{"done"},
+				FailWhen:          []string{"timeout"},
+				ExpectedArtifacts: []string{"none"},
+				RiskLevel:         string(orchestrator.RiskReconReadonly),
+				Budget: orchestrator.TaskBudget{
+					MaxSteps:     1,
+					MaxToolCalls: 1,
+					MaxRuntime:   30 * time.Second,
+				},
+			},
+		},
+	}
+	writePlanFile(t, planPath, plan)
+
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	if code := run([]string{"start", "--sessions-dir", base, "--plan", planPath}, &out, &errOut); code != 0 {
+		t.Fatalf("start failed: code=%d err=%s", code, errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	runArgs := []string{
+		"run",
+		"--sessions-dir", base,
+		"--run", "run-cli-budget",
+		"--worker-cmd", os.Args[0],
+		"--worker-arg", "-test.run=TestHelperProcessOrchestratorWorker",
+		"--worker-arg", "worker-budget-steps",
+		"--worker-env", "GO_WANT_HELPER_PROCESS=1",
+		"--worker-env", "TEST_SESSIONS_DIR=" + base,
+		"--tick", "20ms",
+		"--startup-timeout", "2s",
+		"--stale-timeout", "2s",
+		"--soft-stall-grace", "2s",
+	}
+	if code := run(runArgs, &out, &errOut); code != 0 {
+		t.Fatalf("run failed: code=%d err=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "run completed: run-cli-budget") {
+		t.Fatalf("unexpected run output: %q", out.String())
+	}
+
+	manager := orchestrator.NewManager(base)
+	events, err := manager.Events("run-cli-budget", 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if !hasTaskFailedReason(events, "budget_exhausted") {
+		t.Fatalf("expected task_failed with budget_exhausted reason")
+	}
+	if !hasReplanTrigger(events, "budget_exhausted") {
+		t.Fatalf("expected replan trigger for budget_exhausted")
+	}
+}
+
+func TestHelperProcessOrchestratorWorker(t *testing.T) {
+	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
+		return
+	}
+	mode := ""
+	for _, arg := range os.Args {
+		switch arg {
+		case "worker-ok", "worker-evidence", "worker-budget-steps", "worker-zip-crack", "worker-zip-unsolved":
+			mode = arg
+		}
+	}
+	switch mode {
+	case "worker-ok":
+		os.Exit(0)
+	case "worker-evidence":
+		if err := helperEmitEvidence(); err != nil {
+			_, _ = os.Stderr.WriteString(err.Error())
+			os.Exit(2)
+		}
+		os.Exit(0)
+	case "worker-budget-steps":
+		if err := helperEmitBudgetOverrun(); err != nil {
+			_, _ = os.Stderr.WriteString(err.Error())
+			os.Exit(2)
+		}
+		time.Sleep(10 * time.Second)
+		os.Exit(0)
+	case "worker-zip-crack":
+		if err := helperZipCrackScenario(true); err != nil {
+			_, _ = os.Stderr.WriteString(err.Error())
+			os.Exit(2)
+		}
+		os.Exit(0)
+	case "worker-zip-unsolved":
+		if err := helperZipCrackScenario(false); err != nil {
+			_, _ = os.Stderr.WriteString(err.Error())
+			os.Exit(2)
+		}
+		os.Exit(0)
+	}
+	os.Exit(1)
+}
+
+func writePlanFile(t *testing.T, path string, plan orchestrator.RunPlan) {
+	t.Helper()
+	data, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatalf("marshal plan: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write plan: %v", err)
+	}
+}
+
+func helperEmitEvidence() error {
+	manager, runID, taskID, workerID, err := helperManagerAndIDs()
+	if err != nil {
+		return err
+	}
+	signalWorker := "signal-" + workerID
+	if err := manager.EmitEvent(runID, signalWorker, taskID, orchestrator.EventTypeTaskArtifact, map[string]any{
+		"type":  "log",
+		"title": "artifact-" + taskID,
+		"path":  filepath.ToSlash(filepath.Join("sessions", runID, "logs", taskID+".log")),
+	}); err != nil {
+		return err
+	}
+	return manager.EmitEvent(runID, signalWorker, taskID, orchestrator.EventTypeTaskFinding, map[string]any{
+		"target":       "192.168.50.10",
+		"finding_type": "service",
+		"title":        "finding-" + taskID,
+		"location":     taskID,
+		"severity":     "low",
+		"confidence":   "high",
+		"source":       "helper-worker",
+		"evidence":     []string{"evidence-" + taskID},
+	})
+}
+
+func helperEmitBudgetOverrun() error {
+	manager, runID, taskID, workerID, err := helperManagerAndIDs()
+	if err != nil {
+		return err
+	}
+	return manager.EmitEvent(runID, "signal-"+workerID, taskID, orchestrator.EventTypeTaskProgress, map[string]any{
+		"message":    "simulating high-step task",
+		"steps":      5,
+		"tool_calls": 2,
+	})
+}
+
+func helperManagerAndIDs() (*orchestrator.Manager, string, string, string, error) {
+	sessionsDir := strings.TrimSpace(os.Getenv("TEST_SESSIONS_DIR"))
+	runID := strings.TrimSpace(os.Getenv("BIRDHACKBOT_ORCH_RUN_ID"))
+	taskID := strings.TrimSpace(os.Getenv("BIRDHACKBOT_ORCH_TASK_ID"))
+	workerID := strings.TrimSpace(os.Getenv("BIRDHACKBOT_ORCH_WORKER_ID"))
+	if sessionsDir == "" || runID == "" || taskID == "" || workerID == "" {
+		return nil, "", "", "", os.ErrInvalid
+	}
+	return orchestrator.NewManager(sessionsDir), runID, taskID, workerID, nil
+}
+
+func hasTaskFailedReason(events []orchestrator.EventEnvelope, reason string) bool {
+	for _, event := range events {
+		if event.Type != orchestrator.EventTypeTaskFailed {
+			continue
+		}
+		payload := map[string]any{}
+		if len(event.Payload) > 0 {
+			_ = json.Unmarshal(event.Payload, &payload)
+		}
+		if strings.TrimSpace(payloadString(payload["reason"])) == reason {
+			return true
+		}
+	}
+	return false
+}
+
+func hasReplanTrigger(events []orchestrator.EventEnvelope, trigger string) bool {
+	for _, event := range events {
+		if event.Type != orchestrator.EventTypeRunReplanRequested {
+			continue
+		}
+		payload := map[string]any{}
+		if len(event.Payload) > 0 {
+			_ = json.Unmarshal(event.Payload, &payload)
+		}
+		if strings.TrimSpace(payloadString(payload["trigger"])) == trigger {
+			return true
+		}
+	}
+	return false
+}
+
+func payloadString(v any) string {
+	s, _ := v.(string)
+	return s
+}

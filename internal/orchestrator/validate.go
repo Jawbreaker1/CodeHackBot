@@ -13,22 +13,26 @@ var (
 )
 
 var validEventTypes = map[string]struct{}{
-	EventTypeRunStarted:        {},
-	EventTypeTaskLeased:        {},
-	EventTypeTaskStarted:       {},
-	EventTypeTaskProgress:      {},
-	EventTypeTaskArtifact:      {},
-	EventTypeTaskFinding:       {},
-	EventTypeTaskFailed:        {},
-	EventTypeTaskCompleted:     {},
-	EventTypeWorkerStarted:     {},
-	EventTypeWorkerStopped:     {},
-	EventTypeRunStopped:        {},
-	EventTypeRunCompleted:      {},
-	EventTypeApprovalRequested: {},
-	EventTypeApprovalGranted:   {},
-	EventTypeApprovalDenied:    {},
-	EventTypeApprovalExpired:   {},
+	EventTypeRunStarted:          {},
+	EventTypeTaskLeased:          {},
+	EventTypeTaskStarted:         {},
+	EventTypeTaskProgress:        {},
+	EventTypeTaskArtifact:        {},
+	EventTypeTaskFinding:         {},
+	EventTypeTaskFailed:          {},
+	EventTypeTaskCompleted:       {},
+	EventTypeWorkerStarted:       {},
+	EventTypeWorkerHeartbeat:     {},
+	EventTypeWorkerStopped:       {},
+	EventTypeRunStopped:          {},
+	EventTypeRunCompleted:        {},
+	EventTypeRunStateUpdated:     {},
+	EventTypeRunReplanRequested:  {},
+	EventTypeApprovalRequested:   {},
+	EventTypeApprovalGranted:     {},
+	EventTypeApprovalDenied:      {},
+	EventTypeApprovalExpired:     {},
+	EventTypeWorkerStopRequested: {},
 }
 
 func ValidateRunPlan(plan RunPlan) error {
@@ -79,6 +83,9 @@ func ValidateTaskSpec(task TaskSpec) error {
 	if strings.TrimSpace(task.RiskLevel) == "" {
 		return fmt.Errorf("%w: risk_level is required", ErrInvalidTask)
 	}
+	if _, err := ParseRiskTier(task.RiskLevel); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidTask, err)
+	}
 	if task.Budget.MaxSteps <= 0 {
 		return fmt.Errorf("%w: budget.max_steps must be > 0", ErrInvalidTask)
 	}
@@ -98,11 +105,16 @@ func ValidateTaskLease(lease TaskLease) error {
 	if strings.TrimSpace(lease.LeaseID) == "" {
 		return fmt.Errorf("%w: lease_id is required", ErrInvalidTask)
 	}
-	if strings.TrimSpace(lease.WorkerID) == "" {
-		return fmt.Errorf("%w: worker_id is required", ErrInvalidTask)
-	}
 	if strings.TrimSpace(lease.Status) == "" {
 		return fmt.Errorf("%w: status is required", ErrInvalidTask)
+	}
+	switch lease.Status {
+	case LeaseStatusQueued, LeaseStatusAwaitingApproval, LeaseStatusCompleted, LeaseStatusFailed, LeaseStatusBlocked, LeaseStatusCanceled:
+		// WorkerID may be empty for terminal/requeued states.
+	default:
+		if strings.TrimSpace(lease.WorkerID) == "" {
+			return fmt.Errorf("%w: worker_id is required", ErrInvalidTask)
+		}
 	}
 	if lease.Attempt < 0 {
 		return fmt.Errorf("%w: attempt must be >= 0", ErrInvalidTask)

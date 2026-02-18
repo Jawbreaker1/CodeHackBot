@@ -86,6 +86,46 @@ func TestCLIInteractiveFlow(t *testing.T) {
 	assertContains(t, output, "Command: echo hello")
 }
 
+func TestCLIRegressionCoreCommandsStillAvailable(t *testing.T) {
+	temp := t.TempDir()
+	sessionsDir := filepath.Join(temp, "sessions")
+	configPath := filepath.Join(temp, "config.json")
+
+	cfg := map[string]any{
+		"session": map[string]any{
+			"log_dir": sessionsDir,
+		},
+		"permissions": map[string]any{
+			"level":            "default",
+			"require_approval": false,
+		},
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	if err := os.WriteFile(configPath, data, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	input := "/help\n/exit\n"
+	cmd := exec.Command(cliPath, "--config", configPath, "--permissions", "all")
+	cmd.Dir = projectRoot
+	cmd.Stdin = strings.NewReader(input)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("cli run error: %v\nOutput:\n%s", err, out.String())
+	}
+	output := out.String()
+	assertContains(t, output, "Commands:")
+	assertContains(t, output, "/assist")
+	assertContains(t, output, "/run")
+	assertContains(t, output, "/report")
+}
+
 func TestCLISummarizeManual(t *testing.T) {
 	temp := t.TempDir()
 	sessionsDir := filepath.Join(temp, "sessions")
