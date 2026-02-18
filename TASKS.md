@@ -126,16 +126,17 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
 - [ ] Reduce noise in non-verbose mode (only show task headers + key outputs).
 
 ## Sprint 19 — Orchestrator Contracts + Binary Skeleton (planned)
-- [ ] Add separate orchestrator binary scaffold: `cmd/birdhackbot-orchestrator`.
-- [ ] Create orchestrator package boundary (`internal/orchestrator/*`) with headless engine interfaces.
-- [ ] Implement JSON schemas + validators:
-  - [ ] `plan.json`
-  - [ ] `task.json`
-  - [ ] `event.jsonl` event structs
-  - [ ] `artifact.json`
-  - [ ] `finding.json`
-  - [ ] approval event structs (`approval_requested`, `approval_granted`, `approval_denied`, `approval_expired`)
-- [ ] Add file-based run directory layout: `sessions/<run-id>/orchestrator/{plan,task,event,artifact,finding}/`.
+- [x] Enforce test-first baseline for orchestrator core (new behavior requires tests in same change).
+- [x] Add separate orchestrator binary scaffold: `cmd/birdhackbot-orchestrator`.
+- [x] Create orchestrator package boundary (`internal/orchestrator/*`) with headless engine interfaces.
+- [x] Implement JSON schemas + validators:
+  - [x] `plan.json`
+  - [x] `task.json`
+  - [x] `event.jsonl` event structs
+  - [x] `artifact.json`
+  - [x] `finding.json`
+  - [x] approval event structs (`approval_requested`, `approval_granted`, `approval_denied`, `approval_expired`)
+- [x] Add file-based run directory layout: `sessions/<run-id>/orchestrator/{plan,task,event,artifact,finding}/`.
 - [ ] Lock file-based transport protocol (single-host MVP):
   - [ ] append-only `event.jsonl` envelope with required fields (`event_id`, `run_id`, `worker_id`, `task_id`, `seq`, `ts`, `type`, `payload`)
   - [ ] per-worker monotonic `seq`
@@ -144,10 +145,10 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
 - [ ] Implement task handoff SLA:
   - [ ] orchestrator lease write -> worker must emit `task_started` within configured startup window
   - [ ] reclaim lease on missed startup SLA
-- [ ] Implement atomic file-write helpers for orchestrator artifacts/events (`tmp + rename`).
+- [x] Implement atomic file-write helpers for orchestrator artifacts/events (`tmp + rename`).
 - [ ] Add CLI commands for orchestrator MVP: `start`, `status`, `workers`, `events`, `stop`.
-- [ ] Add tests for schema round-trip and backward-compatible parsing.
-  - [ ] add tests for event ordering, dedupe, and replay reconstruction.
+- [x] Add tests for schema round-trip and backward-compatible parsing.
+  - [x] add tests for event ordering, dedupe, and replay reconstruction.
 - [ ] Implement plan-first validation:
   - [ ] reject `start` when scope/constraints/success/stop criteria are missing
   - [ ] validate task quality fields before lease (`done_when`, `fail_when`, `expected_artifacts`, `risk_level`, budgets)

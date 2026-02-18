@@ -1,5 +1,6 @@
 # Binaries / build output
 /birdhackbot
+/birdhackbot-orchestrator
 /bin/
 /dist/
 

@@ -267,3 +267,13 @@ Minimum session outputs:
 - MVP interface is CLI-only for orchestrator.
 - Future GUI will consume the same event/contracts via API adapter; no orchestration logic in UI layer.
 - Core orchestrator engine must remain headless and reusable by both CLI and future web server.
+
+### Orchestrator Test Policy (MVP)
+- Orchestrator core changes are test-first: state transitions, scheduler behavior, lease/approval logic, and replay correctness.
+- No orchestrator feature is considered complete without tests for expected behavior and failure behavior.
+- Test layers from project start:
+  - unit tests (validation, transition rules, policy matrix),
+  - simulation tests (parallel scheduling, retries, reclaim, stop propagation),
+  - end-to-end run tests (start -> worker fan-out -> evidence merge -> complete).
+- Event/replay tests must use deterministic fixtures under `testdata/` when practical.
+- Build gate remains mandatory before merge: `go test ./...` and `go build ./cmd/birdhackbot`.
