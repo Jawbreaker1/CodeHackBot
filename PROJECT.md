@@ -110,6 +110,27 @@ Minimum session outputs:
   - retries per task: `2`
   - retry backoff: `5s`, then `15s`
 
+### Approval and Timeout Policy (MVP)
+- Approvals are orchestrator-managed, not worker-stdin prompts.
+- Worker emits `approval_requested` event with command/risk/context and transitions task to `awaiting_approval`.
+- Orchestrator owns approval queue + user actions:
+  - approve once,
+  - approve by task scope,
+  - approve by session scope (within existing permission/scope limits).
+- While task is `awaiting_approval`, execution timers are paused:
+  - lease stale timer paused,
+  - execution timeout paused,
+  - no retry consumed.
+- Separate approval-wait timeout is used:
+  - default `45m`,
+  - on expiry task becomes `blocked` (not `failed`) with reason `approval_timeout`.
+- Required approval events:
+  - `approval_requested`,
+  - `approval_granted`,
+  - `approval_denied`,
+  - `approval_expired`.
+- Goal: preserve human control without stalling automation or creating false timeout failures.
+
 ### Plan and Task Contracts
 - `plan.json` (global):
   - run metadata, scope/constraints, success criteria, stop criteria, max parallelism.

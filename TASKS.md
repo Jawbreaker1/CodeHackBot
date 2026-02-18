@@ -134,6 +134,7 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
   - [ ] `event.jsonl` event structs
   - [ ] `artifact.json`
   - [ ] `finding.json`
+  - [ ] approval event structs (`approval_requested`, `approval_granted`, `approval_denied`, `approval_expired`)
 - [ ] Add file-based run directory layout: `sessions/<run-id>/orchestrator/{plan,task,event,artifact,finding}/`.
 - [ ] Add CLI commands for orchestrator MVP: `start`, `status`, `workers`, `events`, `stop`.
 - [ ] Add tests for schema round-trip and backward-compatible parsing.
@@ -151,6 +152,14 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
   - [ ] stale lease detection + reclaim at `20s`
   - [ ] soft-stall grace handling at `30s`
   - [ ] bounded retries (`2`) with backoff (`5s`, `15s`)
+- [ ] Implement centralized approval broker (orchestrator-owned):
+  - [ ] workers emit `approval_requested` events instead of blocking on stdin
+  - [ ] queue + resolution flow for approve/deny/expire
+  - [ ] approval scopes: once, task, session (never outside existing scope/permissions)
+- [ ] Implement timer semantics for `awaiting_approval`:
+  - [ ] pause execution timeout while waiting
+  - [ ] pause lease stale timer while waiting
+  - [ ] separate approval wait timeout (`45m` default) -> mark task `blocked` on expiry
 - [ ] Enforce stop semantics:
   - [ ] global broadcast stop
   - [ ] per-worker stop
@@ -159,6 +168,10 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
   - [ ] per-worker session/artifact directory isolation
   - [ ] confirm normal PATH tool execution works outside session directories
 - [ ] Add scheduler simulation tests (parallelism, reclaim, retry, stop propagation).
+- [ ] Add approval-flow tests:
+  - [ ] no false timeout while approval is pending
+  - [ ] approval expiry marks task blocked (not failed)
+  - [ ] scoped approval reuse works for task/session scopes
 
 ## Sprint 21 — Evidence Merge + Replan Loop (planned)
 - [ ] Implement finding/artifact ingestion pipeline from worker events.
