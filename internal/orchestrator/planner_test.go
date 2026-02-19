@@ -130,3 +130,46 @@ func TestValidateSynthesizedPlanRejectsOutOfScopeTargets(t *testing.T) {
 		t.Fatalf("expected synthesized preflight rejection for out-of-scope target")
 	}
 }
+
+func TestSynthesizeTaskGraphNetworkFanout(t *testing.T) {
+	t.Parallel()
+
+	hypotheses := []Hypothesis{
+		{
+			ID:               "H-01",
+			Statement:        "Network services may expose vulnerable versions.",
+			Confidence:       "high",
+			Impact:           "high",
+			SuccessSignals:   []string{"services fingerprinted"},
+			FailSignals:      []string{"host unreachable"},
+			EvidenceRequired: []string{"nmap output"},
+		},
+	}
+	scope := Scope{Networks: []string{"192.168.50.0/24"}}
+	tasks, err := SynthesizeTaskGraph("map services", scope, hypotheses)
+	if err != nil {
+		t.Fatalf("SynthesizeTaskGraph: %v", err)
+	}
+
+	rangeTasks := 0
+	ids := map[string]TaskSpec{}
+	for _, task := range tasks {
+		ids[task.TaskID] = task
+		if task.Strategy == "recon_fanout" {
+			rangeTasks++
+		}
+	}
+	if rangeTasks != 4 {
+		t.Fatalf("expected 4 recon fanout tasks, got %d", rangeTasks)
+	}
+	hTask, ok := ids["task-h01"]
+	if !ok {
+		t.Fatalf("expected hypothesis task task-h01")
+	}
+	if len(hTask.DependsOn) != 4 {
+		t.Fatalf("expected hypothesis task to depend on 4 fanout tasks, got %d", len(hTask.DependsOn))
+	}
+	if _, hasSeed := ids["task-recon-seed"]; hasSeed {
+		t.Fatalf("did not expect task-recon-seed when fanout is generated")
+	}
+}
