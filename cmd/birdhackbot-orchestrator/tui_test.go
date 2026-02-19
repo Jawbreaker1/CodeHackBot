@@ -272,6 +272,49 @@ func TestLatestTaskProgressByTask(t *testing.T) {
 	}
 }
 
+func TestLatestWorkerDebugByWorker(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	events := []orchestrator.EventEnvelope{
+		{
+			EventID:  "e1",
+			RunID:    "run-1",
+			WorkerID: "signal-worker-a",
+			TaskID:   "task-1",
+			Seq:      1,
+			TS:       now,
+			Type:     orchestrator.EventTypeTaskProgress,
+			Payload:  mustPayload(t, map[string]any{"message": "running nmap", "step": 2, "tool_calls": 1}),
+		},
+		{
+			EventID:  "e2",
+			RunID:    "run-1",
+			WorkerID: "signal-worker-a",
+			TaskID:   "task-1",
+			Seq:      2,
+			TS:       now.Add(time.Second),
+			Type:     orchestrator.EventTypeTaskArtifact,
+			Payload:  mustPayload(t, map[string]any{"command": "nmap", "args": []string{"-sV", "192.168.50.10"}, "path": "sessions/run-1/logs/nmap.log"}),
+		},
+	}
+
+	debug := latestWorkerDebugByWorker(events)
+	snapshot, ok := debug["worker-a"]
+	if !ok {
+		t.Fatalf("expected normalized worker key")
+	}
+	if snapshot.Command != "nmap" {
+		t.Fatalf("unexpected command: %s", snapshot.Command)
+	}
+	if len(snapshot.Args) != 2 || snapshot.Args[0] != "-sV" {
+		t.Fatalf("unexpected args: %#v", snapshot.Args)
+	}
+	if snapshot.LogPath != "sessions/run-1/logs/nmap.log" {
+		t.Fatalf("unexpected log path: %s", snapshot.LogPath)
+	}
+}
+
 func TestFormatProgressSummary(t *testing.T) {
 	t.Parallel()
 

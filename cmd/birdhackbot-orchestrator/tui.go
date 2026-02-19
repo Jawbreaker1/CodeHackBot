@@ -152,6 +152,7 @@ type tuiSnapshot struct {
 	status      orchestrator.RunStatus
 	plan        orchestrator.RunPlan
 	workers     []orchestrator.WorkerStatus
+	workerDebug map[string]tuiWorkerDebug
 	approvals   []orchestrator.PendingApprovalView
 	tasks       []tuiTaskRow
 	progress    map[string]tuiTaskProgress
@@ -187,6 +188,21 @@ type tuiTaskProgress struct {
 	Mode      string
 }
 
+type tuiWorkerDebug struct {
+	WorkerID  string
+	TaskID    string
+	EventType string
+	Message   string
+	Command   string
+	Args      []string
+	LogPath   string
+	Reason    string
+	Error     string
+	Step      int
+	ToolCalls int
+	TS        time.Time
+}
+
 func collectTUISnapshot(manager *orchestrator.Manager, runID string, eventLimit int) (tuiSnapshot, error) {
 	var snap tuiSnapshot
 	status, err := manager.Status(runID)
@@ -220,6 +236,7 @@ func collectTUISnapshot(manager *orchestrator.Manager, runID string, eventLimit 
 	snap.status = status
 	snap.plan = plan
 	snap.workers = hydrateWorkerTasks(workers, leases)
+	snap.workerDebug = latestWorkerDebugByWorker(allEvents)
 	snap.approvals = approvals
 	snap.tasks = buildTaskRows(plan, leases)
 	snap.progress = latestTaskProgressByTask(allEvents)
@@ -327,14 +344,8 @@ func renderTUI(out io.Writer, runID string, snap tuiSnapshot, messages []string,
 		}
 	}
 	lines = append(lines, fitLine("", width))
-	lines = append(lines, fitLine("Workers:", width))
-	if len(snap.workers) == 0 {
-		lines = append(lines, fitLine("  (no workers)", width))
-	} else {
-		for _, worker := range snap.workers {
-			lines = append(lines, fitLine(fmt.Sprintf("  - %s | %s | seq=%d | task=%s", worker.WorkerID, worker.State, worker.LastSeq, worker.CurrentTask), width))
-		}
-	}
+	lines = append(lines, fitLine("Worker Debug:", width))
+	lines = append(lines, renderWorkerBoxes(snap.workers, snap.workerDebug, width)...)
 	lines = append(lines, fitLine("", width))
 	lines = append(lines, fitLine("Task Board:", width))
 	if len(snap.tasks) == 0 {
@@ -462,7 +473,7 @@ func clampTUIBodyLines(lines []string, maxBody int) []string {
 	if len(lines) <= maxBody {
 		return lines
 	}
-	const headKeep = 3
+	const headKeep = 10
 	head := headKeep
 	if head > maxBody {
 		head = maxBody
@@ -475,6 +486,97 @@ func clampTUIBodyLines(lines []string, maxBody int) []string {
 	out = append(out, lines[:head]...)
 	out = append(out, lines[len(lines)-tail:]...)
 	return out
+}
+
+func renderWorkerBoxes(workers []orchestrator.WorkerStatus, debug map[string]tuiWorkerDebug, width int) []string {
+	if len(workers) == 0 {
+		return renderBox("Worker", []string{"no workers running"}, width)
+	}
+	out := make([]string, 0, len(workers)*8)
+	for idx, worker := range workers {
+		task := strings.TrimSpace(worker.CurrentTask)
+		if task == "" {
+			task = "-"
+		}
+		body := []string{
+			fmt.Sprintf("state=%s seq=%d task=%s", strings.TrimSpace(worker.State), worker.LastSeq, task),
+		}
+		if snapshot, ok := debug[worker.WorkerID]; ok {
+			body = append(body, fmt.Sprintf("last=%s type=%s", snapshot.TS.Format("15:04:05"), snapshot.EventType))
+			if snapshot.Step > 0 || snapshot.ToolCalls > 0 {
+				body = append(body, fmt.Sprintf("step=%d tool_calls=%d", snapshot.Step, snapshot.ToolCalls))
+			}
+			if msg := strings.TrimSpace(snapshot.Message); msg != "" {
+				body = append(body, "msg: "+msg)
+			}
+			if cmd := strings.TrimSpace(snapshot.Command); cmd != "" {
+				args := strings.Join(snapshot.Args, " ")
+				if args != "" {
+					body = append(body, "cmd: "+cmd+" "+args)
+				} else {
+					body = append(body, "cmd: "+cmd)
+				}
+			}
+			if reason := strings.TrimSpace(snapshot.Reason); reason != "" {
+				body = append(body, "reason: "+reason)
+			}
+			if errText := strings.TrimSpace(snapshot.Error); errText != "" {
+				body = append(body, "error: "+errText)
+			}
+			if path := strings.TrimSpace(snapshot.LogPath); path != "" {
+				body = append(body, "log: "+path)
+			}
+		} else {
+			body = append(body, "last: no worker output yet")
+		}
+		title := "Worker " + worker.WorkerID
+		out = append(out, renderBox(title, body, width)...)
+		if idx < len(workers)-1 {
+			out = append(out, fitLine("", width))
+		}
+	}
+	return out
+}
+
+func renderBox(title string, body []string, width int) []string {
+	inner := width - 5
+	if inner < 12 {
+		inner = 12
+	}
+	clip := func(text string) string {
+		runes := []rune(strings.TrimSpace(text))
+		if len(runes) > inner {
+			if inner > 3 {
+				return string(runes[:inner-3]) + "..."
+			}
+			return string(runes[:inner])
+		}
+		return string(runes)
+	}
+	pad := func(text string) string {
+		runes := []rune(text)
+		if len(runes) < inner {
+			return text + strings.Repeat(" ", inner-len(runes))
+		}
+		return text
+	}
+
+	top := "+" + strings.Repeat("-", inner+2) + "+"
+	lines := []string{
+		fitLine(top, width),
+		fitLine("| "+pad(clip(title))+" |", width),
+		fitLine("+"+strings.Repeat("-", inner+2)+"+", width),
+	}
+	if len(body) == 0 {
+		lines = append(lines, fitLine("| "+pad(" ")+" |", width))
+	} else {
+		for _, raw := range body {
+			text := clip(raw)
+			lines = append(lines, fitLine("| "+pad(text)+" |", width))
+		}
+	}
+	lines = append(lines, fitLine(top, width))
+	return lines
 }
 
 func hydrateWorkerTasks(workers []orchestrator.WorkerStatus, leases []orchestrator.TaskLease) []orchestrator.WorkerStatus {
@@ -625,6 +727,72 @@ func latestFailureFromEvents(events []orchestrator.EventEnvelope) *tuiFailure {
 	return nil
 }
 
+func latestWorkerDebugByWorker(events []orchestrator.EventEnvelope) map[string]tuiWorkerDebug {
+	out := map[string]tuiWorkerDebug{}
+	for _, event := range events {
+		workerID := normalizeDebugWorkerID(event.WorkerID)
+		if workerID == "" {
+			continue
+		}
+		current, exists := out[workerID]
+		if exists && event.TS.Before(current.TS) {
+			continue
+		}
+		payload := decodeEventPayload(event.Payload)
+		next := current
+		next.WorkerID = workerID
+		next.TaskID = strings.TrimSpace(event.TaskID)
+		next.EventType = strings.TrimSpace(event.Type)
+		next.TS = event.TS
+		switch event.Type {
+		case orchestrator.EventTypeTaskStarted:
+			next.Message = strings.TrimSpace(stringFromAny(payload["goal"]))
+		case orchestrator.EventTypeTaskProgress:
+			next.Message = strings.TrimSpace(stringFromAny(payload["message"]))
+			next.Step = intFromAny(payload["step"])
+			if next.Step == 0 {
+				next.Step = intFromAny(payload["steps"])
+			}
+			next.ToolCalls = intFromAny(payload["tool_calls"])
+			if next.ToolCalls == 0 {
+				next.ToolCalls = intFromAny(payload["tool_call"])
+			}
+			cmd := strings.TrimSpace(stringFromAny(payload["command"]))
+			if cmd != "" {
+				next.Command = cmd
+			}
+		case orchestrator.EventTypeTaskArtifact:
+			next.Command = strings.TrimSpace(stringFromAny(payload["command"]))
+			next.Args = append([]string{}, stringSliceFromAny(payload["args"])...)
+			next.LogPath = strings.TrimSpace(stringFromAny(payload["path"]))
+			next.Step = intFromAny(payload["step"])
+			if next.ToolCalls == 0 {
+				next.ToolCalls = intFromAny(payload["tool_call"])
+			}
+		case orchestrator.EventTypeTaskFailed:
+			next.Reason = strings.TrimSpace(stringFromAny(payload["reason"]))
+			next.Error = strings.TrimSpace(stringFromAny(payload["error"]))
+			next.LogPath = strings.TrimSpace(stringFromAny(payload["log_path"]))
+		case orchestrator.EventTypeWorkerStopped:
+			next.Reason = strings.TrimSpace(stringFromAny(payload["status"]))
+			next.Error = strings.TrimSpace(stringFromAny(payload["error"]))
+			if logPath := strings.TrimSpace(stringFromAny(payload["log_path"])); logPath != "" {
+				next.LogPath = logPath
+			}
+		}
+		out[workerID] = next
+	}
+	return out
+}
+
+func normalizeDebugWorkerID(workerID string) string {
+	trimmed := strings.TrimSpace(workerID)
+	if trimmed == "" {
+		return ""
+	}
+	return strings.TrimPrefix(trimmed, "signal-")
+}
+
 func latestTaskProgressByTask(events []orchestrator.EventEnvelope) map[string]tuiTaskProgress {
 	progress := map[string]tuiTaskProgress{}
 	for _, event := range events {
@@ -740,6 +908,31 @@ func intFromAny(v any) int {
 		}
 	}
 	return 0
+}
+
+func stringSliceFromAny(v any) []string {
+	switch values := v.(type) {
+	case []string:
+		out := make([]string, 0, len(values))
+		for _, value := range values {
+			trimmed := strings.TrimSpace(value)
+			if trimmed != "" {
+				out = append(out, trimmed)
+			}
+		}
+		return out
+	case []any:
+		out := make([]string, 0, len(values))
+		for _, value := range values {
+			trimmed := strings.TrimSpace(stringFromAny(value))
+			if trimmed != "" {
+				out = append(out, trimmed)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func failureHint(reason string) string {
