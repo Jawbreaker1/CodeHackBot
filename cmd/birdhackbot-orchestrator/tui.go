@@ -305,6 +305,9 @@ func renderTUI(out io.Writer, runID string, snap tuiSnapshot, messages []string,
 			reason = "task_failed"
 		}
 		lines = append(lines, fitLine(fmt.Sprintf("  - %s | task=%s | worker=%s | reason=%s", snap.lastFailure.TS.Format("15:04:05"), taskID, snap.lastFailure.Worker, reason), width))
+		if hint := failureHint(reason); hint != "" {
+			lines = append(lines, fitLine("    hint: "+hint, width))
+		}
 		if strings.TrimSpace(snap.lastFailure.Error) != "" {
 			lines = append(lines, fitLine("    error: "+snap.lastFailure.Error, width))
 		}
@@ -527,6 +530,21 @@ func stringFromAny(v any) string {
 	}
 }
 
+func failureHint(reason string) string {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case orchestrator.WorkerFailureAssistTimeout:
+		return "LLM call timed out before task budget completed."
+	case orchestrator.WorkerFailureAssistUnavailable:
+		return "LLM was unreachable or returned an invalid response."
+	case orchestrator.WorkerFailureCommandTimeout:
+		return "Tool command timed out."
+	case "execution_timeout":
+		return "Task runtime budget exceeded."
+	default:
+		return ""
+	}
+}
+
 func parseTUICommand(raw string) (tuiCommand, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -589,7 +607,7 @@ func parseTUICommand(raw string) (tuiCommand, error) {
 		}
 		return tuiCommand{name: "instruct", reason: strings.TrimSpace(strings.TrimPrefix(trimmed, parts[0]))}, nil
 	default:
-		return tuiCommand{}, fmt.Errorf("unknown command %q", parts[0])
+		return tuiCommand{name: "instruct", reason: trimmed}, nil
 	}
 }
 

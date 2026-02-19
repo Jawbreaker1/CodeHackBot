@@ -898,7 +898,7 @@ func (c *Coordinator) handleEventDrivenReplanTriggers() error {
 				trigger = "repeated_step_loop"
 			case "stale_lease", "worker_exit", "startup_sla_missed", "worker_reconcile_stale":
 				trigger = "worker_recovery"
-			case WorkerFailureCommandFailed, WorkerFailureCommandTimeout:
+			case WorkerFailureCommandFailed, WorkerFailureCommandTimeout, WorkerFailureAssistTimeout, WorkerFailureAssistUnavailable:
 				trigger = "execution_failure"
 			case "budget_exhausted":
 				trigger = "budget_exhausted"

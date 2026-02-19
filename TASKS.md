@@ -235,6 +235,11 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
 - [ ] Terminal TUI mode (Codex-like operator cockpit):
   - [x] static status bar (run id, mode, risk, active tools, context/budget usage)
   - [x] command prompt line (interactive action input at bottom of TUI)
+  - [x] plan summary panel (goal + task/criteria counts)
+  - [x] task board panel (per-task state/worker/strategy)
+  - [x] operator instruction command (`instruct <text>`) to inject new goals during active run
+  - [ ] plain-text chat bridge to orchestrator LLM (ask “what is the plan?” style questions without command syntax)
+  - [ ] continue-from-complete flow: accept new top-level instruction after run completion and start follow-up phase without leaving TUI
   - [ ] pipeline stage row (recon -> hypothesis -> verify -> report) with current-step summary
   - [x] multi-agent pane (state, heartbeat age, current task, last tool, queue depth)
   - [ ] approval pane with keyboard actions (approve/deny) and risk metadata

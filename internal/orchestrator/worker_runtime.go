@@ -38,6 +38,7 @@ const (
 	WorkerFailurePolicyInvalid      = "policy_invalid"
 	WorkerFailureBootstrapFailed    = "worker_bootstrap_failed"
 	WorkerFailureAssistUnavailable  = "assist_unavailable"
+	WorkerFailureAssistTimeout      = "assist_timeout"
 	WorkerFailureAssistNeedsInput   = "assist_needs_input"
 	WorkerFailureAssistNoAction     = "assist_no_action"
 	WorkerFailureAssistLoopDetected = "assist_loop_detected"

@@ -31,6 +31,9 @@ const (
 	workerAssistWriteMaxBytes = 512_000
 	workerAssistBrowseMaxBody = 120_000
 	workerAssistLoopMaxRepeat = 2
+	workerAssistLLMCallMax    = 45 * time.Second
+	workerAssistLLMCallMin    = 8 * time.Second
+	workerAssistBudgetReserve = 5 * time.Second
 )
 
 var htmlTitlePattern = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
@@ -91,7 +94,18 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			}
 			recent += "Recovery context: " + recoverHint
 		}
-		suggestion, suggestErr := assistant.Suggest(ctx, assist.Input{
+		suggestCtx, suggestCancel, callTimeout, remainingBudget, timeoutErr := newAssistCallContext(ctx)
+		if timeoutErr != nil {
+			_ = emitWorkerFailure(manager, cfg, task, timeoutErr, WorkerFailureAssistTimeout, map[string]any{
+				"step":                     step,
+				"tool_calls":               toolCalls,
+				"mode":                     mode,
+				"remaining_budget_seconds": int(remainingBudget.Seconds()),
+			})
+			suggestCancel()
+			return timeoutErr
+		}
+		suggestion, suggestErr := assistant.Suggest(suggestCtx, assist.Input{
 			SessionID:   cfg.RunID,
 			Scope:       task.Targets,
 			Targets:     task.Targets,
@@ -104,11 +118,18 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			ChatHistory: recent,
 			Mode:        mode,
 		})
+		suggestCancel()
 		if suggestErr != nil {
-			_ = emitWorkerFailure(manager, cfg, task, suggestErr, WorkerFailureAssistUnavailable, map[string]any{
-				"step":       step,
-				"tool_calls": toolCalls,
-				"mode":       mode,
+			failureReason := WorkerFailureAssistUnavailable
+			if isAssistTimeoutError(suggestErr, suggestCtx.Err(), ctx.Err()) {
+				failureReason = WorkerFailureAssistTimeout
+			}
+			_ = emitWorkerFailure(manager, cfg, task, suggestErr, failureReason, map[string]any{
+				"step":                     step,
+				"tool_calls":               toolCalls,
+				"mode":                     mode,
+				"llm_timeout_seconds":      int(callTimeout.Seconds()),
+				"remaining_budget_seconds": int(remainingBudget.Seconds()),
 			})
 			return suggestErr
 		}
@@ -593,6 +614,41 @@ func buildAssistActionKey(command string, args []string) string {
 
 func errorsIsTimeout(err error) bool {
 	return err == errWorkerCommandTimeout || strings.Contains(strings.ToLower(err.Error()), "timeout")
+}
+
+func isAssistTimeoutError(suggestErr error, suggestCtxErr error, runCtxErr error) bool {
+	if suggestErr == nil {
+		return false
+	}
+	if suggestCtxErr == context.DeadlineExceeded || runCtxErr == context.DeadlineExceeded {
+		return true
+	}
+	lower := strings.ToLower(suggestErr.Error())
+	return strings.Contains(lower, "context deadline exceeded") || strings.Contains(lower, "timeout")
+}
+
+func newAssistCallContext(runCtx context.Context) (context.Context, context.CancelFunc, time.Duration, time.Duration, error) {
+	remaining := workerAssistLLMCallMax
+	if deadline, ok := runCtx.Deadline(); ok {
+		remaining = time.Until(deadline)
+	}
+	if remaining <= workerAssistBudgetReserve+workerAssistLLMCallMin {
+		remainingSecs := int(remaining.Seconds())
+		if remainingSecs < 0 {
+			remainingSecs = 0
+		}
+		return runCtx, func() {}, 0, remaining, fmt.Errorf("assist call timeout: remaining budget too low (%ds)", remainingSecs)
+	}
+	callTimeout := workerAssistLLMCallMax
+	available := remaining - workerAssistBudgetReserve
+	if available < callTimeout {
+		callTimeout = available
+	}
+	if callTimeout < workerAssistLLMCallMin {
+		callTimeout = workerAssistLLMCallMin
+	}
+	ctx, cancel := context.WithTimeout(runCtx, callTimeout)
+	return ctx, cancel, callTimeout, remaining, nil
 }
 
 func isBuiltinListDir(command string) bool {

@@ -21,6 +21,7 @@ func TestParseTUICommand(t *testing.T) {
 		{in: "plan", name: "plan"},
 		{in: "tasks", name: "tasks"},
 		{in: "instruct investigate target", name: "instruct"},
+		{in: "Hello orchestrator", name: "instruct"},
 		{in: "q", name: "quit"},
 		{in: "events 25", name: "events"},
 		{in: "approve apr-1 task ok", name: "approve"},
@@ -50,7 +51,6 @@ func TestParseTUICommandRejectsInvalid(t *testing.T) {
 		"approve",
 		"deny",
 		"instruct",
-		"wat",
 	}
 	for _, in := range invalid {
 		in := in
