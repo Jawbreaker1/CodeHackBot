@@ -121,6 +121,7 @@ func RunWorkerTask(cfg WorkerRunConfig) error {
 		return err
 	}
 	scopePolicy := NewScopePolicy(plan.Scope)
+	signalWorkerID := WorkerSignalID(cfg.WorkerID)
 	if err := scopePolicy.ValidateTaskTargets(task); err != nil {
 		_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureScopeDenied, nil)
 		return err
@@ -130,6 +131,20 @@ func RunWorkerTask(cfg WorkerRunConfig) error {
 		_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureInvalidTaskAction, nil)
 		return err
 	}
+	if action.Type != "assist" {
+		var injected bool
+		var target string
+		action.Args, injected, target = applyCommandTargetFallback(scopePolicy, task, action.Command, action.Args)
+		if injected {
+			_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskProgress, map[string]any{
+				"message":   fmt.Sprintf("auto-injected target %s for command %s", target, action.Command),
+				"step":      0,
+				"tool_call": 0,
+				"command":   action.Command,
+				"args":      action.Args,
+			})
+		}
+	}
 	if err := scopePolicy.ValidateCommandTargets(action.Command, action.Args); err != nil {
 		_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureScopeDenied, nil)
 		return err
@@ -138,8 +153,6 @@ func RunWorkerTask(cfg WorkerRunConfig) error {
 		_ = emitWorkerFailure(manager, cfg, task, err, reason, nil)
 		return err
 	}
-
-	signalWorkerID := WorkerSignalID(cfg.WorkerID)
 	_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskStarted, map[string]any{
 		"attempt":   cfg.Attempt,
 		"worker_id": cfg.WorkerID,

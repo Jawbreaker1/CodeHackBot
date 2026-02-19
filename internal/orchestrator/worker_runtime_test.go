@@ -393,6 +393,82 @@ func TestRunWorkerTaskScopeDenied(t *testing.T) {
 	}
 }
 
+func TestRunWorkerTaskNetworkCommandInjectsTaskTargetBeforeScopeCheck(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-worker-task-network-fallback"
+	taskID := "t1"
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	plan := RunPlan{
+		RunID:           runID,
+		Scope:           Scope{Targets: []string{"127.0.0.1"}},
+		Constraints:     []string{"internal_only"},
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks:           []TaskSpec{},
+	}
+	planPath := filepath.Join(BuildRunPaths(base, runID).PlanDir, "plan.json")
+	if err := WriteJSONAtomic(planPath, plan); err != nil {
+		t.Fatalf("WriteJSONAtomic plan: %v", err)
+	}
+	task := TaskSpec{
+		TaskID:            taskID,
+		Goal:              "network command fallback",
+		Targets:           []string{"127.0.0.1"},
+		DoneWhen:          []string{"done"},
+		FailWhen:          []string{"failed"},
+		ExpectedArtifacts: []string{"log"},
+		RiskLevel:         string(RiskReconReadonly),
+		Action: TaskAction{
+			Type:           "command",
+			Command:        "nmap",
+			TimeoutSeconds: 1,
+		},
+		Budget: TaskBudget{
+			MaxSteps:     1,
+			MaxToolCalls: 1,
+			MaxRuntime:   2 * time.Second,
+		},
+	}
+	taskPath := filepath.Join(BuildRunPaths(base, runID).TaskDir, taskID+".json")
+	if err := WriteJSONAtomic(taskPath, task); err != nil {
+		t.Fatalf("WriteJSONAtomic task: %v", err)
+	}
+
+	_ = RunWorkerTask(WorkerRunConfig{
+		SessionsDir: base,
+		RunID:       runID,
+		TaskID:      taskID,
+		WorkerID:    "worker-t1-a1",
+		Attempt:     1,
+		Permission:  PermissionDefault,
+	})
+
+	events, err := NewManager(base).Events(runID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if !hasEventType(events, EventTypeTaskStarted) {
+		t.Fatalf("expected task_started event (scope check should pass with injected target)")
+	}
+	for _, event := range events {
+		if event.Type != EventTypeTaskFailed {
+			continue
+		}
+		payload := map[string]any{}
+		if len(event.Payload) > 0 {
+			_ = json.Unmarshal(event.Payload, &payload)
+		}
+		if got, _ := payload["reason"].(string); got == WorkerFailureScopeDenied {
+			t.Fatalf("did not expect scope_denied after target injection: %#v", payload)
+		}
+	}
+}
+
 func TestRunWorkerTaskPolicyDenied(t *testing.T) {
 	t.Parallel()
 
