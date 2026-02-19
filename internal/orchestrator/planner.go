@@ -2,7 +2,6 @@ package orchestrator
 
 import (
 	"fmt"
-	"net"
 	"runtime"
 	"slices"
 	"strings"
@@ -26,36 +25,9 @@ func SynthesizeTaskGraph(goal string, scope Scope, hypotheses []Hypothesis) ([]T
 	}
 
 	targets := scopeTargets(scope)
-	reconTaskIDs := make([]string, 0, 4)
-	tasks := make([]TaskSpec, 0, 8)
-	fanoutRanges := splitScopeNetworksForFanout(scope.Networks, 4)
-	if len(fanoutRanges) > 0 {
-		for i, subnet := range fanoutRanges {
-			taskID := fmt.Sprintf("task-recon-range-%02d", i+1)
-			reconTaskIDs = append(reconTaskIDs, taskID)
-			tasks = append(tasks, TaskSpec{
-				TaskID:            taskID,
-				Title:             fmt.Sprintf("Reconnaissance subnet %s", subnet),
-				Goal:              fmt.Sprintf("Enumerate hosts and services in subnet %s for goal: %s", subnet, normalizedGoal),
-				Targets:           []string{subnet},
-				Priority:          100 - i,
-				Strategy:          "recon_fanout",
-				Action:            assistAction(fmt.Sprintf("Enumerate hosts and services in subnet %s. Prefer target-aware, non-redundant recon steps.", subnet)),
-				DoneWhen:          []string{"subnet_recon_completed"},
-				FailWhen:          []string{"subnet_recon_failed", "subnet_recon_timeout"},
-				ExpectedArtifacts: []string{fmt.Sprintf("recon-%s.log", strings.ReplaceAll(subnet, "/", "_"))},
-				RiskLevel:         string(RiskReconReadonly),
-				Budget: TaskBudget{
-					MaxSteps:     20,
-					MaxToolCalls: 30,
-					MaxRuntime:   10 * time.Minute,
-				},
-			})
-		}
-	} else {
-		rootTaskID := "task-recon-seed"
-		reconTaskIDs = append(reconTaskIDs, rootTaskID)
-		tasks = append(tasks, TaskSpec{
+	rootTaskID := "task-recon-seed"
+	tasks := []TaskSpec{
+		{
 			TaskID:            rootTaskID,
 			Title:             "Seed reconnaissance",
 			Goal:              "Establish baseline evidence for goal: " + normalizedGoal,
@@ -72,7 +44,7 @@ func SynthesizeTaskGraph(goal string, scope Scope, hypotheses []Hypothesis) ([]T
 				MaxToolCalls: 30,
 				MaxRuntime:   10 * time.Minute,
 			},
-		})
+		},
 	}
 
 	hypothesisTaskIDs := make([]string, 0, len(hypotheses))
@@ -98,7 +70,7 @@ func SynthesizeTaskGraph(goal string, scope Scope, hypotheses []Hypothesis) ([]T
 			Title:             fmt.Sprintf("Validate %s", hypothesis.ID),
 			Goal:              hypothesis.Statement,
 			Targets:           targets,
-			DependsOn:         append([]string{}, reconTaskIDs...),
+			DependsOn:         []string{rootTaskID},
 			Priority:          priority,
 			Strategy:          "hypothesis_validate",
 			Action:            assistAction("Validate hypothesis " + hypothesis.ID + ": " + hypothesis.Statement),
@@ -111,8 +83,7 @@ func SynthesizeTaskGraph(goal string, scope Scope, hypotheses []Hypothesis) ([]T
 		hypothesisTaskIDs = append(hypothesisTaskIDs, taskID)
 	}
 
-	summaryDepends := append([]string{}, reconTaskIDs...)
-	summaryDepends = append(summaryDepends, hypothesisTaskIDs...)
+	summaryDepends := append([]string{rootTaskID}, hypothesisTaskIDs...)
 	tasks = append(tasks, TaskSpec{
 		TaskID:            "task-plan-summary",
 		Title:             "Plan synthesis summary",
@@ -134,68 +105,6 @@ func SynthesizeTaskGraph(goal string, scope Scope, hypotheses []Hypothesis) ([]T
 	})
 
 	return tasks, nil
-}
-
-func splitScopeNetworksForFanout(networks []string, maxRanges int) []string {
-	if maxRanges <= 0 || len(networks) == 0 {
-		return nil
-	}
-	out := make([]string, 0, maxRanges)
-	seen := map[string]struct{}{}
-	for _, raw := range networks {
-		if len(out) >= maxRanges {
-			break
-		}
-		token := strings.TrimSpace(raw)
-		if token == "" {
-			continue
-		}
-		_, parsed, err := net.ParseCIDR(token)
-		if err != nil || parsed == nil {
-			continue
-		}
-		subnets := splitCIDR(parsed, 4)
-		for _, subnet := range subnets {
-			if len(out) >= maxRanges {
-				break
-			}
-			value := subnet.String()
-			if _, exists := seen[value]; exists {
-				continue
-			}
-			seen[value] = struct{}{}
-			out = append(out, value)
-		}
-	}
-	return out
-}
-
-func splitCIDR(network *net.IPNet, parts int) []*net.IPNet {
-	if network == nil || parts <= 1 {
-		return []*net.IPNet{network}
-	}
-	ip := network.IP.To4()
-	if ip == nil {
-		return []*net.IPNet{network}
-	}
-	ones, bits := network.Mask.Size()
-	if bits != 32 {
-		return []*net.IPNet{network}
-	}
-	// Split into exactly 4 subranges when possible by increasing prefix by 2.
-	newOnes := ones + 2
-	if newOnes > 32 {
-		return []*net.IPNet{network}
-	}
-	base := uint32(ip[0])<<24 | uint32(ip[1])<<16 | uint32(ip[2])<<8 | uint32(ip[3])
-	step := uint32(1) << uint32(32-newOnes)
-	out := make([]*net.IPNet, 0, 4)
-	for i := 0; i < 4; i++ {
-		next := base + (uint32(i) * step)
-		nextIP := net.IPv4(byte(next>>24), byte(next>>16), byte(next>>8), byte(next))
-		out = append(out, &net.IPNet{IP: nextIP.Mask(net.CIDRMask(newOnes, 32)), Mask: net.CIDRMask(newOnes, 32)})
-	}
-	return out
 }
 
 func ValidateSynthesizedPlan(plan RunPlan) error {
