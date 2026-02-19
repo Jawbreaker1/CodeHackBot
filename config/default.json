@@ -1,7 +1,7 @@
 {
   "agent": {
     "name": "BirdHackBot",
-    "model": "openai/gpt-oss-20b",
+    "model": "qwen/qwen3-coder-30b",
     "system_prompt": "prompts/system.md",
     "max_steps": 6,
     "tool_max_fixes": 2,
@@ -9,7 +9,7 @@
   },
   "llm": {
     "base_url": "http://192.168.50.213:1234/v1",
-    "model": "openai/gpt-oss-20b",
+    "model": "qwen/qwen3-coder-30b",
     "timeout_seconds": 120,
     "api_key": "",
     "max_failures": 3,
