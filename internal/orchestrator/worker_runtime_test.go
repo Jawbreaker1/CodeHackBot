@@ -558,6 +558,22 @@ func TestParseWorkerRunConfig(t *testing.T) {
 	}
 }
 
+func TestCappedOutputBufferTruncates(t *testing.T) {
+	t.Parallel()
+
+	buf := newCappedOutputBuffer(12)
+	_, _ = buf.Write([]byte("1234567890"))
+	_, _ = buf.Write([]byte("ABCDEFGHIJ"))
+
+	out := string(buf.Bytes())
+	if len(out) != 12 {
+		t.Fatalf("expected capped output length 12, got %d", len(out))
+	}
+	if !strings.Contains(out, "1234567890") {
+		t.Fatalf("expected original prefix in output, got %q", out)
+	}
+}
+
 func firstEventByType(events []EventEnvelope, eventType string) (EventEnvelope, bool) {
 	for _, event := range events {
 		if event.Type == eventType {

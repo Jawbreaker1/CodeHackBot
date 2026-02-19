@@ -412,19 +412,86 @@ func executeCoordinatorLoop(
 				return 1
 			}
 			if coord.Done() {
-				if err := manager.EmitEvent(runID, "orchestrator", "", orchestrator.EventTypeRunCompleted, map[string]any{
-					"source": "run",
+				outcome, outcomeDetail, err := evaluateRunTerminalOutcome(manager, runID)
+				if err != nil {
+					fmt.Fprintf(stderr, "run completion evaluation failed: %v\n", err)
+					return 1
+				}
+				if outcome == runOutcomeSuccess {
+					if err := manager.EmitEvent(runID, "orchestrator", "", orchestrator.EventTypeRunCompleted, map[string]any{
+						"source": "run",
+					}); err != nil {
+						fmt.Fprintf(stderr, "run completion event failed: %v\n", err)
+						return 1
+					}
+					if announce {
+						fmt.Fprintf(stdout, "run completed: %s\n", runID)
+					}
+					return 0
+				}
+				if err := manager.EmitEvent(runID, "orchestrator", "", orchestrator.EventTypeRunStopped, map[string]any{
+					"source": "run_terminal_failure",
+					"detail": outcomeDetail,
 				}); err != nil {
-					fmt.Fprintf(stderr, "run completion event failed: %v\n", err)
+					fmt.Fprintf(stderr, "run failure event failed: %v\n", err)
 					return 1
 				}
 				if announce {
-					fmt.Fprintf(stdout, "run completed: %s\n", runID)
+					fmt.Fprintf(stdout, "run stopped with failures: %s (%s)\n", runID, outcomeDetail)
 				}
-				return 0
+				return 1
 			}
 		}
 	}
+}
+
+type runOutcome string
+
+const (
+	runOutcomeSuccess runOutcome = "success"
+	runOutcomeFailure runOutcome = "failure"
+)
+
+func evaluateRunTerminalOutcome(manager *orchestrator.Manager, runID string) (runOutcome, string, error) {
+	plan, err := manager.LoadRunPlan(runID)
+	if err != nil {
+		return runOutcomeFailure, "", err
+	}
+	leases, err := manager.ReadLeases(runID)
+	if err != nil {
+		return runOutcomeFailure, "", err
+	}
+	leaseStateByTask := map[string]string{}
+	for _, lease := range leases {
+		leaseStateByTask[lease.TaskID] = strings.TrimSpace(lease.Status)
+	}
+	failed := make([]string, 0)
+	incomplete := make([]string, 0)
+	for _, task := range plan.Tasks {
+		status := strings.TrimSpace(leaseStateByTask[task.TaskID])
+		if status == "" {
+			status = orchestrator.LeaseStatusQueued
+		}
+		switch status {
+		case orchestrator.LeaseStatusCompleted:
+			continue
+		case orchestrator.LeaseStatusFailed, orchestrator.LeaseStatusBlocked, orchestrator.LeaseStatusCanceled:
+			failed = append(failed, fmt.Sprintf("%s:%s", task.TaskID, status))
+		default:
+			incomplete = append(incomplete, fmt.Sprintf("%s:%s", task.TaskID, status))
+		}
+	}
+	if len(failed) == 0 && len(incomplete) == 0 {
+		return runOutcomeSuccess, "all_tasks_completed", nil
+	}
+	detailParts := make([]string, 0, 2)
+	if len(failed) > 0 {
+		detailParts = append(detailParts, "failed="+strings.Join(failed, ","))
+	}
+	if len(incomplete) > 0 {
+		detailParts = append(detailParts, "incomplete="+strings.Join(incomplete, ","))
+	}
+	return runOutcomeFailure, strings.Join(detailParts, " | "), nil
 }
 
 func compactStringFlags(values stringFlags) []string {

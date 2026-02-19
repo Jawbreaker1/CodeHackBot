@@ -1,7 +1,6 @@
 package orchestrator
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -51,6 +50,11 @@ var (
 )
 
 const workerCommandStopGrace = 1500 * time.Millisecond
+
+const (
+	workerCommandOutputMaxBytes = 2 * 1024 * 1024
+	workerCommandTruncationNote = "\n...[output truncated]...\n"
+)
 
 type WorkerRunConfig struct {
 	SessionsDir string
@@ -391,9 +395,9 @@ func runWorkerCommand(ctx context.Context, cmd *exec.Cmd, grace time.Duration) (
 		return nil, fmt.Errorf("nil command")
 	}
 	configureWorkerCommandProcess(cmd)
-	var output bytes.Buffer
-	cmd.Stdout = &output
-	cmd.Stderr = &output
+	output := newCappedOutputBuffer(workerCommandOutputMaxBytes)
+	cmd.Stdout = output
+	cmd.Stderr = output
 	if err := cmd.Start(); err != nil {
 		return output.Bytes(), err
 	}
@@ -416,6 +420,56 @@ func runWorkerCommand(ctx context.Context, cmd *exec.Cmd, grace time.Duration) (
 		}
 		return output.Bytes(), errWorkerCommandInterrupted
 	}
+}
+
+type cappedOutputBuffer struct {
+	data      []byte
+	max       int
+	truncated bool
+}
+
+func newCappedOutputBuffer(max int) *cappedOutputBuffer {
+	if max <= 0 {
+		max = workerCommandOutputMaxBytes
+	}
+	return &cappedOutputBuffer{
+		data: make([]byte, 0, min(4096, max)),
+		max:  max,
+	}
+}
+
+func (c *cappedOutputBuffer) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if len(c.data) < c.max {
+		remaining := c.max - len(c.data)
+		if len(p) <= remaining {
+			c.data = append(c.data, p...)
+		} else {
+			c.data = append(c.data, p[:remaining]...)
+			c.truncated = true
+		}
+	} else {
+		c.truncated = true
+	}
+	return len(p), nil
+}
+
+func (c *cappedOutputBuffer) Bytes() []byte {
+	out := append([]byte(nil), c.data...)
+	if !c.truncated {
+		return out
+	}
+	remaining := c.max - len(out)
+	if remaining <= 0 {
+		return out
+	}
+	note := []byte(workerCommandTruncationNote)
+	if len(note) > remaining {
+		note = note[:remaining]
+	}
+	return append(out, note...)
 }
 
 func enforceWorkerRiskPolicy(task TaskSpec, cfg WorkerRunConfig) (string, error) {

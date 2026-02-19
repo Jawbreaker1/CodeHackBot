@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"fmt"
 	"net"
+	"net/url"
 	"regexp"
 	"strings"
 )
@@ -17,6 +18,7 @@ var privateCIDRAliases = map[string][]string{
 var (
 	scopeIPv4CIDRPattern = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}/\d{1,2}\b`)
 	scopeIPv4Pattern     = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
+	scopeHostPattern     = regexp.MustCompile(`(?i)\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\b`)
 )
 
 type ScopePolicy struct {
@@ -86,6 +88,9 @@ func (p *ScopePolicy) ValidateTaskTargets(task TaskSpec) error {
 func (p *ScopePolicy) ValidateCommandTargets(command string, args []string) error {
 	targets := p.extractTargets(command, args)
 	if len(targets) == 0 {
+		if isNetworkSensitiveCommand(command) {
+			return fmt.Errorf("scope violation: could not infer target from network command %q", strings.TrimSpace(command))
+		}
 		return nil
 	}
 	task := TaskSpec{Targets: targets}
@@ -173,6 +178,9 @@ func (p *ScopePolicy) extractTargets(command string, args []string) []string {
 	candidates := append([]string{command}, args...)
 	for _, token := range candidates {
 		lower := strings.ToLower(token)
+		if host := hostFromURL(token); host != "" {
+			add(host)
+		}
 		if strings.Contains(lower, "localhost") {
 			add("localhost")
 		}
@@ -180,6 +188,9 @@ func (p *ScopePolicy) extractTargets(command string, args []string) []string {
 			add(match)
 		}
 		for _, match := range scopeIPv4Pattern.FindAllString(token, -1) {
+			add(match)
+		}
+		for _, match := range scopeHostPattern.FindAllString(token, -1) {
 			add(match)
 		}
 		for _, literal := range p.allowLiterals {
@@ -198,6 +209,42 @@ func (p *ScopePolicy) extractTargets(command string, args []string) []string {
 		out = append(out, target)
 	}
 	return out
+}
+
+func hostFromURL(token string) string {
+	trimmed := strings.TrimSpace(token)
+	if trimmed == "" || !strings.Contains(trimmed, "://") {
+		return ""
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return ""
+	}
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	return host
+}
+
+func isNetworkSensitiveCommand(command string) bool {
+	cmd := strings.ToLower(strings.TrimSpace(command))
+	if cmd == "" {
+		return false
+	}
+	if strings.Contains(cmd, "/") {
+		parts := strings.Split(cmd, "/")
+		cmd = parts[len(parts)-1]
+	}
+	switch cmd {
+	case "browse", "crawl",
+		"curl", "wget",
+		"nmap", "nc", "netcat",
+		"dig", "nslookup", "host", "whois",
+		"ping", "traceroute", "tracepath",
+		"ssh", "scp", "sftp", "ftp", "telnet",
+		"httpx", "nikto", "ffuf":
+		return true
+	default:
+		return false
+	}
 }
 
 func matchIP(ip net.IP, ips []net.IP, nets []*net.IPNet) bool {

@@ -999,10 +999,10 @@ func TestRunBudgetGuardStopsOnStepExhaustion(t *testing.T) {
 		"--stale-timeout", "2s",
 		"--soft-stall-grace", "2s",
 	}
-	if code := run(runArgs, &out, &errOut); code != 0 {
-		t.Fatalf("run failed: code=%d err=%s", code, errOut.String())
+	if code := run(runArgs, &out, &errOut); code == 0 {
+		t.Fatalf("expected non-zero run exit for failed terminal state")
 	}
-	if !strings.Contains(out.String(), "run completed: run-cli-budget") {
+	if !strings.Contains(out.String(), "run stopped with failures: run-cli-budget") {
 		t.Fatalf("unexpected run output: %q", out.String())
 	}
 
