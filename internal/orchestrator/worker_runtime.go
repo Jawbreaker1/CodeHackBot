@@ -36,6 +36,7 @@ const (
 	WorkerFailureScopeDenied        = "scope_denied"
 	WorkerFailurePolicyDenied       = "policy_denied"
 	WorkerFailurePolicyInvalid      = "policy_invalid"
+	WorkerFailureBootstrapFailed    = "worker_bootstrap_failed"
 	WorkerFailureAssistUnavailable  = "assist_unavailable"
 	WorkerFailureAssistNeedsInput   = "assist_needs_input"
 	WorkerFailureAssistNoAction     = "assist_no_action"
@@ -463,4 +464,20 @@ func primaryTaskTarget(task TaskSpec) string {
 		return strings.TrimSpace(task.Targets[0])
 	}
 	return "local"
+}
+
+func EmitWorkerBootstrapFailure(cfg WorkerRunConfig, cause error) error {
+	if strings.TrimSpace(cfg.SessionsDir) == "" || strings.TrimSpace(cfg.RunID) == "" || strings.TrimSpace(cfg.TaskID) == "" || strings.TrimSpace(cfg.WorkerID) == "" {
+		return nil
+	}
+	manager := NewManager(cfg.SessionsDir)
+	payload := map[string]any{
+		"attempt":   cfg.Attempt,
+		"worker_id": cfg.WorkerID,
+		"reason":    WorkerFailureBootstrapFailed,
+	}
+	if cause != nil {
+		payload["error"] = cause.Error()
+	}
+	return manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskFailed, payload)
 }

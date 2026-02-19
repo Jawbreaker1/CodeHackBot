@@ -179,6 +179,7 @@ func runWorkerMode(args []string) int {
 		return 2
 	}
 	if err := orchestrator.RunWorkerTask(cfg); err != nil {
+		_ = orchestrator.EmitWorkerBootstrapFailure(cfg, err)
 		_, _ = fmt.Fprintf(os.Stderr, "worker failed: %v\n", err)
 		return 1
 	}
