@@ -45,7 +45,7 @@ SESSIONS_DIR="sessions"
 GOAL=""
 MAX_PARALLELISM="2"
 PERMISSIONS="default"
-WORKER_CMD="./birdhackbot"
+WORKER_CMD="$ROOT_DIR/birdhackbot"
 SKIP_BUILD=0
 
 SCOPE_NETWORKS=()

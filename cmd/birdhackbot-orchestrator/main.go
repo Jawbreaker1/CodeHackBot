@@ -169,6 +169,12 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "run requires --worker-cmd")
 		return 2
 	}
+	resolvedWorkerCmd := strings.TrimSpace(workerCmd)
+	if resolvedWorkerCmd != "" && !filepath.IsAbs(resolvedWorkerCmd) {
+		if abs, absErr := filepath.Abs(resolvedWorkerCmd); absErr == nil {
+			resolvedWorkerCmd = abs
+		}
+	}
 	permissionMode := orchestrator.PermissionMode(strings.TrimSpace(permissionModeRaw))
 	manager := orchestrator.NewManager(sessionsDir)
 	if goal != "" {
@@ -288,7 +294,7 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 		}
 		return orchestrator.WorkerSpec{
 			WorkerID: workerID,
-			Command:  workerCmd,
+			Command:  resolvedWorkerCmd,
 			Args:     append([]string{}, workerArgs...),
 			Env:      env,
 		}
