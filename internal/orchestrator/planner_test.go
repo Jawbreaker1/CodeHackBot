@@ -53,6 +53,12 @@ func TestSynthesizeTaskGraphBuildsDependencyAwareGraph(t *testing.T) {
 		if len(task.DoneWhen) == 0 || len(task.FailWhen) == 0 || len(task.ExpectedArtifacts) == 0 {
 			t.Fatalf("task missing contract fields: %#v", task)
 		}
+		if task.Action.Type != "assist" {
+			t.Fatalf("expected synthesized task action type assist, got %q for %s", task.Action.Type, task.TaskID)
+		}
+		if task.Action.Prompt == "" {
+			t.Fatalf("expected synthesized task action prompt for %s", task.TaskID)
+		}
 		if task.Budget.MaxRuntime <= 0 || task.Budget.MaxSteps <= 0 || task.Budget.MaxToolCalls <= 0 {
 			t.Fatalf("task missing bounded budget: %#v", task)
 		}

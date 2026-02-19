@@ -95,18 +95,22 @@ func ValidateTaskSpec(task TaskSpec) error {
 	if task.Budget.MaxRuntime <= 0 {
 		return fmt.Errorf("%w: budget.max_runtime must be > 0", ErrInvalidTask)
 	}
-	if strings.TrimSpace(task.Action.Type) != "" || strings.TrimSpace(task.Action.Command) != "" || len(task.Action.Args) > 0 {
+	if strings.TrimSpace(task.Action.Type) != "" || strings.TrimSpace(task.Action.Command) != "" || len(task.Action.Args) > 0 || strings.TrimSpace(task.Action.Prompt) != "" {
 		actionType := strings.ToLower(strings.TrimSpace(task.Action.Type))
 		if actionType == "" {
 			actionType = "command"
 		}
 		switch actionType {
 		case "command", "shell":
+			if strings.TrimSpace(task.Action.Command) == "" {
+				return fmt.Errorf("%w: action.command is required when action is set", ErrInvalidTask)
+			}
+		case "assist":
+			if strings.TrimSpace(task.Action.Command) != "" || len(task.Action.Args) > 0 {
+				return fmt.Errorf("%w: assist action cannot set command/args", ErrInvalidTask)
+			}
 		default:
-			return fmt.Errorf("%w: action.type must be command or shell", ErrInvalidTask)
-		}
-		if strings.TrimSpace(task.Action.Command) == "" {
-			return fmt.Errorf("%w: action.command is required when action is set", ErrInvalidTask)
+			return fmt.Errorf("%w: action.type must be command, shell, or assist", ErrInvalidTask)
 		}
 	}
 	return nil

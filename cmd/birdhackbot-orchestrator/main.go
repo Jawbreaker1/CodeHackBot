@@ -268,6 +268,7 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "run failed creating approval broker: %v\n", err)
 		return 1
 	}
+	workerConfigPath := detectWorkerConfigPath()
 	coord, err := orchestrator.NewCoordinator(runID, plan.Scope, manager, workers, scheduler, maxAttempts, startupTimeout, staleTimeout, softStallGrace, func(task orchestrator.TaskSpec, attempt int, workerID string) orchestrator.WorkerSpec {
 		env := append([]string{}, os.Environ()...)
 		env = append(env, workerEnv...)
@@ -280,6 +281,9 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 			"BIRDHACKBOT_ORCH_PERMISSION_MODE="+string(permissionMode),
 			fmt.Sprintf("BIRDHACKBOT_ORCH_DISRUPTIVE_OPT_IN=%t", disruptiveOptIn),
 		)
+		if workerConfigPath != "" {
+			env = append(env, "BIRDHACKBOT_CONFIG_PATH="+workerConfigPath)
+		}
 		return orchestrator.WorkerSpec{
 			WorkerID: workerID,
 			Command:  workerCmd,
@@ -504,6 +508,23 @@ func minInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func detectWorkerConfigPath() string {
+	if existing := strings.TrimSpace(os.Getenv("BIRDHACKBOT_CONFIG_PATH")); existing != "" {
+		if _, err := os.Stat(existing); err == nil {
+			return existing
+		}
+	}
+	wd, err := os.Getwd()
+	if err != nil || strings.TrimSpace(wd) == "" {
+		return ""
+	}
+	candidate := filepath.Join(wd, "config", "default.json")
+	if _, err := os.Stat(candidate); err != nil {
+		return ""
+	}
+	return candidate
 }
 
 func runStatus(args []string, stdout, stderr io.Writer) int {

@@ -2,11 +2,14 @@ package orchestrator
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -106,6 +109,87 @@ func TestRunWorkerTaskCommandAction(t *testing.T) {
 	}
 	if status, _ := contract["verification_status"].(string); status != "satisfied" {
 		t.Fatalf("expected verification_status satisfied, got %q", status)
+	}
+}
+
+func TestRunWorkerTaskAssistAction(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-worker-task-assist"
+	taskID := "t1"
+	workerID := "worker-t1-a1"
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	writeWorkerPlan(t, base, runID, Scope{Targets: []string{"127.0.0.1"}})
+
+	task := TaskSpec{
+		TaskID:            taskID,
+		Goal:              "use llm reasoning",
+		Targets:           []string{"127.0.0.1"},
+		DoneWhen:          []string{"task complete"},
+		FailWhen:          []string{"task failed"},
+		ExpectedArtifacts: []string{"assist logs"},
+		RiskLevel:         string(RiskReconReadonly),
+		Action: TaskAction{
+			Type:   "assist",
+			Prompt: "List current directory and then complete.",
+		},
+		Budget: TaskBudget{
+			MaxSteps:     4,
+			MaxToolCalls: 4,
+			MaxRuntime:   15 * time.Second,
+		},
+	}
+	taskPath := filepath.Join(BuildRunPaths(base, runID).TaskDir, taskID+".json")
+	if err := WriteJSONAtomic(taskPath, task); err != nil {
+		t.Fatalf("WriteJSONAtomic task: %v", err)
+	}
+
+	var calls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.NotFound(w, r)
+			return
+		}
+		seq := atomic.AddInt32(&calls, 1)
+		w.Header().Set("Content-Type", "application/json")
+		switch seq {
+		case 1:
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"command\",\"command\":\"list_dir\",\"args\":[\".\"],\"summary\":\"Inspect workspace\"}"}}]}`))
+		default:
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"complete\",\"final\":\"Assist workflow complete\"}"}}]}`))
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv(workerConfigPathEnv, "")
+	t.Setenv(workerLLMBaseURLEnv, server.URL)
+	t.Setenv(workerLLMModelEnv, "test-model")
+	t.Setenv(workerLLMTimeoutSeconds, "10")
+
+	err := RunWorkerTask(WorkerRunConfig{
+		SessionsDir: base,
+		RunID:       runID,
+		TaskID:      taskID,
+		WorkerID:    workerID,
+		Attempt:     1,
+	})
+	if err != nil {
+		t.Fatalf("RunWorkerTask assist: %v", err)
+	}
+
+	events, err := NewManager(base).Events(runID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if !hasEventType(events, EventTypeTaskCompleted) {
+		t.Fatalf("expected task_completed event")
+	}
+	if !hasEventType(events, EventTypeTaskArtifact) {
+		t.Fatalf("expected task_artifact event")
+	}
+	if atomic.LoadInt32(&calls) < 2 {
+		t.Fatalf("expected at least 2 llm calls, got %d", atomic.LoadInt32(&calls))
 	}
 }
 

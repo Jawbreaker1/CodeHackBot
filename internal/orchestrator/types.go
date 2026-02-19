@@ -90,6 +90,7 @@ type TaskAction struct {
 	Type           string   `json:"type,omitempty"`
 	Command        string   `json:"command,omitempty"`
 	Args           []string `json:"args,omitempty"`
+	Prompt         string   `json:"prompt,omitempty"`
 	WorkingDir     string   `json:"working_dir,omitempty"`
 	TimeoutSeconds int      `json:"timeout_seconds,omitempty"`
 }

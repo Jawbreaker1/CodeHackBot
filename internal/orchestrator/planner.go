@@ -34,7 +34,7 @@ func SynthesizeTaskGraph(goal string, scope Scope, hypotheses []Hypothesis) ([]T
 			Targets:           targets,
 			Priority:          100,
 			Strategy:          "recon_seed",
-			Action:            echoAction("recon_seed:" + normalizedGoal),
+			Action:            assistAction("Establish baseline reconnaissance evidence for: " + normalizedGoal),
 			DoneWhen:          []string{"baseline_scope_inventory_captured"},
 			FailWhen:          []string{"scope_inventory_failed", "seed_timeout"},
 			ExpectedArtifacts: []string{"recon-seed.log"},
@@ -73,7 +73,7 @@ func SynthesizeTaskGraph(goal string, scope Scope, hypotheses []Hypothesis) ([]T
 			DependsOn:         []string{rootTaskID},
 			Priority:          priority,
 			Strategy:          "hypothesis_validate",
-			Action:            echoAction("validate_" + hypothesis.ID),
+			Action:            assistAction("Validate hypothesis " + hypothesis.ID + ": " + hypothesis.Statement),
 			DoneWhen:          doneWhen,
 			FailWhen:          failWhen,
 			ExpectedArtifacts: []string{artifactName},
@@ -92,7 +92,7 @@ func SynthesizeTaskGraph(goal string, scope Scope, hypotheses []Hypothesis) ([]T
 		DependsOn:         summaryDepends,
 		Priority:          10,
 		Strategy:          "summarize_and_replan",
-		Action:            echoAction("summarize_hypotheses"),
+		Action:            assistAction("Consolidate hypothesis outcomes, summarize findings, and propose next steps."),
 		DoneWhen:          []string{"hypothesis_summary_recorded"},
 		FailWhen:          []string{"summary_failed", "summary_timeout"},
 		ExpectedArtifacts: []string{"plan-summary.log"},
@@ -199,6 +199,13 @@ func echoAction(message string) TaskAction {
 		Type:    "command",
 		Command: "printf",
 		Args:    []string{"%s\n", trimmed},
+	}
+}
+
+func assistAction(prompt string) TaskAction {
+	return TaskAction{
+		Type:   "assist",
+		Prompt: strings.TrimSpace(prompt),
 	}
 }
 

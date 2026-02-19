@@ -36,6 +36,11 @@ const (
 	WorkerFailureScopeDenied        = "scope_denied"
 	WorkerFailurePolicyDenied       = "policy_denied"
 	WorkerFailurePolicyInvalid      = "policy_invalid"
+	WorkerFailureAssistUnavailable  = "assist_unavailable"
+	WorkerFailureAssistNeedsInput   = "assist_needs_input"
+	WorkerFailureAssistNoAction     = "assist_no_action"
+	WorkerFailureAssistLoopDetected = "assist_loop_detected"
+	WorkerFailureAssistExhausted    = "assist_budget_exhausted"
 )
 
 var (
@@ -156,6 +161,10 @@ func RunWorkerTask(cfg WorkerRunConfig) error {
 	ctx, cancel := context.WithTimeout(signalCtx, timeout)
 	defer cancel()
 
+	if action.Type == "assist" {
+		return runWorkerAssistTask(ctx, manager, cfg, task, action, scopePolicy, workDir)
+	}
+
 	_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskProgress, map[string]any{
 		"message":    "executing action command",
 		"step":       1,
@@ -259,6 +268,10 @@ func normalizeTaskAction(action TaskAction) (TaskAction, error) {
 		}
 		a.Args = []string{"-lc", a.Command}
 		a.Command = "bash"
+	case "assist":
+		if a.Command != "" || len(a.Args) > 0 {
+			return TaskAction{}, fmt.Errorf("assist action cannot set command/args")
+		}
 	default:
 		return TaskAction{}, fmt.Errorf("unsupported action type %q", a.Type)
 	}

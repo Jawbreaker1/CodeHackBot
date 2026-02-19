@@ -86,3 +86,58 @@ func TestValidateTaskSpec_RejectsInvalidAction(t *testing.T) {
 		t.Fatalf("expected ErrInvalidTask, got %v", err)
 	}
 }
+
+func TestValidateTaskSpec_AssistActionAllowed(t *testing.T) {
+	t.Parallel()
+
+	task := TaskSpec{
+		TaskID:            "t1",
+		Goal:              "test assist action",
+		DoneWhen:          []string{"d"},
+		FailWhen:          []string{"f"},
+		ExpectedArtifacts: []string{"a"},
+		RiskLevel:         "recon_readonly",
+		Action: TaskAction{
+			Type:   "assist",
+			Prompt: "Investigate and summarize findings.",
+		},
+		Budget: TaskBudget{
+			MaxSteps:     2,
+			MaxToolCalls: 2,
+			MaxRuntime:   time.Second,
+		},
+	}
+	if err := ValidateTaskSpec(task); err != nil {
+		t.Fatalf("expected assist action to validate, got %v", err)
+	}
+}
+
+func TestValidateTaskSpec_AssistActionRejectsCommandArgs(t *testing.T) {
+	t.Parallel()
+
+	task := TaskSpec{
+		TaskID:            "t1",
+		Goal:              "test assist action",
+		DoneWhen:          []string{"d"},
+		FailWhen:          []string{"f"},
+		ExpectedArtifacts: []string{"a"},
+		RiskLevel:         "recon_readonly",
+		Action: TaskAction{
+			Type:    "assist",
+			Command: "ls",
+			Args:    []string{"-la"},
+		},
+		Budget: TaskBudget{
+			MaxSteps:     2,
+			MaxToolCalls: 2,
+			MaxRuntime:   time.Second,
+		},
+	}
+	err := ValidateTaskSpec(task)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, ErrInvalidTask) {
+		t.Fatalf("expected ErrInvalidTask, got %v", err)
+	}
+}
