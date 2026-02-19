@@ -325,7 +325,6 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 			"--sessions-dir", sessionsDir,
 			"--run", runID,
 			"--refresh", tuiRefresh.String(),
-			"--exit-on-done",
 		}, stdout, stderr)
 
 		select {
