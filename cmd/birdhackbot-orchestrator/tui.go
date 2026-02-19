@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -149,11 +150,23 @@ func readTUIKeys(keyCh chan<- byte, errCh chan<- error) {
 
 type tuiSnapshot struct {
 	status      orchestrator.RunStatus
+	plan        orchestrator.RunPlan
 	workers     []orchestrator.WorkerStatus
 	approvals   []orchestrator.PendingApprovalView
+	tasks       []tuiTaskRow
 	events      []orchestrator.EventEnvelope
 	lastFailure *tuiFailure
 	updatedAt   time.Time
+}
+
+type tuiTaskRow struct {
+	TaskID    string
+	Title     string
+	Strategy  string
+	State     string
+	WorkerID  string
+	Priority  int
+	IsDynamic bool
 }
 
 type tuiFailure struct {
@@ -171,7 +184,15 @@ func collectTUISnapshot(manager *orchestrator.Manager, runID string, eventLimit 
 	if err != nil {
 		return snap, err
 	}
+	plan, err := manager.LoadRunPlan(runID)
+	if err != nil {
+		return snap, err
+	}
 	workers, err := manager.Workers(runID)
+	if err != nil {
+		return snap, err
+	}
+	leases, err := manager.ReadLeases(runID)
 	if err != nil {
 		return snap, err
 	}
@@ -188,8 +209,10 @@ func collectTUISnapshot(manager *orchestrator.Manager, runID string, eventLimit 
 		events = append([]orchestrator.EventEnvelope{}, events[len(events)-eventLimit:]...)
 	}
 	snap.status = status
-	snap.workers = workers
+	snap.plan = plan
+	snap.workers = hydrateWorkerTasks(workers, leases)
 	snap.approvals = approvals
+	snap.tasks = buildTaskRows(plan, leases)
 	snap.events = events
 	snap.lastFailure = latestFailureFromEvents(allEvents)
 	snap.updatedAt = time.Now().UTC()
@@ -218,12 +241,45 @@ func renderTUI(out io.Writer, runID string, snap tuiSnapshot, messages []string,
 	lines = append(lines, styleLine(bar, width, tuiStyleBar))
 	lines = append(lines, fitLine(fmt.Sprintf("Updated: %s", snap.updatedAt.Format("2006-01-02 15:04:05 MST")), width))
 	lines = append(lines, fitLine("", width))
+	lines = append(lines, fitLine("Plan:", width))
+	goal := strings.TrimSpace(snap.plan.Metadata.Goal)
+	if goal == "" {
+		goal = "(no goal metadata)"
+	}
+	lines = append(lines, fitLine("  - Goal: "+goal, width))
+	lines = append(lines, fitLine(fmt.Sprintf("  - Tasks: %d | Success criteria: %d | Stop criteria: %d", len(snap.plan.Tasks), len(snap.plan.SuccessCriteria), len(snap.plan.StopCriteria)), width))
+	lines = append(lines, fitLine("", width))
 	lines = append(lines, fitLine("Workers:", width))
 	if len(snap.workers) == 0 {
 		lines = append(lines, fitLine("  (no workers)", width))
 	} else {
 		for _, worker := range snap.workers {
 			lines = append(lines, fitLine(fmt.Sprintf("  - %s | %s | seq=%d | task=%s", worker.WorkerID, worker.State, worker.LastSeq, worker.CurrentTask), width))
+		}
+	}
+	lines = append(lines, fitLine("", width))
+	lines = append(lines, fitLine("Task Board:", width))
+	if len(snap.tasks) == 0 {
+		lines = append(lines, fitLine("  (no tasks)", width))
+	} else {
+		for i, task := range snap.tasks {
+			if i >= 12 {
+				lines = append(lines, fitLine(fmt.Sprintf("  ... %d more", len(snap.tasks)-i), width))
+				break
+			}
+			dynamic := ""
+			if task.IsDynamic {
+				dynamic = " (dynamic)"
+			}
+			worker := task.WorkerID
+			if strings.TrimSpace(worker) == "" {
+				worker = "-"
+			}
+			strategy := task.Strategy
+			if strings.TrimSpace(strategy) == "" {
+				strategy = "-"
+			}
+			lines = append(lines, fitLine(fmt.Sprintf("  - %s [%s] worker=%s strategy=%s%s", task.TaskID, task.State, worker, strategy, dynamic), width))
 		}
 	}
 	lines = append(lines, fitLine("", width))
@@ -320,6 +376,101 @@ func appendLogLine(lines []string, line string) []string {
 	return out
 }
 
+func hydrateWorkerTasks(workers []orchestrator.WorkerStatus, leases []orchestrator.TaskLease) []orchestrator.WorkerStatus {
+	if len(workers) == 0 {
+		return workers
+	}
+	leaseTask := map[string]string{}
+	for _, lease := range leases {
+		if strings.TrimSpace(lease.WorkerID) == "" {
+			continue
+		}
+		if lease.Status != orchestrator.LeaseStatusLeased && lease.Status != orchestrator.LeaseStatusRunning && lease.Status != orchestrator.LeaseStatusAwaitingApproval {
+			continue
+		}
+		leaseTask[lease.WorkerID] = lease.TaskID
+	}
+	out := make([]orchestrator.WorkerStatus, 0, len(workers))
+	for _, worker := range workers {
+		if strings.TrimSpace(worker.CurrentTask) == "" {
+			if taskID := strings.TrimSpace(leaseTask[worker.WorkerID]); taskID != "" {
+				worker.CurrentTask = taskID
+			}
+		}
+		out = append(out, worker)
+	}
+	return out
+}
+
+func buildTaskRows(plan orchestrator.RunPlan, leases []orchestrator.TaskLease) []tuiTaskRow {
+	leaseByTask := map[string]orchestrator.TaskLease{}
+	for _, lease := range leases {
+		leaseByTask[lease.TaskID] = lease
+	}
+	rows := make([]tuiTaskRow, 0, len(plan.Tasks))
+	for _, task := range plan.Tasks {
+		state := "queued"
+		workerID := ""
+		if lease, ok := leaseByTask[task.TaskID]; ok {
+			state = lease.Status
+			workerID = strings.TrimSpace(lease.WorkerID)
+		}
+		row := tuiTaskRow{
+			TaskID:    task.TaskID,
+			Title:     task.Title,
+			Strategy:  task.Strategy,
+			State:     normalizeDisplayState(state),
+			WorkerID:  workerID,
+			Priority:  task.Priority,
+			IsDynamic: strings.HasPrefix(strings.ToLower(strings.TrimSpace(task.Strategy)), "adaptive_replan_"),
+		}
+		rows = append(rows, row)
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		left := taskStateOrder(rows[i].State)
+		right := taskStateOrder(rows[j].State)
+		if left != right {
+			return left < right
+		}
+		if rows[i].Priority != rows[j].Priority {
+			return rows[i].Priority > rows[j].Priority
+		}
+		return rows[i].TaskID < rows[j].TaskID
+	})
+	return rows
+}
+
+func normalizeDisplayState(state string) string {
+	trimmed := strings.TrimSpace(strings.ToLower(state))
+	if trimmed == "" {
+		return "queued"
+	}
+	return trimmed
+}
+
+func taskStateOrder(state string) int {
+	switch normalizeDisplayState(state) {
+	case "running":
+		return 1
+	case "awaiting_approval":
+		return 2
+	case "leased":
+		return 3
+	case "queued":
+		return 4
+	case "failed":
+		return 5
+	case "blocked":
+		return 6
+	case "completed":
+		return 7
+	case "canceled":
+		return 8
+	default:
+		return 9
+	}
+}
+
 func latestFailureFromEvents(events []orchestrator.EventEnvelope) *tuiFailure {
 	for i := len(events) - 1; i >= 0; i-- {
 		event := events[i]
@@ -388,6 +539,10 @@ func parseTUICommand(raw string) (tuiCommand, error) {
 		return tuiCommand{name: "quit"}, nil
 	case "help", "h":
 		return tuiCommand{name: "help"}, nil
+	case "plan":
+		return tuiCommand{name: "plan"}, nil
+	case "tasks":
+		return tuiCommand{name: "tasks"}, nil
 	case "refresh", "r":
 		return tuiCommand{name: "refresh"}, nil
 	case "events":
@@ -428,6 +583,11 @@ func parseTUICommand(raw string) (tuiCommand, error) {
 		return tuiCommand{name: "deny", approval: parts[1], reason: reason}, nil
 	case "stop":
 		return tuiCommand{name: "stop"}, nil
+	case "instruct":
+		if len(parts) < 2 {
+			return tuiCommand{}, fmt.Errorf("usage: instruct <instruction>")
+		}
+		return tuiCommand{name: "instruct", reason: strings.TrimSpace(strings.TrimPrefix(trimmed, parts[0]))}, nil
 	default:
 		return tuiCommand{}, fmt.Errorf("unknown command %q", parts[0])
 	}
@@ -438,7 +598,32 @@ func executeTUICommand(manager *orchestrator.Manager, runID string, eventLimit *
 	case "quit":
 		return true, "exiting tui"
 	case "help":
-		return false, "commands: help, refresh, events <n>, approve <id> [scope] [reason], deny <id> [reason], stop, quit"
+		return false, "commands: help, plan, tasks, instruct <text>, refresh, events <n>, approve <id> [scope] [reason], deny <id> [reason], stop, quit"
+	case "plan":
+		plan, err := manager.LoadRunPlan(runID)
+		if err != nil {
+			return false, "plan failed: " + err.Error()
+		}
+		goal := strings.TrimSpace(plan.Metadata.Goal)
+		if goal == "" {
+			goal = "(no goal metadata)"
+		}
+		return false, fmt.Sprintf("plan: goal=%q tasks=%d success=%d stop=%d", goal, len(plan.Tasks), len(plan.SuccessCriteria), len(plan.StopCriteria))
+	case "tasks":
+		plan, err := manager.LoadRunPlan(runID)
+		if err != nil {
+			return false, "tasks failed loading plan: " + err.Error()
+		}
+		leases, err := manager.ReadLeases(runID)
+		if err != nil {
+			return false, "tasks failed reading leases: " + err.Error()
+		}
+		rows := buildTaskRows(plan, leases)
+		counts := map[string]int{}
+		for _, row := range rows {
+			counts[row.State]++
+		}
+		return false, fmt.Sprintf("tasks: total=%d running=%d awaiting=%d queued=%d failed=%d blocked=%d completed=%d", len(rows), counts["running"], counts["awaiting_approval"], counts["queued"], counts["failed"], counts["blocked"], counts["completed"])
 	case "refresh":
 		return false, "refreshed"
 	case "events":
@@ -461,6 +646,18 @@ func executeTUICommand(manager *orchestrator.Manager, runID string, eventLimit *
 			return false, "stop failed: " + err.Error()
 		}
 		return false, "stop requested"
+	case "instruct":
+		instruction := strings.TrimSpace(cmd.reason)
+		if instruction == "" {
+			return false, "instruct failed: instruction is required"
+		}
+		if err := manager.EmitEvent(runID, "operator", "", orchestrator.EventTypeOperatorInstruction, map[string]any{
+			"instruction": instruction,
+			"source":      "tui",
+		}); err != nil {
+			return false, "instruct failed: " + err.Error()
+		}
+		return false, "instruction queued: " + instruction
 	default:
 		return false, ""
 	}

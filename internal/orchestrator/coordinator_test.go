@@ -1441,6 +1441,76 @@ func TestCoordinator_AdaptiveReplanHonorsBudgetCap(t *testing.T) {
 	}
 }
 
+func TestCoordinator_OperatorInstructionTriggersAdaptiveTask(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-coord-operator-instruction"
+	manager := NewManager(base)
+	plan := RunPlan{
+		RunID:           runID,
+		Scope:           Scope{Targets: []string{"192.168.50.10"}},
+		Constraints:     []string{"internal_lab_only"},
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks: []TaskSpec{
+			task("t1", nil, 1),
+		},
+	}
+	if _, err := manager.StartFromPlan(plan, ""); err != nil {
+		t.Fatalf("StartFromPlan: %v", err)
+	}
+	scheduler, err := NewScheduler(plan, 1)
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	workers := NewWorkerManager(manager)
+	coord, err := NewCoordinator(runID, Scope{}, manager, workers, scheduler, 2, 2*time.Second, 4*time.Second, 3*time.Second, func(task TaskSpec, attempt int, workerID string) WorkerSpec {
+		return helperWorkerSpec(t, workerID, "ok")
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	if err := manager.EmitEvent(runID, "operator", "", EventTypeOperatorInstruction, map[string]any{
+		"instruction": "map services and summarize weak points",
+	}); err != nil {
+		t.Fatalf("EmitEvent operator_instruction: %v", err)
+	}
+	if err := coord.handleEventDrivenReplanTriggers(); err != nil {
+		t.Fatalf("handleEventDrivenReplanTriggers: %v", err)
+	}
+	events, err := manager.Events(runID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	replan := latestReplanEventByTrigger(events, "operator_instruction")
+	if replan == nil {
+		t.Fatalf("expected replan event for operator_instruction")
+	}
+	payload := map[string]any{}
+	if len(replan.Payload) > 0 {
+		_ = json.Unmarshal(replan.Payload, &payload)
+	}
+	if toString(payload["mutation_status"]) != "task_added" {
+		t.Fatalf("expected task_added mutation status, got %q", toString(payload["mutation_status"]))
+	}
+	addedTaskID := toString(payload["added_task_id"])
+	if addedTaskID == "" {
+		t.Fatalf("expected added_task_id in payload")
+	}
+	addedTask, err := manager.ReadTask(runID, addedTaskID)
+	if err != nil {
+		t.Fatalf("ReadTask added task: %v", err)
+	}
+	if addedTask.Action.Type != "assist" {
+		t.Fatalf("expected assist action for operator instruction task, got %q", addedTask.Action.Type)
+	}
+	if !strings.Contains(strings.ToLower(addedTask.Goal), "map services") {
+		t.Fatalf("unexpected added task goal: %q", addedTask.Goal)
+	}
+}
+
 func TestRetryableWorkerFailureReason(t *testing.T) {
 	t.Parallel()
 

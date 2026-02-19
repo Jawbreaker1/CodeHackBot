@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +18,9 @@ func TestParseTUICommand(t *testing.T) {
 	}{
 		{in: "", name: "refresh"},
 		{in: "help", name: "help"},
+		{in: "plan", name: "plan"},
+		{in: "tasks", name: "tasks"},
+		{in: "instruct investigate target", name: "instruct"},
 		{in: "q", name: "quit"},
 		{in: "events 25", name: "events"},
 		{in: "approve apr-1 task ok", name: "approve"},
@@ -45,6 +49,7 @@ func TestParseTUICommandRejectsInvalid(t *testing.T) {
 		"events nope",
 		"approve",
 		"deny",
+		"instruct",
 		"wat",
 	}
 	for _, in := range invalid {
@@ -80,6 +85,9 @@ func TestExecuteTUICommandApproveDenyStop(t *testing.T) {
 	if done, _ := executeTUICommand(manager, runID, nil, tuiCommand{name: "stop"}); done {
 		t.Fatalf("expected stop to keep tui open")
 	}
+	if done, log := executeTUICommand(manager, runID, nil, tuiCommand{name: "instruct", reason: "enumerate open ports"}); done || !strings.Contains(log, "instruction queued") {
+		t.Fatalf("expected instruct command to queue instruction, got done=%v log=%q", done, log)
+	}
 	events, err := manager.Events(runID, 0)
 	if err != nil {
 		t.Fatalf("Events: %v", err)
@@ -92,6 +100,9 @@ func TestExecuteTUICommandApproveDenyStop(t *testing.T) {
 	}
 	if !hasEvent(events, orchestrator.EventTypeRunStopped) {
 		t.Fatalf("expected run_stopped event")
+	}
+	if !hasEvent(events, orchestrator.EventTypeOperatorInstruction) {
+		t.Fatalf("expected operator_instruction event")
 	}
 }
 

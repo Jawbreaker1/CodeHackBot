@@ -33,6 +33,7 @@ var validEventTypes = map[string]struct{}{
 	EventTypeApprovalDenied:      {},
 	EventTypeApprovalExpired:     {},
 	EventTypeWorkerStopRequested: {},
+	EventTypeOperatorInstruction: {},
 }
 
 func ValidateRunPlan(plan RunPlan) error {

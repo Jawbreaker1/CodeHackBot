@@ -26,6 +26,7 @@ const (
 	EventTypeApprovalDenied      = "approval_denied"
 	EventTypeApprovalExpired     = "approval_expired"
 	EventTypeWorkerStopRequested = "worker_stop_requested"
+	EventTypeOperatorInstruction = "operator_instruction"
 )
 
 type RunPlan struct {

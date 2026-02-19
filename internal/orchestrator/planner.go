@@ -40,9 +40,9 @@ func SynthesizeTaskGraph(goal string, scope Scope, hypotheses []Hypothesis) ([]T
 			ExpectedArtifacts: []string{"recon-seed.log"},
 			RiskLevel:         string(RiskReconReadonly),
 			Budget: TaskBudget{
-				MaxSteps:     2,
-				MaxToolCalls: 2,
-				MaxRuntime:   45 * time.Second,
+				MaxSteps:     6,
+				MaxToolCalls: 8,
+				MaxRuntime:   2 * time.Minute,
 			},
 		},
 	}

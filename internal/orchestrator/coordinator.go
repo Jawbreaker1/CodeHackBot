@@ -907,6 +907,8 @@ func (c *Coordinator) handleEventDrivenReplanTriggers() error {
 			trigger = "approval_denied"
 		case EventTypeApprovalExpired:
 			trigger = "approval_expired"
+		case EventTypeOperatorInstruction:
+			trigger = "operator_instruction"
 		}
 		if trigger == "" {
 			continue
@@ -1040,7 +1042,7 @@ func replanOutcomeForTrigger(trigger string) ReplanOutcome {
 
 func (c *Coordinator) shouldMutateForTrigger(trigger string) bool {
 	switch trigger {
-	case "new_finding", "missing_required_artifacts_after_retries", "execution_failure", "worker_recovery", "repeated_step_loop", "budget_exhausted", "blocked_task":
+	case "new_finding", "missing_required_artifacts_after_retries", "execution_failure", "worker_recovery", "repeated_step_loop", "budget_exhausted", "blocked_task", "operator_instruction":
 		return true
 	default:
 		return false
@@ -1064,6 +1066,10 @@ func (c *Coordinator) buildReplanTask(trigger string, source EventEnvelope, payl
 			risk = string(RiskActiveProbe)
 		}
 	}
+	operatorInstruction := ""
+	if trigger == "operator_instruction" {
+		operatorInstruction = strings.TrimSpace(toString(payload["instruction"]))
+	}
 	budget := budgetForRiskLevel(risk)
 	if budget.MaxRuntime > 3*time.Minute {
 		budget.MaxRuntime = 3 * time.Minute
@@ -1077,18 +1083,28 @@ func (c *Coordinator) buildReplanTask(trigger string, source EventEnvelope, payl
 	if evidenceTarget == "" {
 		evidenceTarget = "run"
 	}
+	goal := fmt.Sprintf("Investigate trigger %s from task %s and produce actionable follow-up evidence", trigger, evidenceTarget)
+	action := echoAction(fmt.Sprintf("adaptive_replan:%s:%s", trigger, evidenceTarget))
+	title := fmt.Sprintf("Adaptive replan for %s", trigger)
+	expectedArtifacts := []string{fmt.Sprintf("replan-%s.log", sanitizePathComponent(evidenceTarget))}
+	if operatorInstruction != "" {
+		goal = operatorInstruction
+		action = assistAction(operatorInstruction)
+		title = "Operator instruction"
+		expectedArtifacts = []string{fmt.Sprintf("operator-instruction-%s.log", hashKey(operatorInstruction)[:8])}
+	}
 	return TaskSpec{
 		TaskID:            taskID,
-		Title:             fmt.Sprintf("Adaptive replan for %s", trigger),
+		Title:             title,
 		IdempotencyKey:    mutationKey,
-		Goal:              fmt.Sprintf("Investigate trigger %s from task %s and produce actionable follow-up evidence", trigger, evidenceTarget),
+		Goal:              goal,
 		Targets:           targets,
 		Priority:          95,
 		Strategy:          "adaptive_replan_" + sanitizePathComponent(trigger),
-		Action:            echoAction(fmt.Sprintf("adaptive_replan:%s:%s", trigger, evidenceTarget)),
+		Action:            action,
 		DoneWhen:          done,
 		FailWhen:          fail,
-		ExpectedArtifacts: []string{fmt.Sprintf("replan-%s.log", sanitizePathComponent(evidenceTarget))},
+		ExpectedArtifacts: expectedArtifacts,
 		RiskLevel:         risk,
 		Budget:            budget,
 	}, nil
