@@ -369,6 +369,16 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 				return err
 			}
 			command, args = normalizeWorkerAssistCommand(command, args)
+			args, injected, injectedTarget := applyCommandTargetFallback(scopePolicy, task, command, args)
+			if injected {
+				_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
+					"message":    fmt.Sprintf("auto-injected target %s for command %s", injectedTarget, command),
+					"step":       actionSteps,
+					"turn":       turn,
+					"tool_calls": toolCalls,
+					"mode":       mode,
+				})
+			}
 			if !isBuiltinListDir(command) && !isBuiltinReadFile(command) && !isBuiltinWriteFile(command) {
 				if err := scopePolicy.ValidateCommandTargets(command, args); err != nil {
 					_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureScopeDenied, map[string]any{
@@ -621,6 +631,8 @@ func executeWorkerAssistTool(ctx context.Context, cfg WorkerRunConfig, task Task
 	}
 
 	args := normalizeArgs(spec.Run.Args)
+	runCommand, args = normalizeWorkerAssistCommand(runCommand, args)
+	args, _, _ = applyCommandTargetFallback(scopePolicy, task, runCommand, args)
 	if err := scopePolicy.ValidateCommandTargets(runCommand, args); err != nil {
 		return workerToolResult{}, fmt.Errorf("%s: %w", WorkerFailureScopeDenied, err)
 	}
@@ -648,6 +660,35 @@ func normalizeWorkerAssistCommand(command string, args []string) (string, []stri
 		return parts[0], parts[1:]
 	}
 	return command, args
+}
+
+func applyCommandTargetFallback(scopePolicy *ScopePolicy, task TaskSpec, command string, args []string) ([]string, bool, string) {
+	if scopePolicy == nil {
+		return args, false, ""
+	}
+	command = strings.TrimSpace(command)
+	if command == "" || !isNetworkSensitiveCommand(command) {
+		return args, false, ""
+	}
+	if len(scopePolicy.extractTargets(command, args)) > 0 {
+		return args, false, ""
+	}
+	fallback := firstTaskTarget(task.Targets)
+	if fallback == "" {
+		return args, false, ""
+	}
+	updated := append(append([]string{}, args...), fallback)
+	return updated, true, fallback
+}
+
+func firstTaskTarget(targets []string) string {
+	for _, target := range targets {
+		trimmed := strings.TrimSpace(target)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func normalizeArgs(args []string) []string {
