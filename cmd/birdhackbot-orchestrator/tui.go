@@ -412,9 +412,7 @@ func renderTUI(out io.Writer, runID string, snap tuiSnapshot, messages []string,
 	if maxBody < 1 {
 		maxBody = 1
 	}
-	if len(lines) > maxBody {
-		lines = lines[len(lines)-maxBody:]
-	}
+	lines = clampTUIBodyLines(lines, maxBody)
 
 	_, _ = fmt.Fprint(out, "\x1b[H\x1b[2J")
 	for _, line := range lines {
@@ -454,6 +452,28 @@ func appendLogLine(lines []string, line string) []string {
 	if len(out) > 8 {
 		return out[len(out)-8:]
 	}
+	return out
+}
+
+func clampTUIBodyLines(lines []string, maxBody int) []string {
+	if maxBody <= 0 {
+		return nil
+	}
+	if len(lines) <= maxBody {
+		return lines
+	}
+	const headKeep = 3
+	head := headKeep
+	if head > maxBody {
+		head = maxBody
+	}
+	tail := maxBody - head
+	if tail <= 0 {
+		return append([]string{}, lines[:head]...)
+	}
+	out := make([]string, 0, maxBody)
+	out = append(out, lines[:head]...)
+	out = append(out, lines[len(lines)-tail:]...)
 	return out
 }
 
@@ -798,8 +818,13 @@ func parseTUICommand(raw string) (tuiCommand, error) {
 			return tuiCommand{}, fmt.Errorf("usage: instruct <instruction>")
 		}
 		return tuiCommand{name: "instruct", reason: strings.TrimSpace(strings.TrimPrefix(trimmed, parts[0]))}, nil
+	case "ask":
+		if len(parts) < 2 {
+			return tuiCommand{}, fmt.Errorf("usage: ask <question>")
+		}
+		return tuiCommand{name: "ask", reason: strings.TrimSpace(strings.TrimPrefix(trimmed, parts[0]))}, nil
 	default:
-		return tuiCommand{name: "instruct", reason: trimmed}, nil
+		return tuiCommand{name: "ask", reason: trimmed}, nil
 	}
 }
 
@@ -808,7 +833,7 @@ func executeTUICommand(manager *orchestrator.Manager, runID string, eventLimit *
 	case "quit":
 		return true, "exiting tui"
 	case "help":
-		return false, "commands: help, plan, tasks, instruct <text>, refresh, events <n>, approve <id> [scope] [reason], deny <id> [reason], stop, quit"
+		return false, "commands: help, plan, tasks, ask <question>, instruct <text>, refresh, events <n>, approve <id> [scope] [reason], deny <id> [reason], stop, quit"
 	case "plan":
 		plan, err := manager.LoadRunPlan(runID)
 		if err != nil {
@@ -856,6 +881,8 @@ func executeTUICommand(manager *orchestrator.Manager, runID string, eventLimit *
 			return false, "stop failed: " + err.Error()
 		}
 		return false, "stop requested"
+	case "ask":
+		return false, answerTUIQuestion(manager, runID, cmd.reason)
 	case "instruct":
 		instruction := strings.TrimSpace(cmd.reason)
 		if instruction == "" {
@@ -871,4 +898,69 @@ func executeTUICommand(manager *orchestrator.Manager, runID string, eventLimit *
 	default:
 		return false, ""
 	}
+}
+
+func answerTUIQuestion(manager *orchestrator.Manager, runID, question string) string {
+	trimmed := strings.TrimSpace(question)
+	if trimmed == "" {
+		return "ask failed: question is required"
+	}
+	lower := strings.ToLower(trimmed)
+
+	status, statusErr := manager.Status(runID)
+	if statusErr != nil {
+		return "ask failed reading status: " + statusErr.Error()
+	}
+	plan, planErr := manager.LoadRunPlan(runID)
+	leases, leaseErr := manager.ReadLeases(runID)
+	if planErr != nil || leaseErr != nil {
+		return fmt.Sprintf("status: state=%s workers=%d queued=%d running=%d", status.State, status.ActiveWorkers, status.QueuedTasks, status.RunningTasks)
+	}
+
+	rows := buildTaskRows(plan, leases)
+	stateByTask := map[string]string{}
+	for _, row := range rows {
+		stateByTask[row.TaskID] = row.State
+	}
+	active := activeTaskRows(rows)
+
+	if strings.Contains(lower, "plan") || strings.Contains(lower, "steps") {
+		stepParts := make([]string, 0, len(plan.Tasks))
+		for i, task := range plan.Tasks {
+			state := stateByTask[task.TaskID]
+			if state == "" {
+				state = "queued"
+			}
+			stepParts = append(stepParts, fmt.Sprintf("%d)%s[%s]", i+1, task.Title, state))
+			if len(stepParts) >= 10 && len(plan.Tasks) > 10 {
+				stepParts = append(stepParts, fmt.Sprintf("... +%d more", len(plan.Tasks)-10))
+				break
+			}
+		}
+		return fmt.Sprintf("plan (%d steps): %s", len(plan.Tasks), strings.Join(stepParts, " | "))
+	}
+
+	if strings.Contains(lower, "current") || strings.Contains(lower, "working on") || strings.Contains(lower, "status") {
+		if len(active) == 0 {
+			return fmt.Sprintf("state=%s. no active step right now. queued=%d failed=%d completed=%d", status.State, countTaskState(rows, "queued"), countTaskState(rows, "failed"), countTaskState(rows, "completed"))
+		}
+		activeParts := make([]string, 0, len(active))
+		for _, row := range active {
+			activeParts = append(activeParts, fmt.Sprintf("%s[%s]", row.TaskID, row.State))
+		}
+		return fmt.Sprintf("state=%s. current active: %s", status.State, strings.Join(activeParts, " | "))
+	}
+
+	return "I can answer run-state questions (plan, steps, current status). Use `instruct <text>` to change the run."
+}
+
+func countTaskState(rows []tuiTaskRow, state string) int {
+	target := normalizeDisplayState(state)
+	count := 0
+	for _, row := range rows {
+		if normalizeDisplayState(row.State) == target {
+			count++
+		}
+	}
+	return count
 }

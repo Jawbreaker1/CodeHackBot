@@ -20,8 +20,9 @@ func TestParseTUICommand(t *testing.T) {
 		{in: "help", name: "help"},
 		{in: "plan", name: "plan"},
 		{in: "tasks", name: "tasks"},
+		{in: "ask what is current status", name: "ask"},
 		{in: "instruct investigate target", name: "instruct"},
-		{in: "Hello orchestrator", name: "instruct"},
+		{in: "Hello orchestrator", name: "ask"},
 		{in: "q", name: "quit"},
 		{in: "events 25", name: "events"},
 		{in: "approve apr-1 task ok", name: "approve"},
@@ -50,6 +51,7 @@ func TestParseTUICommandRejectsInvalid(t *testing.T) {
 		"events nope",
 		"approve",
 		"deny",
+		"ask",
 		"instruct",
 	}
 	for _, in := range invalid {
@@ -256,6 +258,59 @@ func TestFormatProgressSummary(t *testing.T) {
 	want := "step 3 | enumerating services | tools:5"
 	if got != want {
 		t.Fatalf("unexpected summary: got %q want %q", got, want)
+	}
+}
+
+func TestClampTUIBodyLinesKeepsTopBar(t *testing.T) {
+	t.Parallel()
+
+	lines := []string{"bar", "updated", "", "plan", "workers", "events", "log"}
+	clamped := clampTUIBodyLines(lines, 5)
+	if len(clamped) != 5 {
+		t.Fatalf("expected 5 lines, got %d", len(clamped))
+	}
+	if clamped[0] != "bar" || clamped[1] != "updated" || clamped[2] != "" {
+		t.Fatalf("expected top header to be preserved, got %#v", clamped[:3])
+	}
+}
+
+func TestAnswerTUIQuestionPlan(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-tui-ask-plan"
+	manager := orchestrator.NewManager(base)
+	plan := orchestrator.RunPlan{
+		RunID:           runID,
+		Scope:           orchestrator.Scope{Networks: []string{"192.168.50.0/24"}},
+		Constraints:     []string{"internal_lab_only"},
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks: []orchestrator.TaskSpec{
+			{
+				TaskID:            "task-1",
+				Title:             "Seed reconnaissance",
+				Goal:              "collect baseline",
+				DoneWhen:          []string{"baseline"},
+				FailWhen:          []string{"failed"},
+				ExpectedArtifacts: []string{"seed.log"},
+				RiskLevel:         string(orchestrator.RiskReconReadonly),
+				Budget:            orchestrator.TaskBudget{MaxSteps: 2, MaxToolCalls: 2, MaxRuntime: time.Minute},
+			},
+		},
+		Metadata: orchestrator.PlanMetadata{
+			Goal: "Map network",
+		},
+	}
+	if _, err := manager.StartFromPlan(plan, ""); err != nil {
+		t.Fatalf("StartFromPlan: %v", err)
+	}
+
+	answer := answerTUIQuestion(manager, runID, "what is the complete plan?")
+	if !strings.Contains(answer, "plan (1 steps):") {
+		t.Fatalf("unexpected answer: %s", answer)
+	}
+	if !strings.Contains(answer, "1)Seed reconnaissance") {
+		t.Fatalf("expected step title in answer: %s", answer)
 	}
 }
 
