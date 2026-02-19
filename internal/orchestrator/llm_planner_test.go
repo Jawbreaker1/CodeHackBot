@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/llm"
 )
@@ -103,6 +104,71 @@ func TestSynthesizeTaskGraphWithLLMRejectsInvalidTask(t *testing.T) {
 	)
 	if err == nil {
 		t.Fatalf("expected validation error for invalid llm task")
+	}
+}
+
+func TestSynthesizeTaskGraphWithLLMAppliesBudgetFloors(t *testing.T) {
+	t.Parallel()
+
+	client := fakePlannerClient{
+		content: `{
+			"tasks":[
+				{
+					"task_id":"task-recon-low",
+					"title":"Recon",
+					"goal":"recon",
+					"targets":["192.168.50.0/24"],
+					"priority":80,
+					"strategy":"recon",
+					"risk_level":"recon_readonly",
+					"done_when":["done"],
+					"fail_when":["fail"],
+					"expected_artifacts":["recon.log"],
+					"action":{"type":"assist","prompt":"recon"},
+					"budget":{"max_steps":1,"max_tool_calls":1,"max_runtime_seconds":30}
+				},
+				{
+					"task_id":"task-probe-low",
+					"title":"Probe",
+					"goal":"probe",
+					"targets":["192.168.50.0/24"],
+					"priority":70,
+					"strategy":"active_probe",
+					"risk_level":"active_probe",
+					"done_when":["done"],
+					"fail_when":["fail"],
+					"expected_artifacts":["probe.log"],
+					"action":{"type":"assist","prompt":"probe"},
+					"budget":{"max_steps":2,"max_tool_calls":2,"max_runtime_seconds":45}
+				}
+			]
+		}`,
+	}
+
+	tasks, _, err := SynthesizeTaskGraphWithLLM(
+		context.Background(),
+		client,
+		"model",
+		"map services",
+		Scope{Networks: []string{"192.168.50.0/24"}},
+		[]string{"internal_lab_only"},
+		nil,
+		2,
+	)
+	if err != nil {
+		t.Fatalf("SynthesizeTaskGraphWithLLM: %v", err)
+	}
+	if got := tasks[0].Budget.MaxSteps; got < 6 {
+		t.Fatalf("expected recon step floor, got %d", got)
+	}
+	if got := tasks[0].Budget.MaxRuntime; got < 4*time.Minute {
+		t.Fatalf("expected recon runtime floor, got %s", got)
+	}
+	if got := tasks[1].Budget.MaxSteps; got < 8 {
+		t.Fatalf("expected active probe step floor, got %d", got)
+	}
+	if got := tasks[1].Budget.MaxRuntime; got < 6*time.Minute {
+		t.Fatalf("expected active probe runtime floor, got %s", got)
 	}
 }
 

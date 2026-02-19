@@ -1087,6 +1087,12 @@ func (c *Coordinator) buildReplanTask(trigger string, source EventEnvelope, payl
 	action := echoAction(fmt.Sprintf("adaptive_replan:%s:%s", trigger, evidenceTarget))
 	title := fmt.Sprintf("Adaptive replan for %s", trigger)
 	expectedArtifacts := []string{fmt.Sprintf("replan-%s.log", sanitizePathComponent(evidenceTarget))}
+	if trigger == "execution_failure" || trigger == "worker_recovery" || trigger == "budget_exhausted" || trigger == "repeated_step_loop" {
+		goal = buildAdaptiveRecoveryGoal(trigger, evidenceTarget, payload)
+		action = assistAction(goal)
+		title = fmt.Sprintf("Adaptive recovery for %s", trigger)
+		expectedArtifacts = []string{fmt.Sprintf("adaptive-recovery-%s.log", sanitizePathComponent(evidenceTarget))}
+	}
 	if operatorInstruction != "" {
 		goal = operatorInstruction
 		action = assistAction(operatorInstruction)
@@ -1108,6 +1114,26 @@ func (c *Coordinator) buildReplanTask(trigger string, source EventEnvelope, payl
 		RiskLevel:         risk,
 		Budget:            budget,
 	}, nil
+}
+
+func buildAdaptiveRecoveryGoal(trigger, evidenceTarget string, payload map[string]any) string {
+	base := fmt.Sprintf("Recover from %s on task %s and continue the run with actionable evidence.", trigger, evidenceTarget)
+	reason := strings.TrimSpace(toString(payload["reason"]))
+	errText := strings.TrimSpace(toString(payload["error"]))
+	cmd := strings.TrimSpace(toString(payload["command"]))
+	if cmd != "" {
+		base += " Failed command: " + cmd + "."
+	}
+	if reason != "" {
+		base += " Failure reason: " + reason + "."
+	}
+	if errText != "" {
+		base += " Error: " + errText + "."
+	}
+	base += " Use recent artifacts/logs first. Avoid re-running the same failing command unchanged."
+	base += " If a broad CIDR scan timed out, switch to host discovery first, then split into targeted host/service follow-up scans."
+	base += " End with a concise summary and clear next steps."
+	return base
 }
 
 func (c *Coordinator) runScopeTargets() []string {

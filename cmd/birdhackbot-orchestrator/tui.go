@@ -256,6 +256,7 @@ func renderTUI(out io.Writer, runID string, snap tuiSnapshot, messages []string,
 	}
 
 	lines := make([]string, 0, height)
+	pane := computePaneLayout(width)
 	bar := fmt.Sprintf(" Orchestrator TUI | run:%s | state:%s | workers:%d | queued:%d | running:%d | approvals:%d | events:%d ",
 		runID,
 		snap.status.State,
@@ -267,16 +268,19 @@ func renderTUI(out io.Writer, runID string, snap tuiSnapshot, messages []string,
 	)
 	lines = append(lines, styleLine(bar, width, tuiStyleBar))
 	lines = append(lines, fitLine(fmt.Sprintf("Updated: %s", snap.updatedAt.Format("2006-01-02 15:04:05 MST")), width))
-	lines = append(lines, fitLine("", width))
-	lines = append(lines, fitLine("Plan:", width))
+	left := make([]string, 0, height)
+	right := make([]string, 0, height/2)
+
+	left = append(left, "")
+	left = append(left, "Plan:")
 	goal := strings.TrimSpace(snap.plan.Metadata.Goal)
 	if goal == "" {
 		goal = "(no goal metadata)"
 	}
-	lines = append(lines, fitLine("  - Goal: "+goal, width))
-	lines = append(lines, fitLine(fmt.Sprintf("  - Tasks: %d | Success criteria: %d | Stop criteria: %d", len(snap.plan.Tasks), len(snap.plan.SuccessCriteria), len(snap.plan.StopCriteria)), width))
-	lines = append(lines, fitLine("", width))
-	lines = append(lines, fitLine("Execution:", width))
+	left = append(left, "  - Goal: "+goal)
+	left = append(left, fmt.Sprintf("  - Tasks: %d | Success criteria: %d | Stop criteria: %d", len(snap.plan.Tasks), len(snap.plan.SuccessCriteria), len(snap.plan.StopCriteria)))
+	left = append(left, "")
+	left = append(left, "Execution:")
 	stateByTaskID := map[string]tuiTaskRow{}
 	counts := map[string]int{}
 	for _, task := range snap.tasks {
@@ -284,24 +288,24 @@ func renderTUI(out io.Writer, runID string, snap tuiSnapshot, messages []string,
 		counts[task.State]++
 	}
 	remainingSteps := counts["queued"] + counts["leased"] + counts["awaiting_approval"] + counts["blocked"]
-	lines = append(lines, fitLine(fmt.Sprintf("  - Completed: %d/%d | Running: %d | Remaining: %d | Failed: %d", counts["completed"], len(snap.plan.Tasks), counts["running"], remainingSteps, counts["failed"]), width))
+	left = append(left, fmt.Sprintf("  - Completed: %d/%d | Running: %d | Remaining: %d | Failed: %d", counts["completed"], len(snap.plan.Tasks), counts["running"], remainingSteps, counts["failed"]))
 	activeRows := activeTaskRows(snap.tasks)
 	if len(activeRows) == 0 {
-		lines = append(lines, fitLine("  - Current: (no active task)", width))
+		left = append(left, "  - Current: (no active task)")
 	} else {
 		for i, task := range activeRows {
 			if i >= 2 {
-				lines = append(lines, fitLine(fmt.Sprintf("  ... %d more active tasks", len(activeRows)-i), width))
+				left = append(left, fmt.Sprintf("  ... %d more active tasks", len(activeRows)-i))
 				break
 			}
 			progress := formatProgressSummary(snap.progress[task.TaskID])
 			if progress == "" {
 				progress = "started; waiting for progress update"
 			}
-			lines = append(lines, fitLine(fmt.Sprintf("  - Current: %s | %s", task.TaskID, progress), width))
+			left = append(left, fmt.Sprintf("  - Current: %s | %s", task.TaskID, progress))
 		}
 	}
-	lines = append(lines, fitLine("  - Next planned steps:", width))
+	left = append(left, "  - Next planned steps:")
 	nextCount := 0
 	for _, task := range snap.plan.Tasks {
 		row, ok := stateByTaskID[task.TaskID]
@@ -311,19 +315,19 @@ func renderTUI(out io.Writer, runID string, snap tuiSnapshot, messages []string,
 		if row.State == "completed" || row.State == "failed" || row.State == "canceled" {
 			continue
 		}
-		lines = append(lines, fitLine(fmt.Sprintf("    %d) %s [%s]", nextCount+1, task.Title, row.State), width))
+		left = append(left, fmt.Sprintf("    %d) %s [%s]", nextCount+1, task.Title, row.State))
 		nextCount++
 		if nextCount >= 4 {
 			break
 		}
 	}
 	if nextCount == 0 {
-		lines = append(lines, fitLine("    (all planned steps complete or terminal)", width))
+		left = append(left, "    (all planned steps complete or terminal)")
 	}
-	lines = append(lines, fitLine("", width))
-	lines = append(lines, fitLine("Plan Steps:", width))
+	left = append(left, "")
+	left = append(left, "Plan Steps:")
 	if len(snap.plan.Tasks) == 0 {
-		lines = append(lines, fitLine("  (no planned tasks)", width))
+		left = append(left, "  (no planned tasks)")
 	} else {
 		for i, task := range snap.plan.Tasks {
 			row, ok := stateByTaskID[task.TaskID]
@@ -331,29 +335,34 @@ func renderTUI(out io.Writer, runID string, snap tuiSnapshot, messages []string,
 			if ok {
 				state = row.State
 			}
-			lines = append(lines, fitLine(fmt.Sprintf("  %d. %s %s", i+1, stepMarker(state), task.Title), width))
+			left = append(left, fmt.Sprintf("  %d. %s %s", i+1, stepMarker(state), task.Title))
 			if state == "running" || state == "leased" || state == "awaiting_approval" {
 				if progress := formatProgressSummary(snap.progress[task.TaskID]); progress != "" {
-					lines = append(lines, fitLine("     now: "+progress, width))
+					left = append(left, "     now: "+progress)
 				}
 			}
 			if i >= 7 && len(snap.plan.Tasks) > 8 {
-				lines = append(lines, fitLine(fmt.Sprintf("  ... %d more planned steps", len(snap.plan.Tasks)-i-1), width))
+				left = append(left, fmt.Sprintf("  ... %d more planned steps", len(snap.plan.Tasks)-i-1))
 				break
 			}
 		}
 	}
-	lines = append(lines, fitLine("", width))
-	lines = append(lines, fitLine("Worker Debug:", width))
-	lines = append(lines, renderWorkerBoxes(snap.workers, snap.workerDebug, width)...)
-	lines = append(lines, fitLine("", width))
-	lines = append(lines, fitLine("Task Board:", width))
+	right = append(right, "")
+	right = append(right, "Worker Debug:")
+	workerBoxWidth := width
+	if pane.enabled {
+		workerBoxWidth = pane.rightWidth
+	}
+	right = append(right, renderWorkerBoxes(snap.workers, snap.workerDebug, workerBoxWidth)...)
+
+	left = append(left, "")
+	left = append(left, "Task Board:")
 	if len(snap.tasks) == 0 {
-		lines = append(lines, fitLine("  (no tasks)", width))
+		left = append(left, "  (no tasks)")
 	} else {
 		for i, task := range snap.tasks {
 			if i >= 12 {
-				lines = append(lines, fitLine(fmt.Sprintf("  ... %d more", len(snap.tasks)-i), width))
+				left = append(left, fmt.Sprintf("  ... %d more", len(snap.tasks)-i))
 				break
 			}
 			dynamic := ""
@@ -368,22 +377,22 @@ func renderTUI(out io.Writer, runID string, snap tuiSnapshot, messages []string,
 			if strings.TrimSpace(strategy) == "" {
 				strategy = "-"
 			}
-			lines = append(lines, fitLine(fmt.Sprintf("  - %s [%s] worker=%s strategy=%s%s", task.TaskID, task.State, worker, strategy, dynamic), width))
+			left = append(left, fmt.Sprintf("  - %s [%s] worker=%s strategy=%s%s", task.TaskID, task.State, worker, strategy, dynamic))
 		}
 	}
-	lines = append(lines, fitLine("", width))
-	lines = append(lines, fitLine("Pending Approvals:", width))
+	left = append(left, "")
+	left = append(left, "Pending Approvals:")
 	if len(snap.approvals) == 0 {
-		lines = append(lines, fitLine("  (none)", width))
+		left = append(left, "  (none)")
 	} else {
 		for _, approval := range snap.approvals {
-			lines = append(lines, fitLine(fmt.Sprintf("  - %s | task=%s | tier=%s | %s", approval.ApprovalID, approval.TaskID, approval.RiskTier, approval.Reason), width))
+			left = append(left, fmt.Sprintf("  - %s | task=%s | tier=%s | %s", approval.ApprovalID, approval.TaskID, approval.RiskTier, approval.Reason))
 		}
 	}
-	lines = append(lines, fitLine("", width))
-	lines = append(lines, fitLine("Last Failure:", width))
+	left = append(left, "")
+	left = append(left, "Last Failure:")
 	if snap.lastFailure == nil {
-		lines = append(lines, fitLine("  (none)", width))
+		left = append(left, "  (none)")
 	} else {
 		taskID := snap.lastFailure.TaskID
 		if strings.TrimSpace(taskID) == "" {
@@ -393,31 +402,32 @@ func renderTUI(out io.Writer, runID string, snap tuiSnapshot, messages []string,
 		if strings.TrimSpace(reason) == "" {
 			reason = "task_failed"
 		}
-		lines = append(lines, fitLine(fmt.Sprintf("  - %s | task=%s | worker=%s | reason=%s", snap.lastFailure.TS.Format("15:04:05"), taskID, snap.lastFailure.Worker, reason), width))
+		left = append(left, fmt.Sprintf("  - %s | task=%s | worker=%s | reason=%s", snap.lastFailure.TS.Format("15:04:05"), taskID, snap.lastFailure.Worker, reason))
 		if hint := failureHint(reason); hint != "" {
-			lines = append(lines, fitLine("    hint: "+hint, width))
+			left = append(left, "    hint: "+hint)
 		}
 		if strings.TrimSpace(snap.lastFailure.Error) != "" {
-			lines = append(lines, fitLine("    error: "+snap.lastFailure.Error, width))
+			left = append(left, "    error: "+snap.lastFailure.Error)
 		}
 		if strings.TrimSpace(snap.lastFailure.LogPath) != "" {
-			lines = append(lines, fitLine("    log: "+snap.lastFailure.LogPath, width))
+			left = append(left, "    log: "+snap.lastFailure.LogPath)
 		}
 	}
-	lines = append(lines, fitLine("", width))
-	lines = append(lines, fitLine("Recent Events:", width))
+	left = append(left, "")
+	left = append(left, "Recent Events:")
 	if len(snap.events) == 0 {
-		lines = append(lines, fitLine("  (no events)", width))
+		left = append(left, "  (no events)")
 	} else {
 		for _, event := range snap.events {
-			lines = append(lines, fitLine(fmt.Sprintf("  - %s | %s | worker=%s | task=%s", event.TS.Format("15:04:05"), event.Type, event.WorkerID, event.TaskID), width))
+			left = append(left, fmt.Sprintf("  - %s | %s | worker=%s | task=%s", event.TS.Format("15:04:05"), event.Type, event.WorkerID, event.TaskID))
 		}
 	}
-	lines = append(lines, fitLine("", width))
-	lines = append(lines, fitLine("Command Log:", width))
+	left = append(left, "")
+	left = append(left, "Command Log:")
 	for _, msg := range messages {
-		lines = append(lines, fitLine("  - "+msg, width))
+		left = append(left, "  - "+msg)
 	}
+	lines = append(lines, renderTwoPane(left, right, width, pane)...)
 
 	maxBody := height - 2
 	if maxBody < 1 {
@@ -486,6 +496,91 @@ func clampTUIBodyLines(lines []string, maxBody int) []string {
 	out = append(out, lines[:head]...)
 	out = append(out, lines[len(lines)-tail:]...)
 	return out
+}
+
+type tuiPaneLayout struct {
+	enabled    bool
+	leftWidth  int
+	rightWidth int
+	gap        int
+}
+
+func computePaneLayout(width int) tuiPaneLayout {
+	contentWidth := width - 1
+	if contentWidth < 100 {
+		return tuiPaneLayout{}
+	}
+	layout := tuiPaneLayout{
+		enabled: true,
+		gap:     2,
+	}
+	layout.rightWidth = contentWidth / 3
+	if layout.rightWidth < 38 {
+		layout.rightWidth = 38
+	}
+	if layout.rightWidth > 68 {
+		layout.rightWidth = 68
+	}
+	layout.leftWidth = contentWidth - layout.gap - layout.rightWidth
+	if layout.leftWidth < 52 {
+		layout.leftWidth = 52
+		layout.rightWidth = contentWidth - layout.gap - layout.leftWidth
+	}
+	if layout.rightWidth < 32 {
+		return tuiPaneLayout{}
+	}
+	return layout
+}
+
+func renderTwoPane(left []string, right []string, width int, layout tuiPaneLayout) []string {
+	if !layout.enabled || len(right) == 0 {
+		out := make([]string, 0, len(left)+len(right)+1)
+		for _, line := range left {
+			out = append(out, fitLine(line, width))
+		}
+		if len(right) > 0 {
+			out = append(out, fitLine("", width))
+			for _, line := range right {
+				out = append(out, fitLine(line, width))
+			}
+		}
+		return out
+	}
+	rows := len(left)
+	if len(right) > rows {
+		rows = len(right)
+	}
+	gap := strings.Repeat(" ", layout.gap)
+	out := make([]string, 0, rows)
+	for i := 0; i < rows; i++ {
+		l := ""
+		if i < len(left) {
+			l = left[i]
+		}
+		r := ""
+		if i < len(right) {
+			r = right[i]
+		}
+		out = append(out, fitColumn(l, layout.leftWidth)+gap+fitColumn(r, layout.rightWidth))
+	}
+	return out
+}
+
+func fitColumn(line string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	runes := []rune(line)
+	if len(runes) > width {
+		if width > 3 {
+			return string(runes[:width-3]) + "..."
+		}
+		return string(runes[:width])
+	}
+	if len(runes) < width {
+		return string(runes) + strings.Repeat(" ", width-len(runes))
+	}
+	return string(runes)
 }
 
 func renderWorkerBoxes(workers []orchestrator.WorkerStatus, debug map[string]tuiWorkerDebug, width int) []string {

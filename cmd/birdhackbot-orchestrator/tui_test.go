@@ -342,6 +342,45 @@ func TestClampTUIBodyLinesKeepsTopBar(t *testing.T) {
 	}
 }
 
+func TestRenderTwoPaneWide(t *testing.T) {
+	t.Parallel()
+
+	layout := computePaneLayout(140)
+	if !layout.enabled {
+		t.Fatalf("expected two-pane layout to be enabled")
+	}
+	left := []string{"Plan:", "  - Goal: demo"}
+	right := []string{"Worker Debug:", "+-box-+"}
+	lines := renderTwoPane(left, right, 140, layout)
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines, got %d", len(lines))
+	}
+	if !strings.Contains(lines[0], "Plan:") || !strings.Contains(lines[0], "Worker Debug:") {
+		t.Fatalf("expected left/right content on same row, got %q", lines[0])
+	}
+}
+
+func TestRenderTwoPaneNarrowFallsBackToStack(t *testing.T) {
+	t.Parallel()
+
+	layout := computePaneLayout(80)
+	if layout.enabled {
+		t.Fatalf("expected two-pane layout to be disabled for narrow widths")
+	}
+	left := []string{"Plan:"}
+	right := []string{"Worker Debug:"}
+	lines := renderTwoPane(left, right, 80, layout)
+	if len(lines) < 3 {
+		t.Fatalf("expected stacked output with spacer, got %d lines", len(lines))
+	}
+	if !strings.Contains(lines[0], "Plan:") {
+		t.Fatalf("expected left content first, got %q", lines[0])
+	}
+	if !strings.Contains(lines[2], "Worker Debug:") {
+		t.Fatalf("expected right content after spacer, got %q", lines[2])
+	}
+}
+
 func TestAnswerTUIQuestionPlan(t *testing.T) {
 	base := t.TempDir()
 	runID := "run-tui-ask-plan"

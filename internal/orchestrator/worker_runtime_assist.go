@@ -379,6 +379,20 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 					"mode":       mode,
 				})
 			}
+			var adapted bool
+			var adaptNote string
+			command, args, adaptNote, adapted = adaptCommandForRuntime(scopePolicy, command, args)
+			if adapted && adaptNote != "" {
+				_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
+					"message":    adaptNote,
+					"step":       actionSteps,
+					"turn":       turn,
+					"tool_calls": toolCalls,
+					"mode":       mode,
+					"command":    command,
+					"args":       args,
+				})
+			}
 			if !isBuiltinListDir(command) && !isBuiltinReadFile(command) && !isBuiltinWriteFile(command) {
 				if err := scopePolicy.ValidateCommandTargets(command, args); err != nil {
 					_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureScopeDenied, map[string]any{
@@ -633,6 +647,8 @@ func executeWorkerAssistTool(ctx context.Context, cfg WorkerRunConfig, task Task
 	args := normalizeArgs(spec.Run.Args)
 	runCommand, args = normalizeWorkerAssistCommand(runCommand, args)
 	args, _, _ = applyCommandTargetFallback(scopePolicy, task, runCommand, args)
+	var adaptedNote string
+	runCommand, args, adaptedNote, _ = adaptCommandForRuntime(scopePolicy, runCommand, args)
 	if err := scopePolicy.ValidateCommandTargets(runCommand, args); err != nil {
 		return workerToolResult{}, fmt.Errorf("%s: %w", WorkerFailureScopeDenied, err)
 	}
@@ -640,6 +656,9 @@ func executeWorkerAssistTool(ctx context.Context, cfg WorkerRunConfig, task Task
 	cmd.Dir = workDir
 	cmd.Env = os.Environ()
 	output, runErr := runWorkerCommand(ctx, cmd, workerCommandStopGrace)
+	if adaptedNote != "" {
+		_, _ = fmt.Fprintf(&builder, "Runtime adaptation: %s\n", adaptedNote)
+	}
 	builder.Write(output)
 	return workerToolResult{
 		command: runCommand,

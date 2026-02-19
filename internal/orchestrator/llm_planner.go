@@ -17,6 +17,7 @@ const llmPlannerSystemPrompt = "You are the BirdHackBot Orchestrator planner. Re
 	"Schema: {\"rationale\":\"...\",\"tasks\":[{\"task_id\":\"...\",\"title\":\"...\",\"goal\":\"...\",\"targets\":[\"...\"],\"depends_on\":[\"...\"],\"priority\":1,\"strategy\":\"...\",\"risk_level\":\"recon_readonly|active_probe|exploit_controlled|priv_esc|disruptive\",\"done_when\":[\"...\"],\"fail_when\":[\"...\"],\"expected_artifacts\":[\"...\"],\"action\":{\"type\":\"assist|command|shell\",\"prompt\":\"...\",\"command\":\"...\",\"args\":[\"...\"],\"working_dir\":\"...\",\"timeout_seconds\":120},\"budget\":{\"max_steps\":12,\"max_tool_calls\":20,\"max_runtime_seconds\":600}}]}. " +
 	"Rules: every task must be concrete, bounded, and in-scope; dependencies must form a DAG; " +
 	"if tasks can be split into independent subtasks, do so and maximize safe parallel execution up to max_parallelism; " +
+	"for broad CIDR targets, prefer discovery-first fan-out (discovery -> host subsets -> validation/summarize) instead of one monolithic scan; " +
 	"only keep work serialized when there is a clear dependency/safety reason, and state that reason in rationale."
 
 type llmPlannerResponse struct {
@@ -149,6 +150,7 @@ func toTaskSpec(task llmPlannerTask, index int) (TaskSpec, error) {
 	if budget.MaxRuntime <= 0 {
 		budget.MaxRuntime = 8 * time.Minute
 	}
+	budget = normalizeLLMTaskBudget(budget, riskLevel)
 	spec := TaskSpec{
 		TaskID:            taskID,
 		Title:             strings.TrimSpace(task.Title),
@@ -180,6 +182,28 @@ func toTaskSpec(task llmPlannerTask, index int) (TaskSpec, error) {
 		return TaskSpec{}, fmt.Errorf("llm planner task %s invalid: %w", spec.TaskID, err)
 	}
 	return spec, nil
+}
+
+func normalizeLLMTaskBudget(budget TaskBudget, riskLevel string) TaskBudget {
+	risk := strings.ToLower(strings.TrimSpace(riskLevel))
+	minSteps := 6
+	minToolCalls := 8
+	minRuntime := 4 * time.Minute
+	if risk == string(RiskActiveProbe) {
+		minSteps = 8
+		minToolCalls = 12
+		minRuntime = 6 * time.Minute
+	}
+	if budget.MaxSteps < minSteps {
+		budget.MaxSteps = minSteps
+	}
+	if budget.MaxToolCalls < minToolCalls {
+		budget.MaxToolCalls = minToolCalls
+	}
+	if budget.MaxRuntime < minRuntime {
+		budget.MaxRuntime = minRuntime
+	}
+	return budget
 }
 
 func compactStringSlice(values []string) []string {

@@ -144,6 +144,17 @@ func RunWorkerTask(cfg WorkerRunConfig) error {
 				"args":      action.Args,
 			})
 		}
+		var note string
+		action.Command, action.Args, note, injected = adaptCommandForRuntime(scopePolicy, action.Command, action.Args)
+		if injected && note != "" {
+			_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskProgress, map[string]any{
+				"message":   note,
+				"step":      0,
+				"tool_call": 0,
+				"command":   action.Command,
+				"args":      action.Args,
+			})
+		}
 	}
 	if err := scopePolicy.ValidateCommandTargets(action.Command, action.Args); err != nil {
 		_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureScopeDenied, nil)
@@ -539,6 +550,10 @@ func EmitWorkerBootstrapFailure(cfg WorkerRunConfig, cause error) error {
 		return nil
 	}
 	manager := NewManager(cfg.SessionsDir)
+	recorded, err := workerFailureAlreadyRecorded(manager, cfg)
+	if err == nil && recorded {
+		return nil
+	}
 	payload := map[string]any{
 		"attempt":   cfg.Attempt,
 		"worker_id": cfg.WorkerID,
@@ -548,4 +563,27 @@ func EmitWorkerBootstrapFailure(cfg WorkerRunConfig, cause error) error {
 		payload["error"] = cause.Error()
 	}
 	return manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskFailed, payload)
+}
+
+func workerFailureAlreadyRecorded(manager *Manager, cfg WorkerRunConfig) (bool, error) {
+	events, err := manager.Events(cfg.RunID, 0)
+	if err != nil {
+		return false, err
+	}
+	workerID := WorkerSignalID(cfg.WorkerID)
+	for i := len(events) - 1; i >= 0; i-- {
+		event := events[i]
+		if event.TaskID != cfg.TaskID || event.WorkerID != workerID || event.Type != EventTypeTaskFailed {
+			continue
+		}
+		payload := map[string]any{}
+		if len(event.Payload) > 0 {
+			_ = json.Unmarshal(event.Payload, &payload)
+		}
+		attempt, ok := payloadInt(payload["attempt"])
+		if !ok || attempt == cfg.Attempt {
+			return true, nil
+		}
+	}
+	return false, nil
 }
