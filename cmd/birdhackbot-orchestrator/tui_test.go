@@ -190,6 +190,75 @@ func TestLatestFailureFromEvents_WorkerStoppedFallback(t *testing.T) {
 	}
 }
 
+func TestLatestTaskProgressByTask(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	events := []orchestrator.EventEnvelope{
+		{
+			EventID:  "e1",
+			RunID:    "run-1",
+			WorkerID: "worker-a",
+			TaskID:   "task-1",
+			Seq:      1,
+			TS:       now,
+			Type:     orchestrator.EventTypeTaskStarted,
+			Payload:  mustPayload(t, map[string]any{"goal": "seed recon"}),
+		},
+		{
+			EventID:  "e2",
+			RunID:    "run-1",
+			WorkerID: "worker-a",
+			TaskID:   "task-1",
+			Seq:      2,
+			TS:       now.Add(2 * time.Second),
+			Type:     orchestrator.EventTypeTaskProgress,
+			Payload:  mustPayload(t, map[string]any{"step": 2, "tool_calls": 3, "message": "running nmap"}),
+		},
+		{
+			EventID:  "e3",
+			RunID:    "run-1",
+			WorkerID: "worker-b",
+			TaskID:   "task-2",
+			Seq:      1,
+			TS:       now.Add(time.Second),
+			Type:     orchestrator.EventTypeTaskProgress,
+			Payload:  mustPayload(t, map[string]any{"steps": 1, "tool_call": 1, "type": "plan"}),
+		},
+	}
+
+	progress := latestTaskProgressByTask(events)
+	task1, ok := progress["task-1"]
+	if !ok {
+		t.Fatalf("expected task-1 progress")
+	}
+	if task1.Step != 2 || task1.ToolCalls != 3 || task1.Message != "running nmap" {
+		t.Fatalf("unexpected task-1 progress: %#v", task1)
+	}
+
+	task2, ok := progress["task-2"]
+	if !ok {
+		t.Fatalf("expected task-2 progress")
+	}
+	if task2.Step != 1 || task2.ToolCalls != 1 || task2.Message != "plan" {
+		t.Fatalf("unexpected task-2 progress: %#v", task2)
+	}
+}
+
+func TestFormatProgressSummary(t *testing.T) {
+	t.Parallel()
+
+	got := formatProgressSummary(tuiTaskProgress{
+		Step:      3,
+		ToolCalls: 5,
+		Message:   "enumerating services",
+	})
+	want := "step 3 | enumerating services | tools:5"
+	if got != want {
+		t.Fatalf("unexpected summary: got %q want %q", got, want)
+	}
+}
+
 func mustPayload(t *testing.T, payload map[string]any) json.RawMessage {
 	t.Helper()
 	data, err := json.Marshal(payload)

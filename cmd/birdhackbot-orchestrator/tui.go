@@ -154,6 +154,7 @@ type tuiSnapshot struct {
 	workers     []orchestrator.WorkerStatus
 	approvals   []orchestrator.PendingApprovalView
 	tasks       []tuiTaskRow
+	progress    map[string]tuiTaskProgress
 	events      []orchestrator.EventEnvelope
 	lastFailure *tuiFailure
 	updatedAt   time.Time
@@ -176,6 +177,14 @@ type tuiFailure struct {
 	Reason  string
 	Error   string
 	LogPath string
+}
+
+type tuiTaskProgress struct {
+	TS        time.Time
+	Step      int
+	ToolCalls int
+	Message   string
+	Mode      string
 }
 
 func collectTUISnapshot(manager *orchestrator.Manager, runID string, eventLimit int) (tuiSnapshot, error) {
@@ -213,6 +222,7 @@ func collectTUISnapshot(manager *orchestrator.Manager, runID string, eventLimit 
 	snap.workers = hydrateWorkerTasks(workers, leases)
 	snap.approvals = approvals
 	snap.tasks = buildTaskRows(plan, leases)
+	snap.progress = latestTaskProgressByTask(allEvents)
 	snap.events = events
 	snap.lastFailure = latestFailureFromEvents(allEvents)
 	snap.updatedAt = time.Now().UTC()
@@ -248,6 +258,74 @@ func renderTUI(out io.Writer, runID string, snap tuiSnapshot, messages []string,
 	}
 	lines = append(lines, fitLine("  - Goal: "+goal, width))
 	lines = append(lines, fitLine(fmt.Sprintf("  - Tasks: %d | Success criteria: %d | Stop criteria: %d", len(snap.plan.Tasks), len(snap.plan.SuccessCriteria), len(snap.plan.StopCriteria)), width))
+	lines = append(lines, fitLine("", width))
+	lines = append(lines, fitLine("Execution:", width))
+	stateByTaskID := map[string]tuiTaskRow{}
+	counts := map[string]int{}
+	for _, task := range snap.tasks {
+		stateByTaskID[task.TaskID] = task
+		counts[task.State]++
+	}
+	remainingSteps := counts["queued"] + counts["leased"] + counts["awaiting_approval"] + counts["blocked"]
+	lines = append(lines, fitLine(fmt.Sprintf("  - Completed: %d/%d | Running: %d | Remaining: %d | Failed: %d", counts["completed"], len(snap.plan.Tasks), counts["running"], remainingSteps, counts["failed"]), width))
+	activeRows := activeTaskRows(snap.tasks)
+	if len(activeRows) == 0 {
+		lines = append(lines, fitLine("  - Current: (no active task)", width))
+	} else {
+		for i, task := range activeRows {
+			if i >= 2 {
+				lines = append(lines, fitLine(fmt.Sprintf("  ... %d more active tasks", len(activeRows)-i), width))
+				break
+			}
+			progress := formatProgressSummary(snap.progress[task.TaskID])
+			if progress == "" {
+				progress = "started; waiting for progress update"
+			}
+			lines = append(lines, fitLine(fmt.Sprintf("  - Current: %s | %s", task.TaskID, progress), width))
+		}
+	}
+	lines = append(lines, fitLine("  - Next planned steps:", width))
+	nextCount := 0
+	for _, task := range snap.plan.Tasks {
+		row, ok := stateByTaskID[task.TaskID]
+		if !ok {
+			continue
+		}
+		if row.State == "completed" || row.State == "failed" || row.State == "canceled" {
+			continue
+		}
+		lines = append(lines, fitLine(fmt.Sprintf("    %d) %s [%s]", nextCount+1, task.Title, row.State), width))
+		nextCount++
+		if nextCount >= 4 {
+			break
+		}
+	}
+	if nextCount == 0 {
+		lines = append(lines, fitLine("    (all planned steps complete or terminal)", width))
+	}
+	lines = append(lines, fitLine("", width))
+	lines = append(lines, fitLine("Plan Steps:", width))
+	if len(snap.plan.Tasks) == 0 {
+		lines = append(lines, fitLine("  (no planned tasks)", width))
+	} else {
+		for i, task := range snap.plan.Tasks {
+			row, ok := stateByTaskID[task.TaskID]
+			state := "queued"
+			if ok {
+				state = row.State
+			}
+			lines = append(lines, fitLine(fmt.Sprintf("  %d. %s %s", i+1, stepMarker(state), task.Title), width))
+			if state == "running" || state == "leased" || state == "awaiting_approval" {
+				if progress := formatProgressSummary(snap.progress[task.TaskID]); progress != "" {
+					lines = append(lines, fitLine("     now: "+progress, width))
+				}
+			}
+			if i >= 7 && len(snap.plan.Tasks) > 8 {
+				lines = append(lines, fitLine(fmt.Sprintf("  ... %d more planned steps", len(snap.plan.Tasks)-i-1), width))
+				break
+			}
+		}
+	}
 	lines = append(lines, fitLine("", width))
 	lines = append(lines, fitLine("Workers:", width))
 	if len(snap.workers) == 0 {
@@ -451,6 +529,23 @@ func normalizeDisplayState(state string) string {
 	return trimmed
 }
 
+func stepMarker(state string) string {
+	switch normalizeDisplayState(state) {
+	case "completed":
+		return "[x]"
+	case "running", "leased", "awaiting_approval":
+		return "[>]"
+	case "failed":
+		return "[!]"
+	case "blocked":
+		return "[-]"
+	case "canceled":
+		return "[~]"
+	default:
+		return "[ ]"
+	}
+}
+
 func taskStateOrder(state string) int {
 	switch normalizeDisplayState(state) {
 	case "running":
@@ -510,6 +605,80 @@ func latestFailureFromEvents(events []orchestrator.EventEnvelope) *tuiFailure {
 	return nil
 }
 
+func latestTaskProgressByTask(events []orchestrator.EventEnvelope) map[string]tuiTaskProgress {
+	progress := map[string]tuiTaskProgress{}
+	for _, event := range events {
+		taskID := strings.TrimSpace(event.TaskID)
+		if taskID == "" {
+			continue
+		}
+		switch event.Type {
+		case orchestrator.EventTypeTaskStarted:
+			payload := decodeEventPayload(event.Payload)
+			msg := strings.TrimSpace(stringFromAny(payload["goal"]))
+			if msg == "" {
+				msg = "task started"
+			}
+			current, ok := progress[taskID]
+			if !ok || event.TS.After(current.TS) {
+				progress[taskID] = tuiTaskProgress{
+					TS:      event.TS,
+					Message: msg,
+					Mode:    "start",
+				}
+			}
+		case orchestrator.EventTypeTaskProgress:
+			payload := decodeEventPayload(event.Payload)
+			next := tuiTaskProgress{
+				TS:        event.TS,
+				Step:      intFromAny(payload["step"]),
+				ToolCalls: intFromAny(payload["tool_calls"]),
+				Message:   strings.TrimSpace(stringFromAny(payload["message"])),
+				Mode:      strings.TrimSpace(stringFromAny(payload["mode"])),
+			}
+			if next.Step == 0 {
+				next.Step = intFromAny(payload["steps"])
+			}
+			if next.ToolCalls == 0 {
+				next.ToolCalls = intFromAny(payload["tool_call"])
+			}
+			if next.Message == "" {
+				next.Message = strings.TrimSpace(stringFromAny(payload["type"]))
+			}
+			current, ok := progress[taskID]
+			if !ok || event.TS.After(current.TS) || (event.TS.Equal(current.TS) && next.Step >= current.Step) {
+				progress[taskID] = next
+			}
+		}
+	}
+	return progress
+}
+
+func activeTaskRows(rows []tuiTaskRow) []tuiTaskRow {
+	active := make([]tuiTaskRow, 0, len(rows))
+	for _, row := range rows {
+		switch normalizeDisplayState(row.State) {
+		case "running", "leased", "awaiting_approval":
+			active = append(active, row)
+		}
+	}
+	return active
+}
+
+func formatProgressSummary(progress tuiTaskProgress) string {
+	parts := make([]string, 0, 3)
+	if progress.Step > 0 {
+		parts = append(parts, fmt.Sprintf("step %d", progress.Step))
+	}
+	if progress.Message != "" {
+		parts = append(parts, progress.Message)
+	}
+	if progress.ToolCalls > 0 {
+		parts = append(parts, fmt.Sprintf("tools:%d", progress.ToolCalls))
+	}
+	return strings.Join(parts, " | ")
+}
+
 func decodeEventPayload(raw json.RawMessage) map[string]any {
 	payload := map[string]any{}
 	if len(raw) == 0 {
@@ -528,6 +697,29 @@ func stringFromAny(v any) string {
 	default:
 		return ""
 	}
+}
+
+func intFromAny(v any) int {
+	switch value := v.(type) {
+	case int:
+		return value
+	case int64:
+		return int(value)
+	case float64:
+		return int(value)
+	case json.Number:
+		if parsed, err := value.Int64(); err == nil {
+			return int(parsed)
+		}
+		if parsed, err := value.Float64(); err == nil {
+			return int(parsed)
+		}
+	case string:
+		if parsed, err := strconv.Atoi(strings.TrimSpace(value)); err == nil {
+			return parsed
+		}
+	}
+	return 0
 }
 
 func failureHint(reason string) string {
