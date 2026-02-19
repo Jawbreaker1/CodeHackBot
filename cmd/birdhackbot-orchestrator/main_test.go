@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -11,8 +12,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Jawbreaker1/CodeHackBot/internal/llm"
 	"github.com/Jawbreaker1/CodeHackBot/internal/orchestrator"
 )
+
+type fakePlannerChatClient struct {
+	content string
+	err     error
+}
+
+func (f fakePlannerChatClient) Chat(_ context.Context, _ llm.ChatRequest) (llm.ChatResponse, error) {
+	if f.err != nil {
+		return llm.ChatResponse{}, f.err
+	}
+	return llm.ChatResponse{Content: f.content}, nil
+}
 
 func TestRunStartStatusEventsStop(t *testing.T) {
 	t.Parallel()
@@ -237,6 +251,129 @@ func TestRunGoalModeSeedsPlanAndPersistsMetadata(t *testing.T) {
 	}
 	if len(plan.Tasks[0].ExpectedArtifacts) == 0 || len(plan.Tasks[len(plan.Tasks)-1].ExpectedArtifacts) == 0 {
 		t.Fatalf("unexpected seed tasks: %#v", plan.Tasks)
+	}
+}
+
+func TestRunGoalModeRejectsInvalidPlannerMode(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	args := []string{
+		"run",
+		"--sessions-dir", base,
+		"--goal", "investigate host exposure",
+		"--scope-target", "127.0.0.1",
+		"--constraint", "local_only",
+		"--planner", "invalid",
+		"--plan-review", "reject",
+	}
+	if code := run(args, &out, &errOut); code == 0 {
+		t.Fatalf("expected planner mode validation failure")
+	}
+	if !strings.Contains(errOut.String(), "invalid --planner") {
+		t.Fatalf("unexpected planner mode error output: %q", errOut.String())
+	}
+}
+
+func TestBuildGoalLLMPlanUsesLLMSynthesizedGraph(t *testing.T) {
+	t.Parallel()
+
+	fake := fakePlannerChatClient{
+		content: `{
+			"rationale":"split recon and summarize",
+			"tasks":[
+				{
+					"task_id":"task-llm-recon",
+					"title":"LLM Recon",
+					"goal":"Collect passive recon evidence",
+					"targets":["192.168.50.0/24"],
+					"depends_on":[],
+					"priority":100,
+					"strategy":"recon_seed",
+					"risk_level":"recon_readonly",
+					"done_when":["recon_complete"],
+					"fail_when":["recon_failed"],
+					"expected_artifacts":["recon.log"],
+					"action":{"type":"assist","prompt":"run passive recon"},
+					"budget":{"max_steps":8,"max_tool_calls":12,"max_runtime_seconds":240}
+				},
+				{
+					"task_id":"task-llm-summary",
+					"title":"LLM Summary",
+					"goal":"Summarize findings",
+					"targets":["192.168.50.0/24"],
+					"depends_on":["task-llm-recon"],
+					"priority":10,
+					"strategy":"summarize_and_replan",
+					"risk_level":"recon_readonly",
+					"done_when":["summary_done"],
+					"fail_when":["summary_failed"],
+					"expected_artifacts":["summary.log"],
+					"action":{"type":"assist","prompt":"summarize recon findings"},
+					"budget":{"max_steps":4,"max_tool_calls":6,"max_runtime_seconds":180}
+				}
+			]
+		}`,
+	}
+
+	plan, note, err := buildGoalLLMPlan(
+		context.Background(),
+		fake,
+		"qwen/qwen3-coder-30b",
+		"run-llm-plan",
+		"map services",
+		orchestrator.Scope{Networks: []string{"192.168.50.0/24"}},
+		[]string{"internal_lab_only"},
+		nil,
+		nil,
+		2,
+		5,
+		time.Now().UTC(),
+	)
+	if err != nil {
+		t.Fatalf("buildGoalLLMPlan: %v", err)
+	}
+	if plan.Metadata.PlannerMode != plannerModeLLMV1 {
+		t.Fatalf("unexpected planner mode: %q", plan.Metadata.PlannerMode)
+	}
+	if len(plan.Tasks) != 2 {
+		t.Fatalf("expected 2 llm tasks, got %d", len(plan.Tasks))
+	}
+	if plan.Tasks[1].DependsOn[0] != "task-llm-recon" {
+		t.Fatalf("unexpected llm dependency: %#v", plan.Tasks[1].DependsOn)
+	}
+	if strings.TrimSpace(note) == "" {
+		t.Fatalf("expected llm planner rationale note")
+	}
+}
+
+func TestBuildGoalPlanFromModeAutoFallsBackToStaticWhenLLMUnavailable(t *testing.T) {
+	t.Parallel()
+
+	plan, note, err := buildGoalPlanFromMode(
+		context.Background(),
+		"auto",
+		"",
+		"run-auto-fallback",
+		"map services",
+		orchestrator.Scope{Networks: []string{"192.168.50.0/24"}},
+		[]string{"internal_lab_only"},
+		nil,
+		nil,
+		2,
+		5,
+		time.Now().UTC(),
+	)
+	if err != nil {
+		t.Fatalf("buildGoalPlanFromMode(auto): %v", err)
+	}
+	if plan.Metadata.PlannerMode != plannerModeStaticV1 {
+		t.Fatalf("expected static fallback mode, got %q", plan.Metadata.PlannerMode)
+	}
+	if !strings.Contains(note, "fallback") {
+		t.Fatalf("expected fallback note, got %q", note)
 	}
 }
 

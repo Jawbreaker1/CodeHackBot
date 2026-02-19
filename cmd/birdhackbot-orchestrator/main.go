@@ -11,15 +11,29 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/Jawbreaker1/CodeHackBot/internal/config"
+	"github.com/Jawbreaker1/CodeHackBot/internal/llm"
 	"github.com/Jawbreaker1/CodeHackBot/internal/orchestrator"
 )
 
 const version = "dev"
 const plannerVersion = "planner_v1"
+
+const (
+	plannerModeStaticV1 = "goal_seed_v1"
+	plannerModeLLMV1    = "goal_llm_v1"
+
+	plannerLLMBaseURLEnv     = "BIRDHACKBOT_LLM_BASE_URL"
+	plannerLLMModelEnv       = "BIRDHACKBOT_LLM_MODEL"
+	plannerLLMAPIKeyEnv      = "BIRDHACKBOT_LLM_API_KEY"
+	plannerLLMTimeoutEnv     = "BIRDHACKBOT_LLM_TIMEOUT_SECONDS"
+	plannerDefaultLLMTimeout = 120
+)
 
 type stringFlags []string
 
@@ -115,7 +129,7 @@ func runStart(args []string, stdout, stderr io.Writer) int {
 func runRun(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	var sessionsDir, runID, goal, permissionModeRaw, workerCmd, planReviewRaw, planReviewRationale string
+	var sessionsDir, runID, goal, permissionModeRaw, workerCmd, planReviewRaw, planReviewRationale, plannerModeRaw string
 	var tick, startupTimeout, staleTimeout, softStallGrace, approvalTimeout, stopGrace time.Duration
 	var maxAttempts, maxParallelism, regenerateCount int
 	var disruptiveOptIn bool
@@ -136,6 +150,7 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 	fs.Var(&stopCriteria, "stop-criterion", "stop criterion (repeatable)")
 	fs.StringVar(&planReviewRaw, "plan-review", "approve", "goal plan decision: approve|reject|edit|regenerate")
 	fs.StringVar(&planReviewRationale, "plan-review-rationale", "", "planner decision rationale for audit trail")
+	fs.StringVar(&plannerModeRaw, "planner", "static", "planner mode for --goal runs: static|llm|auto")
 	fs.IntVar(&regenerateCount, "plan-regenerate-count", 1, "number of regeneration attempts when --plan-review=regenerate")
 	fs.IntVar(&maxParallelism, "max-parallelism", 1, "max worker parallelism for goal-seeded runs")
 	fs.DurationVar(&tick, "tick", 250*time.Millisecond, "coordinator tick interval")
@@ -155,6 +170,11 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 	planReview, err := normalizePlanReview(planReviewRaw)
 	if err != nil {
 		fmt.Fprintf(stderr, "run invalid --plan-review: %v\n", err)
+		return 2
+	}
+	plannerMode, err := orchestrator.ParsePlannerMode(plannerModeRaw)
+	if err != nil {
+		fmt.Fprintf(stderr, "run invalid --planner: %v\n", err)
 		return 2
 	}
 	if regenerateCount < 1 {
@@ -185,6 +205,7 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	permissionMode := orchestrator.PermissionMode(strings.TrimSpace(permissionModeRaw))
+	workerConfigPath := detectWorkerConfigPath()
 	manager := orchestrator.NewManager(resolvedSessionsDir)
 	if goal != "" {
 		scope := orchestrator.Scope{
@@ -207,9 +228,22 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 
 		success := compactStringFlags(successCriteria)
 		stop := compactStringFlags(stopCriteria)
-		promptHash := plannerPromptHash(goal, scope, goalConstraints, success, stop, maxParallelism)
+		promptHash := plannerPromptHash(goal, plannerMode, scope, goalConstraints, success, stop, maxParallelism)
 		hypothesisLimit := 5
-		plan, err := buildGoalSeedPlan(runID, goal, scope, goalConstraints, success, stop, maxParallelism, hypothesisLimit, time.Now().UTC())
+		plan, plannerBuildNote, err := buildGoalPlanFromMode(
+			context.Background(),
+			plannerMode,
+			workerConfigPath,
+			runID,
+			goal,
+			scope,
+			goalConstraints,
+			success,
+			stop,
+			maxParallelism,
+			hypothesisLimit,
+			time.Now().UTC(),
+		)
 		if err != nil {
 			fmt.Fprintf(stderr, "run failed synthesizing plan: %v\n", err)
 			return 1
@@ -217,7 +251,20 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 		if planReview == "regenerate" {
 			for i := 0; i < regenerateCount; i++ {
 				hypothesisLimit = minInt(8, 5+i+1)
-				plan, err = buildGoalSeedPlan(runID, goal, scope, goalConstraints, success, stop, maxParallelism, hypothesisLimit, time.Now().UTC())
+				plan, plannerBuildNote, err = buildGoalPlanFromMode(
+					context.Background(),
+					plannerMode,
+					workerConfigPath,
+					runID,
+					goal,
+					scope,
+					goalConstraints,
+					success,
+					stop,
+					maxParallelism,
+					hypothesisLimit,
+					time.Now().UTC(),
+				)
 				if err != nil {
 					fmt.Fprintf(stderr, "run failed regenerating plan (attempt %d): %v\n", i+1, err)
 					return 1
@@ -231,13 +278,16 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 		plan.Metadata.PlannerVersion = plannerVersion
 		plan.Metadata.PlannerPromptHash = promptHash
 		plan.Metadata.PlannerDecision = decision
-		plan.Metadata.PlannerRationale = strings.TrimSpace(planReviewRationale)
+		plan.Metadata.PlannerRationale = mergePlannerRationale(planReviewRationale, plannerBuildNote)
 		plan.Metadata.RegenerationCount = 0
 		if planReview == "regenerate" {
 			plan.Metadata.RegenerationCount = regenerateCount
 		}
 
 		printPlanSummary(stdout, plan)
+		if strings.TrimSpace(plannerBuildNote) != "" {
+			fmt.Fprintf(stdout, "plan note: %s\n", strings.TrimSpace(plannerBuildNote))
+		}
 		switch planReview {
 		case "reject":
 			plan.Metadata.PlannerDecision = "reject"
@@ -285,7 +335,6 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "run failed creating approval broker: %v\n", err)
 		return 1
 	}
-	workerConfigPath := detectWorkerConfigPath()
 	coord, err := orchestrator.NewCoordinator(runID, plan.Scope, manager, workers, scheduler, maxAttempts, startupTimeout, staleTimeout, softStallGrace, func(task orchestrator.TaskSpec, attempt int, workerID string) orchestrator.WorkerSpec {
 		env := append([]string{}, os.Environ()...)
 		env = append(env, workerEnv...)
@@ -538,6 +587,148 @@ func generateRunID(now time.Time) string {
 	return fmt.Sprintf("run-%s-%04x", utc.Format("20060102-150405"), utc.UnixNano()&0xffff)
 }
 
+func buildGoalPlanFromMode(
+	ctx context.Context,
+	plannerMode string,
+	workerConfigPath string,
+	runID, goal string,
+	scope orchestrator.Scope,
+	constraints, successCriteria, stopCriteria []string,
+	maxParallelism, hypothesisLimit int,
+	now time.Time,
+) (orchestrator.RunPlan, string, error) {
+	if plannerMode == "llm" || plannerMode == "auto" {
+		client, model, llmCfgErr := resolvePlannerLLMClient(workerConfigPath)
+		if llmCfgErr == nil && client != nil && strings.TrimSpace(model) != "" {
+			plan, llmRationale, err := buildGoalLLMPlan(ctx, client, model, runID, goal, scope, constraints, successCriteria, stopCriteria, maxParallelism, hypothesisLimit, now)
+			if err == nil {
+				return plan, llmRationale, nil
+			}
+			if plannerMode == "llm" {
+				return orchestrator.RunPlan{}, "", err
+			}
+			fallback, fallbackErr := buildGoalSeedPlan(runID, goal, scope, constraints, successCriteria, stopCriteria, maxParallelism, hypothesisLimit, now)
+			if fallbackErr != nil {
+				return orchestrator.RunPlan{}, "", fmt.Errorf("llm planner failed (%v); static fallback failed: %w", err, fallbackErr)
+			}
+			note := fmt.Sprintf("auto fallback to static planner: %v", err)
+			return fallback, note, nil
+		}
+		if plannerMode == "llm" {
+			return orchestrator.RunPlan{}, "", llmCfgErr
+		}
+		fallback, fallbackErr := buildGoalSeedPlan(runID, goal, scope, constraints, successCriteria, stopCriteria, maxParallelism, hypothesisLimit, now)
+		if fallbackErr != nil {
+			return orchestrator.RunPlan{}, "", fallbackErr
+		}
+		note := ""
+		if llmCfgErr != nil {
+			note = fmt.Sprintf("auto fallback to static planner: %v", llmCfgErr)
+		}
+		return fallback, note, nil
+	}
+	plan, err := buildGoalSeedPlan(runID, goal, scope, constraints, successCriteria, stopCriteria, maxParallelism, hypothesisLimit, now)
+	return plan, "", err
+}
+
+func buildGoalLLMPlan(
+	ctx context.Context,
+	client llm.Client,
+	model string,
+	runID, goal string,
+	scope orchestrator.Scope,
+	constraints, successCriteria, stopCriteria []string,
+	maxParallelism, hypothesisLimit int,
+	now time.Time,
+) (orchestrator.RunPlan, string, error) {
+	normalizedGoal := normalizeGoal(goal)
+	hypotheses := orchestrator.GenerateHypotheses(normalizedGoal, scope, hypothesisLimit)
+	tasks, llmRationale, err := orchestrator.SynthesizeTaskGraphWithLLM(ctx, client, model, normalizedGoal, scope, constraints, hypotheses, maxParallelism)
+	if err != nil {
+		return orchestrator.RunPlan{}, "", err
+	}
+	if maxParallelism <= 0 {
+		maxParallelism = 1
+	}
+	if len(successCriteria) == 0 {
+		successCriteria = []string{"goal_seed_completed"}
+	}
+	if len(stopCriteria) == 0 {
+		stopCriteria = []string{"manual_stop", "out_of_scope", "budget_exhausted"}
+	}
+	plan := orchestrator.RunPlan{
+		RunID:           runID,
+		Scope:           scope,
+		Constraints:     constraints,
+		SuccessCriteria: successCriteria,
+		StopCriteria:    stopCriteria,
+		MaxParallelism:  maxParallelism,
+		Tasks:           tasks,
+		Metadata: orchestrator.PlanMetadata{
+			CreatedAt:      now.UTC(),
+			Goal:           strings.TrimSpace(goal),
+			NormalizedGoal: normalizedGoal,
+			PlannerMode:    plannerModeLLMV1,
+			Hypotheses:     hypotheses,
+		},
+	}
+	if err := orchestrator.ValidateSynthesizedPlan(plan); err != nil {
+		return orchestrator.RunPlan{}, "", err
+	}
+	return plan, strings.TrimSpace(llmRationale), nil
+}
+
+func resolvePlannerLLMClient(workerConfigPath string) (llm.Client, string, error) {
+	cfg, err := loadPlannerLLMConfig(workerConfigPath)
+	if err != nil {
+		return nil, "", err
+	}
+	if strings.TrimSpace(cfg.LLM.BaseURL) == "" {
+		return nil, "", fmt.Errorf("llm planner requires %s or llm.base_url in config", plannerLLMBaseURLEnv)
+	}
+	model := strings.TrimSpace(cfg.LLM.Model)
+	if model == "" {
+		model = strings.TrimSpace(cfg.Agent.Model)
+	}
+	if model == "" {
+		return nil, "", fmt.Errorf("llm planner requires %s or llm.model in config", plannerLLMModelEnv)
+	}
+	return llm.NewLMStudioClient(cfg), model, nil
+}
+
+func loadPlannerLLMConfig(workerConfigPath string) (config.Config, error) {
+	cfg := config.Config{}
+	cfg.LLM.TimeoutSeconds = plannerDefaultLLMTimeout
+	if strings.TrimSpace(workerConfigPath) != "" {
+		loaded, _, err := config.Load(workerConfigPath, "", "")
+		if err != nil {
+			return config.Config{}, fmt.Errorf("load config from %s: %w", workerConfigPath, err)
+		}
+		cfg = loaded
+		if cfg.LLM.TimeoutSeconds <= 0 {
+			cfg.LLM.TimeoutSeconds = plannerDefaultLLMTimeout
+		}
+	}
+
+	if v := strings.TrimSpace(os.Getenv(plannerLLMBaseURLEnv)); v != "" {
+		cfg.LLM.BaseURL = v
+	}
+	if v := strings.TrimSpace(os.Getenv(plannerLLMModelEnv)); v != "" {
+		cfg.LLM.Model = v
+	}
+	if v := strings.TrimSpace(os.Getenv(plannerLLMAPIKeyEnv)); v != "" {
+		cfg.LLM.APIKey = v
+	}
+	if v := strings.TrimSpace(os.Getenv(plannerLLMTimeoutEnv)); v != "" {
+		parsed, err := strconv.Atoi(v)
+		if err != nil || parsed <= 0 {
+			return config.Config{}, fmt.Errorf("invalid %s value %q", plannerLLMTimeoutEnv, v)
+		}
+		cfg.LLM.TimeoutSeconds = parsed
+	}
+	return cfg, nil
+}
+
 func buildGoalSeedPlan(runID, goal string, scope orchestrator.Scope, constraints, successCriteria, stopCriteria []string, maxParallelism, hypothesisLimit int, now time.Time) (orchestrator.RunPlan, error) {
 	normalizedGoal := normalizeGoal(goal)
 	hypotheses := orchestrator.GenerateHypotheses(normalizedGoal, scope, hypothesisLimit)
@@ -566,7 +757,7 @@ func buildGoalSeedPlan(runID, goal string, scope orchestrator.Scope, constraints
 			CreatedAt:      now.UTC(),
 			Goal:           strings.TrimSpace(goal),
 			NormalizedGoal: normalizedGoal,
-			PlannerMode:    "goal_seed_v1",
+			PlannerMode:    plannerModeStaticV1,
 			Hypotheses:     hypotheses,
 		},
 	}
@@ -587,9 +778,21 @@ func normalizePlanReview(raw string) (string, error) {
 	}
 }
 
-func plannerPromptHash(goal string, scope orchestrator.Scope, constraints, successCriteria, stopCriteria []string, maxParallelism int) string {
+func mergePlannerRationale(reviewRationale, plannerNote string) string {
+	parts := make([]string, 0, 2)
+	if trimmed := strings.TrimSpace(reviewRationale); trimmed != "" {
+		parts = append(parts, trimmed)
+	}
+	if trimmed := strings.TrimSpace(plannerNote); trimmed != "" {
+		parts = append(parts, trimmed)
+	}
+	return strings.Join(parts, " | ")
+}
+
+func plannerPromptHash(goal, plannerMode string, scope orchestrator.Scope, constraints, successCriteria, stopCriteria []string, maxParallelism int) string {
 	payload := map[string]any{
 		"version":          plannerVersion,
+		"planner_mode":     strings.TrimSpace(plannerMode),
 		"goal":             normalizeGoal(goal),
 		"scope":            scope,
 		"constraints":      constraints,
@@ -606,7 +809,7 @@ func plannerPromptHash(goal string, scope orchestrator.Scope, constraints, succe
 }
 
 func printPlanSummary(stdout io.Writer, plan orchestrator.RunPlan) {
-	fmt.Fprintf(stdout, "plan summary: run=%s planner=%s prompt_hash=%s hypotheses=%d tasks=%d max_parallelism=%d\n", plan.RunID, plan.Metadata.PlannerVersion, plan.Metadata.PlannerPromptHash, len(plan.Metadata.Hypotheses), len(plan.Tasks), plan.MaxParallelism)
+	fmt.Fprintf(stdout, "plan summary: run=%s planner=%s mode=%s prompt_hash=%s hypotheses=%d tasks=%d max_parallelism=%d\n", plan.RunID, plan.Metadata.PlannerVersion, plan.Metadata.PlannerMode, plan.Metadata.PlannerPromptHash, len(plan.Metadata.Hypotheses), len(plan.Tasks), plan.MaxParallelism)
 	for i, hypothesis := range plan.Metadata.Hypotheses {
 		if i >= 3 {
 			fmt.Fprintf(stdout, "  ... %d more hypotheses\n", len(plan.Metadata.Hypotheses)-i)

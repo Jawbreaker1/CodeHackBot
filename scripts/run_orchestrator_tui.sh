@@ -18,6 +18,7 @@ Options:
   --sessions-dir DIR         Sessions directory (default: sessions).
   --max-parallelism N        Max parallel workers (default: 2).
   --permissions MODE         readonly|default|all (default: default).
+  --planner MODE             static|llm|auto (default: auto).
   --worker-cmd PATH          Worker binary path (default: ./birdhackbot).
   --worker-arg ARG           Worker arg (repeatable, default: worker).
   --llm-base-url URL         Export BIRDHACKBOT_LLM_BASE_URL for this run.
@@ -45,6 +46,7 @@ SESSIONS_DIR="sessions"
 GOAL=""
 MAX_PARALLELISM="2"
 PERMISSIONS="default"
+PLANNER_MODE="auto"
 WORKER_CMD="$ROOT_DIR/birdhackbot"
 SKIP_BUILD=0
 
@@ -85,6 +87,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --permissions)
       PERMISSIONS="${2:-}"
+      shift 2
+      ;;
+    --planner)
+      PLANNER_MODE="${2:-}"
       shift 2
       ;;
     --worker-cmd)
@@ -160,6 +166,7 @@ cmd=(
   --run "$RUN_ID"
   --goal "$GOAL"
   --max-parallelism "$MAX_PARALLELISM"
+  --planner "$PLANNER_MODE"
   --worker-cmd "$WORKER_CMD"
   --permissions "$PERMISSIONS"
   --tui
@@ -181,6 +188,7 @@ done
 echo "[run] RUN_ID=$RUN_ID"
 echo "[run] sessions-dir=$SESSIONS_DIR"
 echo "[run] goal=$GOAL"
+echo "[run] planner=$PLANNER_MODE"
 if [[ -n "${BIRDHACKBOT_LLM_BASE_URL:-}" ]]; then
   echo "[run] llm-base-url=$BIRDHACKBOT_LLM_BASE_URL"
 fi

@@ -317,12 +317,12 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
   - [x] regression: existing `plan.json` path still works unchanged
 
 ## Sprint 25 — LLM Planner Mode + Playbook Grounding (planned)
-- [ ] Add optional planner mode `--planner llm|deterministic` (default deterministic for safety).
-- [ ] Implement LLM-based hypothesis + task-graph synthesis with strict JSON schema validation.
+- [x] Add optional planner mode `--planner static|llm|auto` (default static for deterministic safety).
+- [x] Implement LLM-based hypothesis + task-graph synthesis with strict JSON schema validation.
 - [ ] Ground planner prompts in relevant playbooks (bounded read) so plans reuse repo guidance.
-- [ ] Add deterministic fallback when LLM planner is unavailable or returns invalid plan.
+- [x] Add deterministic fallback when LLM planner is unavailable or returns invalid plan.
 - [ ] Persist planner provenance (`mode`, model, prompt hash, playbooks used) in run metadata.
 - [ ] Tests:
-  - [ ] unit tests for planner validation/fallback behavior
-  - [ ] integration test for `--planner llm` with mocked LLM output
-  - [ ] regression test that deterministic planner path remains unchanged
+  - [x] unit tests for planner validation/fallback behavior
+  - [ ] integration test for `run --planner llm` with mocked LLM output
+  - [x] regression test that deterministic planner path remains unchanged
