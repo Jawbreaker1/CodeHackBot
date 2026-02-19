@@ -1071,8 +1071,8 @@ func (c *Coordinator) buildReplanTask(trigger string, source EventEnvelope, payl
 		operatorInstruction = strings.TrimSpace(toString(payload["instruction"]))
 	}
 	budget := budgetForRiskLevel(risk)
-	if budget.MaxRuntime > 3*time.Minute {
-		budget.MaxRuntime = 3 * time.Minute
+	if budget.MaxRuntime > 10*time.Minute {
+		budget.MaxRuntime = 10 * time.Minute
 	}
 	done := []string{"replan_task_completed"}
 	fail := []string{"replan_task_failed"}

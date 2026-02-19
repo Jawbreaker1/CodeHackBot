@@ -40,9 +40,9 @@ func SynthesizeTaskGraph(goal string, scope Scope, hypotheses []Hypothesis) ([]T
 			ExpectedArtifacts: []string{"recon-seed.log"},
 			RiskLevel:         string(RiskReconReadonly),
 			Budget: TaskBudget{
-				MaxSteps:     6,
-				MaxToolCalls: 8,
-				MaxRuntime:   2 * time.Minute,
+				MaxSteps:     20,
+				MaxToolCalls: 30,
+				MaxRuntime:   10 * time.Minute,
 			},
 		},
 	}
@@ -98,9 +98,9 @@ func SynthesizeTaskGraph(goal string, scope Scope, hypotheses []Hypothesis) ([]T
 		ExpectedArtifacts: []string{"plan-summary.log"},
 		RiskLevel:         string(RiskReconReadonly),
 		Budget: TaskBudget{
-			MaxSteps:     3,
-			MaxToolCalls: 3,
-			MaxRuntime:   90 * time.Second,
+			MaxSteps:     6,
+			MaxToolCalls: 8,
+			MaxRuntime:   3 * time.Minute,
 		},
 	})
 
@@ -171,15 +171,15 @@ func riskLevelFromHypothesis(hypothesis Hypothesis) string {
 func budgetForRiskLevel(riskLevel string) TaskBudget {
 	if riskLevel == string(RiskActiveProbe) {
 		return TaskBudget{
-			MaxSteps:     10,
-			MaxToolCalls: 10,
-			MaxRuntime:   4 * time.Minute,
+			MaxSteps:     24,
+			MaxToolCalls: 40,
+			MaxRuntime:   12 * time.Minute,
 		}
 	}
 	return TaskBudget{
-		MaxSteps:     6,
-		MaxToolCalls: 6,
-		MaxRuntime:   2 * time.Minute,
+		MaxSteps:     16,
+		MaxToolCalls: 24,
+		MaxRuntime:   8 * time.Minute,
 	}
 }
 

@@ -34,6 +34,9 @@ const (
 	workerAssistLLMCallMax    = 45 * time.Second
 	workerAssistLLMCallMin    = 8 * time.Second
 	workerAssistBudgetReserve = 5 * time.Second
+	workerAssistMinTurns      = 16
+	workerAssistTurnFactor    = 4
+	workerAssistMaxLoopBlocks = 3
 )
 
 var htmlTitlePattern = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
@@ -62,27 +65,46 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 		return err
 	}
 
-	maxSteps := task.Budget.MaxSteps
-	if maxSteps <= 0 {
-		maxSteps = 6
+	maxActionSteps := task.Budget.MaxSteps
+	if maxActionSteps <= 0 {
+		maxActionSteps = 6
 	}
 	maxToolCalls := task.Budget.MaxToolCalls
 	if maxToolCalls <= 0 {
 		maxToolCalls = 6
 	}
+	maxTurns := maxActionSteps * workerAssistTurnFactor
+	if maxTurns < workerAssistMinTurns {
+		maxTurns = workerAssistMinTurns
+	}
 
 	observations := make([]string, 0, workerAssistObsLimit)
 	executed := map[string]int{}
+	blockedActions := map[string]struct{}{}
 	mode := "execute-step"
 	recoverHint := ""
 	toolCalls := 0
+	actionSteps := 0
+	loopBlocks := 0
 
-	for step := 1; step <= maxSteps; step++ {
+	for turn := 1; turn <= maxTurns; turn++ {
+		if actionSteps >= maxActionSteps {
+			err := fmt.Errorf("assist budget exhausted: action_steps=%d max=%d", actionSteps, maxActionSteps)
+			_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureAssistExhausted, map[string]any{
+				"step":         actionSteps,
+				"turn":         turn,
+				"tool_calls":   toolCalls,
+				"action_steps": actionSteps,
+			})
+			return err
+		}
 		if toolCalls >= maxToolCalls {
 			err := fmt.Errorf("assist budget exhausted: tool_calls=%d max=%d", toolCalls, maxToolCalls)
 			_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureAssistExhausted, map[string]any{
-				"step":       step,
-				"tool_calls": toolCalls,
+				"step":         actionSteps,
+				"turn":         turn,
+				"tool_calls":   toolCalls,
+				"action_steps": actionSteps,
 			})
 			return err
 		}
@@ -97,7 +119,8 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 		suggestCtx, suggestCancel, callTimeout, remainingBudget, timeoutErr := newAssistCallContext(ctx)
 		if timeoutErr != nil {
 			_ = emitWorkerFailure(manager, cfg, task, timeoutErr, WorkerFailureAssistTimeout, map[string]any{
-				"step":                     step,
+				"step":                     actionSteps,
+				"turn":                     turn,
 				"tool_calls":               toolCalls,
 				"mode":                     mode,
 				"remaining_budget_seconds": int(remainingBudget.Seconds()),
@@ -125,7 +148,8 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 				failureReason = WorkerFailureAssistTimeout
 			}
 			_ = emitWorkerFailure(manager, cfg, task, suggestErr, failureReason, map[string]any{
-				"step":                     step,
+				"step":                     actionSteps,
+				"turn":                     turn,
 				"tool_calls":               toolCalls,
 				"mode":                     mode,
 				"llm_timeout_seconds":      int(callTimeout.Seconds()),
@@ -140,7 +164,8 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 		}
 		_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
 			"message":    progressMsg,
-			"step":       step,
+			"step":       actionSteps,
+			"turn":       turn,
 			"tool_calls": toolCalls,
 			"mode":       mode,
 			"type":       suggestion.Type,
@@ -164,7 +189,7 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 				"type":      "assist_summary",
 				"title":     fmt.Sprintf("assistant completion summary (%s)", cfg.TaskID),
 				"path":      logPath,
-				"step":      step,
+				"step":      actionSteps,
 				"tool_call": toolCalls,
 			})
 			_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskFinding, map[string]any{
@@ -179,7 +204,8 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 					"attempt":       cfg.Attempt,
 					"reason":        "assist_complete",
 					"assistant":     assistantModel,
-					"steps":         step,
+					"steps":         actionSteps,
+					"turns":         turn,
 					"tool_calls":    toolCalls,
 					"final_summary": final,
 				},
@@ -202,7 +228,8 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 		case "question":
 			err := fmt.Errorf("assistant requested user input: %s", strings.TrimSpace(suggestion.Question))
 			_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureAssistNeedsInput, map[string]any{
-				"step":       step,
+				"step":       actionSteps,
+				"turn":       turn,
 				"tool_calls": toolCalls,
 				"question":   strings.TrimSpace(suggestion.Question),
 			})
@@ -211,7 +238,8 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			if mode == "recover" {
 				err := fmt.Errorf("assistant did not provide actionable recovery step")
 				_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureAssistNoAction, map[string]any{
-					"step":       step,
+					"step":       actionSteps,
+					"turn":       turn,
 					"tool_calls": toolCalls,
 					"type":       suggestion.Type,
 				})
@@ -221,9 +249,64 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			observations = appendObservation(observations, summarizeSuggestion(suggestion))
 			continue
 		case "tool":
+			if suggestion.Tool == nil {
+				err := fmt.Errorf("assistant tool suggestion missing spec")
+				_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureAssistNoAction, map[string]any{
+					"step":       actionSteps,
+					"turn":       turn,
+					"tool_calls": toolCalls,
+				})
+				return err
+			}
+			runCommand := strings.TrimSpace(suggestion.Tool.Run.Command)
+			runArgs := append([]string{}, suggestion.Tool.Run.Args...)
+			actionKey := buildAssistActionKey(runCommand, runArgs)
+			if _, blocked := blockedActions[actionKey]; blocked {
+				loopBlocks++
+				mode = "recover"
+				recoverHint = "action blocked as repeated; choose a different command path"
+				observations = appendObservation(observations, fmt.Sprintf("recovery: repeated action blocked for %s", strings.TrimSpace(strings.Join(append([]string{runCommand}, runArgs...), " "))))
+				_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
+					"message":    "repeated action blocked; waiting for alternative command",
+					"step":       actionSteps,
+					"turn":       turn,
+					"tool_calls": toolCalls,
+					"mode":       mode,
+				})
+				if loopBlocks >= workerAssistMaxLoopBlocks {
+					err := fmt.Errorf("repeated command blocked too many times")
+					_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureAssistLoopDetected, map[string]any{
+						"step":       actionSteps,
+						"turn":       turn,
+						"tool_calls": toolCalls,
+						"command":    runCommand,
+						"args":       runArgs,
+					})
+					return err
+				}
+				continue
+			}
+			executed[actionKey]++
+			if executed[actionKey] > workerAssistLoopMaxRepeat {
+				blockedActions[actionKey] = struct{}{}
+				loopBlocks++
+				mode = "recover"
+				recoverHint = "action blocked as repeated; choose a different command path"
+				observations = appendObservation(observations, fmt.Sprintf("recovery: repeated action blocked for %s", strings.TrimSpace(strings.Join(append([]string{runCommand}, runArgs...), " "))))
+				_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
+					"message":    "repeated action blocked; waiting for alternative command",
+					"step":       actionSteps,
+					"turn":       turn,
+					"tool_calls": toolCalls,
+					"mode":       mode,
+				})
+				continue
+			}
+			actionSteps++
 			toolCalls++
+			loopBlocks = 0
 			result, runErr := executeWorkerAssistTool(ctx, cfg, task, scopePolicy, workDir, suggestion.Tool)
-			logPath, logErr := writeWorkerActionLog(cfg, fmt.Sprintf("%s-a%d-s%d-t%d.log", sanitizePathComponent(cfg.WorkerID), cfg.Attempt, step, toolCalls), result.output)
+			logPath, logErr := writeWorkerActionLog(cfg, fmt.Sprintf("%s-a%d-s%d-t%d.log", sanitizePathComponent(cfg.WorkerID), cfg.Attempt, actionSteps, toolCalls), result.output)
 			if logErr != nil {
 				_ = emitWorkerFailure(manager, cfg, task, logErr, WorkerFailureArtifactWrite, nil)
 				return logErr
@@ -234,7 +317,8 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 				"path":      logPath,
 				"command":   result.command,
 				"args":      result.args,
-				"step":      step,
+				"step":      actionSteps,
+				"turn":      turn,
 				"tool_call": toolCalls,
 				"exit_code": commandExitCode(runErr),
 			})
@@ -242,7 +326,8 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			if runErr != nil {
 				if strings.Contains(strings.ToLower(runErr.Error()), WorkerFailureScopeDenied) {
 					_ = emitWorkerFailure(manager, cfg, task, runErr, WorkerFailureScopeDenied, map[string]any{
-						"step":       step,
+						"step":       actionSteps,
+						"turn":       turn,
 						"tool_calls": toolCalls,
 						"command":    result.command,
 						"args":       result.args,
@@ -256,7 +341,8 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 						reason = WorkerFailureCommandTimeout
 					}
 					_ = emitWorkerFailure(manager, cfg, task, runErr, reason, map[string]any{
-						"step":       step,
+						"step":       actionSteps,
+						"turn":       turn,
 						"tool_calls": toolCalls,
 						"command":    result.command,
 						"args":       result.args,
@@ -276,7 +362,8 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			if command == "" {
 				err := fmt.Errorf("assistant returned empty command")
 				_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureAssistNoAction, map[string]any{
-					"step":       step,
+					"step":       actionSteps,
+					"turn":       turn,
 					"tool_calls": toolCalls,
 				})
 				return err
@@ -285,7 +372,8 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			if !isBuiltinListDir(command) && !isBuiltinReadFile(command) && !isBuiltinWriteFile(command) {
 				if err := scopePolicy.ValidateCommandTargets(command, args); err != nil {
 					_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureScopeDenied, map[string]any{
-						"step":       step,
+						"step":       actionSteps,
+						"turn":       turn,
 						"tool_calls": toolCalls,
 						"command":    command,
 						"args":       args,
@@ -294,20 +382,52 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 				}
 			}
 			key := buildAssistActionKey(command, args)
+			if _, blocked := blockedActions[key]; blocked {
+				loopBlocks++
+				mode = "recover"
+				recoverHint = "action blocked as repeated; choose a different command path"
+				observations = appendObservation(observations, fmt.Sprintf("recovery: repeated command blocked for %s", strings.TrimSpace(strings.Join(append([]string{command}, args...), " "))))
+				_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
+					"message":    "repeated command blocked; waiting for alternative",
+					"step":       actionSteps,
+					"turn":       turn,
+					"tool_calls": toolCalls,
+					"mode":       mode,
+				})
+				if loopBlocks >= workerAssistMaxLoopBlocks {
+					err := fmt.Errorf("repeated command blocked too many times")
+					_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureAssistLoopDetected, map[string]any{
+						"step":       actionSteps,
+						"turn":       turn,
+						"tool_calls": toolCalls,
+						"command":    command,
+						"args":       args,
+					})
+					return err
+				}
+				continue
+			}
 			executed[key]++
 			if executed[key] > workerAssistLoopMaxRepeat {
-				err := fmt.Errorf("repeated command blocked: %s", strings.TrimSpace(strings.Join(append([]string{command}, args...), " ")))
-				_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureAssistLoopDetected, map[string]any{
-					"step":       step,
+				blockedActions[key] = struct{}{}
+				loopBlocks++
+				mode = "recover"
+				recoverHint = "action blocked as repeated; choose a different command path"
+				observations = appendObservation(observations, fmt.Sprintf("recovery: repeated command blocked for %s", strings.TrimSpace(strings.Join(append([]string{command}, args...), " "))))
+				_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
+					"message":    "repeated command blocked; waiting for alternative",
+					"step":       actionSteps,
+					"turn":       turn,
 					"tool_calls": toolCalls,
-					"command":    command,
-					"args":       args,
+					"mode":       mode,
 				})
-				return err
+				continue
 			}
+			actionSteps++
 			toolCalls++
+			loopBlocks = 0
 			result := executeWorkerAssistCommand(ctx, command, args, workDir)
-			logPath, logErr := writeWorkerActionLog(cfg, fmt.Sprintf("%s-a%d-s%d-t%d.log", sanitizePathComponent(cfg.WorkerID), cfg.Attempt, step, toolCalls), result.output)
+			logPath, logErr := writeWorkerActionLog(cfg, fmt.Sprintf("%s-a%d-s%d-t%d.log", sanitizePathComponent(cfg.WorkerID), cfg.Attempt, actionSteps, toolCalls), result.output)
 			if logErr != nil {
 				_ = emitWorkerFailure(manager, cfg, task, logErr, WorkerFailureArtifactWrite, nil)
 				return logErr
@@ -318,7 +438,8 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 				"path":      logPath,
 				"command":   result.command,
 				"args":      result.args,
-				"step":      step,
+				"step":      actionSteps,
+				"turn":      turn,
 				"tool_call": toolCalls,
 				"exit_code": commandExitCode(result.runErr),
 			})
@@ -330,7 +451,8 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 						reason = WorkerFailureCommandTimeout
 					}
 					_ = emitWorkerFailure(manager, cfg, task, result.runErr, reason, map[string]any{
-						"step":       step,
+						"step":       actionSteps,
+						"turn":       turn,
 						"tool_calls": toolCalls,
 						"command":    result.command,
 						"args":       result.args,
@@ -347,7 +469,8 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 		default:
 			err := fmt.Errorf("assistant returned unsupported type %q", suggestion.Type)
 			_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureAssistNoAction, map[string]any{
-				"step":       step,
+				"step":       actionSteps,
+				"turn":       turn,
 				"tool_calls": toolCalls,
 				"type":       suggestion.Type,
 			})
@@ -355,10 +478,12 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 		}
 	}
 
-	err = fmt.Errorf("assist exhausted max steps (%d)", maxSteps)
+	err = fmt.Errorf("assist exhausted max turns (%d) without completion", maxTurns)
 	_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureAssistExhausted, map[string]any{
-		"step":       maxSteps,
-		"tool_calls": toolCalls,
+		"step":         actionSteps,
+		"turn":         maxTurns,
+		"tool_calls":   toolCalls,
+		"action_steps": actionSteps,
 	})
 	return err
 }
