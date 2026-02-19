@@ -13,6 +13,7 @@ type RunPaths struct {
 	EventDir    string
 	ArtifactDir string
 	FindingDir  string
+	MemoryDir   string
 }
 
 func BuildRunPaths(baseDir, runID string) RunPaths {
@@ -24,6 +25,7 @@ func BuildRunPaths(baseDir, runID string) RunPaths {
 		EventDir:    filepath.Join(root, "event"),
 		ArtifactDir: filepath.Join(root, "artifact"),
 		FindingDir:  filepath.Join(root, "finding"),
+		MemoryDir:   filepath.Join(root, "memory"),
 	}
 }
 
@@ -38,6 +40,7 @@ func EnsureRunLayout(baseDir, runID string) (RunPaths, error) {
 		paths.EventDir,
 		paths.ArtifactDir,
 		paths.FindingDir,
+		paths.MemoryDir,
 	}
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0o755); err != nil {

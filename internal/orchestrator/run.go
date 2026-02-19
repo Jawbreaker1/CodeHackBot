@@ -36,6 +36,10 @@ func (m *Manager) Start(planPath, overrideRunID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return m.StartFromPlan(plan, overrideRunID)
+}
+
+func (m *Manager) StartFromPlan(plan RunPlan, overrideRunID string) (string, error) {
 	if overrideRunID != "" {
 		plan.RunID = overrideRunID
 	}
@@ -54,6 +58,9 @@ func (m *Manager) Start(planPath, overrideRunID string) (string, error) {
 		if err := WriteJSONAtomic(filepath.Join(paths.TaskDir, task.TaskID+".json"), task); err != nil {
 			return "", fmt.Errorf("write task %s: %w", task.TaskID, err)
 		}
+	}
+	if err := m.InitializeMemoryBank(plan.RunID, plan); err != nil {
+		return "", fmt.Errorf("initialize memory bank: %w", err)
 	}
 
 	seq, err := m.nextSeq(plan.RunID, orchestratorWorkerID)
@@ -86,14 +93,15 @@ func (m *Manager) Stop(runID string) error {
 	if len(events) == 0 {
 		return fmt.Errorf("run %s has no events", runID)
 	}
-	seq, err := m.nextSeq(runID, orchestratorWorkerID)
+	stopWorkerID := fmt.Sprintf("operator-stop-%d", m.Now().UnixNano())
+	seq, err := m.nextSeq(runID, stopWorkerID)
 	if err != nil {
 		return err
 	}
 	return AppendEventJSONL(m.eventPath(runID), EventEnvelope{
 		EventID:  NewEventID(),
 		RunID:    runID,
-		WorkerID: orchestratorWorkerID,
+		WorkerID: stopWorkerID,
 		Seq:      seq,
 		TS:       m.Now(),
 		Type:     EventTypeRunStopped,

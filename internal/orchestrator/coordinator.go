@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -26,8 +27,11 @@ type Coordinator struct {
 	seenBlockedTasks            map[string]struct{}
 	seenFindingKeys             map[string]struct{}
 	seenReplanSourceEvents      map[string]struct{}
+	seenReplanMutationKeys      map[string]struct{}
 	seenMissingArtifactTasks    map[string]struct{}
 	lastRunStateHash            string
+	replanMutationCount         int
+	replanMutationBudget        int
 }
 
 func NewCoordinator(runID string, scope Scope, manager *Manager, workers *WorkerManager, scheduler *Scheduler, maxAttempts int, startupTimeout, staleTimeout, softStallGrace time.Duration, specForTask func(TaskSpec, int, string) WorkerSpec, broker *ApprovalBroker) (*Coordinator, error) {
@@ -77,11 +81,13 @@ func NewCoordinator(runID string, scope Scope, manager *Manager, workers *Worker
 		seenBlockedTasks:            map[string]struct{}{},
 		seenFindingKeys:             map[string]struct{}{},
 		seenReplanSourceEvents:      map[string]struct{}{},
+		seenReplanMutationKeys:      map[string]struct{}{},
 		seenMissingArtifactTasks:    map[string]struct{}{},
 	}, nil
 }
 
 func (c *Coordinator) Tick() error {
+	c.ensureReplanBudget()
 	if _, err := c.manager.IngestEvidence(c.runID); err != nil {
 		return err
 	}
@@ -728,6 +734,9 @@ func (c *Coordinator) markFailedWithReplan(taskID, reason string, retryable bool
 }
 
 func (c *Coordinator) handleRunStateAndReplan() error {
+	if err := c.manager.RefreshMemoryBank(c.runID); err != nil {
+		return err
+	}
 	leases, err := c.manager.ReadLeases(c.runID)
 	if err != nil {
 		return err
@@ -801,6 +810,10 @@ func (c *Coordinator) handleRunStateAndReplan() error {
 		if _, seen := c.seenFindingKeys[key]; seen {
 			continue
 		}
+		if c.isAdaptiveReplanTask(finding.TaskID) {
+			c.seenFindingKeys[key] = struct{}{}
+			continue
+		}
 		if err := c.manager.EmitEvent(c.runID, orchestratorWorkerID, finding.TaskID, EventTypeRunReplanRequested, map[string]any{
 			"trigger":     "new_finding",
 			"finding_key": key,
@@ -819,6 +832,21 @@ func (c *Coordinator) handleRunStateAndReplan() error {
 	}
 
 	return nil
+}
+
+func (c *Coordinator) isAdaptiveReplanTask(taskID string) bool {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return false
+	}
+	if task, ok := c.scheduler.Task(taskID); ok {
+		return strings.HasPrefix(task.Strategy, "adaptive_replan_")
+	}
+	task, err := c.manager.ReadTask(c.runID, taskID)
+	if err != nil {
+		return false
+	}
+	return strings.HasPrefix(task.Strategy, "adaptive_replan_")
 }
 
 func (c *Coordinator) handleEventDrivenReplanTriggers() error {
@@ -901,9 +929,16 @@ func (c *Coordinator) emitReplanForSourceEvent(source EventEnvelope, trigger str
 	if payload == nil {
 		payload = map[string]any{}
 	}
+	mutationKey := c.replanMutationKey(trigger, source)
+	payload["idempotency_key"] = mutationKey
+	for k, v := range c.maybeMutateTaskGraph(trigger, source, payload, mutationKey) {
+		payload[k] = v
+	}
 	payload["trigger"] = trigger
 	payload["source_event_id"] = source.EventID
-	payload["outcome"] = string(replanOutcomeForTrigger(trigger))
+	if _, ok := payload["outcome"]; !ok {
+		payload["outcome"] = string(replanOutcomeForTrigger(trigger))
+	}
 	if _, ok := payload["reason"]; !ok {
 		payload["reason"] = trigger
 	}
@@ -912,6 +947,72 @@ func (c *Coordinator) emitReplanForSourceEvent(source EventEnvelope, trigger str
 	}
 	c.seenReplanSourceEvents[source.EventID] = struct{}{}
 	return nil
+}
+
+func (c *Coordinator) maybeMutateTaskGraph(trigger string, source EventEnvelope, payload map[string]any, mutationKey string) map[string]any {
+	out := map[string]any{
+		"graph_mutation": false,
+	}
+	outcome := replanOutcomeForTrigger(trigger)
+	if outcome == ReplanOutcomeTerminate {
+		out["mutation_status"] = "terminated_by_policy"
+		out["outcome"] = string(outcome)
+		return out
+	}
+	if !c.shouldMutateForTrigger(trigger) {
+		out["mutation_status"] = "no_mutation_policy"
+		return out
+	}
+	if _, seen := c.seenReplanMutationKeys[mutationKey]; seen {
+		out["mutation_status"] = "duplicate_ignored"
+		return out
+	}
+	if c.replanMutationBudget > 0 && c.replanMutationCount >= c.replanMutationBudget {
+		out["mutation_status"] = "replan_budget_exhausted"
+		out["outcome"] = string(ReplanOutcomeTerminate)
+		_ = c.manager.Stop(c.runID)
+		return out
+	}
+	task, err := c.buildReplanTask(trigger, source, payload, mutationKey)
+	if err != nil {
+		out["mutation_status"] = "task_build_failed"
+		out["mutation_error"] = err.Error()
+		return out
+	}
+	if err := c.scheduler.AddTask(task); err != nil {
+		out["mutation_status"] = "task_add_failed"
+		out["mutation_error"] = err.Error()
+		return out
+	}
+	if err := c.manager.AddTask(c.runID, task); err != nil {
+		_ = c.scheduler.ForceState(task.TaskID, TaskStateCanceled)
+		out["mutation_status"] = "task_persist_failed"
+		out["mutation_error"] = err.Error()
+		return out
+	}
+	now := c.manager.Now()
+	lease := TaskLease{
+		TaskID:    task.TaskID,
+		LeaseID:   fmt.Sprintf("lease-%s-%d", task.TaskID, now.UnixNano()),
+		WorkerID:  "",
+		Status:    LeaseStatusQueued,
+		Attempt:   1,
+		StartedAt: now,
+		Deadline:  now.Add(c.startupTimeout),
+	}
+	if err := c.manager.WriteLease(c.runID, lease); err != nil {
+		_ = c.scheduler.ForceState(task.TaskID, TaskStateCanceled)
+		out["mutation_status"] = "lease_write_failed"
+		out["mutation_error"] = err.Error()
+		return out
+	}
+	c.replanMutationCount++
+	c.seenReplanMutationKeys[mutationKey] = struct{}{}
+	out["graph_mutation"] = true
+	out["mutation_status"] = "task_added"
+	out["added_task_id"] = task.TaskID
+	out["added_task_strategy"] = task.Strategy
+	return out
 }
 
 type ReplanOutcome string
@@ -935,6 +1036,108 @@ func replanOutcomeForTrigger(trigger string) ReplanOutcome {
 	}
 }
 
+func (c *Coordinator) shouldMutateForTrigger(trigger string) bool {
+	switch trigger {
+	case "new_finding", "missing_required_artifacts_after_retries", "execution_failure", "worker_recovery", "repeated_step_loop", "budget_exhausted", "blocked_task":
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *Coordinator) buildReplanTask(trigger string, source EventEnvelope, payload map[string]any, mutationKey string) (TaskSpec, error) {
+	baseTask, hasBase := c.scheduler.Task(source.TaskID)
+	targets := []string{}
+	if hasBase {
+		targets = append(targets, baseTask.Targets...)
+	}
+	if len(targets) == 0 {
+		targets = append(targets, c.runScopeTargets()...)
+	}
+	taskID := fmt.Sprintf("task-rp-%s", hashKey(mutationKey)[:10])
+	risk := string(RiskReconReadonly)
+	if trigger == "new_finding" {
+		severity := strings.ToLower(strings.TrimSpace(toString(payload["severity"])))
+		if severity == "high" || severity == "critical" {
+			risk = string(RiskActiveProbe)
+		}
+	}
+	budget := budgetForRiskLevel(risk)
+	if budget.MaxRuntime > 3*time.Minute {
+		budget.MaxRuntime = 3 * time.Minute
+	}
+	done := []string{"replan_task_completed"}
+	fail := []string{"replan_task_failed"}
+	if hasBase {
+		done = append(done, fmt.Sprintf("source_task_%s_followup_complete", baseTask.TaskID))
+	}
+	evidenceTarget := source.TaskID
+	if evidenceTarget == "" {
+		evidenceTarget = "run"
+	}
+	return TaskSpec{
+		TaskID:            taskID,
+		Title:             fmt.Sprintf("Adaptive replan for %s", trigger),
+		IdempotencyKey:    mutationKey,
+		Goal:              fmt.Sprintf("Investigate trigger %s from task %s and produce actionable follow-up evidence", trigger, evidenceTarget),
+		Targets:           targets,
+		Priority:          95,
+		Strategy:          "adaptive_replan_" + sanitizePathComponent(trigger),
+		Action:            echoAction(fmt.Sprintf("adaptive_replan:%s:%s", trigger, evidenceTarget)),
+		DoneWhen:          done,
+		FailWhen:          fail,
+		ExpectedArtifacts: []string{fmt.Sprintf("replan-%s.log", sanitizePathComponent(evidenceTarget))},
+		RiskLevel:         risk,
+		Budget:            budget,
+	}, nil
+}
+
+func (c *Coordinator) runScopeTargets() []string {
+	plan, err := c.manager.LoadRunPlan(c.runID)
+	if err != nil {
+		return nil
+	}
+	targets := append([]string{}, plan.Scope.Targets...)
+	targets = append(targets, plan.Scope.Networks...)
+	return targets
+}
+
+func (c *Coordinator) replanMutationKey(trigger string, source EventEnvelope) string {
+	keyBase := strings.Join([]string{c.runID, trigger, source.EventID, source.TaskID}, "|")
+	return "rp:" + hashKey(keyBase)
+}
+
+func (c *Coordinator) ensureReplanBudget() {
+	if c.replanMutationBudget > 0 {
+		return
+	}
+	c.replanMutationBudget = 8
+	plan, err := c.manager.LoadRunPlan(c.runID)
+	if err != nil {
+		return
+	}
+	if budget := parseReplanBudget(plan.StopCriteria); budget > 0 {
+		c.replanMutationBudget = budget
+	}
+}
+
+func parseReplanBudget(stopCriteria []string) int {
+	for _, criterion := range stopCriteria {
+		raw := strings.ToLower(strings.TrimSpace(criterion))
+		for _, prefix := range []string{"max_replans=", "replan_budget="} {
+			if !strings.HasPrefix(raw, prefix) {
+				continue
+			}
+			value := strings.TrimSpace(strings.TrimPrefix(raw, prefix))
+			var n int
+			if _, err := fmt.Sscanf(value, "%d", &n); err == nil && n > 0 {
+				return n
+			}
+		}
+	}
+	return 0
+}
+
 func (c *Coordinator) restoreSeenReplanState() error {
 	events, err := c.manager.Events(c.runID, 0)
 	if err != nil {
@@ -955,6 +1158,12 @@ func (c *Coordinator) restoreSeenReplanState() error {
 			payload := map[string]any{}
 			if len(event.Payload) > 0 {
 				_ = json.Unmarshal(event.Payload, &payload)
+			}
+			if key := toString(payload["idempotency_key"]); key != "" {
+				c.seenReplanMutationKeys[key] = struct{}{}
+			}
+			if mutated, ok := payload["graph_mutation"].(bool); ok && mutated {
+				c.replanMutationCount++
 			}
 			sourceEventID := toString(payload["source_event_id"])
 			if sourceEventID != "" {

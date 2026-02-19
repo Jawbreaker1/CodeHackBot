@@ -278,3 +278,35 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
   - [x] e2e `start -> run -> approvals -> completion -> report` using production worker mode
   - [x] gated integration test on Kali toolchain (network-safe lab profile)
   - [x] regression test that standalone interactive `birdhackbot` behavior remains unchanged
+
+## Sprint 24 — Autonomous Planner + Hypothesis Engine (planned, fundamental)
+- [x] Add high-level instruction intake for orchestrator:
+  - [x] `run --goal "<text>"` input path (without requiring prebuilt `plan.json`)
+  - [x] persist normalized goal + operator constraints in run metadata
+  - [x] enforce mandatory scope/constraints gate before planning
+- [x] Implement hypothesis generation:
+  - [x] generate initial hypotheses from goal + target profile
+  - [x] map each hypothesis to success/fail signals and evidence requirements
+  - [x] bound hypothesis count and rank by confidence/impact
+- [x] Implement autonomous task-graph synthesis:
+  - [x] convert hypotheses into dependency-aware task graph (`task.json` contracts)
+  - [x] attach risk tier, budgets, done/fail criteria, expected artifacts to every task
+  - [x] preflight validation rejects unsafe/out-of-scope/unbounded plans
+- [x] Add plan review + launch controls:
+  - [x] show generated plan summary in CLI/TUI before execution
+  - [x] operator choices: approve all / edit / reject / regenerate
+  - [x] audit log for planner version, prompt hash, and decision rationale
+- [x] Implement adaptive replanning with graph mutation:
+  - [x] on new evidence, add/split/prioritize tasks instead of only emitting replan events
+  - [x] maintain deterministic idempotency keys for generated tasks
+  - [x] cap replans by run-level budget and stop criteria
+- [x] Add orchestrator memory bank (file-first, planner-oriented):
+  - [x] run-level memory artifacts under `sessions/<run-id>/orchestrator/memory/` (`hypotheses.md`, `plan_summary.md`, `known_facts.md`, `open_questions.md`, `context.json`)
+  - [x] persist planner decisions + rationale + confidence and link them to generated tasks/events
+  - [x] add compaction/summarization strategy for long runs so planning context stays bounded and stable
+  - [x] ensure worker findings/artifacts are folded into orchestrator memory before replanning
+- [x] Testing and acceptance:
+  - [x] unit tests: hypothesis scoring, graph synthesis, safety validators
+  - [x] simulation tests: evidence-driven replan mutation and budget/stop enforcement
+  - [x] e2e: `goal -> generated plan -> approval -> worker fan-out -> report`
+  - [x] regression: existing `plan.json` path still works unchanged

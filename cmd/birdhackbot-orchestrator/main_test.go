@@ -110,6 +110,205 @@ func TestRunRejectsMissingRequiredFlags(t *testing.T) {
 	if code := run([]string{"status"}, &out, &errOut); code == 0 {
 		t.Fatalf("expected status failure without --run")
 	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"run", "--worker-cmd", os.Args[0]}, &out, &errOut); code == 0 {
+		t.Fatalf("expected run failure without --run or --goal")
+	}
+	if !strings.Contains(errOut.String(), "run requires --run or --goal") {
+		t.Fatalf("unexpected run error output: %q", errOut.String())
+	}
+}
+
+func TestRunGoalModeRejectsMissingScopeOrConstraints(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+
+	args := []string{
+		"run",
+		"--sessions-dir", base,
+		"--goal", "check target",
+		"--constraint", "internal_only",
+		"--worker-cmd", os.Args[0],
+	}
+	if code := run(args, &out, &errOut); code == 0 {
+		t.Fatalf("expected goal run failure without scope")
+	}
+	if !strings.Contains(errOut.String(), "--scope-target or --scope-network") {
+		t.Fatalf("unexpected missing-scope error: %q", errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	args = []string{
+		"run",
+		"--sessions-dir", base,
+		"--goal", "check target",
+		"--scope-target", "127.0.0.1",
+		"--worker-cmd", os.Args[0],
+	}
+	if code := run(args, &out, &errOut); code == 0 {
+		t.Fatalf("expected goal run failure without constraints")
+	}
+	if !strings.Contains(errOut.String(), "--constraint") {
+		t.Fatalf("unexpected missing-constraint error: %q", errOut.String())
+	}
+}
+
+func TestRunGoalModeSeedsPlanAndPersistsMetadata(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-cli-goal-seed"
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	args := []string{
+		"run",
+		"--sessions-dir", base,
+		"--run", runID,
+		"--goal", "  investigate    host   exposure  ",
+		"--scope-target", "127.0.0.1",
+		"--constraint", "local_only",
+		"--permissions", "all",
+		"--success-criterion", "goal_processed",
+		"--stop-criterion", "manual_stop",
+		"--worker-cmd", os.Args[0],
+		"--worker-arg", "-test.run=TestHelperProcessOrchestratorWorker",
+		"--worker-arg", "worker-ok",
+		"--worker-env", "GO_WANT_HELPER_PROCESS=1",
+		"--tick", "20ms",
+		"--startup-timeout", "1s",
+		"--stale-timeout", "1s",
+		"--soft-stall-grace", "1s",
+	}
+	if code := run(args, &out, &errOut); code != 0 {
+		t.Fatalf("goal run failed: code=%d err=%s", code, errOut.String())
+	}
+	output := out.String()
+	if !strings.Contains(output, "run started: "+runID) || !strings.Contains(output, "run completed: "+runID) {
+		t.Fatalf("unexpected run output: %q", output)
+	}
+
+	plan, err := orchestrator.NewManager(base).LoadRunPlan(runID)
+	if err != nil {
+		t.Fatalf("LoadRunPlan: %v", err)
+	}
+	if plan.Metadata.Goal != "investigate host exposure" {
+		t.Fatalf("unexpected metadata goal: %q", plan.Metadata.Goal)
+	}
+	if plan.Metadata.NormalizedGoal != "investigate host exposure" {
+		t.Fatalf("unexpected normalized goal: %q", plan.Metadata.NormalizedGoal)
+	}
+	if plan.Metadata.PlannerMode != "goal_seed_v1" {
+		t.Fatalf("unexpected planner mode: %q", plan.Metadata.PlannerMode)
+	}
+	if strings.TrimSpace(plan.Metadata.PlannerVersion) == "" {
+		t.Fatalf("expected planner version in metadata")
+	}
+	if strings.TrimSpace(plan.Metadata.PlannerPromptHash) == "" {
+		t.Fatalf("expected planner prompt hash in metadata")
+	}
+	if plan.Metadata.PlannerDecision != "approve" {
+		t.Fatalf("expected approve planner decision, got %q", plan.Metadata.PlannerDecision)
+	}
+	if len(plan.Metadata.Hypotheses) == 0 {
+		t.Fatalf("expected generated hypotheses in plan metadata")
+	}
+	if len(plan.Metadata.Hypotheses[0].EvidenceRequired) == 0 {
+		t.Fatalf("expected hypothesis evidence requirements")
+	}
+	if len(plan.Constraints) != 1 || plan.Constraints[0] != "local_only" {
+		t.Fatalf("unexpected constraints: %#v", plan.Constraints)
+	}
+	if len(plan.Scope.Targets) != 1 || plan.Scope.Targets[0] != "127.0.0.1" {
+		t.Fatalf("unexpected scope targets: %#v", plan.Scope.Targets)
+	}
+	if len(plan.Tasks) < 3 {
+		t.Fatalf("expected synthesized task graph, got %#v", plan.Tasks)
+	}
+	if plan.Tasks[0].TaskID != "task-recon-seed" {
+		t.Fatalf("expected recon seed as first task, got %s", plan.Tasks[0].TaskID)
+	}
+	if plan.Tasks[len(plan.Tasks)-1].TaskID != "task-plan-summary" {
+		t.Fatalf("expected summary task as terminal node, got %s", plan.Tasks[len(plan.Tasks)-1].TaskID)
+	}
+	if len(plan.Tasks[0].ExpectedArtifacts) == 0 || len(plan.Tasks[len(plan.Tasks)-1].ExpectedArtifacts) == 0 {
+		t.Fatalf("unexpected seed tasks: %#v", plan.Tasks)
+	}
+}
+
+func TestRunGoalModePlanReviewRejectWritesReviewArtifact(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-cli-goal-reject"
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	args := []string{
+		"run",
+		"--sessions-dir", base,
+		"--run", runID,
+		"--goal", "investigate host exposure",
+		"--scope-target", "127.0.0.1",
+		"--constraint", "local_only",
+		"--plan-review", "reject",
+		"--plan-review-rationale", "operator rejected generated plan",
+	}
+	if code := run(args, &out, &errOut); code != 0 {
+		t.Fatalf("goal reject run failed: code=%d err=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "plan rejected:") {
+		t.Fatalf("expected rejected output, got %q", out.String())
+	}
+
+	planPath := filepath.Join(base, runID, "orchestrator", "plan", "plan.review.json")
+	if _, err := os.Stat(planPath); err != nil {
+		t.Fatalf("expected rejected plan artifact: %v", err)
+	}
+	reviewPath := filepath.Join(base, runID, "orchestrator", "plan", "plan.review.audit.json")
+	data, err := os.ReadFile(reviewPath)
+	if err != nil {
+		t.Fatalf("read review artifact: %v", err)
+	}
+	if !strings.Contains(string(data), `"decision": "reject"`) {
+		t.Fatalf("expected reject decision in review artifact: %s", string(data))
+	}
+}
+
+func TestRunGoalModePlanReviewEditWritesDraft(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-cli-goal-edit"
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	args := []string{
+		"run",
+		"--sessions-dir", base,
+		"--run", runID,
+		"--goal", "investigate host exposure",
+		"--scope-target", "127.0.0.1",
+		"--constraint", "local_only",
+		"--plan-review", "edit",
+	}
+	if code := run(args, &out, &errOut); code != 0 {
+		t.Fatalf("goal edit run failed: code=%d err=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "plan draft written:") {
+		t.Fatalf("expected draft output, got %q", out.String())
+	}
+
+	draftPath := filepath.Join(base, runID, "orchestrator", "plan", "plan.draft.json")
+	if _, err := os.Stat(draftPath); err != nil {
+		t.Fatalf("expected editable draft plan artifact: %v", err)
+	}
+	reviewPath := filepath.Join(base, runID, "orchestrator", "plan", "plan.review.audit.json")
+	if _, err := os.Stat(reviewPath); err != nil {
+		t.Fatalf("expected review audit artifact: %v", err)
+	}
 }
 
 func TestRunCommandExecutesPlan(t *testing.T) {
@@ -820,6 +1019,77 @@ func TestRunBudgetGuardStopsOnStepExhaustion(t *testing.T) {
 	}
 }
 
+func TestRunGoalToGeneratedPlanApprovalFanoutAndReport(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-cli-goal-e2e"
+	runArgs := []string{
+		"run",
+		"--sessions-dir", base,
+		"--run", runID,
+		"--goal", "scan network services and assess web auth surface",
+		"--scope-target", "127.0.0.1",
+		"--constraint", "local_only",
+		"--permissions", "default",
+		"--worker-cmd", os.Args[0],
+		"--worker-arg", "-test.run=TestHelperProcessOrchestratorWorker",
+		"--worker-arg", "worker-evidence",
+		"--worker-env", "GO_WANT_HELPER_PROCESS=1",
+		"--worker-env", "TEST_SESSIONS_DIR=" + base,
+		"--tick", "20ms",
+		"--startup-timeout", "2s",
+		"--stale-timeout", "2s",
+		"--soft-stall-grace", "2s",
+		"--max-attempts", "1",
+		"--plan-review", "approve",
+		"--max-parallelism", "2",
+	}
+	var runOut bytes.Buffer
+	var runErr bytes.Buffer
+	codeCh := make(chan int, 1)
+	go func() {
+		codeCh <- run(runArgs, &runOut, &runErr)
+	}()
+
+	manager := orchestrator.NewManager(base)
+	autoApprovePending(t, manager, runID, 10*time.Second)
+
+	select {
+	case code := <-codeCh:
+		if code != 0 {
+			t.Fatalf("goal run failed: code=%d err=%s", code, runErr.String())
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatalf("timed out waiting for goal run completion")
+	}
+	if !strings.Contains(runOut.String(), "run completed: "+runID) {
+		t.Fatalf("unexpected goal run output: %s", runOut.String())
+	}
+
+	plan, err := manager.LoadRunPlan(runID)
+	if err != nil {
+		t.Fatalf("LoadRunPlan: %v", err)
+	}
+	if len(plan.Metadata.Hypotheses) == 0 {
+		t.Fatalf("expected hypotheses in generated goal plan metadata")
+	}
+
+	reportPath := filepath.Join(base, "goal-e2e-report.md")
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	if code := run([]string{"report", "--sessions-dir", base, "--run", runID, "--out", reportPath}, &out, &errOut); code != 0 {
+		t.Fatalf("report failed: code=%d err=%s", code, errOut.String())
+	}
+	data, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(string(data)), "findings") {
+		t.Fatalf("expected findings section in report")
+	}
+}
+
 func TestHelperProcessOrchestratorWorker(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
 		return
@@ -1007,4 +1277,32 @@ func waitForApprovalID(t *testing.T, manager *orchestrator.Manager, runID string
 	}
 	t.Fatalf("timed out waiting for pending approval on run %s", runID)
 	return ""
+}
+
+func autoApprovePending(t *testing.T, manager *orchestrator.Manager, runID string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	approved := map[string]struct{}{}
+	for time.Now().Before(deadline) {
+		status, err := manager.Status(runID)
+		if err == nil && (status.State == "completed" || status.State == "stopped") {
+			return
+		}
+		pending, err := manager.PendingApprovals(runID)
+		if err == nil {
+			for _, req := range pending {
+				if req.ApprovalID == "" {
+					continue
+				}
+				if _, seen := approved[req.ApprovalID]; seen {
+					continue
+				}
+				if err := manager.SubmitApprovalDecision(runID, req.ApprovalID, true, "task", "auto-test", "goal-e2e auto approve", 0); err != nil {
+					t.Fatalf("SubmitApprovalDecision(%s): %v", req.ApprovalID, err)
+				}
+				approved[req.ApprovalID] = struct{}{}
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }

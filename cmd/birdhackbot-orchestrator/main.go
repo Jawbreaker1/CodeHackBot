@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -16,6 +19,7 @@ import (
 )
 
 const version = "dev"
+const plannerVersion = "planner_v1"
 
 type stringFlags []string
 
@@ -111,17 +115,28 @@ func runStart(args []string, stdout, stderr io.Writer) int {
 func runRun(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	var sessionsDir, runID, permissionModeRaw, workerCmd string
+	var sessionsDir, runID, goal, permissionModeRaw, workerCmd, planReviewRaw, planReviewRationale string
 	var tick, startupTimeout, staleTimeout, softStallGrace, approvalTimeout, stopGrace time.Duration
-	var maxAttempts int
+	var maxAttempts, maxParallelism, regenerateCount int
 	var disruptiveOptIn bool
-	var workerArgs, workerEnv stringFlags
+	var workerArgs, workerEnv, scopeTargets, scopeNetworks, scopeDenyTargets, constraints, successCriteria, stopCriteria stringFlags
 	fs.StringVar(&sessionsDir, "sessions-dir", "sessions", "sessions base directory")
 	fs.StringVar(&runID, "run", "", "run id")
+	fs.StringVar(&goal, "goal", "", "goal text for seed planning (requires scope + constraints)")
 	fs.StringVar(&permissionModeRaw, "permissions", string(orchestrator.PermissionDefault), "permission mode: readonly|default|all")
 	fs.StringVar(&workerCmd, "worker-cmd", "", "worker command to launch for each task")
 	fs.Var(&workerArgs, "worker-arg", "worker argument (repeatable)")
 	fs.Var(&workerEnv, "worker-env", "worker environment variable KEY=VALUE (repeatable)")
+	fs.Var(&scopeTargets, "scope-target", "in-scope target hostname/ip (repeatable)")
+	fs.Var(&scopeNetworks, "scope-network", "in-scope network CIDR (repeatable)")
+	fs.Var(&scopeDenyTargets, "scope-deny-target", "explicit deny target hostname/ip (repeatable)")
+	fs.Var(&constraints, "constraint", "run constraint (repeatable)")
+	fs.Var(&successCriteria, "success-criterion", "success criterion (repeatable)")
+	fs.Var(&stopCriteria, "stop-criterion", "stop criterion (repeatable)")
+	fs.StringVar(&planReviewRaw, "plan-review", "approve", "goal plan decision: approve|reject|edit|regenerate")
+	fs.StringVar(&planReviewRationale, "plan-review-rationale", "", "planner decision rationale for audit trail")
+	fs.IntVar(&regenerateCount, "plan-regenerate-count", 1, "number of regeneration attempts when --plan-review=regenerate")
+	fs.IntVar(&maxParallelism, "max-parallelism", 1, "max worker parallelism for goal-seeded runs")
 	fs.DurationVar(&tick, "tick", 250*time.Millisecond, "coordinator tick interval")
 	fs.DurationVar(&startupTimeout, "startup-timeout", 30*time.Second, "startup SLA timeout")
 	fs.DurationVar(&staleTimeout, "stale-timeout", 20*time.Second, "stale lease timeout")
@@ -133,16 +148,110 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if strings.TrimSpace(runID) == "" {
-		fmt.Fprintln(stderr, "run requires --run")
+	runID = strings.TrimSpace(runID)
+	goal = normalizeGoal(goal)
+	planReview, err := normalizePlanReview(planReviewRaw)
+	if err != nil {
+		fmt.Fprintf(stderr, "run invalid --plan-review: %v\n", err)
 		return 2
 	}
-	if strings.TrimSpace(workerCmd) == "" {
+	if regenerateCount < 1 {
+		fmt.Fprintln(stderr, "run invalid --plan-regenerate-count: must be >= 1")
+		return 2
+	}
+	if runID == "" && goal == "" {
+		fmt.Fprintln(stderr, "run requires --run or --goal")
+		return 2
+	}
+	if strings.TrimSpace(workerCmd) == "" && !(goal != "" && (planReview == "reject" || planReview == "edit")) {
 		fmt.Fprintln(stderr, "run requires --worker-cmd")
 		return 2
 	}
 	permissionMode := orchestrator.PermissionMode(strings.TrimSpace(permissionModeRaw))
 	manager := orchestrator.NewManager(sessionsDir)
+	if goal != "" {
+		scope := orchestrator.Scope{
+			Networks:    compactStringFlags(scopeNetworks),
+			Targets:     compactStringFlags(scopeTargets),
+			DenyTargets: compactStringFlags(scopeDenyTargets),
+		}
+		goalConstraints := compactStringFlags(constraints)
+		if err := validateGoalSeedInputs(scope, goalConstraints); err != nil {
+			fmt.Fprintf(stderr, "run invalid goal input: %v\n", err)
+			return 2
+		}
+		if runID == "" {
+			runID = generateRunID(time.Now().UTC())
+		}
+		if err := ensureRunIDAvailable(sessionsDir, runID); err != nil {
+			fmt.Fprintf(stderr, "run invalid id: %v\n", err)
+			return 2
+		}
+
+		success := compactStringFlags(successCriteria)
+		stop := compactStringFlags(stopCriteria)
+		promptHash := plannerPromptHash(goal, scope, goalConstraints, success, stop, maxParallelism)
+		hypothesisLimit := 5
+		plan, err := buildGoalSeedPlan(runID, goal, scope, goalConstraints, success, stop, maxParallelism, hypothesisLimit, time.Now().UTC())
+		if err != nil {
+			fmt.Fprintf(stderr, "run failed synthesizing plan: %v\n", err)
+			return 1
+		}
+		if planReview == "regenerate" {
+			for i := 0; i < regenerateCount; i++ {
+				hypothesisLimit = minInt(8, 5+i+1)
+				plan, err = buildGoalSeedPlan(runID, goal, scope, goalConstraints, success, stop, maxParallelism, hypothesisLimit, time.Now().UTC())
+				if err != nil {
+					fmt.Fprintf(stderr, "run failed regenerating plan (attempt %d): %v\n", i+1, err)
+					return 1
+				}
+			}
+		}
+		decision := planReview
+		if planReview == "regenerate" {
+			decision = "approve"
+		}
+		plan.Metadata.PlannerVersion = plannerVersion
+		plan.Metadata.PlannerPromptHash = promptHash
+		plan.Metadata.PlannerDecision = decision
+		plan.Metadata.PlannerRationale = strings.TrimSpace(planReviewRationale)
+		plan.Metadata.RegenerationCount = 0
+		if planReview == "regenerate" {
+			plan.Metadata.RegenerationCount = regenerateCount
+		}
+
+		printPlanSummary(stdout, plan)
+		switch planReview {
+		case "reject":
+			plan.Metadata.PlannerDecision = "reject"
+			planPath, auditPath, err := persistPlanReview(sessionsDir, plan, "plan.review.json")
+			if err != nil {
+				fmt.Fprintf(stderr, "run failed writing rejected plan review: %v\n", err)
+				return 1
+			}
+			fmt.Fprintf(stdout, "plan rejected: %s\nreview log: %s\n", planPath, auditPath)
+			return 0
+		case "edit":
+			plan.Metadata.PlannerDecision = "edit"
+			planPath, auditPath, err := persistPlanReview(sessionsDir, plan, "plan.draft.json")
+			if err != nil {
+				fmt.Fprintf(stderr, "run failed writing editable plan draft: %v\n", err)
+				return 1
+			}
+			fmt.Fprintf(stdout, "plan draft written: %s\nedit and launch with: birdhackbot-orchestrator start --sessions-dir %s --plan %s\nreview log: %s\n", planPath, sessionsDir, planPath, auditPath)
+			return 0
+		}
+		startedRunID, err := manager.StartFromPlan(plan, "")
+		if err != nil {
+			fmt.Fprintf(stderr, "run failed creating goal plan: %v\n", err)
+			return 1
+		}
+		runID = startedRunID
+		if _, _, err := persistPlanReview(sessionsDir, plan, "plan.json"); err != nil {
+			fmt.Fprintf(stderr, "run warning: failed to write planner audit: %v\n", err)
+		}
+		fmt.Fprintf(stdout, "run started: %s\n", runID)
+	}
 	plan, err := manager.LoadRunPlan(runID)
 	if err != nil {
 		fmt.Fprintf(stderr, "run failed loading plan: %v\n", err)
@@ -226,6 +335,175 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 			}
 		}
 	}
+}
+
+func normalizeGoal(raw string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(raw)), " ")
+}
+
+func compactStringFlags(values stringFlags) []string {
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
+}
+
+func validateGoalSeedInputs(scope orchestrator.Scope, constraints []string) error {
+	if len(scope.Targets) == 0 && len(scope.Networks) == 0 {
+		return fmt.Errorf("at least one --scope-target or --scope-network is required with --goal")
+	}
+	if len(constraints) == 0 {
+		return fmt.Errorf("at least one --constraint is required with --goal")
+	}
+	return nil
+}
+
+func ensureRunIDAvailable(sessionsDir, runID string) error {
+	runRoot := orchestrator.BuildRunPaths(sessionsDir, runID).Root
+	_, err := os.Stat(runRoot)
+	if err == nil {
+		return fmt.Errorf("run id %q already exists", runID)
+	}
+	if !os.IsNotExist(err) {
+		return fmt.Errorf("check run path: %w", err)
+	}
+	return nil
+}
+
+func generateRunID(now time.Time) string {
+	utc := now.UTC()
+	return fmt.Sprintf("run-%s-%04x", utc.Format("20060102-150405"), utc.UnixNano()&0xffff)
+}
+
+func buildGoalSeedPlan(runID, goal string, scope orchestrator.Scope, constraints, successCriteria, stopCriteria []string, maxParallelism, hypothesisLimit int, now time.Time) (orchestrator.RunPlan, error) {
+	normalizedGoal := normalizeGoal(goal)
+	hypotheses := orchestrator.GenerateHypotheses(normalizedGoal, scope, hypothesisLimit)
+	tasks, err := orchestrator.SynthesizeTaskGraph(normalizedGoal, scope, hypotheses)
+	if err != nil {
+		return orchestrator.RunPlan{}, err
+	}
+	if maxParallelism <= 0 {
+		maxParallelism = 1
+	}
+	if len(successCriteria) == 0 {
+		successCriteria = []string{"goal_seed_completed"}
+	}
+	if len(stopCriteria) == 0 {
+		stopCriteria = []string{"manual_stop", "out_of_scope", "budget_exhausted"}
+	}
+	plan := orchestrator.RunPlan{
+		RunID:           runID,
+		Scope:           scope,
+		Constraints:     constraints,
+		SuccessCriteria: successCriteria,
+		StopCriteria:    stopCriteria,
+		MaxParallelism:  maxParallelism,
+		Tasks:           tasks,
+		Metadata: orchestrator.PlanMetadata{
+			CreatedAt:      now.UTC(),
+			Goal:           strings.TrimSpace(goal),
+			NormalizedGoal: normalizedGoal,
+			PlannerMode:    "goal_seed_v1",
+			Hypotheses:     hypotheses,
+		},
+	}
+	if err := orchestrator.ValidateSynthesizedPlan(plan); err != nil {
+		return orchestrator.RunPlan{}, err
+	}
+	return plan, nil
+}
+
+func normalizePlanReview(raw string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "approve":
+		return "approve", nil
+	case "reject", "edit", "regenerate":
+		return strings.ToLower(strings.TrimSpace(raw)), nil
+	default:
+		return "", fmt.Errorf("must be one of: approve|reject|edit|regenerate")
+	}
+}
+
+func plannerPromptHash(goal string, scope orchestrator.Scope, constraints, successCriteria, stopCriteria []string, maxParallelism int) string {
+	payload := map[string]any{
+		"version":          plannerVersion,
+		"goal":             normalizeGoal(goal),
+		"scope":            scope,
+		"constraints":      constraints,
+		"success_criteria": successCriteria,
+		"stop_criteria":    stopCriteria,
+		"max_parallelism":  maxParallelism,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+func printPlanSummary(stdout io.Writer, plan orchestrator.RunPlan) {
+	fmt.Fprintf(stdout, "plan summary: run=%s planner=%s prompt_hash=%s hypotheses=%d tasks=%d max_parallelism=%d\n", plan.RunID, plan.Metadata.PlannerVersion, plan.Metadata.PlannerPromptHash, len(plan.Metadata.Hypotheses), len(plan.Tasks), plan.MaxParallelism)
+	for i, hypothesis := range plan.Metadata.Hypotheses {
+		if i >= 3 {
+			fmt.Fprintf(stdout, "  ... %d more hypotheses\n", len(plan.Metadata.Hypotheses)-i)
+			break
+		}
+		fmt.Fprintf(stdout, "  [%s] impact=%s confidence=%s score=%d: %s\n", hypothesis.ID, hypothesis.Impact, hypothesis.Confidence, hypothesis.Score, hypothesis.Statement)
+	}
+	for i, task := range plan.Tasks {
+		if i >= 5 {
+			fmt.Fprintf(stdout, "  ... %d more tasks\n", len(plan.Tasks)-i)
+			break
+		}
+		fmt.Fprintf(stdout, "  task[%d] %s risk=%s depends_on=%d strategy=%s\n", i+1, task.TaskID, task.RiskLevel, len(task.DependsOn), task.Strategy)
+	}
+}
+
+func persistPlanReview(sessionsDir string, plan orchestrator.RunPlan, planFilename string) (string, string, error) {
+	paths, err := orchestrator.EnsureRunLayout(sessionsDir, plan.RunID)
+	if err != nil {
+		return "", "", err
+	}
+	planPath := filepath.Join(paths.PlanDir, planFilename)
+	if err := orchestrator.WriteJSONAtomic(planPath, plan); err != nil {
+		return "", "", err
+	}
+	reviewPath := filepath.Join(paths.PlanDir, "plan.review.audit.json")
+	review := map[string]any{
+		"run_id":              plan.RunID,
+		"planner_version":     plan.Metadata.PlannerVersion,
+		"planner_prompt_hash": plan.Metadata.PlannerPromptHash,
+		"decision":            plan.Metadata.PlannerDecision,
+		"rationale":           plan.Metadata.PlannerRationale,
+		"regeneration_count":  plan.Metadata.RegenerationCount,
+		"created_at":          plan.Metadata.CreatedAt,
+		"goal":                plan.Metadata.Goal,
+		"normalized_goal":     plan.Metadata.NormalizedGoal,
+		"hypothesis_count":    len(plan.Metadata.Hypotheses),
+		"task_count":          len(plan.Tasks),
+	}
+	if err := orchestrator.WriteJSONAtomic(reviewPath, review); err != nil {
+		return "", "", err
+	}
+	return planPath, reviewPath, nil
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func runStatus(args []string, stdout, stderr io.Writer) int {

@@ -194,6 +194,33 @@ func (s *Scheduler) SetRetryBackoff(backoff []time.Duration) {
 	s.backoff = append([]time.Duration(nil), backoff...)
 }
 
+func (s *Scheduler) AddTask(task TaskSpec) error {
+	if err := ValidateTaskSpec(task); err != nil {
+		return err
+	}
+	if _, exists := s.tasks[task.TaskID]; exists {
+		return fmt.Errorf("task %s already exists", task.TaskID)
+	}
+	for _, dep := range task.DependsOn {
+		if _, ok := s.tasks[dep]; !ok {
+			return fmt.Errorf("task %s depends on unknown task %s", task.TaskID, dep)
+		}
+	}
+	tasks := make(map[string]TaskSpec, len(s.tasks)+1)
+	for id, existing := range s.tasks {
+		tasks[id] = existing
+	}
+	tasks[task.TaskID] = task
+	if err := validateAcyclic(tasks); err != nil {
+		return err
+	}
+	s.tasks[task.TaskID] = task
+	s.state[task.TaskID] = TaskStateQueued
+	s.attempts[task.TaskID] = 1
+	delete(s.retryAfter, task.TaskID)
+	return nil
+}
+
 func (s *Scheduler) IsDone() bool {
 	for _, st := range s.state {
 		switch st {

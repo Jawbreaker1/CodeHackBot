@@ -83,7 +83,8 @@ func (m *Manager) SubmitApprovalDecision(runID, approvalID string, approve bool,
 	if expiresIn > 0 {
 		payload["expires_in_seconds"] = int(expiresIn.Seconds())
 	}
-	return m.EmitEvent(runID, orchestratorWorkerID, "", eventType, payload)
+	workerID := fmt.Sprintf("operator-approval-%d", m.Now().UnixNano())
+	return m.EmitEvent(runID, workerID, "", eventType, payload)
 }
 
 func toString(v any) string {

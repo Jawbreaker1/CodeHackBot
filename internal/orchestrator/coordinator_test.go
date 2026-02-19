@@ -1256,6 +1256,161 @@ func TestCoordinator_ReplanTriggerExecutionFailure(t *testing.T) {
 	}
 }
 
+func TestCoordinator_AdaptiveReplanAddsTaskAndLease(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-coord-adaptive-add"
+	manager := NewManager(base)
+	plan := RunPlan{
+		RunID:           runID,
+		Scope:           Scope{Targets: []string{"127.0.0.1"}},
+		Constraints:     []string{"local_only"},
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks:           []TaskSpec{task("t1", nil, 1)},
+	}
+	if _, err := manager.StartFromPlan(plan, ""); err != nil {
+		t.Fatalf("StartFromPlan: %v", err)
+	}
+	scheduler, err := NewScheduler(plan, 1)
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	workers := NewWorkerManager(manager)
+	coord, err := NewCoordinator(runID, plan.Scope, manager, workers, scheduler, 2, 2*time.Second, 4*time.Second, 3*time.Second, func(task TaskSpec, attempt int, workerID string) WorkerSpec {
+		return helperWorkerSpec(t, workerID, "ok")
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	if err := manager.EmitEvent(runID, "signal-worker-t1-a1", "t1", EventTypeTaskFailed, map[string]any{
+		"reason": "repeated_step_loop",
+	}); err != nil {
+		t.Fatalf("EmitEvent task_failed: %v", err)
+	}
+	if err := coord.handleEventDrivenReplanTriggers(); err != nil {
+		t.Fatalf("handleEventDrivenReplanTriggers: %v", err)
+	}
+
+	events, err := manager.Events(runID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	replan := latestReplanEventByTrigger(events, "repeated_step_loop")
+	if replan == nil {
+		t.Fatalf("expected replan event for repeated_step_loop")
+	}
+	payload := map[string]any{}
+	if len(replan.Payload) > 0 {
+		_ = json.Unmarshal(replan.Payload, &payload)
+	}
+	if mutated, _ := payload["graph_mutation"].(bool); !mutated {
+		t.Fatalf("expected graph_mutation=true payload: %#v", payload)
+	}
+	addedTaskID := toString(payload["added_task_id"])
+	if addedTaskID == "" {
+		t.Fatalf("expected added_task_id in payload: %#v", payload)
+	}
+	if _, ok := scheduler.Task(addedTaskID); !ok {
+		t.Fatalf("expected added task %s in scheduler", addedTaskID)
+	}
+	addedTask, err := manager.ReadTask(runID, addedTaskID)
+	if err != nil {
+		t.Fatalf("ReadTask adaptive task: %v", err)
+	}
+	if addedTask.IdempotencyKey == "" {
+		t.Fatalf("expected idempotency key on adaptive task")
+	}
+	lease, err := manager.ReadLease(runID, addedTaskID)
+	if err != nil {
+		t.Fatalf("ReadLease adaptive task: %v", err)
+	}
+	if lease.Status != LeaseStatusQueued {
+		t.Fatalf("expected queued lease for adaptive task, got %s", lease.Status)
+	}
+}
+
+func TestCoordinator_AdaptiveReplanHonorsBudgetCap(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-coord-adaptive-budget"
+	manager := NewManager(base)
+	plan := RunPlan{
+		RunID:           runID,
+		Scope:           Scope{Targets: []string{"127.0.0.1"}},
+		Constraints:     []string{"local_only"},
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"max_replans=1"},
+		MaxParallelism:  1,
+		Tasks:           []TaskSpec{task("t1", nil, 1)},
+	}
+	if _, err := manager.StartFromPlan(plan, ""); err != nil {
+		t.Fatalf("StartFromPlan: %v", err)
+	}
+	scheduler, err := NewScheduler(plan, 1)
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	workers := NewWorkerManager(manager)
+	coord, err := NewCoordinator(runID, plan.Scope, manager, workers, scheduler, 2, 2*time.Second, 4*time.Second, 3*time.Second, func(task TaskSpec, attempt int, workerID string) WorkerSpec {
+		return helperWorkerSpec(t, workerID, "ok")
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	coord.ensureReplanBudget()
+	if coord.replanMutationBudget != 1 {
+		t.Fatalf("expected replan budget=1, got %d", coord.replanMutationBudget)
+	}
+
+	if err := manager.EmitEvent(runID, "signal-worker-t1-a1", "t1", EventTypeTaskFailed, map[string]any{
+		"reason": "repeated_step_loop",
+	}); err != nil {
+		t.Fatalf("emit first failure: %v", err)
+	}
+	if err := manager.EmitEvent(runID, "signal-worker-t1-a1", "t1", EventTypeTaskFailed, map[string]any{
+		"reason": "repeated_step_loop",
+	}); err != nil {
+		t.Fatalf("emit second failure: %v", err)
+	}
+	if err := coord.handleEventDrivenReplanTriggers(); err != nil {
+		t.Fatalf("handleEventDrivenReplanTriggers: %v", err)
+	}
+
+	events, err := manager.Events(runID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	replanEvents := replanEventsByTrigger(events, "repeated_step_loop")
+	if len(replanEvents) < 2 {
+		t.Fatalf("expected at least two repeated_step_loop replan events, got %d", len(replanEvents))
+	}
+	firstPayload := map[string]any{}
+	_ = json.Unmarshal(replanEvents[0].Payload, &firstPayload)
+	if mutated, _ := firstPayload["graph_mutation"].(bool); !mutated {
+		t.Fatalf("expected first event to mutate graph: %#v", firstPayload)
+	}
+	secondPayload := map[string]any{}
+	_ = json.Unmarshal(replanEvents[1].Payload, &secondPayload)
+	if status := toString(secondPayload["mutation_status"]); status != "replan_budget_exhausted" {
+		t.Fatalf("expected replan_budget_exhausted status, got %q payload=%#v", status, secondPayload)
+	}
+	if outcome := toString(secondPayload["outcome"]); outcome != string(ReplanOutcomeTerminate) {
+		t.Fatalf("expected terminate outcome, got %q", outcome)
+	}
+	status, err := manager.Status(runID)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if status.State != "stopped" {
+		t.Fatalf("expected run stopped after replan budget exhaustion, got %s", status.State)
+	}
+}
+
 func TestRetryableWorkerFailureReason(t *testing.T) {
 	t.Parallel()
 
@@ -1388,4 +1543,38 @@ func replanOutcomeCount(events []EventEnvelope, outcome string) int {
 		}
 	}
 	return count
+}
+
+func latestReplanEventByTrigger(events []EventEnvelope, trigger string) *EventEnvelope {
+	for i := len(events) - 1; i >= 0; i-- {
+		event := events[i]
+		if event.Type != EventTypeRunReplanRequested {
+			continue
+		}
+		payload := map[string]any{}
+		if len(event.Payload) > 0 {
+			_ = json.Unmarshal(event.Payload, &payload)
+		}
+		if toString(payload["trigger"]) == trigger {
+			return &event
+		}
+	}
+	return nil
+}
+
+func replanEventsByTrigger(events []EventEnvelope, trigger string) []EventEnvelope {
+	out := []EventEnvelope{}
+	for _, event := range events {
+		if event.Type != EventTypeRunReplanRequested {
+			continue
+		}
+		payload := map[string]any{}
+		if len(event.Payload) > 0 {
+			_ = json.Unmarshal(event.Payload, &payload)
+		}
+		if toString(payload["trigger"]) == trigger {
+			out = append(out, event)
+		}
+	}
+	return out
 }

@@ -40,7 +40,27 @@ type RunPlan struct {
 }
 
 type PlanMetadata struct {
-	CreatedAt time.Time `json:"created_at,omitempty"`
+	CreatedAt         time.Time    `json:"created_at,omitempty"`
+	Goal              string       `json:"goal,omitempty"`
+	NormalizedGoal    string       `json:"normalized_goal,omitempty"`
+	PlannerMode       string       `json:"planner_mode,omitempty"`
+	PlannerVersion    string       `json:"planner_version,omitempty"`
+	PlannerPromptHash string       `json:"planner_prompt_hash,omitempty"`
+	PlannerDecision   string       `json:"planner_decision,omitempty"`
+	PlannerRationale  string       `json:"planner_rationale,omitempty"`
+	RegenerationCount int          `json:"regeneration_count,omitempty"`
+	Hypotheses        []Hypothesis `json:"hypotheses,omitempty"`
+}
+
+type Hypothesis struct {
+	ID               string   `json:"id"`
+	Statement        string   `json:"statement"`
+	Confidence       string   `json:"confidence"`
+	Impact           string   `json:"impact"`
+	Score            int      `json:"score"`
+	SuccessSignals   []string `json:"success_signals,omitempty"`
+	FailSignals      []string `json:"fail_signals,omitempty"`
+	EvidenceRequired []string `json:"evidence_required,omitempty"`
 }
 
 type Scope struct {
@@ -52,6 +72,7 @@ type Scope struct {
 type TaskSpec struct {
 	TaskID            string     `json:"task_id"`
 	Title             string     `json:"title"`
+	IdempotencyKey    string     `json:"idempotency_key,omitempty"`
 	Goal              string     `json:"goal"`
 	Targets           []string   `json:"targets,omitempty"`
 	DependsOn         []string   `json:"depends_on,omitempty"`

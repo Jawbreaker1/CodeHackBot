@@ -173,6 +173,40 @@ func TestScheduler_InvalidGraph(t *testing.T) {
 	}
 }
 
+func TestScheduler_AddTaskDynamicGraphMutation(t *testing.T) {
+	t.Parallel()
+
+	plan := RunPlan{
+		RunID:           "run-dynamic",
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  2,
+		Tasks: []TaskSpec{
+			task("t1", nil, 1),
+		},
+	}
+	s, err := NewScheduler(plan, 2)
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	if err := s.AddTask(task("t2", []string{"t1"}, 2)); err != nil {
+		t.Fatalf("AddTask: %v", err)
+	}
+	if err := s.MarkLeased("t1"); err != nil {
+		t.Fatalf("MarkLeased t1: %v", err)
+	}
+	if err := s.MarkRunning("t1"); err != nil {
+		t.Fatalf("MarkRunning t1: %v", err)
+	}
+	if err := s.MarkCompleted("t1"); err != nil {
+		t.Fatalf("MarkCompleted t1: %v", err)
+	}
+	ready := s.NextLeasable()
+	if len(ready) != 1 || ready[0].TaskID != "t2" {
+		t.Fatalf("expected dynamic task t2 to become leasable, got %#v", ready)
+	}
+}
+
 func task(id string, deps []string, priority int) TaskSpec {
 	return TaskSpec{
 		TaskID:            id,

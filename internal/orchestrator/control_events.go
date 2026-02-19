@@ -18,5 +18,6 @@ func (m *Manager) SubmitWorkerStopRequest(runID, workerID, actor, reason string)
 		"reason":           reason,
 		"source":           "cli",
 	}
-	return m.EmitEvent(runID, orchestratorWorkerID, "", EventTypeWorkerStopRequested, payload)
+	operatorWorkerID := fmt.Sprintf("operator-worker-stop-%d", m.Now().UnixNano())
+	return m.EmitEvent(runID, operatorWorkerID, "", EventTypeWorkerStopRequested, payload)
 }
