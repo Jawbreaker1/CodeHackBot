@@ -33,10 +33,12 @@ func runTUI(args []string, stdout, stderr io.Writer) int {
 	var sessionsDir, runID string
 	var refresh time.Duration
 	var eventLimit int
+	var exitOnDone bool
 	fs.StringVar(&sessionsDir, "sessions-dir", "sessions", "sessions base directory")
 	fs.StringVar(&runID, "run", "", "run id")
 	fs.DurationVar(&refresh, "refresh", time.Second, "refresh interval")
 	fs.IntVar(&eventLimit, "events", 12, "max recent events to display")
+	fs.BoolVar(&exitOnDone, "exit-on-done", false, "exit automatically when run reaches completed/stopped")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -82,6 +84,11 @@ func runTUI(args []string, stdout, stderr io.Writer) int {
 		snapshot, snapErr := collectTUISnapshot(manager, runID, eventLimit)
 		if snapErr != nil {
 			messages = appendLogLine(messages, "snapshot error: "+snapErr.Error())
+		}
+		if exitOnDone && (snapshot.status.State == "completed" || snapshot.status.State == "stopped") {
+			messages = appendLogLine(messages, fmt.Sprintf("run %s %s; exiting tui", runID, snapshot.status.State))
+			renderTUI(stdout, runID, snapshot, messages, input, eventLimit)
+			break
 		}
 		renderTUI(stdout, runID, snapshot, messages, input, eventLimit)
 

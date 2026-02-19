@@ -119,6 +119,7 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 	var tick, startupTimeout, staleTimeout, softStallGrace, approvalTimeout, stopGrace time.Duration
 	var maxAttempts, maxParallelism, regenerateCount int
 	var disruptiveOptIn bool
+	var useTUI bool
 	var workerArgs, workerEnv, scopeTargets, scopeNetworks, scopeDenyTargets, constraints, successCriteria, stopCriteria stringFlags
 	fs.StringVar(&sessionsDir, "sessions-dir", "sessions", "sessions base directory")
 	fs.StringVar(&runID, "run", "", "run id")
@@ -145,6 +146,7 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 	fs.DurationVar(&stopGrace, "stop-grace", 2*time.Second, "worker stop grace period")
 	fs.IntVar(&maxAttempts, "max-attempts", 2, "max retry attempts per task")
 	fs.BoolVar(&disruptiveOptIn, "disruptive-opt-in", false, "allow disruptive actions to enter approval flow")
+	fs.BoolVar(&useTUI, "tui", false, "run coordinator with attached TUI in this terminal")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -302,6 +304,68 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	if useTUI {
+		runDone := make(chan int, 1)
+		go func() {
+			runDone <- executeCoordinatorLoop(ctx, manager, coord, runID, tick, stopGrace, stdout, stderr, false)
+		}()
+
+		tuiRefresh := tick
+		if tuiRefresh < 500*time.Millisecond {
+			tuiRefresh = 500 * time.Millisecond
+		}
+		tuiCode := runTUI([]string{
+			"--sessions-dir", sessionsDir,
+			"--run", runID,
+			"--refresh", tuiRefresh.String(),
+			"--exit-on-done",
+		}, stdout, stderr)
+
+		select {
+		case runCode := <-runDone:
+			if runCode != 0 {
+				return runCode
+			}
+			return tuiCode
+		default:
+		}
+
+		if status, err := manager.Status(runID); err == nil && status.State != "completed" && status.State != "stopped" {
+			_ = manager.Stop(runID)
+		}
+		stop()
+
+		select {
+		case runCode := <-runDone:
+			if runCode != 0 {
+				return runCode
+			}
+		case <-time.After(5 * time.Second):
+			fmt.Fprintf(stderr, "run shutdown timeout: %s\n", runID)
+			return 1
+		}
+		return tuiCode
+	}
+
+	return executeCoordinatorLoop(ctx, manager, coord, runID, tick, stopGrace, stdout, stderr, true)
+}
+
+func normalizeGoal(raw string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(raw)), " ")
+}
+
+func executeCoordinatorLoop(
+	ctx context.Context,
+	manager *orchestrator.Manager,
+	coord *orchestrator.Coordinator,
+	runID string,
+	tick time.Duration,
+	stopGrace time.Duration,
+	stdout io.Writer,
+	stderr io.Writer,
+	announce bool,
+) int {
 	ticker := time.NewTicker(tick)
 	defer ticker.Stop()
 
@@ -309,8 +373,12 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 		select {
 		case <-ctx.Done():
 			_ = coord.StopAll(stopGrace)
-			_ = manager.Stop(runID)
-			fmt.Fprintf(stdout, "run interrupted: %s\n", runID)
+			if status, err := manager.Status(runID); err == nil && status.State != "completed" && status.State != "stopped" {
+				_ = manager.Stop(runID)
+			}
+			if announce {
+				fmt.Fprintf(stdout, "run interrupted: %s\n", runID)
+			}
 			return 0
 		case <-ticker.C:
 			status, err := manager.Status(runID)
@@ -320,7 +388,9 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 			}
 			if status.State == "stopped" {
 				_ = coord.StopAll(stopGrace)
-				fmt.Fprintf(stdout, "run stopped: %s\n", runID)
+				if announce {
+					fmt.Fprintf(stdout, "run stopped: %s\n", runID)
+				}
 				return 0
 			}
 			if err := coord.Tick(); err != nil {
@@ -334,15 +404,13 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 					fmt.Fprintf(stderr, "run completion event failed: %v\n", err)
 					return 1
 				}
-				fmt.Fprintf(stdout, "run completed: %s\n", runID)
+				if announce {
+					fmt.Fprintf(stdout, "run completed: %s\n", runID)
+				}
 				return 0
 			}
 		}
 	}
-}
-
-func normalizeGoal(raw string) string {
-	return strings.Join(strings.Fields(strings.TrimSpace(raw)), " ")
 }
 
 func compactStringFlags(values stringFlags) []string {
