@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -116,6 +117,75 @@ func TestWaitForApprovalID(t *testing.T) {
 	if id != "apr-wait-1" {
 		t.Fatalf("unexpected approval id: %s", id)
 	}
+}
+
+func TestLatestFailureFromEvents_TaskFailed(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	events := []orchestrator.EventEnvelope{
+		{
+			EventID:  "e1",
+			RunID:    "run-1",
+			WorkerID: "worker-a",
+			TaskID:   "task-a",
+			Seq:      1,
+			TS:       now,
+			Type:     orchestrator.EventTypeTaskFailed,
+			Payload:  mustPayload(t, map[string]any{"reason": "assist_budget_exhausted", "error": "exhausted max steps", "log_path": "/tmp/worker.log"}),
+		},
+	}
+
+	failure := latestFailureFromEvents(events)
+	if failure == nil {
+		t.Fatalf("expected failure")
+	}
+	if failure.Reason != "assist_budget_exhausted" {
+		t.Fatalf("unexpected reason: %s", failure.Reason)
+	}
+	if failure.Error != "exhausted max steps" {
+		t.Fatalf("unexpected error: %s", failure.Error)
+	}
+	if failure.LogPath != "/tmp/worker.log" {
+		t.Fatalf("unexpected log path: %s", failure.LogPath)
+	}
+}
+
+func TestLatestFailureFromEvents_WorkerStoppedFallback(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	events := []orchestrator.EventEnvelope{
+		{
+			EventID:  "e1",
+			RunID:    "run-1",
+			WorkerID: "worker-a",
+			Seq:      2,
+			TS:       now,
+			Type:     orchestrator.EventTypeWorkerStopped,
+			Payload:  mustPayload(t, map[string]any{"status": "failed", "error": "exit status 1", "log_path": "/tmp/worker.log"}),
+		},
+	}
+
+	failure := latestFailureFromEvents(events)
+	if failure == nil {
+		t.Fatalf("expected failure")
+	}
+	if failure.Reason != "worker_stopped_failed" {
+		t.Fatalf("unexpected reason: %s", failure.Reason)
+	}
+	if failure.Error != "exit status 1" {
+		t.Fatalf("unexpected error: %s", failure.Error)
+	}
+}
+
+func mustPayload(t *testing.T, payload map[string]any) json.RawMessage {
+	t.Helper()
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	return data
 }
 
 func hasEvent(events []orchestrator.EventEnvelope, eventType string) bool {

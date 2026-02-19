@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -147,11 +148,21 @@ func readTUIKeys(keyCh chan<- byte, errCh chan<- error) {
 }
 
 type tuiSnapshot struct {
-	status    orchestrator.RunStatus
-	workers   []orchestrator.WorkerStatus
-	approvals []orchestrator.PendingApprovalView
-	events    []orchestrator.EventEnvelope
-	updatedAt time.Time
+	status      orchestrator.RunStatus
+	workers     []orchestrator.WorkerStatus
+	approvals   []orchestrator.PendingApprovalView
+	events      []orchestrator.EventEnvelope
+	lastFailure *tuiFailure
+	updatedAt   time.Time
+}
+
+type tuiFailure struct {
+	TS      time.Time
+	TaskID  string
+	Worker  string
+	Reason  string
+	Error   string
+	LogPath string
 }
 
 func collectTUISnapshot(manager *orchestrator.Manager, runID string, eventLimit int) (tuiSnapshot, error) {
@@ -168,14 +179,19 @@ func collectTUISnapshot(manager *orchestrator.Manager, runID string, eventLimit 
 	if err != nil {
 		return snap, err
 	}
-	events, err := manager.Events(runID, eventLimit)
+	allEvents, err := manager.Events(runID, 0)
 	if err != nil {
 		return snap, err
+	}
+	events := allEvents
+	if eventLimit > 0 && len(events) > eventLimit {
+		events = append([]orchestrator.EventEnvelope{}, events[len(events)-eventLimit:]...)
 	}
 	snap.status = status
 	snap.workers = workers
 	snap.approvals = approvals
 	snap.events = events
+	snap.lastFailure = latestFailureFromEvents(allEvents)
 	snap.updatedAt = time.Now().UTC()
 	return snap, nil
 }
@@ -217,6 +233,27 @@ func renderTUI(out io.Writer, runID string, snap tuiSnapshot, messages []string,
 	} else {
 		for _, approval := range snap.approvals {
 			lines = append(lines, fitLine(fmt.Sprintf("  - %s | task=%s | tier=%s | %s", approval.ApprovalID, approval.TaskID, approval.RiskTier, approval.Reason), width))
+		}
+	}
+	lines = append(lines, fitLine("", width))
+	lines = append(lines, fitLine("Last Failure:", width))
+	if snap.lastFailure == nil {
+		lines = append(lines, fitLine("  (none)", width))
+	} else {
+		taskID := snap.lastFailure.TaskID
+		if strings.TrimSpace(taskID) == "" {
+			taskID = "-"
+		}
+		reason := snap.lastFailure.Reason
+		if strings.TrimSpace(reason) == "" {
+			reason = "task_failed"
+		}
+		lines = append(lines, fitLine(fmt.Sprintf("  - %s | task=%s | worker=%s | reason=%s", snap.lastFailure.TS.Format("15:04:05"), taskID, snap.lastFailure.Worker, reason), width))
+		if strings.TrimSpace(snap.lastFailure.Error) != "" {
+			lines = append(lines, fitLine("    error: "+snap.lastFailure.Error, width))
+		}
+		if strings.TrimSpace(snap.lastFailure.LogPath) != "" {
+			lines = append(lines, fitLine("    log: "+snap.lastFailure.LogPath, width))
 		}
 	}
 	lines = append(lines, fitLine("", width))
@@ -281,6 +318,62 @@ func appendLogLine(lines []string, line string) []string {
 		return out[len(out)-8:]
 	}
 	return out
+}
+
+func latestFailureFromEvents(events []orchestrator.EventEnvelope) *tuiFailure {
+	for i := len(events) - 1; i >= 0; i-- {
+		event := events[i]
+		payload := decodeEventPayload(event.Payload)
+		switch event.Type {
+		case orchestrator.EventTypeTaskFailed:
+			reason := strings.TrimSpace(stringFromAny(payload["reason"]))
+			if reason == "" {
+				reason = "task_failed"
+			}
+			return &tuiFailure{
+				TS:      event.TS,
+				TaskID:  event.TaskID,
+				Worker:  event.WorkerID,
+				Reason:  reason,
+				Error:   strings.TrimSpace(stringFromAny(payload["error"])),
+				LogPath: strings.TrimSpace(stringFromAny(payload["log_path"])),
+			}
+		case orchestrator.EventTypeWorkerStopped:
+			status := strings.ToLower(strings.TrimSpace(stringFromAny(payload["status"])))
+			if status != "failed" {
+				continue
+			}
+			return &tuiFailure{
+				TS:      event.TS,
+				TaskID:  event.TaskID,
+				Worker:  event.WorkerID,
+				Reason:  "worker_stopped_failed",
+				Error:   strings.TrimSpace(stringFromAny(payload["error"])),
+				LogPath: strings.TrimSpace(stringFromAny(payload["log_path"])),
+			}
+		}
+	}
+	return nil
+}
+
+func decodeEventPayload(raw json.RawMessage) map[string]any {
+	payload := map[string]any{}
+	if len(raw) == 0 {
+		return payload
+	}
+	_ = json.Unmarshal(raw, &payload)
+	return payload
+}
+
+func stringFromAny(v any) string {
+	switch value := v.(type) {
+	case string:
+		return value
+	case fmt.Stringer:
+		return value.String()
+	default:
+		return ""
+	}
 }
 
 func parseTUICommand(raw string) (tuiCommand, error) {
