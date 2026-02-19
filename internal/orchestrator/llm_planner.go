@@ -15,7 +15,9 @@ const llmPlannerSystemPrompt = "You are the BirdHackBot Orchestrator planner. Re
 	"Create an executable task graph for authorized internal-lab security testing. " +
 	"Do not use destructive actions by default. " +
 	"Schema: {\"rationale\":\"...\",\"tasks\":[{\"task_id\":\"...\",\"title\":\"...\",\"goal\":\"...\",\"targets\":[\"...\"],\"depends_on\":[\"...\"],\"priority\":1,\"strategy\":\"...\",\"risk_level\":\"recon_readonly|active_probe|exploit_controlled|priv_esc|disruptive\",\"done_when\":[\"...\"],\"fail_when\":[\"...\"],\"expected_artifacts\":[\"...\"],\"action\":{\"type\":\"assist|command|shell\",\"prompt\":\"...\",\"command\":\"...\",\"args\":[\"...\"],\"working_dir\":\"...\",\"timeout_seconds\":120},\"budget\":{\"max_steps\":12,\"max_tool_calls\":20,\"max_runtime_seconds\":600}}]}. " +
-	"Rules: every task must be concrete, bounded, and in-scope; dependencies must form a DAG; prefer parallelism where safe."
+	"Rules: every task must be concrete, bounded, and in-scope; dependencies must form a DAG; " +
+	"if tasks can be split into independent subtasks, do so and maximize safe parallel execution up to max_parallelism; " +
+	"only keep work serialized when there is a clear dependency/safety reason, and state that reason in rationale."
 
 type llmPlannerResponse struct {
 	Rationale string           `json:"rationale"`

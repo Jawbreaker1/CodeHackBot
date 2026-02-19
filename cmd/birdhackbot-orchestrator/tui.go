@@ -824,8 +824,32 @@ func parseTUICommand(raw string) (tuiCommand, error) {
 		}
 		return tuiCommand{name: "ask", reason: strings.TrimSpace(strings.TrimPrefix(trimmed, parts[0]))}, nil
 	default:
-		return tuiCommand{name: "ask", reason: trimmed}, nil
+		name := "instruct"
+		if looksLikeQuestion(trimmed) {
+			name = "ask"
+		}
+		return tuiCommand{name: name, reason: trimmed}, nil
 	}
+}
+
+func looksLikeQuestion(input string) bool {
+	trimmed := strings.TrimSpace(strings.ToLower(input))
+	if trimmed == "" {
+		return false
+	}
+	if strings.HasSuffix(trimmed, "?") {
+		return true
+	}
+	questionPrefixes := []string{
+		"what", "why", "how", "when", "where", "who", "which",
+		"can", "could", "would", "should", "is", "are", "do", "does", "did",
+	}
+	for _, prefix := range questionPrefixes {
+		if strings.HasPrefix(trimmed, prefix+" ") {
+			return true
+		}
+	}
+	return false
 }
 
 func executeTUICommand(manager *orchestrator.Manager, runID string, eventLimit *int, cmd tuiCommand) (bool, string) {

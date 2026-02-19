@@ -22,7 +22,8 @@ func TestParseTUICommand(t *testing.T) {
 		{in: "tasks", name: "tasks"},
 		{in: "ask what is current status", name: "ask"},
 		{in: "instruct investigate target", name: "instruct"},
-		{in: "Hello orchestrator", name: "ask"},
+		{in: "Hello orchestrator", name: "instruct"},
+		{in: "how many workers are running?", name: "ask"},
 		{in: "q", name: "quit"},
 		{in: "events 25", name: "events"},
 		{in: "approve apr-1 task ok", name: "approve"},
@@ -60,6 +61,30 @@ func TestParseTUICommandRejectsInvalid(t *testing.T) {
 			t.Parallel()
 			if _, err := parseTUICommand(in); err == nil {
 				t.Fatalf("expected parse error for %q", in)
+			}
+		})
+	}
+}
+
+func TestLooksLikeQuestion(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{in: "how many workers are running?", want: true},
+		{in: "What is the current plan", want: true},
+		{in: "can you summarize", want: true},
+		{in: "scan the network now", want: false},
+		{in: "resume execution", want: false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.in, func(t *testing.T) {
+			t.Parallel()
+			if got := looksLikeQuestion(tc.in); got != tc.want {
+				t.Fatalf("looksLikeQuestion(%q)=%v want %v", tc.in, got, tc.want)
 			}
 		})
 	}
