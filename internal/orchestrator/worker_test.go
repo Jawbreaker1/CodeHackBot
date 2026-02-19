@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -66,19 +67,38 @@ func TestWorkerManagerLaunchStopCleanup(t *testing.T) {
 		t.Fatalf("Events: %v", err)
 	}
 	var started, stopped bool
+	var logPath string
 	for _, event := range events {
 		if event.WorkerID != "worker-1" {
 			continue
 		}
+		payload := map[string]any{}
+		if len(event.Payload) > 0 {
+			_ = json.Unmarshal(event.Payload, &payload)
+		}
 		if event.Type == EventTypeWorkerStarted {
+			if got := strings.TrimSpace(toString(payload["log_path"])); got == "" {
+				t.Fatalf("expected worker_started log_path payload")
+			} else {
+				logPath = got
+			}
 			started = true
 		}
 		if event.Type == EventTypeWorkerStopped {
+			if got := strings.TrimSpace(toString(payload["log_path"])); got == "" {
+				t.Fatalf("expected worker_stopped log_path payload")
+			}
 			stopped = true
 		}
 	}
 	if !started || !stopped {
 		t.Fatalf("expected worker started and stopped events")
+	}
+	if strings.TrimSpace(logPath) == "" {
+		t.Fatalf("expected worker log path")
+	}
+	if _, err := os.Stat(logPath); err != nil {
+		t.Fatalf("worker log missing: %v", err)
 	}
 
 	removed := wm.CleanupCompleted(0)

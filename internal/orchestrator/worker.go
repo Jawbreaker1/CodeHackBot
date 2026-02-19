@@ -34,6 +34,8 @@ type runningWorker struct {
 	started  time.Time
 	attempts int
 	stopHB   chan struct{}
+	logPath  string
+	logFile  *os.File
 }
 
 type completedWorker struct {
@@ -44,6 +46,7 @@ type completedWorker struct {
 	errorMsg string
 	runID    string
 	workerID string
+	logPath  string
 }
 
 type WorkerExit struct {
@@ -53,6 +56,7 @@ type WorkerExit struct {
 	Attempts int
 	ErrorMsg string
 	ExitedAt time.Time
+	LogPath  string
 }
 
 func NewWorkerManager(manager *Manager) *WorkerManager {
@@ -96,8 +100,16 @@ func (wm *WorkerManager) Launch(runID string, spec WorkerSpec) error {
 		return fmt.Errorf("create worker workspace: %w", err)
 	}
 	cmd.Dir = workDir
+	logPath := filepath.Join(workDir, "worker.log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return fmt.Errorf("open worker log: %w", err)
+	}
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
 	configureWorkerProcess(cmd)
 	if err := cmd.Start(); err != nil {
+		_ = logFile.Close()
 		return fmt.Errorf("start worker %s: %w", spec.WorkerID, err)
 	}
 
@@ -119,9 +131,11 @@ func (wm *WorkerManager) Launch(runID string, spec WorkerSpec) error {
 			"command":  spec.Command,
 			"args":     spec.Args,
 			"attempts": attempts,
+			"log_path": logPath,
 		}),
 	}); err != nil {
 		terminateWorkerProcess(cmd, 0)
+		_ = logFile.Close()
 		return err
 	}
 
@@ -134,6 +148,8 @@ func (wm *WorkerManager) Launch(runID string, spec WorkerSpec) error {
 		started:  now,
 		attempts: attempts,
 		stopHB:   make(chan struct{}),
+		logPath:  logPath,
+		logFile:  logFile,
 	}
 	wm.mu.Unlock()
 
@@ -217,6 +233,7 @@ func (wm *WorkerManager) DrainCompleted(runID string) []WorkerExit {
 			Attempts: entry.attempts,
 			ErrorMsg: entry.errorMsg,
 			ExitedAt: entry.exitedAt,
+			LogPath:  entry.logPath,
 		})
 		delete(wm.completed, key)
 	}
@@ -231,6 +248,9 @@ func (wm *WorkerManager) waitWorker(key string) {
 		return
 	}
 	err := worker.cmd.Wait()
+	if worker.logFile != nil {
+		_ = worker.logFile.Close()
+	}
 	now := wm.manager.Now()
 	failed := err != nil
 	errMsg := ""
@@ -249,6 +269,7 @@ func (wm *WorkerManager) waitWorker(key string) {
 		errorMsg: errMsg,
 		runID:    worker.runID,
 		workerID: worker.spec.WorkerID,
+		logPath:  worker.logPath,
 	}
 	wm.mu.Unlock()
 
@@ -260,6 +281,9 @@ func (wm *WorkerManager) waitWorker(key string) {
 	if failed {
 		payload["status"] = "failed"
 		payload["error"] = errMsg
+	}
+	if strings.TrimSpace(worker.logPath) != "" {
+		payload["log_path"] = worker.logPath
 	}
 	seq, seqErr := wm.claimNextSeq(worker.runID, worker.spec.WorkerID)
 	if seqErr != nil {

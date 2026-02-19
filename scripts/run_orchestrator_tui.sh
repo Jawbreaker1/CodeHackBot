@@ -188,4 +188,9 @@ if [[ -n "${BIRDHACKBOT_LLM_MODEL:-}" ]]; then
   echo "[run] llm-model=$BIRDHACKBOT_LLM_MODEL"
 fi
 
-exec "${cmd[@]}"
+"${cmd[@]}"
+exit_code=$?
+echo
+echo "[debug] Inspect failures:"
+echo "./scripts/show_orchestrator_failures.sh --run $RUN_ID"
+exit "$exit_code"

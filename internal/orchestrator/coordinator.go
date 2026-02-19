@@ -223,6 +223,7 @@ func (c *Coordinator) handleWorkerExits() error {
 					"error":     exit.ErrorMsg,
 					"attempts":  exit.Attempts,
 					"worker_id": exit.WorkerID,
+					"log_path":  exit.LogPath,
 				}); err != nil {
 					return err
 				}
@@ -230,6 +231,7 @@ func (c *Coordinator) handleWorkerExits() error {
 			if err := c.markFailedWithReplan(taskID, reason, retryable, map[string]any{
 				"reason":    reason,
 				"worker_id": exit.WorkerID,
+				"log_path":  exit.LogPath,
 			}); err != nil {
 				return err
 			}

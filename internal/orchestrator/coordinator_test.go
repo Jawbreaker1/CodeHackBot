@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -118,6 +119,35 @@ func TestCoordinator_RetryFailedTask(t *testing.T) {
 	attempt, _ := scheduler.Attempt("t1")
 	if attempt != 2 {
 		t.Fatalf("expected retry attempt=2, got %d", attempt)
+	}
+
+	events, err := manager.Events(runID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	hasWorkerStoppedLogPath := false
+	hasReplanLogPath := false
+	for _, event := range events {
+		payload := map[string]any{}
+		if len(event.Payload) > 0 {
+			_ = json.Unmarshal(event.Payload, &payload)
+		}
+		switch event.Type {
+		case EventTypeWorkerStopped:
+			if strings.HasPrefix(event.WorkerID, "worker-t1-") && strings.TrimSpace(toString(payload["log_path"])) != "" {
+				hasWorkerStoppedLogPath = true
+			}
+		case EventTypeRunReplanRequested:
+			if event.TaskID == "t1" && strings.TrimSpace(toString(payload["log_path"])) != "" {
+				hasReplanLogPath = true
+			}
+		}
+	}
+	if !hasWorkerStoppedLogPath {
+		t.Fatalf("expected worker_stopped event to include log_path")
+	}
+	if !hasReplanLogPath {
+		t.Fatalf("expected run_replan_requested event to include log_path")
 	}
 }
 
