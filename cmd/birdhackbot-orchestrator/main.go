@@ -169,6 +169,15 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "run requires --worker-cmd")
 		return 2
 	}
+	resolvedSessionsDir := strings.TrimSpace(sessionsDir)
+	if resolvedSessionsDir == "" {
+		resolvedSessionsDir = "sessions"
+	}
+	if !filepath.IsAbs(resolvedSessionsDir) {
+		if abs, absErr := filepath.Abs(resolvedSessionsDir); absErr == nil {
+			resolvedSessionsDir = abs
+		}
+	}
 	resolvedWorkerCmd := strings.TrimSpace(workerCmd)
 	if resolvedWorkerCmd != "" && !filepath.IsAbs(resolvedWorkerCmd) {
 		if abs, absErr := filepath.Abs(resolvedWorkerCmd); absErr == nil {
@@ -176,7 +185,7 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	permissionMode := orchestrator.PermissionMode(strings.TrimSpace(permissionModeRaw))
-	manager := orchestrator.NewManager(sessionsDir)
+	manager := orchestrator.NewManager(resolvedSessionsDir)
 	if goal != "" {
 		scope := orchestrator.Scope{
 			Networks:    compactStringFlags(scopeNetworks),
@@ -191,7 +200,7 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 		if runID == "" {
 			runID = generateRunID(time.Now().UTC())
 		}
-		if err := ensureRunIDAvailable(sessionsDir, runID); err != nil {
+		if err := ensureRunIDAvailable(resolvedSessionsDir, runID); err != nil {
 			fmt.Fprintf(stderr, "run invalid id: %v\n", err)
 			return 2
 		}
@@ -232,7 +241,7 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 		switch planReview {
 		case "reject":
 			plan.Metadata.PlannerDecision = "reject"
-			planPath, auditPath, err := persistPlanReview(sessionsDir, plan, "plan.review.json")
+			planPath, auditPath, err := persistPlanReview(resolvedSessionsDir, plan, "plan.review.json")
 			if err != nil {
 				fmt.Fprintf(stderr, "run failed writing rejected plan review: %v\n", err)
 				return 1
@@ -241,12 +250,12 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 			return 0
 		case "edit":
 			plan.Metadata.PlannerDecision = "edit"
-			planPath, auditPath, err := persistPlanReview(sessionsDir, plan, "plan.draft.json")
+			planPath, auditPath, err := persistPlanReview(resolvedSessionsDir, plan, "plan.draft.json")
 			if err != nil {
 				fmt.Fprintf(stderr, "run failed writing editable plan draft: %v\n", err)
 				return 1
 			}
-			fmt.Fprintf(stdout, "plan draft written: %s\nedit and launch with: birdhackbot-orchestrator start --sessions-dir %s --plan %s\nreview log: %s\n", planPath, sessionsDir, planPath, auditPath)
+			fmt.Fprintf(stdout, "plan draft written: %s\nedit and launch with: birdhackbot-orchestrator start --sessions-dir %s --plan %s\nreview log: %s\n", planPath, resolvedSessionsDir, planPath, auditPath)
 			return 0
 		}
 		startedRunID, err := manager.StartFromPlan(plan, "")
@@ -255,7 +264,7 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		runID = startedRunID
-		if _, _, err := persistPlanReview(sessionsDir, plan, "plan.json"); err != nil {
+		if _, _, err := persistPlanReview(resolvedSessionsDir, plan, "plan.json"); err != nil {
 			fmt.Fprintf(stderr, "run warning: failed to write planner audit: %v\n", err)
 		}
 		fmt.Fprintf(stdout, "run started: %s\n", runID)
@@ -281,7 +290,7 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 		env := append([]string{}, os.Environ()...)
 		env = append(env, workerEnv...)
 		env = append(env,
-			"BIRDHACKBOT_ORCH_SESSIONS_DIR="+sessionsDir,
+			"BIRDHACKBOT_ORCH_SESSIONS_DIR="+resolvedSessionsDir,
 			"BIRDHACKBOT_ORCH_RUN_ID="+runID,
 			"BIRDHACKBOT_ORCH_TASK_ID="+task.TaskID,
 			fmt.Sprintf("BIRDHACKBOT_ORCH_ATTEMPT=%d", attempt),
@@ -322,7 +331,7 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 			tuiRefresh = 500 * time.Millisecond
 		}
 		tuiCode := runTUI([]string{
-			"--sessions-dir", sessionsDir,
+			"--sessions-dir", resolvedSessionsDir,
 			"--run", runID,
 			"--refresh", tuiRefresh.String(),
 		}, stdout, stderr)
