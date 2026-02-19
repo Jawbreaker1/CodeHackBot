@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -33,16 +34,16 @@ type Client interface {
 }
 
 type LMStudioClient struct {
-	baseURL string
-	model   string
-	apiKey  string
-	http    *http.Client
+	baseURLs []string
+	model    string
+	apiKey   string
+	http     *http.Client
 }
 
 func NewLMStudioClient(cfg config.Config) *LMStudioClient {
-	baseURL := cfg.LLM.BaseURL
-	if baseURL == "" {
-		baseURL = "http://localhost:1234/v1"
+	baseURLs := splitBaseURLs(cfg.LLM.BaseURL)
+	if len(baseURLs) == 0 {
+		baseURLs = []string{normalizeBaseURL("http://localhost:1234/v1")}
 	}
 	model := cfg.LLM.Model
 	if model == "" {
@@ -53,11 +54,23 @@ func NewLMStudioClient(cfg config.Config) *LMStudioClient {
 		timeout = 120 * time.Second
 	}
 	return &LMStudioClient{
-		baseURL: normalizeBaseURL(baseURL),
-		model:   model,
-		apiKey:  cfg.LLM.APIKey,
+		baseURLs: baseURLs,
+		model:    model,
+		apiKey:   cfg.LLM.APIKey,
 		http: &http.Client{
 			Timeout: timeout,
+			Transport: &http.Transport{
+				Proxy: http.ProxyFromEnvironment,
+				DialContext: (&net.Dialer{
+					Timeout:   5 * time.Second,
+					KeepAlive: 30 * time.Second,
+				}).DialContext,
+				ForceAttemptHTTP2:     true,
+				MaxIdleConns:          100,
+				IdleConnTimeout:       90 * time.Second,
+				TLSHandshakeTimeout:   10 * time.Second,
+				ExpectContinueTimeout: 1 * time.Second,
+			},
 		},
 	}
 }
@@ -76,38 +89,20 @@ func (c *LMStudioClient) Chat(ctx context.Context, req ChatRequest) (ChatRespons
 	if err != nil {
 		return ChatResponse{}, fmt.Errorf("marshal request: %w", err)
 	}
-	endpoint := c.baseURL + "/chat/completions"
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewBuffer(payload))
-	if err != nil {
-		return ChatResponse{}, fmt.Errorf("create request: %w", err)
-	}
-	request.Header.Set("Content-Type", "application/json")
-	if c.apiKey != "" {
-		request.Header.Set("Authorization", "Bearer "+c.apiKey)
+
+	if len(c.baseURLs) == 0 {
+		return ChatResponse{}, fmt.Errorf("llm base URL is not configured")
 	}
 
-	resp, err := c.http.Do(request)
-	if err != nil {
-		return ChatResponse{}, fmt.Errorf("llm request failed: %w", err)
+	failures := make([]string, 0, len(c.baseURLs))
+	for _, baseURL := range c.baseURLs {
+		resp, err := c.chatAtEndpoint(ctx, baseURL+"/chat/completions", payload)
+		if err == nil {
+			return resp, nil
+		}
+		failures = append(failures, fmt.Sprintf("%s (%v)", baseURL, err))
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return ChatResponse{}, fmt.Errorf("llm request failed with status %s", resp.Status)
-	}
-
-	var decoded chatCompletionResponse
-	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
-		return ChatResponse{}, fmt.Errorf("decode response: %w", err)
-	}
-	if len(decoded.Choices) == 0 {
-		return ChatResponse{}, fmt.Errorf("llm response missing choices")
-	}
-	content := decoded.Choices[0].Message.Content
-	if strings.TrimSpace(content) == "" {
-		return ChatResponse{}, fmt.Errorf("llm response empty")
-	}
-	return ChatResponse{Content: content}, nil
+	return ChatResponse{}, fmt.Errorf("llm request failed across endpoints: %s", strings.Join(failures, " | "))
 }
 
 type chatCompletionResponse struct {
@@ -129,4 +124,57 @@ func normalizeBaseURL(baseURL string) string {
 		return trimmed
 	}
 	return trimmed + "/v1"
+}
+
+func splitBaseURLs(raw string) []string {
+	tokens := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';' || r == '\n' || r == '\r' || r == '\t' || r == ' '
+	})
+	out := make([]string, 0, len(tokens))
+	seen := map[string]struct{}{}
+	for _, token := range tokens {
+		normalized := normalizeBaseURL(token)
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		out = append(out, normalized)
+	}
+	return out
+}
+
+func (c *LMStudioClient) chatAtEndpoint(ctx context.Context, endpoint string, payload []byte) (ChatResponse, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return ChatResponse{}, fmt.Errorf("create request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" {
+		request.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+
+	resp, err := c.http.Do(request)
+	if err != nil {
+		return ChatResponse{}, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return ChatResponse{}, fmt.Errorf("status %s", resp.Status)
+	}
+
+	var decoded chatCompletionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+		return ChatResponse{}, fmt.Errorf("decode response: %w", err)
+	}
+	if len(decoded.Choices) == 0 {
+		return ChatResponse{}, fmt.Errorf("response missing choices")
+	}
+	content := decoded.Choices[0].Message.Content
+	if strings.TrimSpace(content) == "" {
+		return ChatResponse{}, fmt.Errorf("response empty")
+	}
+	return ChatResponse{Content: content}, nil
 }
