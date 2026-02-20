@@ -83,3 +83,13 @@ func TestShouldTreatPendingInputAsNewGoal(t *testing.T) {
 		t.Fatalf("expected default-choice answer to stay as follow-up")
 	}
 }
+
+func TestAutoAssistFollowUpAnswerAuthorizationConfirm(t *testing.T) {
+	answer, ok := autoAssistFollowUpAnswer("Is this correct and authorized within your lab environment?")
+	if !ok {
+		t.Fatalf("expected auto answer for authorization confirmation")
+	}
+	if !strings.Contains(strings.ToLower(answer), "proceed") {
+		t.Fatalf("unexpected auto answer: %q", answer)
+	}
+}

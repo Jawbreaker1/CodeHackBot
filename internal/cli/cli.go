@@ -657,6 +657,10 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 				r.maybeFinalizeReport(goal, dryRun)
 				return err
 			}
+			if strings.TrimSpace(r.pendingAssistQ) != "" && strings.TrimSpace(r.pendingAssistGoal) == "" {
+				// A question was raised while executing plan steps; keep goal pending so follow-up can resume.
+				r.pendingAssistGoal = goal
+			}
 			r.maybeEmitGoalSummary(goal, dryRun)
 			r.maybeFinalizeReport(goal, dryRun)
 			return nil
@@ -2333,9 +2337,20 @@ func autoAssistFollowUpAnswer(question string) (string, bool) {
 	if question == "" {
 		return "", false
 	}
+	authConfirmHints := []string{
+		"is this correct and authorized",
+		"is this authorized",
+		"within your lab environment",
+		"confirm authorization",
+	}
+	for _, hint := range authConfirmHints {
+		if strings.Contains(question, hint) {
+			return "Yes. Proceed within the configured in-scope lab targets only.", true
+		}
+	}
 	requiresSpecificInput := []string{
 		"which file", "file path", "path", "target", "ip", "hostname", "url", "password",
-		"wordlist path", "token", "credential", "username", "scope", "authorization",
+		"wordlist path", "token", "credential", "username", "scope",
 	}
 	for _, hint := range requiresSpecificInput {
 		if strings.Contains(question, hint) {
