@@ -268,13 +268,27 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			continue
 		case "tool":
 			if suggestion.Tool == nil {
+				questionLoops = 0
+				if mode == "recover" {
+					observations = appendObservation(observations, "recovery: assistant returned tool without spec")
+					recoverHint = "Tool suggestion was invalid (missing spec). Return a concrete command or valid tool with files and run command."
+					loopBlocks++
+					if loopBlocks >= workerAssistMaxLoopBlocks {
+						err := fmt.Errorf("assistant tool suggestion missing spec")
+						_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureAssistNoAction, map[string]any{
+							"step":       actionSteps,
+							"turn":       turn,
+							"tool_calls": toolCalls,
+						})
+						return err
+					}
+					continue
+				}
 				err := fmt.Errorf("assistant tool suggestion missing spec")
-				_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureAssistNoAction, map[string]any{
-					"step":       actionSteps,
-					"turn":       turn,
-					"tool_calls": toolCalls,
-				})
-				return err
+				mode = "recover"
+				recoverHint = err.Error()
+				observations = appendObservation(observations, "recovery: "+err.Error())
+				continue
 			}
 			runCommand := strings.TrimSpace(suggestion.Tool.Run.Command)
 			runArgs := append([]string{}, suggestion.Tool.Run.Args...)
@@ -343,6 +357,12 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			})
 			observations = appendObservation(observations, summarizeCommandResult(result.command, result.args, runErr, result.output))
 			if runErr != nil {
+				if isAssistInvalidToolSpecError(runErr) {
+					mode = "recover"
+					recoverHint = summarizeCommandResult(result.command, result.args, runErr, result.output)
+					observations = appendObservation(observations, "recovery: invalid tool specification; request command/tool with concrete files+run")
+					continue
+				}
 				if strings.Contains(strings.ToLower(runErr.Error()), WorkerFailureScopeDenied) {
 					_ = emitWorkerFailure(manager, cfg, task, runErr, WorkerFailureScopeDenied, map[string]any{
 						"step":       actionSteps,
@@ -699,6 +719,28 @@ func normalizeWorkerAssistCommand(command string, args []string) (string, []stri
 		return parts[0], parts[1:]
 	}
 	return command, args
+}
+
+func isAssistInvalidToolSpecError(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(strings.TrimSpace(err.Error()))
+	if lower == "" {
+		return false
+	}
+	invalidHints := []string{
+		"tool suggestion missing spec",
+		"tool suggestion has no files",
+		"tool suggestion too many files",
+		"tool suggestion missing run.command",
+	}
+	for _, hint := range invalidHints {
+		if strings.Contains(lower, hint) {
+			return true
+		}
+	}
+	return false
 }
 
 func applyCommandTargetFallback(scopePolicy *ScopePolicy, task TaskSpec, command string, args []string) ([]string, bool, string) {

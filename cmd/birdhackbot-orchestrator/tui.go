@@ -610,8 +610,9 @@ func renderWorkerBoxes(workers []orchestrator.WorkerStatus, debug map[string]tui
 	if len(workers) == 0 {
 		return renderBox("Worker", []string{"no workers running"}, width)
 	}
-	out := make([]string, 0, len(workers)*8)
-	for idx, worker := range workers {
+	sortedWorkers := sortWorkersForDebug(workers, debug)
+	out := make([]string, 0, len(sortedWorkers)*8)
+	for idx, worker := range sortedWorkers {
 		task := strings.TrimSpace(worker.CurrentTask)
 		if task == "" {
 			task = "-"
@@ -649,10 +650,47 @@ func renderWorkerBoxes(workers []orchestrator.WorkerStatus, debug map[string]tui
 		}
 		title := "Worker " + worker.WorkerID
 		out = append(out, renderBox(title, body, width)...)
-		if idx < len(workers)-1 {
+		if idx < len(sortedWorkers)-1 {
 			out = append(out, fitLine("", width))
 		}
 	}
+	return out
+}
+
+func sortWorkersForDebug(workers []orchestrator.WorkerStatus, debug map[string]tuiWorkerDebug) []orchestrator.WorkerStatus {
+	out := append([]orchestrator.WorkerStatus{}, workers...)
+	stateRank := func(state string) int {
+		switch strings.ToLower(strings.TrimSpace(state)) {
+		case "active":
+			return 0
+		case "seen":
+			return 1
+		case "stopped":
+			return 2
+		default:
+			return 3
+		}
+	}
+	lastTS := func(worker orchestrator.WorkerStatus) time.Time {
+		ts := worker.LastEvent
+		if snapshot, ok := debug[worker.WorkerID]; ok && snapshot.TS.After(ts) {
+			ts = snapshot.TS
+		}
+		return ts
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		leftRank := stateRank(out[i].State)
+		rightRank := stateRank(out[j].State)
+		if leftRank != rightRank {
+			return leftRank < rightRank
+		}
+		leftTS := lastTS(out[i])
+		rightTS := lastTS(out[j])
+		if !leftTS.Equal(rightTS) {
+			return leftTS.After(rightTS)
+		}
+		return out[i].WorkerID < out[j].WorkerID
+	})
 	return out
 }
 

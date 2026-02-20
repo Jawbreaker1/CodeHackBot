@@ -399,6 +399,41 @@ func TestRenderTwoPaneCapsRightPaneHeight(t *testing.T) {
 	}
 }
 
+func TestRenderWorkerBoxesOrdersActiveBeforeStopped(t *testing.T) {
+	t.Parallel()
+
+	workers := []orchestrator.WorkerStatus{
+		{
+			WorkerID:  "worker-stopped",
+			State:     "stopped",
+			LastEvent: time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC),
+		},
+		{
+			WorkerID:  "worker-active",
+			State:     "active",
+			LastEvent: time.Date(2026, 2, 20, 10, 1, 0, 0, time.UTC),
+		},
+	}
+
+	lines := renderWorkerBoxes(workers, map[string]tuiWorkerDebug{}, 60)
+	idxActive := -1
+	idxStopped := -1
+	for i, line := range lines {
+		if strings.Contains(line, "Worker worker-active") {
+			idxActive = i
+		}
+		if strings.Contains(line, "Worker worker-stopped") {
+			idxStopped = i
+		}
+	}
+	if idxActive < 0 || idxStopped < 0 {
+		t.Fatalf("expected both worker titles in output")
+	}
+	if idxActive >= idxStopped {
+		t.Fatalf("expected active worker box before stopped worker box (active=%d stopped=%d)", idxActive, idxStopped)
+	}
+}
+
 func TestAnswerTUIQuestionPlan(t *testing.T) {
 	base := t.TempDir()
 	runID := "run-tui-ask-plan"

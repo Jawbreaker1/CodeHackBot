@@ -3,31 +3,49 @@ package orchestrator
 import (
 	"fmt"
 	"net"
+	"os"
+	"os/user"
+	"strconv"
 	"strings"
 )
+
+var currentUserLookup = user.Current
 
 func adaptCommandForRuntime(scopePolicy *ScopePolicy, command string, args []string) (string, []string, string, bool) {
 	command = strings.TrimSpace(command)
 	args = normalizeArgs(args)
-	if scopePolicy == nil || !strings.EqualFold(command, "nmap") {
+	if !strings.EqualFold(command, "nmap") {
 		return command, args, "", false
 	}
-	if hasNmapFlag(args, "-sn") {
-		return command, args, "", false
+	adapted := false
+	notes := make([]string, 0, 3)
+
+	if nextArgs, note, ok := removeMissingNmapInputList(args); ok {
+		args = nextArgs
+		adapted = true
+		if note != "" {
+			notes = append(notes, note)
+		}
 	}
-	if !hasNmapFingerprintArgs(args) {
-		return command, args, "", false
+	if nextArgs, note, ok := downgradeSynScanForUnprivilegedUser(args); ok {
+		args = nextArgs
+		adapted = true
+		if note != "" {
+			notes = append(notes, note)
+		}
 	}
-	target, ok := firstBroadCIDRTarget(scopePolicy.extractTargets(command, args))
-	if !ok {
-		return command, args, "", false
+	if scopePolicy != nil && !hasNmapFlag(args, "-sn") && hasNmapFingerprintArgs(args) {
+		target, ok := firstBroadCIDRTarget(scopePolicy.extractTargets(command, args))
+		if ok {
+			nextArgs := buildNmapDiscoveryArgs(args, target)
+			if !stringSlicesEqual(args, nextArgs) {
+				args = nextArgs
+				adapted = true
+				notes = append(notes, fmt.Sprintf("adapted nmap for broad target %s: switched to host discovery (-sn) to avoid timeout; run targeted service scans on discovered hosts next", target))
+			}
+		}
 	}
-	adapted := buildNmapDiscoveryArgs(args, target)
-	if stringSlicesEqual(args, adapted) {
-		return command, args, "", false
-	}
-	note := fmt.Sprintf("adapted nmap for broad target %s: switched to host discovery (-sn) to avoid timeout; run targeted service scans on discovered hosts next", target)
-	return command, adapted, note, true
+	return command, args, strings.Join(notes, "; "), adapted
 }
 
 func hasNmapFingerprintArgs(args []string) bool {
@@ -143,4 +161,98 @@ func stringSlicesEqual(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func removeMissingNmapInputList(args []string) ([]string, string, bool) {
+	if len(args) == 0 {
+		return args, "", false
+	}
+	out := make([]string, 0, len(args))
+	removed := []string{}
+	changed := false
+	for i := 0; i < len(args); i++ {
+		arg := strings.TrimSpace(args[i])
+		lower := strings.ToLower(arg)
+		if lower == "-il" {
+			if i+1 < len(args) {
+				path := strings.TrimSpace(args[i+1])
+				if shouldDropNmapInputList(path) {
+					removed = append(removed, path)
+					changed = true
+					i++
+					continue
+				}
+			}
+			out = append(out, arg)
+			continue
+		}
+		if strings.HasPrefix(lower, "-il") && len(arg) > 3 {
+			path := strings.TrimSpace(arg[3:])
+			if shouldDropNmapInputList(path) {
+				removed = append(removed, path)
+				changed = true
+				continue
+			}
+		}
+		out = append(out, arg)
+	}
+	if !changed {
+		return args, "", false
+	}
+	note := "removed missing nmap -iL file"
+	if len(removed) == 1 {
+		note += ": " + removed[0]
+	} else if len(removed) > 1 {
+		note += "s: " + strings.Join(removed, ", ")
+	}
+	return out, note, true
+}
+
+func shouldDropNmapInputList(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return true
+	}
+	if !strings.HasPrefix(path, "/") {
+		// Relative paths may resolve in worker-specific directories; keep them.
+		return false
+	}
+	if _, err := os.Stat(path); err == nil {
+		return false
+	}
+	return true
+}
+
+func downgradeSynScanForUnprivilegedUser(args []string) ([]string, string, bool) {
+	if len(args) == 0 || runningAsRoot() {
+		return args, "", false
+	}
+	changed := false
+	out := append([]string{}, args...)
+	for i, raw := range out {
+		if strings.EqualFold(strings.TrimSpace(raw), "-sS") {
+			out[i] = "-sT"
+			changed = true
+		}
+	}
+	if !changed {
+		return args, "", false
+	}
+	return out, "downgraded nmap SYN scan (-sS) to connect scan (-sT) for unprivileged runtime", true
+}
+
+func runningAsRoot() bool {
+	lookup := currentUserLookup
+	if lookup == nil {
+		return false
+	}
+	u, err := lookup()
+	if err != nil || u == nil {
+		return false
+	}
+	uid, err := strconv.Atoi(strings.TrimSpace(u.Uid))
+	if err != nil {
+		return false
+	}
+	return uid == 0
 }
