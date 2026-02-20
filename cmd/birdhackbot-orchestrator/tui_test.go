@@ -22,8 +22,9 @@ func TestParseTUICommand(t *testing.T) {
 		{in: "tasks", name: "tasks"},
 		{in: "ask what is current status", name: "ask"},
 		{in: "instruct investigate target", name: "instruct"},
-		{in: "Hello orchestrator", name: "instruct"},
+		{in: "Hello orchestrator", name: "ask"},
 		{in: "how many workers are running?", name: "ask"},
+		{in: "scan the current network again", name: "ask"},
 		{in: "q", name: "quit"},
 		{in: "events 25", name: "events"},
 		{in: "approve apr-1 task ok", name: "approve"},
@@ -339,6 +340,27 @@ func TestClampTUIBodyLinesKeepsTopBar(t *testing.T) {
 	}
 	if clamped[0] != "bar" || clamped[1] != "updated" || clamped[2] != "" {
 		t.Fatalf("expected top header to be preserved, got %#v", clamped[:3])
+	}
+}
+
+func TestAppendLogLinesSplitsAndCaps(t *testing.T) {
+	t.Parallel()
+
+	lines := []string{"old-1", "old-2"}
+	updated := appendLogLines(lines, "line-a\nline-b\n\nline-c")
+	if got, want := len(updated), 5; got != want {
+		t.Fatalf("expected %d lines, got %d (%#v)", want, got, updated)
+	}
+	if updated[2] != "line-a" || updated[4] != "line-c" {
+		t.Fatalf("unexpected appended lines: %#v", updated)
+	}
+
+	over := append([]string{}, updated...)
+	for i := 0; i < 20; i++ {
+		over = appendLogLines(over, "entry")
+	}
+	if len(over) != tuiCommandLogMaxLines {
+		t.Fatalf("expected capped log length %d, got %d", tuiCommandLogMaxLines, len(over))
 	}
 }
 

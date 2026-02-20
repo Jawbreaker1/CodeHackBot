@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Jawbreaker1/CodeHackBot/internal/config"
+	"github.com/Jawbreaker1/CodeHackBot/internal/llm"
 	"github.com/Jawbreaker1/CodeHackBot/internal/orchestrator"
 	"golang.org/x/term"
 )
@@ -19,6 +22,10 @@ const (
 	tuiStylePrompt = "\x1b[48;5;236m\x1b[38;5;252m"
 	tuiStyleBar    = "\x1b[48;5;238m\x1b[38;5;250m"
 	tuiStyleReset  = "\x1b[0m"
+
+	tuiCommandLogMaxLines = 12
+	tuiAskEventWindow     = 32
+	tuiAskLLMMaxContext   = 7000
 )
 
 type tuiCommand struct {
@@ -27,6 +34,12 @@ type tuiCommand struct {
 	scope      string
 	reason     string
 	eventLimit int
+}
+
+type tuiAssistantDecision struct {
+	Reply            string `json:"reply"`
+	QueueInstruction bool   `json:"queue_instruction"`
+	Instruction      string `json:"instruction"`
 }
 
 func runTUI(args []string, stdout, stderr io.Writer) int {
@@ -85,10 +98,10 @@ func runTUI(args []string, stdout, stderr io.Writer) int {
 	for running {
 		snapshot, snapErr := collectTUISnapshot(manager, runID, eventLimit)
 		if snapErr != nil {
-			messages = appendLogLine(messages, "snapshot error: "+snapErr.Error())
+			messages = appendLogLines(messages, "snapshot error: "+snapErr.Error())
 		}
 		if exitOnDone && (snapshot.status.State == "completed" || snapshot.status.State == "stopped") {
-			messages = appendLogLine(messages, fmt.Sprintf("run %s %s; exiting tui", runID, snapshot.status.State))
+			messages = appendLogLines(messages, fmt.Sprintf("run %s %s; exiting tui", runID, snapshot.status.State))
 			renderTUI(stdout, runID, snapshot, messages, input, eventLimit)
 			break
 		}
@@ -99,7 +112,7 @@ func runTUI(args []string, stdout, stderr io.Writer) int {
 			continue
 		case readErr := <-errCh:
 			if readErr != nil && readErr != io.EOF {
-				messages = appendLogLine(messages, "input error: "+readErr.Error())
+				messages = appendLogLines(messages, "input error: "+readErr.Error())
 			}
 			running = false
 		case b := <-keyCh:
@@ -108,12 +121,12 @@ func runTUI(args []string, stdout, stderr io.Writer) int {
 				cmd, parseErr := parseTUICommand(input)
 				input = ""
 				if parseErr != nil {
-					messages = appendLogLine(messages, "invalid command: "+parseErr.Error())
+					messages = appendLogLines(messages, "invalid command: "+parseErr.Error())
 					continue
 				}
 				done, logLine := executeTUICommand(manager, runID, &eventLimit, cmd)
 				if logLine != "" {
-					messages = appendLogLine(messages, logLine)
+					messages = appendLogLines(messages, logLine)
 				}
 				if done {
 					running = false
@@ -468,12 +481,40 @@ func fitLine(line string, width int) string {
 	return string(runes)
 }
 
-func appendLogLine(lines []string, line string) []string {
-	out := append(lines, strings.TrimSpace(line))
-	if len(out) > 8 {
-		return out[len(out)-8:]
+func appendLogLines(lines []string, text string) []string {
+	chunks := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	out := append([]string{}, lines...)
+	for _, chunk := range chunks {
+		cleaned := sanitizeLogLine(chunk)
+		if cleaned == "" {
+			continue
+		}
+		out = append(out, cleaned)
+	}
+	if len(out) > tuiCommandLogMaxLines {
+		return out[len(out)-tuiCommandLogMaxLines:]
 	}
 	return out
+}
+
+func sanitizeLogLine(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(len(trimmed))
+	for _, r := range trimmed {
+		if r < 32 && r != '\t' {
+			continue
+		}
+		if r == '\t' {
+			b.WriteRune(' ')
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func clampTUIBodyLines(lines []string, maxBody int) []string {
@@ -1173,11 +1214,7 @@ func parseTUICommand(raw string) (tuiCommand, error) {
 		}
 		return tuiCommand{name: "ask", reason: strings.TrimSpace(strings.TrimPrefix(trimmed, parts[0]))}, nil
 	default:
-		name := "instruct"
-		if looksLikeQuestion(trimmed) {
-			name = "ask"
-		}
-		return tuiCommand{name: name, reason: trimmed}, nil
+		return tuiCommand{name: "ask", reason: trimmed}, nil
 	}
 }
 
@@ -1255,22 +1292,303 @@ func executeTUICommand(manager *orchestrator.Manager, runID string, eventLimit *
 		}
 		return false, "stop requested"
 	case "ask":
-		return false, answerTUIQuestion(manager, runID, cmd.reason)
+		return false, handleTUIAsk(manager, runID, cmd.reason)
 	case "instruct":
 		instruction := strings.TrimSpace(cmd.reason)
 		if instruction == "" {
 			return false, "instruct failed: instruction is required"
 		}
-		if err := manager.EmitEvent(runID, "operator", "", orchestrator.EventTypeOperatorInstruction, map[string]any{
-			"instruction": instruction,
-			"source":      "tui",
-		}); err != nil {
+		if err := queueTUIInstruction(manager, runID, instruction); err != nil {
 			return false, "instruct failed: " + err.Error()
 		}
 		return false, "instruction queued: " + instruction
 	default:
 		return false, ""
 	}
+}
+
+func queueTUIInstruction(manager *orchestrator.Manager, runID, instruction string) error {
+	return manager.EmitEvent(runID, "operator", "", orchestrator.EventTypeOperatorInstruction, map[string]any{
+		"instruction": strings.TrimSpace(instruction),
+		"source":      "tui",
+	})
+}
+
+func handleTUIAsk(manager *orchestrator.Manager, runID, input string) string {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return "ask failed: question is required"
+	}
+
+	if reply, err := askTUIWithLLM(manager, runID, trimmed); err == nil {
+		lines := []string{fmt.Sprintf("assistant: %s", strings.TrimSpace(reply.Reply))}
+		if reply.QueueInstruction {
+			instruction := strings.TrimSpace(reply.Instruction)
+			if instruction == "" {
+				instruction = trimmed
+			}
+			if err := queueTUIInstruction(manager, runID, instruction); err != nil {
+				lines = append(lines, "instruction failed: "+err.Error())
+			} else {
+				lines = append(lines, "instruction queued: "+instruction)
+			}
+		}
+		return strings.Join(lines, "\n")
+	}
+
+	fallback := answerTUIQuestion(manager, runID, trimmed)
+	if looksLikeQuestion(trimmed) {
+		return fallback
+	}
+	if err := queueTUIInstruction(manager, runID, trimmed); err != nil {
+		return fallback + "\ninstruction failed: " + err.Error()
+	}
+	return fallback + "\ninstruction queued: " + trimmed
+}
+
+func askTUIWithLLM(manager *orchestrator.Manager, runID, operatorInput string) (tuiAssistantDecision, error) {
+	client, model, timeout, err := resolveTUIAssistantClient()
+	if err != nil {
+		return tuiAssistantDecision{}, err
+	}
+	contextText, err := buildTUIAssistantContext(manager, runID)
+	if err != nil {
+		return tuiAssistantDecision{}, err
+	}
+
+	chatCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	resp, err := client.Chat(chatCtx, llm.ChatRequest{
+		Model: model,
+		Messages: []llm.Message{
+			{
+				Role: "system",
+				Content: "You are BirdHackBot Orchestrator's operator assistant for authorized internal lab security testing. " +
+					"You must answer the operator based on run context and decide whether to queue a new operator instruction. " +
+					"Return strict JSON only with keys: reply (string), queue_instruction (boolean), instruction (string). " +
+					"Set queue_instruction=true only when the operator asks to change execution or run a new action. " +
+					"Keep reply concise and specific.",
+			},
+			{
+				Role:    "user",
+				Content: "RUN CONTEXT:\n" + contextText + "\n\nOPERATOR INPUT:\n" + operatorInput,
+			},
+		},
+		Temperature: 0.2,
+		MaxTokens:   280,
+	})
+	if err != nil {
+		return tuiAssistantDecision{}, err
+	}
+	parsed, err := parseTUIAssistantDecision(resp.Content)
+	if err != nil {
+		reply := sanitizeLogLine(resp.Content)
+		if reply == "" {
+			return tuiAssistantDecision{}, err
+		}
+		return tuiAssistantDecision{
+			Reply:            reply,
+			QueueInstruction: !looksLikeQuestion(operatorInput),
+		}, nil
+	}
+	parsed.Reply = strings.TrimSpace(parsed.Reply)
+	if parsed.Reply == "" {
+		parsed.Reply = "I did not generate a usable answer."
+	}
+	parsed.Instruction = strings.TrimSpace(parsed.Instruction)
+	return parsed, nil
+}
+
+func resolveTUIAssistantClient() (llm.Client, string, time.Duration, error) {
+	cfg := config.Config{}
+	cfg.LLM.TimeoutSeconds = 45
+
+	loadPath := strings.TrimSpace(detectWorkerConfigPath())
+	if loadPath != "" {
+		loaded, _, err := config.Load(loadPath, "", "")
+		if err != nil {
+			return nil, "", 0, fmt.Errorf("load config from %s: %w", loadPath, err)
+		}
+		cfg = loaded
+		if cfg.LLM.TimeoutSeconds <= 0 {
+			cfg.LLM.TimeoutSeconds = 45
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv(plannerLLMBaseURLEnv)); v != "" {
+		cfg.LLM.BaseURL = v
+	}
+	if v := strings.TrimSpace(os.Getenv(plannerLLMModelEnv)); v != "" {
+		cfg.LLM.Model = v
+	}
+	if v := strings.TrimSpace(os.Getenv(plannerLLMAPIKeyEnv)); v != "" {
+		cfg.LLM.APIKey = v
+	}
+	if v := strings.TrimSpace(os.Getenv(plannerLLMTimeoutEnv)); v != "" {
+		if parsed, convErr := strconv.Atoi(v); convErr == nil && parsed > 0 {
+			cfg.LLM.TimeoutSeconds = parsed
+		}
+	}
+
+	model := strings.TrimSpace(cfg.LLM.Model)
+	if model == "" {
+		model = strings.TrimSpace(cfg.Agent.Model)
+	}
+	if strings.TrimSpace(cfg.LLM.BaseURL) == "" || model == "" {
+		return nil, "", 0, fmt.Errorf("llm configuration unavailable")
+	}
+	timeout := time.Duration(cfg.LLM.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 45 * time.Second
+	}
+	if timeout > 45*time.Second {
+		timeout = 45 * time.Second
+	}
+	return llm.NewLMStudioClient(cfg), model, timeout, nil
+}
+
+func buildTUIAssistantContext(manager *orchestrator.Manager, runID string) (string, error) {
+	snap, err := collectTUISnapshot(manager, runID, tuiAskEventWindow)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	goal := strings.TrimSpace(snap.plan.Metadata.Goal)
+	if goal == "" {
+		goal = "(no goal metadata)"
+	}
+	fmt.Fprintf(&b, "run_id=%s state=%s active_workers=%d queued=%d running=%d\n", runID, snap.status.State, snap.status.ActiveWorkers, snap.status.QueuedTasks, snap.status.RunningTasks)
+	fmt.Fprintf(&b, "goal=%s\n", goal)
+	fmt.Fprintf(&b, "tasks_total=%d completed=%d running=%d queued=%d failed=%d awaiting_approval=%d\n",
+		len(snap.tasks),
+		countTaskState(snap.tasks, "completed"),
+		countTaskState(snap.tasks, "running")+countTaskState(snap.tasks, "leased"),
+		countTaskState(snap.tasks, "queued"),
+		countTaskState(snap.tasks, "failed"),
+		countTaskState(snap.tasks, "awaiting_approval"),
+	)
+	if path := latestReportPath(snap.events); path != "" {
+		fmt.Fprintf(&b, "latest_report_path=%s\n", path)
+	}
+	if len(snap.approvals) > 0 {
+		fmt.Fprintln(&b, "pending_approvals:")
+		for i, approval := range snap.approvals {
+			if i >= 6 {
+				fmt.Fprintf(&b, "- ... %d more\n", len(snap.approvals)-i)
+				break
+			}
+			fmt.Fprintf(&b, "- %s task=%s tier=%s reason=%s\n", approval.ApprovalID, approval.TaskID, approval.RiskTier, approval.Reason)
+		}
+	}
+	if len(snap.tasks) > 0 {
+		fmt.Fprintln(&b, "task_board:")
+		for i, task := range snap.tasks {
+			if i >= 14 {
+				fmt.Fprintf(&b, "- ... %d more\n", len(snap.tasks)-i)
+				break
+			}
+			progress := formatProgressSummary(snap.progress[task.TaskID])
+			if progress != "" {
+				fmt.Fprintf(&b, "- %s [%s] worker=%s strategy=%s progress=%s\n", task.TaskID, task.State, emptyDash(task.WorkerID), emptyDash(task.Strategy), progress)
+			} else {
+				fmt.Fprintf(&b, "- %s [%s] worker=%s strategy=%s\n", task.TaskID, task.State, emptyDash(task.WorkerID), emptyDash(task.Strategy))
+			}
+		}
+	}
+	if len(snap.workers) > 0 {
+		fmt.Fprintln(&b, "workers:")
+		ordered := sortWorkersForDebug(snap.workers, snap.workerDebug)
+		for i, worker := range ordered {
+			if i >= 10 {
+				fmt.Fprintf(&b, "- ... %d more\n", len(ordered)-i)
+				break
+			}
+			fmt.Fprintf(&b, "- %s state=%s task=%s seq=%d\n", worker.WorkerID, worker.State, emptyDash(worker.CurrentTask), worker.LastSeq)
+			if dbg, ok := snap.workerDebug[worker.WorkerID]; ok {
+				if msg := strings.TrimSpace(dbg.Message); msg != "" {
+					fmt.Fprintf(&b, "  last=%s\n", msg)
+				}
+				if cmd := strings.TrimSpace(dbg.Command); cmd != "" {
+					fmt.Fprintf(&b, "  cmd=%s %s\n", cmd, strings.TrimSpace(strings.Join(dbg.Args, " ")))
+				}
+				if reason := strings.TrimSpace(dbg.Reason); reason != "" {
+					fmt.Fprintf(&b, "  reason=%s\n", reason)
+				}
+				if errText := strings.TrimSpace(dbg.Error); errText != "" {
+					fmt.Fprintf(&b, "  error=%s\n", errText)
+				}
+			}
+		}
+	}
+	if snap.lastFailure != nil {
+		fmt.Fprintf(&b, "last_failure task=%s worker=%s reason=%s error=%s log=%s\n",
+			emptyDash(snap.lastFailure.TaskID),
+			emptyDash(snap.lastFailure.Worker),
+			emptyDash(snap.lastFailure.Reason),
+			emptyDash(snap.lastFailure.Error),
+			emptyDash(snap.lastFailure.LogPath),
+		)
+	}
+	if len(snap.events) > 0 {
+		fmt.Fprintln(&b, "recent_events:")
+		for i, event := range snap.events {
+			if i >= 16 {
+				fmt.Fprintf(&b, "- ... %d more\n", len(snap.events)-i)
+				break
+			}
+			fmt.Fprintf(&b, "- %s %s worker=%s task=%s\n", event.TS.Format("15:04:05"), event.Type, emptyDash(event.WorkerID), emptyDash(event.TaskID))
+		}
+	}
+	text := b.String()
+	if len(text) > tuiAskLLMMaxContext {
+		return text[:tuiAskLLMMaxContext], nil
+	}
+	return text, nil
+}
+
+func parseTUIAssistantDecision(raw string) (tuiAssistantDecision, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return tuiAssistantDecision{}, fmt.Errorf("assistant response empty")
+	}
+	decoded := tuiAssistantDecision{}
+	if err := json.Unmarshal([]byte(trimmed), &decoded); err == nil {
+		return decoded, nil
+	}
+	start := strings.Index(trimmed, "{")
+	end := strings.LastIndex(trimmed, "}")
+	if start < 0 || end <= start {
+		return tuiAssistantDecision{}, fmt.Errorf("assistant response is not json")
+	}
+	if err := json.Unmarshal([]byte(trimmed[start:end+1]), &decoded); err != nil {
+		return tuiAssistantDecision{}, fmt.Errorf("parse assistant json: %w", err)
+	}
+	return decoded, nil
+}
+
+func latestReportPath(events []orchestrator.EventEnvelope) string {
+	for i := len(events) - 1; i >= 0; i-- {
+		event := events[i]
+		if event.Type != orchestrator.EventTypeTaskArtifact {
+			continue
+		}
+		payload := decodeEventPayload(event.Payload)
+		path := strings.TrimSpace(stringFromAny(payload["path"]))
+		if path == "" {
+			continue
+		}
+		if strings.HasSuffix(strings.ToLower(path), ".md") || strings.Contains(strings.ToLower(path), "report") {
+			return path
+		}
+	}
+	return ""
+}
+
+func emptyDash(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "-"
+	}
+	return trimmed
 }
 
 func answerTUIQuestion(manager *orchestrator.Manager, runID, question string) string {

@@ -18,7 +18,9 @@ const llmPlannerSystemPrompt = "You are the BirdHackBot Orchestrator planner. Re
 	"Rules: every task must be concrete, bounded, and in-scope; dependencies must form a DAG; " +
 	"if tasks can be split into independent subtasks, do so and maximize safe parallel execution up to max_parallelism; " +
 	"for broad CIDR targets, prefer discovery-first fan-out (discovery -> host subsets -> validation/summarize) instead of one monolithic scan; " +
-	"only keep work serialized when there is a clear dependency/safety reason, and state that reason in rationale."
+	"only keep work serialized when there is a clear dependency/safety reason, and state that reason in rationale; " +
+	"ground tasks in the operator goal: preserve goal-specific entities (for example router/gateway/firewall/webapp) and include at least one explicit task focused on that entity; " +
+	"if the goal asks for vulnerabilities, include a dedicated vulnerability-mapping step tied to discovered versions/configuration."
 
 type llmPlannerResponse struct {
 	Rationale string           `json:"rationale"`
@@ -117,6 +119,7 @@ func SynthesizeTaskGraphWithLLM(
 		}
 		tasks = append(tasks, spec)
 	}
+	tasks = applyGoalAnchoring(tasks, goal)
 	return tasks, strings.TrimSpace(decoded.Rationale), nil
 }
 
@@ -221,6 +224,120 @@ func compactStringSlice(values []string) []string {
 		out = append(out, trimmed)
 	}
 	return out
+}
+
+func applyGoalAnchoring(tasks []TaskSpec, goal string) []TaskSpec {
+	if len(tasks) == 0 {
+		return tasks
+	}
+	trimmedGoal := strings.TrimSpace(goal)
+	if trimmedGoal == "" {
+		return tasks
+	}
+	goalLower := strings.ToLower(trimmedGoal)
+
+	if containsAny(goalLower, "router", "gateway", "default gateway", "default gw", "firewall", "access point", "ap ") &&
+		!tasksMentionAny(tasks, "router", "gateway", "default gateway", "firewall", "access point") {
+		idx := chooseGoalAnchorTask(tasks, "recon", "scan", "discover", "host", "network", "enumerate")
+		attachGoalFocus(&tasks[idx], "router focus", "Primary goal focus: identify the in-scope router/gateway and prioritize router-specific validation and findings.")
+	}
+
+	if containsAny(goalLower, "vulnerability", "vulnerabilities", "cve", "exploit", "misconfig", "weakness") &&
+		!tasksMentionAny(tasks, "vulnerability", "cve", "exploit", "misconfig", "weakness", "searchsploit", "metasploit") {
+		idx := chooseGoalAnchorTask(tasks, "version", "service", "validate", "analyze", "probe", "summary")
+		attachGoalFocus(&tasks[idx], "vuln mapping", "Primary goal focus: map discovered versions/configuration to known vulnerabilities (CVE/searchsploit/metasploit modules) and capture reproducible evidence.")
+	}
+
+	for i := range tasks {
+		if strings.ToLower(strings.TrimSpace(tasks[i].Action.Type)) != "assist" {
+			continue
+		}
+		prompt := strings.TrimSpace(tasks[i].Action.Prompt)
+		goalLine := "Operator goal: " + trimmedGoal
+		if strings.Contains(strings.ToLower(prompt), strings.ToLower(trimmedGoal)) || strings.Contains(strings.ToLower(prompt), "operator goal:") {
+			continue
+		}
+		if prompt == "" {
+			tasks[i].Action.Prompt = goalLine
+			continue
+		}
+		tasks[i].Action.Prompt = prompt + "\n" + goalLine
+	}
+	return tasks
+}
+
+func containsAny(text string, needles ...string) bool {
+	for _, needle := range needles {
+		if strings.Contains(text, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func tasksMentionAny(tasks []TaskSpec, needles ...string) bool {
+	for _, task := range tasks {
+		combined := strings.ToLower(strings.TrimSpace(task.Title + " " + task.Goal + " " + task.Action.Prompt + " " + strings.Join(task.ExpectedArtifacts, " ")))
+		for _, needle := range needles {
+			if strings.Contains(combined, needle) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func chooseGoalAnchorTask(tasks []TaskSpec, preferredTerms ...string) int {
+	bestIdx := 0
+	bestScore := -1
+	for i, task := range tasks {
+		score := 0
+		if strings.ToLower(strings.TrimSpace(task.Action.Type)) == "assist" {
+			score += 3
+		}
+		if strings.Contains(strings.ToLower(task.RiskLevel), string(RiskReconReadonly)) || strings.Contains(strings.ToLower(task.RiskLevel), string(RiskActiveProbe)) {
+			score += 2
+		}
+		text := strings.ToLower(strings.TrimSpace(task.Title + " " + task.Goal + " " + task.Strategy))
+		for _, term := range preferredTerms {
+			if strings.Contains(text, term) {
+				score += 1
+			}
+		}
+		if task.Priority > 0 {
+			score += task.Priority / 50
+		}
+		if score > bestScore {
+			bestScore = score
+			bestIdx = i
+		}
+	}
+	return bestIdx
+}
+
+func attachGoalFocus(task *TaskSpec, titleSuffix, note string) {
+	if task == nil {
+		return
+	}
+	note = strings.TrimSpace(note)
+	if note == "" {
+		return
+	}
+	titleSuffix = strings.TrimSpace(titleSuffix)
+	if titleSuffix != "" && !strings.Contains(strings.ToLower(task.Title), strings.ToLower(titleSuffix)) {
+		task.Title = strings.TrimSpace(task.Title + " (" + titleSuffix + ")")
+	}
+	if !strings.Contains(strings.ToLower(task.Goal), strings.ToLower(note)) {
+		task.Goal = strings.TrimSpace(task.Goal + " " + note)
+	}
+	if strings.ToLower(strings.TrimSpace(task.Action.Type)) == "assist" && !strings.Contains(strings.ToLower(task.Action.Prompt), strings.ToLower(note)) {
+		prompt := strings.TrimSpace(task.Action.Prompt)
+		if prompt == "" {
+			task.Action.Prompt = note
+		} else {
+			task.Action.Prompt = prompt + "\n" + note
+		}
+	}
 }
 
 func extractPlannerJSON(content string) string {

@@ -175,6 +175,36 @@ func TestLLMAssistantParsesComplete(t *testing.T) {
 	}
 }
 
+func TestLLMAssistantParsesLooseStepsObject(t *testing.T) {
+	client := fakeClient{content: `{"type":"plan","plan":"scan then summarize","steps":{"1":"scan hosts","2":"summarize findings"}}`}
+	assistant := LLMAssistant{Client: client}
+	suggestion, err := assistant.Suggest(context.Background(), Input{SessionID: "s"})
+	if err != nil {
+		t.Fatalf("suggest error: %v", err)
+	}
+	if suggestion.Type != "plan" {
+		t.Fatalf("expected plan, got %s", suggestion.Type)
+	}
+	if len(suggestion.Steps) != 2 || suggestion.Steps[0] != "scan hosts" || suggestion.Steps[1] != "summarize findings" {
+		t.Fatalf("unexpected steps: %#v", suggestion.Steps)
+	}
+}
+
+func TestLLMAssistantParsesLooseArgsString(t *testing.T) {
+	client := fakeClient{content: `{"type":"command","command":"nmap","args":"-sn 192.168.50.0/24"}`}
+	assistant := LLMAssistant{Client: client}
+	suggestion, err := assistant.Suggest(context.Background(), Input{SessionID: "s"})
+	if err != nil {
+		t.Fatalf("suggest error: %v", err)
+	}
+	if suggestion.Type != "command" || suggestion.Command != "nmap" {
+		t.Fatalf("unexpected suggestion: %+v", suggestion)
+	}
+	if len(suggestion.Args) != 2 || suggestion.Args[0] != "-sn" || suggestion.Args[1] != "192.168.50.0/24" {
+		t.Fatalf("unexpected args: %#v", suggestion.Args)
+	}
+}
+
 func TestLLMAssistantReturnsParseErrorWithRawContent(t *testing.T) {
 	client := fakeClient{content: "I cannot help with that request."}
 	assistant := LLMAssistant{Client: client}

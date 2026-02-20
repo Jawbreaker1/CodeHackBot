@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -204,5 +205,80 @@ func TestParsePlannerMode(t *testing.T) {
 				t.Fatalf("unexpected mode: got %s want %s", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestSynthesizeTaskGraphWithLLMAnchorsRouterAndVulnGoal(t *testing.T) {
+	t.Parallel()
+
+	client := fakePlannerClient{
+		content: `{
+			"rationale":"generic recon split",
+			"tasks":[
+				{
+					"task_id":"task-1",
+					"title":"Discovery",
+					"goal":"Scan subnet and collect open ports",
+					"targets":["192.168.50.0/24"],
+					"priority":90,
+					"strategy":"recon_seed",
+					"risk_level":"recon_readonly",
+					"done_when":["done"],
+					"fail_when":["failed"],
+					"expected_artifacts":["discovery.log"],
+					"action":{"type":"assist","prompt":"scan subnet"},
+					"budget":{"max_steps":10,"max_tool_calls":12,"max_runtime_seconds":300}
+				},
+				{
+					"task_id":"task-2",
+					"title":"Version enumeration",
+					"goal":"Enumerate service versions",
+					"targets":["192.168.50.0/24"],
+					"depends_on":["task-1"],
+					"priority":80,
+					"strategy":"active_probe",
+					"risk_level":"active_probe",
+					"done_when":["done"],
+					"fail_when":["failed"],
+					"expected_artifacts":["versions.log"],
+					"action":{"type":"assist","prompt":"enumerate versions"},
+					"budget":{"max_steps":12,"max_tool_calls":16,"max_runtime_seconds":420}
+				}
+			]
+		}`,
+	}
+
+	goal := "Investigate the router on this network for potential vulnerabilities"
+	tasks, _, err := SynthesizeTaskGraphWithLLM(
+		context.Background(),
+		client,
+		"qwen/qwen3-coder-30b",
+		goal,
+		Scope{Networks: []string{"192.168.50.0/24"}},
+		[]string{"internal_lab_only"},
+		nil,
+		2,
+	)
+	if err != nil {
+		t.Fatalf("SynthesizeTaskGraphWithLLM: %v", err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("expected 2 tasks, got %d", len(tasks))
+	}
+
+	allText := strings.ToLower(tasks[0].Title + " " + tasks[0].Goal + " " + tasks[1].Title + " " + tasks[1].Goal)
+	if !strings.Contains(allText, "router") && !strings.Contains(allText, "gateway") {
+		t.Fatalf("expected router/gateway goal anchoring in tasks, got: %s", allText)
+	}
+	if !strings.Contains(allText, "vulnerab") && !strings.Contains(allText, "cve") {
+		t.Fatalf("expected vulnerability goal anchoring in tasks, got: %s", allText)
+	}
+	for _, task := range tasks {
+		if strings.ToLower(task.Action.Type) != "assist" {
+			continue
+		}
+		if !strings.Contains(strings.ToLower(task.Action.Prompt), "operator goal:") {
+			t.Fatalf("expected assist prompt to include operator goal, got %q", task.Action.Prompt)
+		}
 	}
 }
