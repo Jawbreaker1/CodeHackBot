@@ -96,7 +96,7 @@ func (s LLMSummarizer) Summarize(ctx context.Context, input SummaryInput) (Summa
 		Messages: []llm.Message{
 			{
 				Role:    "system",
-				Content: "You summarize security testing sessions. Respond with JSON only: {\"summary\":[\"...\"],\"facts\":[\"...\"]}. Keep bullets short.",
+				Content: "You summarize security testing sessions. Use only evidence present in provided logs/artifacts/context. Do not invent vulnerabilities or access claims. If something is not proven, write UNVERIFIED. Respond with JSON only: {\"summary\":[\"...\"],\"facts\":[\"...\"]}. Keep bullets short.",
 			},
 			{
 				Role:    "user",

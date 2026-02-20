@@ -259,6 +259,7 @@ func (r *Runner) summarizeFromLatestArtifact(goal string) error {
 	}
 	r.recordLLMSuccess()
 	text := normalizeAssistantOutput(resp.Content)
+	text = r.enforceEvidenceClaims(text)
 	safePrintln(text)
 	r.appendConversation("Assistant", text)
 	return nil

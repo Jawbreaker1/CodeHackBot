@@ -142,3 +142,41 @@ func TestNormalizeProfileAliases(t *testing.T) {
 		}
 	}
 }
+
+func TestGenerateReportSkipsUnverifiedPrivilegeFact(t *testing.T) {
+	temp := t.TempDir()
+	outPath := filepath.Join(temp, "report.md")
+	info := Info{
+		KnownFacts: "- Gained admin access to router without creds",
+	}
+	if err := Generate("", outPath, info); err != nil {
+		t.Fatalf("Generate error: %v", err)
+	}
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	content := string(data)
+	if strings.Contains(strings.ToLower(content), "gained admin access to router without creds") {
+		t.Fatalf("expected unverified privilege fact to be filtered")
+	}
+}
+
+func TestGenerateReportSkipsUnverifiedPrivilegeFinding(t *testing.T) {
+	temp := t.TempDir()
+	outPath := filepath.Join(temp, "report.md")
+	info := Info{
+		Findings: []string{"Confirmed root access on target host"},
+	}
+	if err := Generate("", outPath, info); err != nil {
+		t.Fatalf("Generate error: %v", err)
+	}
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	content := strings.ToLower(string(data))
+	if strings.Contains(content, "confirmed root access on target host") {
+		t.Fatalf("expected unverified privilege finding to be filtered")
+	}
+}

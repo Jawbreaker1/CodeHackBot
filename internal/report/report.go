@@ -146,7 +146,7 @@ func writeReportContent(content, outPath string, info Info) error {
 		content = strings.TrimSpace(content) + "\n\n## Evidence Ledger\n\n" + strings.TrimSpace(info.Ledger) + "\n"
 	}
 	content = appendSection(content, "Session Summary", info.Summary)
-	content = appendSection(content, "Known Facts", info.KnownFacts)
+	content = appendSection(content, "Known Facts", sanitizeKnownFactsForReport(info.KnownFacts, info.Observations))
 	content = appendSection(content, "Recent Observations", info.Observations)
 	content = appendSection(content, "Task Foundation", info.Focus)
 	content = appendSection(content, "Plan", info.Plan)
@@ -158,6 +158,28 @@ func writeReportContent(content, outPath string, info Info) error {
 		return fmt.Errorf("write report: %w", err)
 	}
 	return nil
+}
+
+func sanitizeKnownFactsForReport(knownFacts, observations string) string {
+	lines := strings.Split(knownFacts, "\n")
+	if len(lines) == 0 {
+		return knownFacts
+	}
+	privilegedEvidence := hasPrivilegeEvidence(observations)
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			out = append(out, line)
+			continue
+		}
+		lower := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(trimmed, "-")))
+		if isPrivilegedClaim(lower) && !privilegedEvidence {
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.TrimSpace(strings.Join(out, "\n"))
 }
 
 func compactValues(values []string) []string {
@@ -179,12 +201,12 @@ func compactValues(values []string) []string {
 }
 
 func deriveHighLevelFindings(info Info) []string {
-	findings := compactValues(info.Findings)
-	if len(findings) == 0 {
-		findings = append(findings, deriveFactFindings(info.KnownFacts)...)
-	}
+	findings := filterFindingsWithEvidence(compactValues(info.Findings), info.Observations)
 	if len(findings) == 0 {
 		findings = append(findings, deriveObservationFindings(info.Observations)...)
+	}
+	if len(findings) == 0 {
+		findings = append(findings, deriveFactFindings(info.KnownFacts, info.Observations)...)
 	}
 	if len(findings) == 0 {
 		findings = append(findings, "Command observations captured; review Recent Observations for evidence.")
@@ -195,9 +217,26 @@ func deriveHighLevelFindings(info Info) []string {
 	return findings
 }
 
-func deriveFactFindings(knownFacts string) []string {
+func filterFindingsWithEvidence(findings []string, observations string) []string {
+	if len(findings) == 0 {
+		return findings
+	}
+	privilegedEvidence := hasPrivilegeEvidence(observations)
+	out := make([]string, 0, len(findings))
+	for _, finding := range findings {
+		lower := strings.ToLower(strings.TrimSpace(finding))
+		if isPrivilegedClaim(lower) && !privilegedEvidence {
+			continue
+		}
+		out = append(out, finding)
+	}
+	return out
+}
+
+func deriveFactFindings(knownFacts string, observations string) []string {
 	lines := strings.Split(knownFacts, "\n")
 	out := make([]string, 0, len(lines))
+	privilegedEvidence := hasPrivilegeEvidence(observations)
 	for _, line := range lines {
 		line = strings.TrimSpace(strings.TrimPrefix(line, "-"))
 		if line == "" {
@@ -205,6 +244,9 @@ func deriveFactFindings(knownFacts string) []string {
 		}
 		lower := strings.ToLower(line)
 		if lower == "none recorded." || lower == "summary pending." {
+			continue
+		}
+		if isPrivilegedClaim(lower) && !privilegedEvidence {
 			continue
 		}
 		out = append(out, line)
@@ -245,6 +287,40 @@ func deriveObservationFindings(observations string) []string {
 		out = append(out, "Scan commands completed and produced observational output.")
 	}
 	return out
+}
+
+func hasPrivilegeEvidence(observations string) bool {
+	lower := strings.ToLower(observations)
+	markers := []string{
+		"uid=0(",
+		"whoami",
+		"meterpreter session",
+		"command shell session",
+		"session opened",
+	}
+	for _, marker := range markers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func isPrivilegedClaim(lowerFact string) bool {
+	phrases := []string{
+		"admin access",
+		"root access",
+		"privilege escalation",
+		"elevated privileges",
+		"compromised",
+		"full control",
+	}
+	for _, phrase := range phrases {
+		if strings.Contains(lowerFact, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 func rewriteFindingsSection(content string, findings []string, scopeText, observations string) string {

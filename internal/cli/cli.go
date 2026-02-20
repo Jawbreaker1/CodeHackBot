@@ -78,6 +78,7 @@ func (r *Runner) handleAsk(text string) error {
 		r.logger.Printf("Assistant response:")
 	}
 	msg := normalizeAssistantOutput(resp.Content)
+	msg = r.enforceEvidenceClaims(msg)
 	safePrintln(msg)
 	r.appendConversation("Assistant", msg)
 	return nil
@@ -560,15 +561,17 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 		if err := r.guardAssistQuestionLoop(suggestion.Question); err != nil {
 			return err
 		}
+		question := normalizeAssistantOutput(suggestion.Question)
+		question = r.enforceEvidenceClaims(question)
 		if r.cfg.UI.Verbose {
 			r.logger.Printf("Assistant question: %s", suggestion.Question)
 			if suggestion.Summary != "" {
 				r.logger.Printf("Summary: %s", suggestion.Summary)
 			}
 		} else {
-			safePrintln(normalizeAssistantOutput(suggestion.Question))
+			safePrintln(question)
 		}
-		r.appendConversation("Assistant", normalizeAssistantOutput(suggestion.Question))
+		r.appendConversation("Assistant", question)
 		r.pendingAssistQ = suggestion.Question
 		return nil
 	case "noop":
@@ -585,6 +588,7 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 			final = "(completed)"
 		}
 		final = normalizeAssistantOutput(final)
+		final = r.enforceEvidenceClaims(final)
 		safePrintln(final)
 		r.appendConversation("Assistant", final)
 		r.pendingAssistGoal = ""
