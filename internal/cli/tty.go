@@ -3,10 +3,13 @@ package cli
 import (
 	"io"
 	"os"
+	"regexp"
 	"strings"
 
 	"golang.org/x/term"
 )
+
+var ansiControlPattern = regexp.MustCompile("\x1b(?:\\[[0-9;?]*[ -/]*[@-~]|\\][^\x1b\x07]*(?:\x07|\x1b\\\\))")
 
 func (r *Runner) liveWriter() io.Writer {
 	if !term.IsTerminal(int(os.Stdout.Fd())) {
@@ -39,6 +42,10 @@ func normalizeTTYBytes(p []byte) []byte {
 	}
 	normalized := strings.ReplaceAll(string(p), "\r\n", "\n")
 	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	normalized = ansiControlPattern.ReplaceAllString(normalized, "")
+	normalized = strings.ReplaceAll(normalized, "\x1b", "")
+	normalized = strings.ReplaceAll(normalized, "\b", "")
+	normalized = strings.TrimLeft(normalized, "\n")
 
 	out := make([]byte, 0, len(normalized)*2)
 	for i := 0; i < len(normalized); i++ {

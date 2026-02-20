@@ -43,6 +43,7 @@ func executeCoordinatorLoop(
 			}
 			if status.State == "stopped" {
 				_ = coord.StopAll(stopGrace)
+				emitRunReport(manager, runID, stdout, stderr, announce)
 				if announce {
 					fmt.Fprintf(stdout, "run stopped: %s\n", runID)
 				}
@@ -65,6 +66,7 @@ func executeCoordinatorLoop(
 						fmt.Fprintf(stderr, "run completion event failed: %v\n", err)
 						return 1
 					}
+					emitRunReport(manager, runID, stdout, stderr, announce)
 					if announce {
 						fmt.Fprintf(stdout, "run completed: %s\n", runID)
 					}
@@ -77,6 +79,7 @@ func executeCoordinatorLoop(
 					fmt.Fprintf(stderr, "run failure event failed: %v\n", err)
 					return 1
 				}
+				emitRunReport(manager, runID, stdout, stderr, announce)
 				if announce {
 					fmt.Fprintf(stdout, "run stopped with failures: %s (%s)\n", runID, outcomeDetail)
 				}
@@ -84,6 +87,18 @@ func executeCoordinatorLoop(
 			}
 		}
 	}
+}
+
+func emitRunReport(manager *orchestrator.Manager, runID string, stdout, stderr io.Writer, announce bool) {
+	if !announce {
+		return
+	}
+	path, err := manager.AssembleRunReport(runID, "")
+	if err != nil {
+		fmt.Fprintf(stderr, "report generation failed: %v\n", err)
+		return
+	}
+	fmt.Fprintf(stdout, "report written: %s\n", path)
 }
 
 type runOutcome string

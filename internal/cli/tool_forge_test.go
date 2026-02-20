@@ -303,3 +303,43 @@ func TestNormalizeToolRunKeepsExistingPythonUnbufferedFlag(t *testing.T) {
 		t.Fatalf("expected exactly one -u flag, got %d in %v", count, args)
 	}
 }
+
+func TestRewriteMSFConsoleExecuteFlag(t *testing.T) {
+	input := "#!/usr/bin/env bash\nmsfconsole -q -e \"db_status; exit\"\necho done\n"
+	got, changed := rewriteMSFConsoleExecuteFlag(input)
+	if !changed {
+		t.Fatalf("expected rewrite to change content")
+	}
+	if strings.Contains(got, " -e ") {
+		t.Fatalf("expected -e to be replaced, got:\n%s", got)
+	}
+	if !strings.Contains(got, "msfconsole -q -x \"db_status; exit\"") {
+		t.Fatalf("expected msfconsole -x command, got:\n%s", got)
+	}
+}
+
+func TestMaybePatchMSFConsoleScript(t *testing.T) {
+	tmp := t.TempDir()
+	scriptPath := filepath.Join(tmp, "check_msf_db.sh")
+	content := "#!/usr/bin/env bash\nmsfconsole -q -e \"db_status; exit\"\n"
+	if err := os.WriteFile(scriptPath, []byte(content), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	path, patched, err := maybePatchMSFConsoleScript("bash", []string{scriptPath})
+	if err != nil {
+		t.Fatalf("maybePatchMSFConsoleScript: %v", err)
+	}
+	if !patched {
+		t.Fatalf("expected patch=true")
+	}
+	if path != scriptPath {
+		t.Fatalf("unexpected path: %q", path)
+	}
+	data, err := os.ReadFile(scriptPath)
+	if err != nil {
+		t.Fatalf("read script: %v", err)
+	}
+	if strings.Contains(string(data), " -e ") {
+		t.Fatalf("expected patched script, got:\n%s", string(data))
+	}
+}

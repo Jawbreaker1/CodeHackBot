@@ -438,6 +438,11 @@ func (r *Runner) executeToolRun(command string, args []string) error {
 	if command == "" {
 		return fmt.Errorf("tool run: empty command")
 	}
+	if patchedPath, patched, patchErr := maybePatchMSFConsoleScript(command, args); patchErr != nil {
+		r.logger.Printf("Runtime adaptation failed: %v", patchErr)
+	} else if patched {
+		r.logger.Printf("Runtime adaptation: patched msfconsole -e to -x in %s", patchedPath)
+	}
 
 	// Allow internal primitives.
 	switch strings.ToLower(command) {
@@ -526,4 +531,68 @@ func (r *Runner) executeToolRun(command string, args []string) error {
 		return commandError{Result: result, Err: err}
 	}
 	return nil
+}
+
+func maybePatchMSFConsoleScript(command string, args []string) (string, bool, error) {
+	shell := strings.ToLower(strings.TrimSpace(filepath.Base(command)))
+	switch shell {
+	case "bash", "sh", "zsh":
+	default:
+		return "", false, nil
+	}
+	if len(args) == 0 {
+		return "", false, nil
+	}
+	if first := strings.TrimSpace(args[0]); first == "-c" || first == "-lc" {
+		return "", false, nil
+	}
+	scriptPath := ""
+	for _, arg := range args {
+		arg = strings.TrimSpace(arg)
+		if arg == "" || strings.HasPrefix(arg, "-") {
+			continue
+		}
+		scriptPath = arg
+		break
+	}
+	if scriptPath == "" || !filepath.IsAbs(scriptPath) {
+		return "", false, nil
+	}
+	data, err := os.ReadFile(scriptPath)
+	if err != nil {
+		return scriptPath, false, err
+	}
+	patched, changed := rewriteMSFConsoleExecuteFlag(string(data))
+	if !changed {
+		return scriptPath, false, nil
+	}
+	if err := os.WriteFile(scriptPath, []byte(patched), 0o644); err != nil {
+		return scriptPath, false, err
+	}
+	return scriptPath, true, nil
+}
+
+func rewriteMSFConsoleExecuteFlag(content string) (string, bool) {
+	if strings.TrimSpace(content) == "" {
+		return content, false
+	}
+	lines := strings.Split(content, "\n")
+	changed := false
+	for i, line := range lines {
+		if !strings.Contains(line, "msfconsole") {
+			continue
+		}
+		updated := line
+		updated = strings.Replace(updated, " -e ", " -x ", 1)
+		updated = strings.Replace(updated, " -e\"", " -x\"", 1)
+		updated = strings.Replace(updated, " -e'", " -x'", 1)
+		if updated != line {
+			lines[i] = updated
+			changed = true
+		}
+	}
+	if !changed {
+		return content, false
+	}
+	return strings.Join(lines, "\n"), true
 }
