@@ -21,13 +21,13 @@ const (
 	workerAssistReadMaxBytes  = 64_000
 	workerAssistWriteMaxBytes = 512_000
 	workerAssistBrowseMaxBody = 120_000
-	workerAssistLoopMaxRepeat = 2
-	workerAssistLLMCallMax    = 45 * time.Second
-	workerAssistLLMCallMin    = 8 * time.Second
-	workerAssistBudgetReserve = 5 * time.Second
+	workerAssistLoopMaxRepeat = 3
+	workerAssistLLMCallMax    = 90 * time.Second
+	workerAssistLLMCallMin    = 15 * time.Second
+	workerAssistBudgetReserve = 10 * time.Second
 	workerAssistMinTurns      = 16
 	workerAssistTurnFactor    = 4
-	workerAssistMaxLoopBlocks = 3
+	workerAssistMaxLoopBlocks = 6
 )
 
 var htmlTitlePattern = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
@@ -70,8 +70,8 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 	}
 
 	observations := make([]string, 0, workerAssistObsLimit)
-	executed := map[string]int{}
-	blockedActions := map[string]struct{}{}
+	lastActionKey := ""
+	lastActionStreak := 0
 	mode := "execute-step"
 	recoverHint := ""
 	toolCalls := 0
@@ -284,17 +284,19 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			runCommand := strings.TrimSpace(suggestion.Tool.Run.Command)
 			runArgs := append([]string{}, suggestion.Tool.Run.Args...)
 			actionKey := buildAssistActionKey(runCommand, runArgs)
-			if _, blocked := blockedActions[actionKey]; blocked {
+			lastActionKey, lastActionStreak = trackAssistActionStreak(lastActionKey, lastActionStreak, actionKey)
+			if lastActionStreak > workerAssistLoopMaxRepeat {
 				loopBlocks++
 				mode = "recover"
-				recoverHint = "action blocked as repeated; choose a different command path"
+				recoverHint = "same action repeated too many times; choose a different command path"
 				observations = appendObservation(observations, fmt.Sprintf("recovery: repeated action blocked for %s", strings.TrimSpace(strings.Join(append([]string{runCommand}, runArgs...), " "))))
 				_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
-					"message":    "repeated action blocked; waiting for alternative command",
+					"message":    "same action repeated too many times; waiting for alternative command",
 					"step":       actionSteps,
 					"turn":       turn,
 					"tool_calls": toolCalls,
 					"mode":       mode,
+					"streak":     lastActionStreak,
 				})
 				if loopBlocks >= workerAssistMaxLoopBlocks {
 					err := fmt.Errorf("repeated command blocked too many times")
@@ -304,25 +306,10 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 						"tool_calls": toolCalls,
 						"command":    runCommand,
 						"args":       runArgs,
+						"streak":     lastActionStreak,
 					})
 					return err
 				}
-				continue
-			}
-			executed[actionKey]++
-			if executed[actionKey] > workerAssistLoopMaxRepeat {
-				blockedActions[actionKey] = struct{}{}
-				loopBlocks++
-				mode = "recover"
-				recoverHint = "action blocked as repeated; choose a different command path"
-				observations = appendObservation(observations, fmt.Sprintf("recovery: repeated action blocked for %s", strings.TrimSpace(strings.Join(append([]string{runCommand}, runArgs...), " "))))
-				_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
-					"message":    "repeated action blocked; waiting for alternative command",
-					"step":       actionSteps,
-					"turn":       turn,
-					"tool_calls": toolCalls,
-					"mode":       mode,
-				})
 				continue
 			}
 			actionSteps++
@@ -436,17 +423,19 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 				}
 			}
 			key := buildAssistActionKey(command, args)
-			if _, blocked := blockedActions[key]; blocked {
+			lastActionKey, lastActionStreak = trackAssistActionStreak(lastActionKey, lastActionStreak, key)
+			if lastActionStreak > workerAssistLoopMaxRepeat {
 				loopBlocks++
 				mode = "recover"
-				recoverHint = "action blocked as repeated; choose a different command path"
+				recoverHint = "same command repeated too many times; choose a different command path"
 				observations = appendObservation(observations, fmt.Sprintf("recovery: repeated command blocked for %s", strings.TrimSpace(strings.Join(append([]string{command}, args...), " "))))
 				_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
-					"message":    "repeated command blocked; waiting for alternative",
+					"message":    "same command repeated too many times; waiting for alternative",
 					"step":       actionSteps,
 					"turn":       turn,
 					"tool_calls": toolCalls,
 					"mode":       mode,
+					"streak":     lastActionStreak,
 				})
 				if loopBlocks >= workerAssistMaxLoopBlocks {
 					err := fmt.Errorf("repeated command blocked too many times")
@@ -456,25 +445,10 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 						"tool_calls": toolCalls,
 						"command":    command,
 						"args":       args,
+						"streak":     lastActionStreak,
 					})
 					return err
 				}
-				continue
-			}
-			executed[key]++
-			if executed[key] > workerAssistLoopMaxRepeat {
-				blockedActions[key] = struct{}{}
-				loopBlocks++
-				mode = "recover"
-				recoverHint = "action blocked as repeated; choose a different command path"
-				observations = appendObservation(observations, fmt.Sprintf("recovery: repeated command blocked for %s", strings.TrimSpace(strings.Join(append([]string{command}, args...), " "))))
-				_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
-					"message":    "repeated command blocked; waiting for alternative",
-					"step":       actionSteps,
-					"turn":       turn,
-					"tool_calls": toolCalls,
-					"mode":       mode,
-				})
 				continue
 			}
 			actionSteps++
@@ -541,4 +515,15 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 		"action_steps": actionSteps,
 	})
 	return err
+}
+
+func trackAssistActionStreak(lastKey string, lastStreak int, currentKey string) (string, int) {
+	currentKey = strings.TrimSpace(currentKey)
+	if currentKey == "" {
+		return "", 0
+	}
+	if currentKey == lastKey {
+		return currentKey, lastStreak + 1
+	}
+	return currentKey, 1
 }

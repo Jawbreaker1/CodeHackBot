@@ -27,7 +27,10 @@ func buildWorkerAssistant() (string, assist.Assistant, error) {
 		return "", nil, fmt.Errorf("llm model is required (set %s or config llm.model)", workerLLMModelEnv)
 	}
 	client := llm.NewLMStudioClient(cfg)
-	return model, assist.LLMAssistant{Client: client, Model: model}, nil
+	return model, assist.ChainedAssistant{
+		Primary:  assist.LLMAssistant{Client: client, Model: model},
+		Fallback: assist.FallbackAssistant{},
+	}, nil
 }
 
 func loadWorkerLLMConfig() (config.Config, error) {
@@ -92,7 +95,7 @@ func newAssistCallContext(runCtx context.Context) (context.Context, context.Canc
 	if deadline, ok := runCtx.Deadline(); ok {
 		remaining = time.Until(deadline)
 	}
-	if remaining <= workerAssistBudgetReserve+workerAssistLLMCallMin {
+	if remaining <= 2*time.Second {
 		remainingSecs := int(remaining.Seconds())
 		if remainingSecs < 0 {
 			remainingSecs = 0
@@ -101,12 +104,34 @@ func newAssistCallContext(runCtx context.Context) (context.Context, context.Canc
 	}
 	callTimeout := workerAssistLLMCallMax
 	available := remaining - workerAssistBudgetReserve
-	if available < callTimeout {
+	if available > 0 && available < callTimeout {
 		callTimeout = available
 	}
-	if callTimeout < workerAssistLLMCallMin {
-		callTimeout = workerAssistLLMCallMin
+	if available <= 0 {
+		callTimeout = remaining - time.Second
+	}
+	if callTimeout > remaining-time.Second {
+		callTimeout = remaining - time.Second
+	}
+	if callTimeout < 3*time.Second {
+		callTimeout = minDuration(remaining-time.Second, workerAssistLLMCallMin)
+	}
+	if callTimeout < 3*time.Second {
+		callTimeout = 3 * time.Second
 	}
 	ctx, cancel := context.WithTimeout(runCtx, callTimeout)
 	return ctx, cancel, callTimeout, remaining, nil
+}
+
+func minDuration(a, b time.Duration) time.Duration {
+	if a <= 0 {
+		return b
+	}
+	if b <= 0 {
+		return a
+	}
+	if a < b {
+		return a
+	}
+	return b
 }

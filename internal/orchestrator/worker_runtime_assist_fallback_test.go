@@ -52,3 +52,22 @@ func TestApplyCommandTargetFallbackSkipsNonNetworkCommands(t *testing.T) {
 		t.Fatalf("unexpected args: %#v", args)
 	}
 }
+
+func TestApplyCommandTargetFallbackUsesScopeDefaultWhenTaskHasNoTargets(t *testing.T) {
+	t.Parallel()
+
+	scope := Scope{Networks: []string{"192.168.50.0/24"}}
+	policy := NewScopePolicy(scope)
+	task := TaskSpec{}
+
+	args, injected, target := applyCommandTargetFallback(policy, task, "nmap", []string{"-sV"})
+	if !injected {
+		t.Fatalf("expected fallback target injection from scope")
+	}
+	if target != "192.168.50.0/24" {
+		t.Fatalf("unexpected injected target: %q", target)
+	}
+	if len(args) != 2 || args[1] != "192.168.50.0/24" {
+		t.Fatalf("unexpected args: %#v", args)
+	}
+}

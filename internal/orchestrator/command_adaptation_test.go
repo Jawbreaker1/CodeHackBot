@@ -67,10 +67,10 @@ func TestAdaptCommandForRuntimeRemovesMissingAbsoluteInputListAndDowngradesSynSc
 	if strings.Contains(joined, missingList) || strings.Contains(joined, "-iL") {
 		t.Fatalf("expected missing -iL args removed, got %#v", args)
 	}
-	if !strings.Contains(joined, "-sT") {
-		t.Fatalf("expected -sS downgraded to -sT, got %#v", args)
+	if !strings.Contains(joined, "-sn") {
+		t.Fatalf("expected broad scan downshifted to host discovery, got %#v", args)
 	}
-	if !strings.Contains(note, "removed missing nmap -iL file") || !strings.Contains(note, "downgraded nmap SYN scan") {
+	if !strings.Contains(note, "removed missing nmap -iL file") || !strings.Contains(note, "host discovery") {
 		t.Fatalf("expected combined adaptation note, got %q", note)
 	}
 }
@@ -94,5 +94,27 @@ func TestAdaptCommandForRuntimeKeepsRelativeInputListPath(t *testing.T) {
 	}
 	if len(args) != len(original) {
 		t.Fatalf("expected args unchanged, got %#v", args)
+	}
+}
+
+func TestAdaptCommandForRuntimeDownshiftsBroadNmapAllPortsScan(t *testing.T) {
+	t.Parallel()
+
+	scope := Scope{Networks: []string{"192.168.50.0/24"}}
+	policy := NewScopePolicy(scope)
+	original := []string{"-sS", "-p-", "--open", "192.168.50.0/24"}
+
+	_, args, note, adapted := adaptCommandForRuntime(policy, "nmap", original)
+	if !adapted {
+		t.Fatalf("expected adaptation for broad all-ports scan")
+	}
+	if len(args) < 2 || args[0] != "-sn" {
+		t.Fatalf("expected host discovery args, got %#v", args)
+	}
+	if args[len(args)-1] != "192.168.50.0/24" {
+		t.Fatalf("expected target preserved, got %#v", args)
+	}
+	if !strings.Contains(note, "host discovery") {
+		t.Fatalf("expected host discovery adaptation note, got %q", note)
 	}
 }

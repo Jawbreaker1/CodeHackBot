@@ -157,6 +157,9 @@ func applyCommandTargetFallback(scopePolicy *ScopePolicy, task TaskSpec, command
 	}
 	fallback := firstTaskTarget(task.Targets)
 	if fallback == "" {
+		fallback = scopePolicy.FirstAllowedTarget()
+	}
+	if fallback == "" {
 		return args, false, ""
 	}
 	updated := append(append([]string{}, args...), fallback)

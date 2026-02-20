@@ -97,6 +97,37 @@ func (p *ScopePolicy) ValidateCommandTargets(command string, args []string) erro
 	return p.ValidateTaskTargets(task)
 }
 
+func (p *ScopePolicy) FirstAllowedTarget() string {
+	if p == nil {
+		return ""
+	}
+	for _, network := range p.allowNets {
+		if network == nil {
+			continue
+		}
+		value := strings.TrimSpace(network.String())
+		if value != "" {
+			return value
+		}
+	}
+	for _, ip := range p.allowIPs {
+		if ip == nil {
+			continue
+		}
+		value := strings.TrimSpace(ip.String())
+		if value != "" {
+			return value
+		}
+	}
+	for _, literal := range p.allowLiterals {
+		value := strings.TrimSpace(literal)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 func (p *ScopePolicy) loadAllow(entries []string) {
 	p.allowIPs, p.allowNets, p.allowLiterals = parseScopeEntries(entries)
 }

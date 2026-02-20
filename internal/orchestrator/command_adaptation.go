@@ -34,7 +34,7 @@ func adaptCommandForRuntime(scopePolicy *ScopePolicy, command string, args []str
 			notes = append(notes, note)
 		}
 	}
-	if scopePolicy != nil && !hasNmapFlag(args, "-sn") && hasNmapFingerprintArgs(args) {
+	if scopePolicy != nil && !hasNmapFlag(args, "-sn") && (hasNmapFingerprintArgs(args) || hasNmapAggressiveRangeArgs(args)) {
 		target, ok := firstBroadCIDRTarget(scopePolicy.extractTargets(command, args))
 		if ok {
 			nextArgs := buildNmapDiscoveryArgs(args, target)
@@ -54,6 +54,34 @@ func hasNmapFingerprintArgs(args []string) bool {
 		switch arg {
 		case "-sv", "-o", "-a", "--version-all", "--osscan-guess":
 			return true
+		}
+	}
+	return false
+}
+
+func hasNmapAggressiveRangeArgs(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		arg := strings.ToLower(strings.TrimSpace(args[i]))
+		switch arg {
+		case "-p-":
+			return true
+		case "-p":
+			if i+1 < len(args) && strings.TrimSpace(args[i+1]) == "-" {
+				return true
+			}
+		case "--top-ports":
+			if i+1 < len(args) {
+				if value, err := strconv.Atoi(strings.TrimSpace(args[i+1])); err == nil && value > 100 {
+					return true
+				}
+			}
+		default:
+			if strings.HasPrefix(arg, "--top-ports=") {
+				value := strings.TrimSpace(strings.TrimPrefix(arg, "--top-ports="))
+				if n, err := strconv.Atoi(value); err == nil && n > 100 {
+					return true
+				}
+			}
 		}
 	}
 	return false
