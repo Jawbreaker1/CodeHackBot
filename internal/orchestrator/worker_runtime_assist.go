@@ -86,6 +86,7 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 	toolCalls := 0
 	actionSteps := 0
 	loopBlocks := 0
+	questionLoops := 0
 
 	for turn := 1; turn <= maxTurns; turn++ {
 		if actionSteps >= maxActionSteps {
@@ -226,15 +227,32 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			})
 			return nil
 		case "question":
-			err := fmt.Errorf("assistant requested user input: %s", strings.TrimSpace(suggestion.Question))
-			_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureAssistNeedsInput, map[string]any{
+			questionLoops++
+			question := strings.TrimSpace(suggestion.Question)
+			observations = appendObservation(observations, "assistant asked for input in non-interactive worker mode: "+question)
+			_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
+				"message":    "assistant asked a question; worker is non-interactive, forcing autonomous recovery",
 				"step":       actionSteps,
 				"turn":       turn,
 				"tool_calls": toolCalls,
-				"question":   strings.TrimSpace(suggestion.Question),
+				"mode":       mode,
+				"question":   question,
 			})
-			return err
+			if questionLoops >= 3 {
+				err := fmt.Errorf("assistant requested user input in non-interactive worker mode: %s", question)
+				_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureAssistNeedsInput, map[string]any{
+					"step":       actionSteps,
+					"turn":       turn,
+					"tool_calls": toolCalls,
+					"question":   question,
+				})
+				return err
+			}
+			mode = "recover"
+			recoverHint = "No user interaction is available in worker mode. Infer missing values from task target, prior logs, and artifacts, then proceed with a concrete command."
+			continue
 		case "plan", "noop":
+			questionLoops = 0
 			if mode == "recover" {
 				err := fmt.Errorf("assistant did not provide actionable recovery step")
 				_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureAssistNoAction, map[string]any{
@@ -305,6 +323,7 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			actionSteps++
 			toolCalls++
 			loopBlocks = 0
+			questionLoops = 0
 			result, runErr := executeWorkerAssistTool(ctx, cfg, task, scopePolicy, workDir, suggestion.Tool)
 			logPath, logErr := writeWorkerActionLog(cfg, fmt.Sprintf("%s-a%d-s%d-t%d.log", sanitizePathComponent(cfg.WorkerID), cfg.Attempt, actionSteps, toolCalls), result.output)
 			if logErr != nil {
@@ -450,6 +469,7 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			actionSteps++
 			toolCalls++
 			loopBlocks = 0
+			questionLoops = 0
 			result := executeWorkerAssistCommand(ctx, command, args, workDir)
 			logPath, logErr := writeWorkerActionLog(cfg, fmt.Sprintf("%s-a%d-s%d-t%d.log", sanitizePathComponent(cfg.WorkerID), cfg.Attempt, actionSteps, toolCalls), result.output)
 			if logErr != nil {

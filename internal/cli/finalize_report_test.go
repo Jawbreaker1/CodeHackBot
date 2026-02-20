@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Jawbreaker1/CodeHackBot/internal/assist"
 	"github.com/Jawbreaker1/CodeHackBot/internal/config"
 	"github.com/Jawbreaker1/CodeHackBot/internal/memory"
 )
@@ -62,5 +63,81 @@ func TestFinalizeReportWritesArtifact(t *testing.T) {
 	}
 	if !strings.Contains(content, "## Session Summary") || !strings.Contains(content, "## Recent Observations") {
 		t.Fatalf("missing context sections")
+	}
+}
+
+func TestFinalizeReportUsesRequestedFilenameFromGoal(t *testing.T) {
+	cfg := config.Config{}
+	cfg.Session.LogDir = t.TempDir()
+	cfg.Session.PlanFilename = "plan.md"
+	cfg.Session.InventoryFilename = "inventory.md"
+	cfg.Session.LedgerFilename = "ledger.md"
+	cfg.Context.MaxRecentOutputs = 10
+	cfg.Permissions.Level = "all"
+
+	r := NewRunner(cfg, "session-2", "", "")
+	r.lastKnownTarget = "example.com"
+
+	sessionDir, err := r.ensureSessionScaffold()
+	if err != nil {
+		t.Fatalf("ensureSessionScaffold: %v", err)
+	}
+	artifacts, err := memory.EnsureArtifacts(sessionDir)
+	if err != nil {
+		t.Fatalf("EnsureArtifacts: %v", err)
+	}
+	if err := os.WriteFile(artifacts.SummaryPath, []byte("# Session Summary\n\n- ok\n"), 0o644); err != nil {
+		t.Fatalf("write summary: %v", err)
+	}
+
+	wd := t.TempDir()
+	origWD, _ := os.Getwd()
+	_ = os.Chdir(wd)
+	t.Cleanup(func() { _ = os.Chdir(origWD) })
+
+	outPath, err := r.finalizeReport("scan target and create security_report.md in this folder")
+	if err != nil {
+		t.Fatalf("finalizeReport: %v", err)
+	}
+	wantPath := filepath.Join(wd, "security_report.md")
+	realOut, err := filepath.EvalSymlinks(outPath)
+	if err != nil {
+		t.Fatalf("eval out path: %v", err)
+	}
+	realWant, err := filepath.EvalSymlinks(wantPath)
+	if err != nil {
+		t.Fatalf("eval want path: %v", err)
+	}
+	if realOut != realWant {
+		t.Fatalf("unexpected output path: got %s want %s", realOut, realWant)
+	}
+	if _, err := os.Stat(wantPath); err != nil {
+		t.Fatalf("expected report at requested path: %v", err)
+	}
+}
+
+func TestExecuteAssistSuggestionReportCommand(t *testing.T) {
+	cfg := config.Config{}
+	cfg.Session.LogDir = t.TempDir()
+	cfg.Permissions.Level = "all"
+	r := NewRunner(cfg, "session-report-cmd", "", "")
+
+	if _, err := r.ensureSessionScaffold(); err != nil {
+		t.Fatalf("ensureSessionScaffold: %v", err)
+	}
+	wd := t.TempDir()
+	origWD, _ := os.Getwd()
+	_ = os.Chdir(wd)
+	t.Cleanup(func() { _ = os.Chdir(origWD) })
+
+	if err := r.executeAssistSuggestion(assist.Suggestion{
+		Type:    "command",
+		Command: "report",
+		Args:    []string{"security_report.md"},
+	}, false); err != nil {
+		t.Fatalf("executeAssistSuggestion(report): %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(wd, "security_report.md")); err != nil {
+		t.Fatalf("expected security_report.md to be created: %v", err)
 	}
 }

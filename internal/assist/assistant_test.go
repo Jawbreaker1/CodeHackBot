@@ -109,6 +109,21 @@ func TestFallbackAssistantWebGoalUsesBrowse(t *testing.T) {
 	}
 }
 
+func TestFallbackAssistantReportGoalUsesReportCommand(t *testing.T) {
+	suggestion, err := (FallbackAssistant{}).Suggest(context.Background(), Input{
+		Goal: "Create a security_report.md in this folder using OWASP format.",
+	})
+	if err != nil {
+		t.Fatalf("fallback error: %v", err)
+	}
+	if suggestion.Type != "command" || suggestion.Command != "report" {
+		t.Fatalf("unexpected suggestion: %+v", suggestion)
+	}
+	if len(suggestion.Args) == 0 || suggestion.Args[0] != "security_report.md" {
+		t.Fatalf("unexpected report args: %+v", suggestion.Args)
+	}
+}
+
 func TestFallbackAssistantNoTargetsAsksGenericTargetQuestion(t *testing.T) {
 	suggestion, err := (FallbackAssistant{}).Suggest(context.Background(), Input{
 		Goal: "continue",

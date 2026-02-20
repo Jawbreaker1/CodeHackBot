@@ -381,6 +381,24 @@ func TestRenderTwoPaneNarrowFallsBackToStack(t *testing.T) {
 	}
 }
 
+func TestRenderTwoPaneCapsRightPaneHeight(t *testing.T) {
+	t.Parallel()
+
+	layout := computePaneLayout(140)
+	if !layout.enabled {
+		t.Fatalf("expected two-pane layout to be enabled")
+	}
+	left := []string{"Plan:", "Execution:", "Task Board:"}
+	right := []string{"Worker Debug:", "box1", "box2", "box3", "box4"}
+	lines := renderTwoPane(left, right, 140, layout)
+	if len(lines) != len(left) {
+		t.Fatalf("expected lines to match left pane height (%d), got %d", len(left), len(lines))
+	}
+	if !strings.Contains(lines[len(lines)-1], "...") {
+		t.Fatalf("expected truncated marker in last row, got %q", lines[len(lines)-1])
+	}
+}
+
 func TestAnswerTUIQuestionPlan(t *testing.T) {
 	base := t.TempDir()
 	runID := "run-tui-ask-plan"

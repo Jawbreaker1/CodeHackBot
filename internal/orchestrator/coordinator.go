@@ -1121,8 +1121,13 @@ func buildAdaptiveRecoveryGoal(trigger, evidenceTarget string, payload map[strin
 	reason := strings.TrimSpace(toString(payload["reason"]))
 	errText := strings.TrimSpace(toString(payload["error"]))
 	cmd := strings.TrimSpace(toString(payload["command"]))
+	args := payloadStringSlice(payload["args"])
+	logPath := strings.TrimSpace(toString(payload["log_path"]))
 	if cmd != "" {
-		base += " Failed command: " + cmd + "."
+		fullCmd := strings.TrimSpace(strings.Join(append([]string{cmd}, args...), " "))
+		if fullCmd != "" {
+			base += " Failed command: " + fullCmd + "."
+		}
 	}
 	if reason != "" {
 		base += " Failure reason: " + reason + "."
@@ -1130,10 +1135,37 @@ func buildAdaptiveRecoveryGoal(trigger, evidenceTarget string, payload map[strin
 	if errText != "" {
 		base += " Error: " + errText + "."
 	}
+	if logPath != "" {
+		base += " Failure log: " + logPath + "."
+	}
 	base += " Use recent artifacts/logs first. Avoid re-running the same failing command unchanged."
 	base += " If a broad CIDR scan timed out, switch to host discovery first, then split into targeted host/service follow-up scans."
+	base += " Worker mode is non-interactive: do not ask the operator questions; infer best-effort inputs from context and continue."
 	base += " End with a concise summary and clear next steps."
 	return base
+}
+
+func payloadStringSlice(value any) []string {
+	switch typed := value.(type) {
+	case []string:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if trimmed := strings.TrimSpace(item); trimmed != "" {
+				out = append(out, trimmed)
+			}
+		}
+		return out
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if s := strings.TrimSpace(fmt.Sprintf("%v", item)); s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func (c *Coordinator) runScopeTargets() []string {

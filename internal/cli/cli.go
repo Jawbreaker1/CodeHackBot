@@ -1002,6 +1002,9 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 	if strings.EqualFold(suggestion.Command, "write_file") || strings.EqualFold(suggestion.Command, "write") {
 		return r.handleWriteFile(suggestion.Args)
 	}
+	if strings.EqualFold(suggestion.Command, "report") {
+		return r.handleReport(suggestion.Args)
+	}
 	if strings.HasPrefix(strings.ToLower(suggestion.Command), "http") && len(suggestion.Args) == 0 {
 		return r.handleBrowse([]string{suggestion.Command})
 	}

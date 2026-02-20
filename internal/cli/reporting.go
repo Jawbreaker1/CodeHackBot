@@ -21,7 +21,11 @@ func (r *Runner) handleReport(args []string) error {
 	}
 	outPath := filepath.Join(sessionDir, "report.md")
 	if len(args) > 0 && strings.TrimSpace(args[0]) != "" {
-		outPath = args[0]
+		resolved, resolveErr := r.resolveReportWritePath(sessionDir, args[0])
+		if resolveErr != nil {
+			return resolveErr
+		}
+		outPath = resolved
 	}
 
 	artifacts, err := memory.EnsureArtifacts(sessionDir)
@@ -159,6 +163,11 @@ func (r *Runner) finalizeReport(goal string) (string, error) {
 	}
 
 	outPath := filepath.Join(sessionDir, "report.md")
+	if requested, ok := extractRequestedReportPath(goal); ok {
+		if resolved, resolveErr := r.resolveReportWritePath(sessionDir, requested); resolveErr == nil {
+			outPath = resolved
+		}
+	}
 	timestamp := time.Now().UTC().Format("20060102-150405")
 	archiveDir := filepath.Join(sessionDir, "reports")
 	archivePath := filepath.Join(archiveDir, fmt.Sprintf("report-%s.md", timestamp))
@@ -184,4 +193,51 @@ func (r *Runner) finalizeReport(goal string) (string, error) {
 	}
 	_ = report.Generate("", archivePath, info)
 	return outPath, nil
+}
+
+func extractRequestedReportPath(goal string) (string, bool) {
+	goal = strings.TrimSpace(goal)
+	if goal == "" {
+		return "", false
+	}
+	tokens := strings.Fields(goal)
+	for _, token := range tokens {
+		candidate := strings.Trim(token, "\"'`(),;:[]{}<>")
+		if candidate == "" || strings.Contains(candidate, "://") {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(candidate))
+		switch ext {
+		case ".md", ".txt", ".html":
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
+func (r *Runner) resolveReportWritePath(sessionDir, raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", fmt.Errorf("report output path is empty")
+	}
+	wd := r.currentWorkingDir()
+	if wd == "" {
+		wd = "."
+	}
+	candidate := raw
+	if !filepath.IsAbs(candidate) {
+		candidate = filepath.Join(wd, candidate)
+	}
+	candidate = filepath.Clean(candidate)
+
+	allowedRoots := []string{filepath.Clean(sessionDir)}
+	if wdClean := filepath.Clean(wd); wdClean != "" {
+		allowedRoots = append(allowedRoots, wdClean)
+	}
+	for _, root := range allowedRoots {
+		if pathWithinRoot(candidate, root) {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("report path out of bounds: %s (allowed: session dir or current working dir)", raw)
 }

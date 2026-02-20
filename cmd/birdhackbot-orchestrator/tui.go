@@ -547,8 +547,14 @@ func renderTwoPane(left []string, right []string, width int, layout tuiPaneLayou
 		return out
 	}
 	rows := len(left)
-	if len(right) > rows {
+	if rows == 0 {
 		rows = len(right)
+	}
+	if rows == 0 {
+		return nil
+	}
+	if len(right) > rows {
+		right = truncatePaneLines(right, rows, "worker lines")
 	}
 	gap := strings.Repeat(" ", layout.gap)
 	out := make([]string, 0, rows)
@@ -564,6 +570,23 @@ func renderTwoPane(left []string, right []string, width int, layout tuiPaneLayou
 		out = append(out, fitColumn(l, layout.leftWidth)+gap+fitColumn(r, layout.rightWidth))
 	}
 	return out
+}
+
+func truncatePaneLines(lines []string, maxRows int, label string) []string {
+	if maxRows <= 0 || len(lines) <= maxRows {
+		return lines
+	}
+	trimmed := append([]string{}, lines[:maxRows]...)
+	hidden := len(lines) - maxRows + 1
+	if hidden < 1 {
+		hidden = 1
+	}
+	suffix := "more"
+	if strings.TrimSpace(label) != "" {
+		suffix = label
+	}
+	trimmed[maxRows-1] = fmt.Sprintf("... %d %s", hidden, suffix)
+	return trimmed
 }
 
 func fitColumn(line string, width int) string {
