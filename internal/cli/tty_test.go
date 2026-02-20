@@ -19,3 +19,12 @@ func TestNormalizeTTYBytesStripsANSIControlSequences(t *testing.T) {
 		t.Fatalf("normalizeTTYBytes mismatch:\n got: %q\nwant: %q", got, want)
 	}
 }
+
+func TestNormalizeTTYBytesPreservesLeadingNewlines(t *testing.T) {
+	in := []byte("\nline1\nline2\n")
+	got := string(normalizeTTYBytes(in))
+	want := "\r\nline1\r\nline2\r\n"
+	if got != want {
+		t.Fatalf("normalizeTTYBytes leading newline mismatch:\n got: %q\nwant: %q", got, want)
+	}
+}

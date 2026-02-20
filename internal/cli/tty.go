@@ -40,12 +40,17 @@ func normalizeTTYBytes(p []byte) []byte {
 	if len(p) == 0 {
 		return nil
 	}
-	normalized := strings.ReplaceAll(string(p), "\r\n", "\n")
+	raw := string(p)
+	normalized := strings.ReplaceAll(raw, "\r\n", "\n")
 	normalized = strings.ReplaceAll(normalized, "\r", "\n")
 	normalized = ansiControlPattern.ReplaceAllString(normalized, "")
 	normalized = strings.ReplaceAll(normalized, "\x1b", "")
 	normalized = strings.ReplaceAll(normalized, "\b", "")
-	normalized = strings.TrimLeft(normalized, "\n")
+	// Keep explicit leading line breaks, but avoid a synthetic blank line
+	// when a chunk starts with carriage-return-only progress output.
+	if !strings.HasPrefix(raw, "\n") && strings.HasPrefix(normalized, "\n") {
+		normalized = strings.TrimPrefix(normalized, "\n")
+	}
 
 	out := make([]byte, 0, len(normalized)*2)
 	for i := 0; i < len(normalized); i++ {
