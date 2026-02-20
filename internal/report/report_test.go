@@ -87,3 +87,58 @@ func TestGenerateReportWithContextSections(t *testing.T) {
 		}
 	}
 }
+
+func TestGenerateWithProfileUsesOWASPTemplate(t *testing.T) {
+	temp := t.TempDir()
+	outPath := filepath.Join(temp, "owasp.md")
+	info := Info{
+		Scope:    []string{"10.10.0.0/24"},
+		Findings: []string{"Sample finding"},
+	}
+	if err := GenerateWithProfile("owasp", "", outPath, info); err != nil {
+		t.Fatalf("GenerateWithProfile error: %v", err)
+	}
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "# OWASP Security Assessment Report") {
+		t.Fatalf("expected OWASP template header")
+	}
+	if !strings.Contains(content, "## OWASP Methodology Mapping") {
+		t.Fatalf("expected OWASP section")
+	}
+}
+
+func TestGenerateWithProfileRejectsUnknownProfile(t *testing.T) {
+	temp := t.TempDir()
+	outPath := filepath.Join(temp, "bad.md")
+	err := GenerateWithProfile("unknown_profile", "", outPath, Info{})
+	if err == nil {
+		t.Fatalf("expected unsupported profile error")
+	}
+	if !strings.Contains(err.Error(), "unsupported report profile") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestNormalizeProfileAliases(t *testing.T) {
+	cases := map[string]string{
+		"":         string(ProfileStandard),
+		"default":  string(ProfileStandard),
+		"OWASP":    string(ProfileOWASP),
+		"wstg":     string(ProfileOWASP),
+		"n2":       string(ProfileNIS2),
+		"internal": string(ProfileInternal),
+	}
+	for input, want := range cases {
+		got, err := NormalizeProfile(input)
+		if err != nil {
+			t.Fatalf("NormalizeProfile(%q) error: %v", input, err)
+		}
+		if got != want {
+			t.Fatalf("NormalizeProfile(%q) = %q; want %q", input, got, want)
+		}
+	}
+}

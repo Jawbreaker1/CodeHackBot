@@ -15,13 +15,25 @@ func (r *Runner) handleReport(args []string) error {
 	if r.cfg.Permissions.Level == "readonly" {
 		return fmt.Errorf("readonly mode: report generation not permitted")
 	}
+	if len(args) == 1 {
+		switch strings.ToLower(strings.TrimSpace(args[0])) {
+		case "profiles", "profile", "types", "list":
+			r.logger.Printf("Report profiles: %s", strings.Join(report.AvailableProfiles(), ", "))
+			r.logger.Printf("Usage: /report [profile] [output_path]")
+			return nil
+		}
+	}
 	sessionDir, err := r.ensureSessionScaffold()
 	if err != nil {
 		return err
 	}
+	profile, outArg, err := parseReportArgs(args)
+	if err != nil {
+		return err
+	}
 	outPath := filepath.Join(sessionDir, "report.md")
-	if len(args) > 0 && strings.TrimSpace(args[0]) != "" {
-		resolved, resolveErr := r.resolveReportWritePath(sessionDir, args[0])
+	if outArg != "" {
+		resolved, resolveErr := r.resolveReportWritePath(sessionDir, outArg)
 		if resolveErr != nil {
 			return resolveErr
 		}
@@ -65,10 +77,10 @@ func (r *Runner) handleReport(args []string) error {
 		Inventory:    inventoryText,
 		Observations: obsText,
 	}
-	if err := report.Generate("", outPath, info); err != nil {
+	if err := report.GenerateWithProfile(profile, "", outPath, info); err != nil {
 		return err
 	}
-	r.logger.Printf("Report generated: %s", outPath)
+	r.logger.Printf("Report generated (%s): %s", profile, outPath)
 	return nil
 }
 
@@ -163,6 +175,7 @@ func (r *Runner) finalizeReport(goal string) (string, error) {
 	}
 
 	outPath := filepath.Join(sessionDir, "report.md")
+	profile := extractRequestedReportProfile(goal)
 	if requested, ok := extractRequestedReportPath(goal); ok {
 		if resolved, resolveErr := r.resolveReportWritePath(sessionDir, requested); resolveErr == nil {
 			outPath = resolved
@@ -188,10 +201,10 @@ func (r *Runner) finalizeReport(goal string) (string, error) {
 		Inventory:    inventoryText,
 		Observations: obsText,
 	}
-	if err := report.Generate("", outPath, info); err != nil {
+	if err := report.GenerateWithProfile(profile, "", outPath, info); err != nil {
 		return "", err
 	}
-	_ = report.Generate("", archivePath, info)
+	_ = report.GenerateWithProfile(profile, "", archivePath, info)
 	return outPath, nil
 }
 
@@ -213,6 +226,63 @@ func extractRequestedReportPath(goal string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func extractRequestedReportProfile(goal string) string {
+	lower := strings.ToLower(goal)
+	switch {
+	case strings.Contains(lower, "owasp") || strings.Contains(lower, "wstg") || strings.Contains(lower, "asvs"):
+		return string(report.ProfileOWASP)
+	case strings.Contains(lower, "nis2"):
+		return string(report.ProfileNIS2)
+	case strings.Contains(lower, "internal lab"), strings.Contains(lower, "lab report"), strings.Contains(lower, "internal report"):
+		return string(report.ProfileInternal)
+	default:
+		return string(report.ProfileStandard)
+	}
+}
+
+func parseReportArgs(args []string) (profile string, outArg string, err error) {
+	profile = string(report.ProfileStandard)
+	for _, arg := range args {
+		trimmed := strings.TrimSpace(arg)
+		if trimmed == "" {
+			continue
+		}
+		if looksLikePathArg(trimmed) {
+			if outArg == "" {
+				outArg = trimmed
+				continue
+			}
+			return "", "", fmt.Errorf("usage: /report [profile] [output_path]")
+		}
+		if resolved, ok := tryNormalizeProfile(trimmed); ok {
+			profile = resolved
+			continue
+		}
+		if outArg == "" {
+			outArg = trimmed
+			continue
+		}
+		return "", "", fmt.Errorf("usage: /report [profile] [output_path]")
+	}
+	return profile, outArg, nil
+}
+
+func looksLikePathArg(arg string) bool {
+	if strings.Contains(arg, "/") || strings.Contains(arg, "\\") {
+		return true
+	}
+	ext := strings.ToLower(filepath.Ext(arg))
+	return ext == ".md" || ext == ".txt" || ext == ".html"
+}
+
+func tryNormalizeProfile(value string) (string, bool) {
+	resolved, err := report.NormalizeProfile(value)
+	if err != nil {
+		return "", false
+	}
+	return resolved, true
 }
 
 func (r *Runner) resolveReportWritePath(sessionDir, raw string) (string, error) {

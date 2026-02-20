@@ -141,3 +141,107 @@ func TestExecuteAssistSuggestionReportCommand(t *testing.T) {
 		t.Fatalf("expected security_report.md to be created: %v", err)
 	}
 }
+
+func TestExecuteAssistSuggestionReportCommandWithProfile(t *testing.T) {
+	cfg := config.Config{}
+	cfg.Session.LogDir = t.TempDir()
+	cfg.Permissions.Level = "all"
+	r := NewRunner(cfg, "session-report-profile-cmd", "", "")
+
+	if _, err := r.ensureSessionScaffold(); err != nil {
+		t.Fatalf("ensureSessionScaffold: %v", err)
+	}
+	wd := t.TempDir()
+	origWD, _ := os.Getwd()
+	_ = os.Chdir(wd)
+	t.Cleanup(func() { _ = os.Chdir(origWD) })
+
+	if err := r.executeAssistSuggestion(assist.Suggestion{
+		Type:    "command",
+		Command: "report",
+		Args:    []string{"owasp", "security_report.md"},
+	}, false); err != nil {
+		t.Fatalf("executeAssistSuggestion(report owasp): %v", err)
+	}
+	path := filepath.Join(wd, "security_report.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	if !strings.Contains(string(data), "# OWASP Security Assessment Report") {
+		t.Fatalf("expected OWASP template in report output")
+	}
+}
+
+func TestFinalizeReportSelectsProfileFromGoal(t *testing.T) {
+	cfg := config.Config{}
+	cfg.Session.LogDir = t.TempDir()
+	cfg.Session.PlanFilename = "plan.md"
+	cfg.Session.InventoryFilename = "inventory.md"
+	cfg.Session.LedgerFilename = "ledger.md"
+	cfg.Context.MaxRecentOutputs = 10
+	cfg.Permissions.Level = "all"
+
+	r := NewRunner(cfg, "session-profile-goal", "", "")
+	r.lastKnownTarget = "example.com"
+
+	sessionDir, err := r.ensureSessionScaffold()
+	if err != nil {
+		t.Fatalf("ensureSessionScaffold: %v", err)
+	}
+	artifacts, err := memory.EnsureArtifacts(sessionDir)
+	if err != nil {
+		t.Fatalf("EnsureArtifacts: %v", err)
+	}
+	if err := os.WriteFile(artifacts.SummaryPath, []byte("# Session Summary\n\n- ok\n"), 0o644); err != nil {
+		t.Fatalf("write summary: %v", err)
+	}
+
+	outPath, err := r.finalizeReport("create an OWASP security report")
+	if err != nil {
+		t.Fatalf("finalizeReport: %v", err)
+	}
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	if !strings.Contains(string(data), "# OWASP Security Assessment Report") {
+		t.Fatalf("expected OWASP profile report")
+	}
+}
+
+func TestParseReportArgs(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantP   string
+		wantOut string
+		wantErr bool
+	}{
+		{name: "default", args: nil, wantP: "standard"},
+		{name: "profile only", args: []string{"owasp"}, wantP: "owasp"},
+		{name: "output only", args: []string{"security_report.md"}, wantP: "standard", wantOut: "security_report.md"},
+		{name: "profile and output", args: []string{"nis2", "security_report.md"}, wantP: "nis2", wantOut: "security_report.md"},
+		{name: "invalid extra args", args: []string{"owasp", "a.md", "b.md"}, wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotP, gotOut, err := parseReportArgs(tc.args)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseReportArgs error: %v", err)
+			}
+			if gotP != tc.wantP {
+				t.Fatalf("profile mismatch: got %q want %q", gotP, tc.wantP)
+			}
+			if gotOut != tc.wantOut {
+				t.Fatalf("output mismatch: got %q want %q", gotOut, tc.wantOut)
+			}
+		})
+	}
+}
