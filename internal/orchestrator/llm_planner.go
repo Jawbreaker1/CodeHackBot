@@ -113,7 +113,7 @@ func SynthesizeTaskGraphWithLLM(
 
 	tasks := make([]TaskSpec, 0, len(decoded.Tasks))
 	for i, task := range decoded.Tasks {
-		spec, err := toTaskSpec(task, i)
+		spec, err := toTaskSpec(task, i, scope)
 		if err != nil {
 			return nil, "", err
 		}
@@ -123,7 +123,7 @@ func SynthesizeTaskGraphWithLLM(
 	return tasks, strings.TrimSpace(decoded.Rationale), nil
 }
 
-func toTaskSpec(task llmPlannerTask, index int) (TaskSpec, error) {
+func toTaskSpec(task llmPlannerTask, index int, scope Scope) (TaskSpec, error) {
 	taskID := strings.TrimSpace(task.TaskID)
 	if taskID == "" {
 		taskID = fmt.Sprintf("task-llm-%02d", index+1)
@@ -158,7 +158,7 @@ func toTaskSpec(task llmPlannerTask, index int) (TaskSpec, error) {
 		TaskID:            taskID,
 		Title:             strings.TrimSpace(task.Title),
 		Goal:              strings.TrimSpace(task.Goal),
-		Targets:           compactStringSlice(task.Targets),
+		Targets:           normalizeLLMTaskTargets(task.Targets, scope),
 		DependsOn:         compactStringSlice(task.DependsOn),
 		Priority:          task.Priority,
 		Strategy:          strings.TrimSpace(task.Strategy),
@@ -185,6 +185,28 @@ func toTaskSpec(task llmPlannerTask, index int) (TaskSpec, error) {
 		return TaskSpec{}, fmt.Errorf("llm planner task %s invalid: %w", spec.TaskID, err)
 	}
 	return spec, nil
+}
+
+func normalizeLLMTaskTargets(rawTargets []string, scope Scope) []string {
+	scopedDefaults := scopeTargets(scope)
+	targets := compactStringSlice(rawTargets)
+	if len(targets) == 0 {
+		return scopedDefaults
+	}
+	policy := NewScopePolicy(scope)
+	allowed := make([]string, 0, len(targets))
+	for _, target := range targets {
+		candidate := TaskSpec{Targets: []string{target}}
+		if err := policy.ValidateTaskTargets(candidate); err != nil {
+			continue
+		}
+		allowed = append(allowed, target)
+	}
+	allowed = compactStringSlice(allowed)
+	if len(allowed) == 0 {
+		return scopedDefaults
+	}
+	return allowed
 }
 
 func normalizeLLMTaskBudget(budget TaskBudget, riskLevel string) TaskBudget {

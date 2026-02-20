@@ -282,3 +282,50 @@ func TestSynthesizeTaskGraphWithLLMAnchorsRouterAndVulnGoal(t *testing.T) {
 		}
 	}
 }
+
+func TestSynthesizeTaskGraphWithLLMRewritesOutOfScopePlaceholderTargets(t *testing.T) {
+	t.Parallel()
+
+	client := fakePlannerClient{
+		content: `{
+			"rationale":"router focus with placeholder target",
+			"tasks":[
+				{
+					"task_id":"task-router",
+					"title":"Router scan",
+					"goal":"Investigate router weaknesses",
+					"targets":["router_ip"],
+					"priority":90,
+					"strategy":"recon_router",
+					"risk_level":"recon_readonly",
+					"done_when":["done"],
+					"fail_when":["failed"],
+					"expected_artifacts":["router.log"],
+					"action":{"type":"assist","prompt":"scan router"},
+					"budget":{"max_steps":10,"max_tool_calls":12,"max_runtime_seconds":300}
+				}
+			]
+		}`,
+	}
+
+	scope := Scope{Networks: []string{"192.168.50.0/24"}}
+	tasks, _, err := SynthesizeTaskGraphWithLLM(
+		context.Background(),
+		client,
+		"qwen/qwen3-coder-30b",
+		"Investigate router vulnerabilities",
+		scope,
+		[]string{"internal_lab_only"},
+		nil,
+		1,
+	)
+	if err != nil {
+		t.Fatalf("SynthesizeTaskGraphWithLLM: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected one task, got %d", len(tasks))
+	}
+	if got := tasks[0].Targets; len(got) != 1 || got[0] != "192.168.50.0/24" {
+		t.Fatalf("expected placeholder target rewritten to scoped network, got %#v", got)
+	}
+}

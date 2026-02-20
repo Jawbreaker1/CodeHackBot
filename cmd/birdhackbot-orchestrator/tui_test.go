@@ -27,6 +27,8 @@ func TestParseTUICommand(t *testing.T) {
 		{in: "scan the current network again", name: "ask"},
 		{in: "q", name: "quit"},
 		{in: "events 25", name: "events"},
+		{in: "log up 3", name: "log"},
+		{in: "log down", name: "log"},
 		{in: "approve apr-1 task ok", name: "approve"},
 		{in: "deny apr-2 nope", name: "deny"},
 		{in: "stop", name: "stop"},
@@ -51,6 +53,7 @@ func TestParseTUICommandRejectsInvalid(t *testing.T) {
 
 	invalid := []string{
 		"events nope",
+		"log sideways",
 		"approve",
 		"deny",
 		"ask",
@@ -104,16 +107,17 @@ func TestExecuteTUICommandApproveDenyStop(t *testing.T) {
 		t.Fatalf("EmitEvent run_started: %v", err)
 	}
 
-	if done, log := executeTUICommand(manager, runID, nil, tuiCommand{name: "approve", approval: "apr-1", scope: "task", reason: "ok"}); done || log == "" {
+	scroll := 0
+	if done, log := executeTUICommand(manager, runID, nil, tuiCommand{name: "approve", approval: "apr-1", scope: "task", reason: "ok"}, &scroll); done || log == "" {
 		t.Fatalf("expected approve command to continue with log, got done=%v log=%q", done, log)
 	}
-	if done, log := executeTUICommand(manager, runID, nil, tuiCommand{name: "deny", approval: "apr-2", reason: "no"}); done || log == "" {
+	if done, log := executeTUICommand(manager, runID, nil, tuiCommand{name: "deny", approval: "apr-2", reason: "no"}, &scroll); done || log == "" {
 		t.Fatalf("expected deny command to continue with log, got done=%v log=%q", done, log)
 	}
-	if done, _ := executeTUICommand(manager, runID, nil, tuiCommand{name: "stop"}); done {
+	if done, _ := executeTUICommand(manager, runID, nil, tuiCommand{name: "stop"}, &scroll); done {
 		t.Fatalf("expected stop to keep tui open")
 	}
-	if done, log := executeTUICommand(manager, runID, nil, tuiCommand{name: "instruct", reason: "enumerate open ports"}); done || !strings.Contains(log, "instruction queued") {
+	if done, log := executeTUICommand(manager, runID, nil, tuiCommand{name: "instruct", reason: "enumerate open ports"}, &scroll); done || !strings.Contains(log, "instruction queued") {
 		t.Fatalf("expected instruct command to queue instruction, got done=%v log=%q", done, log)
 	}
 	events, err := manager.Events(runID, 0)
@@ -356,11 +360,37 @@ func TestAppendLogLinesSplitsAndCaps(t *testing.T) {
 	}
 
 	over := append([]string{}, updated...)
-	for i := 0; i < 20; i++ {
+	for i := 0; i < 200; i++ {
 		over = appendLogLines(over, "entry")
 	}
-	if len(over) != tuiCommandLogMaxLines {
-		t.Fatalf("expected capped log length %d, got %d", tuiCommandLogMaxLines, len(over))
+	if len(over) != tuiCommandLogStoreLines {
+		t.Fatalf("expected capped log length %d, got %d", tuiCommandLogStoreLines, len(over))
+	}
+}
+
+func TestExecuteTUICommandLogScroll(t *testing.T) {
+	t.Parallel()
+
+	manager := orchestrator.NewManager(t.TempDir())
+	scroll := 0
+
+	if done, log := executeTUICommand(manager, "run-any", nil, tuiCommand{name: "log", scope: "up", logCount: 3}, &scroll); done || !strings.Contains(log, "up 3") {
+		t.Fatalf("unexpected log up result: done=%v log=%q", done, log)
+	}
+	if scroll != 3 {
+		t.Fatalf("expected scroll=3, got %d", scroll)
+	}
+	if done, _ := executeTUICommand(manager, "run-any", nil, tuiCommand{name: "log", scope: "down", logCount: 2}, &scroll); done {
+		t.Fatalf("expected down to continue")
+	}
+	if scroll != 1 {
+		t.Fatalf("expected scroll=1 after down, got %d", scroll)
+	}
+	if done, _ := executeTUICommand(manager, "run-any", nil, tuiCommand{name: "log", scope: "bottom"}, &scroll); done {
+		t.Fatalf("expected bottom to continue")
+	}
+	if scroll != 0 {
+		t.Fatalf("expected scroll reset to 0, got %d", scroll)
 	}
 }
 
