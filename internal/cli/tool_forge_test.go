@@ -343,3 +343,50 @@ func TestMaybePatchMSFConsoleScript(t *testing.T) {
 		t.Fatalf("expected patched script, got:\n%s", string(data))
 	}
 }
+
+func TestMaybeAdaptRubyMSFScript(t *testing.T) {
+	tmp := t.TempDir()
+	scriptPath := filepath.Join(tmp, "msf_exploit.rb")
+	content := "require 'msf/core'\nputs 'x'\n"
+	if err := os.WriteFile(scriptPath, []byte(content), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	cmd, args, note, err := maybeAdaptRubyMSFScript("ruby", []string{scriptPath})
+	if err != nil {
+		t.Fatalf("maybeAdaptRubyMSFScript: %v", err)
+	}
+	if cmd != "bash" {
+		t.Fatalf("expected bash command, got %q", cmd)
+	}
+	if len(args) != 2 || args[0] != "-lc" {
+		t.Fatalf("unexpected args: %v", args)
+	}
+	if !strings.Contains(args[1], "/usr/share/metasploit-framework/msfenv") || !strings.Contains(args[1], "ruby ") {
+		t.Fatalf("expected msfenv bootstrap command, got: %s", args[1])
+	}
+	if !strings.Contains(note, "msfenv bootstrap") {
+		t.Fatalf("expected adaptation note, got: %q", note)
+	}
+}
+
+func TestMaybeAdaptRubyMSFScriptSkipsPlainRuby(t *testing.T) {
+	tmp := t.TempDir()
+	scriptPath := filepath.Join(tmp, "plain.rb")
+	content := "puts 'hello'\n"
+	if err := os.WriteFile(scriptPath, []byte(content), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	cmd, args, note, err := maybeAdaptRubyMSFScript("ruby", []string{scriptPath})
+	if err != nil {
+		t.Fatalf("maybeAdaptRubyMSFScript: %v", err)
+	}
+	if cmd != "ruby" {
+		t.Fatalf("expected ruby command, got %q", cmd)
+	}
+	if len(args) != 1 || args[0] != scriptPath {
+		t.Fatalf("unexpected args: %v", args)
+	}
+	if note != "" {
+		t.Fatalf("unexpected note: %q", note)
+	}
+}

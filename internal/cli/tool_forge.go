@@ -327,6 +327,7 @@ func (r *Runner) toolFilesUpToDate(sessionDir string, files []assist.ToolFile, d
 func (r *Runner) buildToolRecoveryGoal(tool assist.ToolSpec, runErr error) string {
 	builder := strings.Builder{}
 	builder.WriteString("The previous tool run failed. Provide a corrected tool spec (type=tool) that fixes the issue.\n")
+	builder.WriteString("If using Metasploit, prefer `msfconsole -x` (or a bash wrapper). Avoid running Ruby scripts that require msf/* directly with plain `ruby`.\n")
 	if tool.Name != "" {
 		builder.WriteString("Tool name: " + tool.Name + "\n")
 	}
@@ -442,6 +443,14 @@ func (r *Runner) executeToolRun(command string, args []string) error {
 		r.logger.Printf("Runtime adaptation failed: %v", patchErr)
 	} else if patched {
 		r.logger.Printf("Runtime adaptation: patched msfconsole -e to -x in %s", patchedPath)
+	}
+	if adaptedCmd, adaptedArgs, note, adaptErr := maybeAdaptRubyMSFScript(command, args); adaptErr != nil {
+		r.logger.Printf("Runtime adaptation failed: %v", adaptErr)
+	} else if adaptedCmd != command || !equalStringSlices(adaptedArgs, args) {
+		command, args = adaptedCmd, adaptedArgs
+		if strings.TrimSpace(note) != "" {
+			r.logger.Printf("%s", note)
+		}
 	}
 
 	// Allow internal primitives.
@@ -593,4 +602,65 @@ func rewriteMSFConsoleExecuteFlag(content string) (string, bool) {
 		return content, false
 	}
 	return strings.Join(lines, "\n"), true
+}
+
+func maybeAdaptRubyMSFScript(command string, args []string) (string, []string, string, error) {
+	base := strings.ToLower(strings.TrimSpace(filepath.Base(command)))
+	if base != "ruby" {
+		return command, args, "", nil
+	}
+	scriptPath := ""
+	for _, arg := range args {
+		trimmed := strings.TrimSpace(arg)
+		if trimmed == "" || strings.HasPrefix(trimmed, "-") {
+			continue
+		}
+		scriptPath = trimmed
+		break
+	}
+	if scriptPath == "" {
+		return command, args, "", nil
+	}
+	data, err := os.ReadFile(scriptPath)
+	if err != nil {
+		return command, args, "", err
+	}
+	if !looksLikeMetasploitRubyScript(string(data)) {
+		return command, args, "", nil
+	}
+	expr := "if [ -f /usr/share/metasploit-framework/msfenv ]; then . /usr/share/metasploit-framework/msfenv; fi; ruby " + shellSingleQuote(scriptPath)
+	return "bash", []string{"-lc", expr}, "Runtime adaptation: executing metasploit ruby script via msfenv bootstrap", nil
+}
+
+func looksLikeMetasploitRubyScript(content string) bool {
+	lower := strings.ToLower(content)
+	needles := []string{
+		"require 'msf/",
+		"require \"msf/",
+		"require 'rex/",
+		"require \"rex/",
+		"/usr/share/metasploit-framework/lib/msf",
+	}
+	for _, needle := range needles {
+		if strings.Contains(lower, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func shellSingleQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
+}
+
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
