@@ -466,9 +466,7 @@ func (r *Runner) executeToolRun(command string, args []string) error {
 
 	start := time.Now()
 	timeout := time.Duration(r.cfg.Tools.Shell.TimeoutSeconds) * time.Second
-	if timeout <= 0 {
-		timeout = 30 * time.Second
-	}
+	timeout = resolveShellIdleTimeout(timeout, command, args)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

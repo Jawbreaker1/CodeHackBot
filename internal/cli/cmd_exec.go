@@ -28,9 +28,11 @@ func (r *Runner) handleRun(args []string) error {
 	start := time.Now()
 	requireApproval := r.cfg.Permissions.Level == "default" && r.cfg.Permissions.RequireApproval
 	timeout := time.Duration(r.cfg.Tools.Shell.TimeoutSeconds) * time.Second
-	if timeout <= 0 {
-		timeout = 30 * time.Second
+	resolvedTimeout := resolveShellIdleTimeout(timeout, args[0], args[1:])
+	if resolvedTimeout != timeout && !r.cfg.UI.Verbose {
+		r.logger.Printf("Adjusted idle timeout to %s for command: %s", resolvedTimeout, args[0])
 	}
+	timeout = resolvedTimeout
 	if requireApproval {
 		approved, err := r.confirm(fmt.Sprintf("Run command: %s %s?", args[0], strings.Join(args[1:], " ")))
 		if err != nil {
@@ -192,11 +194,12 @@ func (r *Runner) handleMSF(args []string) error {
 	if activityWriter != nil {
 		liveWriter = activityWriter
 	}
+	cmdArgs := []string{"-q", "-x", command}
 	execRunner := exec.Runner{
 		Permissions:      exec.PermissionLevel(r.cfg.Permissions.Level),
 		RequireApproval:  false,
 		LogDir:           filepath.Join(r.cfg.Session.LogDir, r.sessionID, "logs"),
-		Timeout:          2 * time.Minute,
+		Timeout:          resolveShellIdleTimeout(2*time.Minute, "msfconsole", cmdArgs),
 		Reader:           r.reader,
 		PromptWriter:     r.outputWriter(),
 		ScopeNetworks:    r.cfg.Scope.Networks,
@@ -204,7 +207,6 @@ func (r *Runner) handleMSF(args []string) error {
 		ScopeDenyTargets: r.cfg.Scope.DenyTargets,
 		LiveWriter:       liveWriter,
 	}
-	cmdArgs := []string{"-q", "-x", command}
 	result, err := execRunner.RunCommandWithContext(ctx, "msfconsole", cmdArgs...)
 	wasCanceled := errors.Is(err, context.Canceled)
 	if stopInterrupt != nil {
