@@ -112,6 +112,48 @@ func TestRunWorkerTaskCommandAction(t *testing.T) {
 	}
 }
 
+func TestNormalizeTaskActionSplitsCommandLine(t *testing.T) {
+	t.Parallel()
+
+	action, err := normalizeTaskAction(TaskAction{
+		Type:    "command",
+		Command: "nmap -sV -Pn 192.168.50.1",
+	})
+	if err != nil {
+		t.Fatalf("normalizeTaskAction: %v", err)
+	}
+	if action.Command != "nmap" {
+		t.Fatalf("expected command nmap, got %q", action.Command)
+	}
+	if len(action.Args) != 3 {
+		t.Fatalf("expected 3 args, got %d", len(action.Args))
+	}
+	if action.Args[0] != "-sV" || action.Args[1] != "-Pn" || action.Args[2] != "192.168.50.1" {
+		t.Fatalf("unexpected args: %#v", action.Args)
+	}
+}
+
+func TestNormalizeTaskActionWrapsShellExpressions(t *testing.T) {
+	t.Parallel()
+
+	action, err := normalizeTaskAction(TaskAction{
+		Type:    "command",
+		Command: "grep -E 'router|cisco' /tmp/nmap_results.txt || echo 'No router identified'",
+	})
+	if err != nil {
+		t.Fatalf("normalizeTaskAction: %v", err)
+	}
+	if action.Command != "bash" {
+		t.Fatalf("expected command bash, got %q", action.Command)
+	}
+	if len(action.Args) != 2 || action.Args[0] != "-lc" {
+		t.Fatalf("unexpected bash args: %#v", action.Args)
+	}
+	if action.Args[1] != "grep -E 'router|cisco' /tmp/nmap_results.txt || echo 'No router identified'" {
+		t.Fatalf("unexpected shell payload: %q", action.Args[1])
+	}
+}
+
 func TestRunWorkerTaskAssistAction(t *testing.T) {
 	base := t.TempDir()
 	runID := "run-worker-task-assist"

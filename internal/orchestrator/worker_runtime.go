@@ -284,6 +284,7 @@ func normalizeTaskAction(action TaskAction) (TaskAction, error) {
 	a := action
 	a.Type = strings.ToLower(strings.TrimSpace(a.Type))
 	a.Command = strings.TrimSpace(a.Command)
+	a.Args = normalizeActionArgs(a.Args)
 	if a.Type == "" {
 		a.Type = "command"
 	}
@@ -292,6 +293,7 @@ func normalizeTaskAction(action TaskAction) (TaskAction, error) {
 		if a.Command == "" {
 			return TaskAction{}, fmt.Errorf("task action command is required")
 		}
+		a.Command, a.Args = normalizeCommandAction(a.Command, a.Args)
 	case "shell":
 		if a.Command == "" {
 			return TaskAction{}, fmt.Errorf("task shell action command is required")
@@ -306,6 +308,59 @@ func normalizeTaskAction(action TaskAction) (TaskAction, error) {
 		return TaskAction{}, fmt.Errorf("unsupported action type %q", a.Type)
 	}
 	return a, nil
+}
+
+func normalizeActionArgs(args []string) []string {
+	if len(args) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(args))
+	for _, arg := range args {
+		arg = strings.TrimSpace(arg)
+		if arg == "" {
+			continue
+		}
+		out = append(out, arg)
+	}
+	return out
+}
+
+func normalizeCommandAction(command string, args []string) (string, []string) {
+	command = strings.TrimSpace(command)
+	args = normalizeActionArgs(args)
+	if command == "" {
+		return "", args
+	}
+	if len(args) > 0 {
+		return command, args
+	}
+	if looksLikeShellExpression(command) {
+		return "bash", []string{"-lc", command}
+	}
+	parts := strings.Fields(command)
+	if len(parts) == 0 {
+		return command, nil
+	}
+	if len(parts) == 1 {
+		return parts[0], nil
+	}
+	return parts[0], parts[1:]
+}
+
+func looksLikeShellExpression(command string) bool {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return false
+	}
+	shellTokens := []string{
+		"||", "&&", "|", ";", "$(", "`", ">", "<", "\n",
+	}
+	for _, token := range shellTokens {
+		if strings.Contains(command, token) {
+			return true
+		}
+	}
+	return false
 }
 
 func resolveActionWorkingDir(configured, workspaceDir string) (string, error) {
