@@ -154,10 +154,10 @@ if [[ "${#SCOPE_NETWORKS[@]}" -eq 0 && "${#SCOPE_TARGETS[@]}" -eq 0 ]]; then
 fi
 
 if [[ "$SKIP_BUILD" -ne 1 ]]; then
-  echo "[build] go build ./cmd/birdhackbot"
-  go build -o birdhackbot ./cmd/birdhackbot
-  echo "[build] go build ./cmd/birdhackbot-orchestrator"
-  go build -o birdhackbot-orchestrator ./cmd/birdhackbot-orchestrator
+  echo "[build] go build -buildvcs=false ./cmd/birdhackbot"
+  go build -buildvcs=false -o birdhackbot ./cmd/birdhackbot
+  echo "[build] go build -buildvcs=false ./cmd/birdhackbot-orchestrator"
+  go build -buildvcs=false -o birdhackbot-orchestrator ./cmd/birdhackbot-orchestrator
 fi
 
 cmd=(

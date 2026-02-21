@@ -32,7 +32,7 @@ func TestWorkerManagerLaunchesRealBirdHackBotBinary(t *testing.T) {
 
 	repoRoot := mustRepoRoot(t)
 	binPath := filepath.Join(base, "birdhackbot")
-	build := exec.Command("go", "build", "-o", binPath, "./cmd/birdhackbot")
+	build := exec.Command("go", "build", "-buildvcs=false", "-o", binPath, "./cmd/birdhackbot")
 	build.Dir = repoRoot
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build real birdhackbot binary: %v\n%s", err, string(out))

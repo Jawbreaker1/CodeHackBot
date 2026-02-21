@@ -1511,7 +1511,7 @@ func workerShellEchoCommand(message string) (string, []string) {
 func buildBirdHackBotBinary(t *testing.T, repoRoot, outDir string) string {
 	t.Helper()
 	binPath := filepath.Join(outDir, "birdhackbot")
-	build := exec.Command("go", "build", "-o", binPath, "./cmd/birdhackbot")
+	build := exec.Command("go", "build", "-buildvcs=false", "-o", binPath, "./cmd/birdhackbot")
 	build.Dir = repoRoot
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build birdhackbot: %v\n%s", err, string(output))

@@ -20,8 +20,8 @@ All authorization/scope constraints in `AGENTS.md` are mandatory.
 
 ## Build, Test, and Local Run
 - `go test ./...` — run full test suite.
-- `go build ./cmd/birdhackbot` — build CLI binary.
-- `go build ./cmd/birdhackbot-orchestrator` — build orchestrator binary.
+- `go build -buildvcs=false ./cmd/birdhackbot` — build CLI binary (avoids VCS stat-cache warnings in restricted environments).
+- `go build -buildvcs=false ./cmd/birdhackbot-orchestrator` — build orchestrator binary (avoids VCS stat-cache warnings in restricted environments).
 - `go run ./cmd/birdhackbot --profile <name>` — run directly with optional profile.
 - `./birdhackbot-orchestrator tui --sessions-dir sessions --run <run-id>` — interactive orchestrator TUI (status, workers, approvals, events, prompt commands).
 - `./birdhackbot --resume <session-id>` — continue an interrupted session.
@@ -278,4 +278,4 @@ Minimum session outputs:
   - simulation tests (parallel scheduling, retries, reclaim, stop propagation),
   - end-to-end run tests (start -> worker fan-out -> evidence merge -> complete).
 - Event/replay tests must use deterministic fixtures under `testdata/` when practical.
-- Build gate remains mandatory before merge: `go test ./...` and `go build ./cmd/birdhackbot`.
+- Build gate remains mandatory before merge: `go test ./...` and `go build -buildvcs=false ./cmd/birdhackbot`.

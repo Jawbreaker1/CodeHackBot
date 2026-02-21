@@ -10,8 +10,8 @@ This runbook is for authorized internal lab usage only.
 
 ## 2) Build
 ```bash
-go build -o birdhackbot ./cmd/birdhackbot
-go build -o birdhackbot-orchestrator ./cmd/birdhackbot-orchestrator
+go build -buildvcs=false -o birdhackbot ./cmd/birdhackbot
+go build -buildvcs=false -o birdhackbot-orchestrator ./cmd/birdhackbot-orchestrator
 ```
 
 ## 3) Prepare a run plan

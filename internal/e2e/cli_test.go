@@ -26,7 +26,7 @@ func TestMain(m *testing.M) {
 	}
 	cliPath = filepath.Join(temp, "birdhackbot")
 
-	cmd := exec.Command("go", "build", "-o", cliPath, "./cmd/birdhackbot")
+	cmd := exec.Command("go", "build", "-buildvcs=false", "-o", cliPath, "./cmd/birdhackbot")
 	cmd.Dir = projectRoot
 	output, err := cmd.CombinedOutput()
 	if err != nil {
