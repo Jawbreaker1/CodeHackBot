@@ -44,6 +44,13 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "run: %s\n", status.RunID)
 	fmt.Fprintf(stdout, "state: %s\n", status.State)
+	if plan, err := manager.LoadRunPlan(runID); err == nil {
+		phase := orchestrator.NormalizeRunPhase(plan.Metadata.RunPhase)
+		if phase == "" {
+			phase = "-"
+		}
+		fmt.Fprintf(stdout, "phase: %s\n", phase)
+	}
 	fmt.Fprintf(stdout, "active_workers: %d\n", status.ActiveWorkers)
 	fmt.Fprintf(stdout, "queued_tasks: %d\n", status.QueuedTasks)
 	fmt.Fprintf(stdout, "running_tasks: %d\n", status.RunningTasks)

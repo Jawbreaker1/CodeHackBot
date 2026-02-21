@@ -52,9 +52,11 @@ func (c *Coordinator) handleRunStateAndReplan() error {
 	for state, count := range c.scheduler.Summary() {
 		taskCounts[string(state)] = count
 	}
+	phase := NormalizeRunPhase(c.runPhase)
 	snapshot := RunStateSnapshot{
 		RunID:         c.runID,
 		UpdatedAt:     c.manager.Now(),
+		Phase:         phase,
 		ActiveWorkers: c.workers.RunningCount(),
 		TaskCounts:    taskCounts,
 		ArtifactCount: artifactCount,
@@ -68,6 +70,7 @@ func (c *Coordinator) handleRunStateAndReplan() error {
 	if stateHash != c.lastRunStateHash {
 		if err := c.manager.EmitEvent(c.runID, orchestratorWorkerID, "", EventTypeRunStateUpdated, map[string]any{
 			"state_hash":     stateHash,
+			"phase":          snapshot.Phase,
 			"active_workers": snapshot.ActiveWorkers,
 			"task_counts":    snapshot.TaskCounts,
 			"artifact_count": snapshot.ArtifactCount,

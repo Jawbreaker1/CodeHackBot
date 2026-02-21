@@ -10,6 +10,7 @@ import (
 type RunStateSnapshot struct {
 	RunID         string         `json:"run_id"`
 	UpdatedAt     time.Time      `json:"updated_at"`
+	Phase         string         `json:"phase,omitempty"`
 	ActiveWorkers int            `json:"active_workers"`
 	TaskCounts    map[string]int `json:"task_counts"`
 	ArtifactCount int            `json:"artifact_count"`

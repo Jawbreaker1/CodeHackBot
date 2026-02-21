@@ -326,3 +326,125 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
   - [x] unit tests for planner validation/fallback behavior
   - [ ] integration test for `run --planner llm` with mocked LLM output
   - [x] regression test that deterministic planner path remains unchanged
+
+## Sprint 26 — Completion Contract Enforcement (planned)
+- [ ] Enforce task completion contracts in coordinator before accepting `task_completed`:
+  - [ ] verify required artifacts exist and are non-empty
+  - [ ] verify required finding types were emitted for the task/target
+  - [ ] emit `task_failed` with reason `missing_required_artifacts` when contract is not met
+- [ ] Stop marking `completion_contract.verification_status="satisfied"` unconditionally in workers.
+- [ ] Add contract-check diagnostics to TUI (`why task marked failed/completed`).
+- [ ] Tests:
+  - [ ] completion event with missing artifacts is converted to failure
+  - [ ] completion with valid artifacts/findings remains completed
+  - [ ] replan trigger on repeated `missing_required_artifacts` still works
+
+## Sprint 27 — Scope Engine Unification + Fail-Closed Wrappers (planned)
+- [ ] Introduce shared scope package and remove duplicated logic between:
+  - [ ] `internal/exec/scope.go`
+  - [ ] `internal/orchestrator/scope.go`
+- [ ] Enforce fail-closed behavior for network-capable wrapper commands (`bash -c`, `sh -c`, `zsh -c`) when scope is enabled.
+- [ ] Add target extraction for wrapped network commands and URLs (including script body parsing for common patterns).
+- [ ] Add policy parity tests so CLI and orchestrator enforce identical scope decisions.
+- [ ] Tests:
+  - [ ] wrapper bypass attempts are denied when target is missing/out-of-scope
+  - [ ] in-scope wrapped commands are allowed
+  - [ ] deny-target rules are enforced in both execution paths
+
+## Sprint 28 — Event Pipeline Performance + Robustness (planned)
+- [ ] Add incremental event ingestion (cursor/offset) so evidence merge processes only new events.
+- [ ] Replace repeated full-log `nextSeq` scans with per-worker sequence state persisted atomically.
+- [ ] Add resilient event reading mode:
+  - [ ] quarantine/skip malformed lines with explicit warning events
+  - [ ] avoid aborting whole run on a single corrupt event line
+- [ ] Add run-state/materialized snapshots to reduce repeated recomputation in TUI/status paths.
+- [ ] Tests:
+  - [ ] long-run event growth benchmark guard
+  - [ ] malformed event line does not kill run status processing
+  - [ ] seq monotonicity remains correct under concurrent workers
+
+## Sprint 29 — Worker Assist Reliability Modes (planned)
+- [ ] Add worker assist modes:
+  - [ ] `strict` (no fallback assistant, fail-fast on LLM failure/parse failure)
+  - [ ] `degraded` (allow fallback assistant)
+- [ ] Emit explicit metadata per assist turn: model, timeout, parse-repair used, fallback used.
+- [ ] Improve loop handling:
+  - [ ] semantic repeat detection (same intent via alias/arg reorder)
+  - [ ] stronger recovery constraints after repeated failures
+- [ ] Add assistant output schema hardening for tool suggestions (`steps`, `tool.files`, `run`).
+- [ ] Tests:
+  - [ ] strict mode fails loudly without silent fallback
+  - [ ] degraded mode keeps progressing and surfaces fallback reason in events
+  - [ ] loop guard catches semantic repeats
+
+## Sprint 30 — TUI Operator UX Semantics (planned)
+- [ ] Lock command semantics:
+  - [ ] `ask` is read-only and never queues instructions
+  - [ ] `instruct` always queues execution changes
+- [ ] Expand command log viewport and preserve full assistant replies (no premature truncation).
+- [ ] Add scroll controls for both command log and recent events.
+- [ ] Keep active workers pinned at top of worker debug pane; completed/stopped workers collapsed by default.
+- [ ] Tests:
+  - [ ] `ask` vs `instruct` behavior contract tests
+  - [ ] snapshot tests for worker pane ordering/collapse
+  - [ ] long-message rendering tests (no dropped critical lines)
+
+## Sprint 31 — Evidence-First Reporting + Templates (planned)
+- [ ] Make report generation strictly evidence-backed:
+  - [ ] each finding requires linked artifact/log evidence
+  - [ ] unresolved claims are labeled `UNVERIFIED`
+- [ ] Add report validators for required sections per profile (`standard`, `owasp`, `nis2`, `internal`).
+- [ ] Improve orchestrator default report discoverability (path emitted in status/TUI and on terminal outcomes).
+- [ ] Add report quality tests using real run artifacts (network scan + web recon cases).
+
+## Sprint 32 — Maintainability Refactor Guardrails (planned)
+- [ ] Refactor high-complexity files into smaller units:
+  - [ ] `internal/assist/assistant.go`
+  - [ ] `internal/cli/assist_state.go`
+  - [ ] `internal/orchestrator/worker_runtime_assist.go`
+  - [ ] `cmd/birdhackbot-orchestrator/tui_render.go`
+- [ ] Add package-level architecture notes for assist loop, scope enforcement, and event pipeline.
+- [ ] Add CI checks for complexity/size thresholds and enforce test updates for refactors.
+
+## Sprint 33 — Interactive Orchestrator Planning Mode (planned)
+- [x] Make `--goal` optional for orchestrator startup:
+  - [x] keep `--goal` path for automation/non-interactive runs
+  - [x] support `tui` startup with no initial goal
+- [x] Add explicit run phases: `planning -> review -> approved -> executing -> completed`.
+- [x] Add planner chat loop in TUI before execution:
+  - [x] operator enters testing intent in plain text
+  - [x] orchestrator LLM proposes a draft plan + rationale
+  - [x] operator can discuss/refine plan in multiple turns
+- [x] Add plan editing commands (pre-execution):
+  - [x] add task
+  - [x] remove task
+  - [x] modify task (goal/targets/risk/budget/dependencies)
+  - [x] reorder/prioritize tasks
+- [x] Add plan diff + validation gate before execution:
+  - [x] show what changed from last draft
+  - [x] run full safety/scope validator on every revision
+  - [x] block execute if plan is invalid or out of scope
+- [x] Add explicit execution controls:
+  - [x] `execute` to start workers from approved plan
+  - [x] `regenerate` to ask planner for a new draft
+  - [x] `discard` to reset planning session
+- [x] Persist planning conversation and revisions under run artifacts:
+  - [x] planner transcript
+  - [x] plan versions (`v1..vn`) + diff metadata
+  - [x] final approved plan provenance (model, prompt hash, operator approvals)
+- [x] Tests:
+  - [x] no-goal startup enters planning mode and does not execute workers
+  - [x] multi-turn plan refinement updates task graph deterministically
+  - [x] add/remove/modify commands mutate plan as expected
+  - [x] execute only works from approved valid plan
+  - [x] `--goal` automation path remains unchanged (regression)
+
+## Sprint 34 — LLM Stability Controls (planned)
+- [ ] Make LLM behavior tunable via config/env (with safe defaults):
+  - [ ] `llm.temperature` base setting
+  - [ ] optional per-role overrides (`assist`, `planner`, `summarize`, `recovery`, `tui_assistant`)
+  - [ ] optional `max_tokens` controls per role
+- [ ] Lower default temperatures for high-trust paths:
+  - [ ] planner and evaluation/repair paths deterministic (`0.0-0.1`)
+  - [ ] summaries/recovery conservative (`~0.1`)
+- [ ] Add tests ensuring configured values are actually used by call sites.

@@ -113,6 +113,7 @@ func TestRunStartStatusEventsStop(t *testing.T) {
 func TestRunRejectsMissingRequiredFlags(t *testing.T) {
 	t.Parallel()
 
+	base := t.TempDir()
 	var out bytes.Buffer
 	var errOut bytes.Buffer
 
@@ -126,11 +127,54 @@ func TestRunRejectsMissingRequiredFlags(t *testing.T) {
 	}
 	out.Reset()
 	errOut.Reset()
-	if code := run([]string{"run", "--worker-cmd", os.Args[0]}, &out, &errOut); code == 0 {
-		t.Fatalf("expected run failure without --run or --goal")
+	if code := run([]string{"run", "--sessions-dir", base}, &out, &errOut); code != 0 {
+		t.Fatalf("expected planning run bootstrap, got code=%d err=%s", code, errOut.String())
 	}
-	if !strings.Contains(errOut.String(), "run requires --run or --goal") {
-		t.Fatalf("unexpected run error output: %q", errOut.String())
+	if !strings.Contains(out.String(), "run started in planning mode:") {
+		t.Fatalf("unexpected planning run output: %q", out.String())
+	}
+}
+
+func TestRunBootstrapPlanningModeWithoutGoal(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-cli-planning"
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+
+	code := run([]string{
+		"run",
+		"--sessions-dir", base,
+		"--run", runID,
+	}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("run failed: code=%d err=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "run started in planning mode: "+runID) {
+		t.Fatalf("unexpected output: %q", out.String())
+	}
+
+	manager := orchestrator.NewManager(base)
+	plan, err := manager.LoadRunPlan(runID)
+	if err != nil {
+		t.Fatalf("LoadRunPlan: %v", err)
+	}
+	if phase := orchestrator.NormalizeRunPhase(plan.Metadata.RunPhase); phase != orchestrator.RunPhasePlanning {
+		t.Fatalf("expected planning phase, got %q", plan.Metadata.RunPhase)
+	}
+	if len(plan.Tasks) != 0 {
+		t.Fatalf("expected zero tasks in planning bootstrap, got %d", len(plan.Tasks))
+	}
+
+	events, err := manager.Events(runID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	for _, event := range events {
+		if event.Type == orchestrator.EventTypeWorkerStarted || event.Type == orchestrator.EventTypeTaskStarted {
+			t.Fatalf("unexpected execution event in planning bootstrap: %s", event.Type)
+		}
 	}
 }
 
@@ -227,6 +271,9 @@ func TestRunGoalModeSeedsPlanAndPersistsMetadata(t *testing.T) {
 	}
 	if plan.Metadata.PlannerDecision != "approve" {
 		t.Fatalf("expected approve planner decision, got %q", plan.Metadata.PlannerDecision)
+	}
+	if phase := orchestrator.NormalizeRunPhase(plan.Metadata.RunPhase); phase != orchestrator.RunPhaseCompleted {
+		t.Fatalf("expected completed run phase after execution, got %q", plan.Metadata.RunPhase)
 	}
 	if len(plan.Metadata.Hypotheses) == 0 {
 		t.Fatalf("expected generated hypotheses in plan metadata")

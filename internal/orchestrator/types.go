@@ -42,6 +42,7 @@ type RunPlan struct {
 
 type PlanMetadata struct {
 	CreatedAt         time.Time    `json:"created_at,omitempty"`
+	RunPhase          string       `json:"run_phase,omitempty"`
 	Goal              string       `json:"goal,omitempty"`
 	NormalizedGoal    string       `json:"normalized_goal,omitempty"`
 	PlannerMode       string       `json:"planner_mode,omitempty"`

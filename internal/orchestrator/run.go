@@ -192,9 +192,54 @@ func (m *Manager) LoadRunPlan(runID string) (RunPlan, error) {
 	return ReadRunPlan(planPath)
 }
 
+func (m *Manager) ReplaceRunPlan(plan RunPlan) error {
+	if err := ValidateRunPlan(plan); err != nil {
+		return err
+	}
+	paths, err := EnsureRunLayout(m.SessionsDir, plan.RunID)
+	if err != nil {
+		return err
+	}
+	if err := removeJSONFiles(paths.TaskDir); err != nil {
+		return fmt.Errorf("clear task dir: %w", err)
+	}
+	if err := WriteJSONAtomic(filepath.Join(paths.PlanDir, "plan.json"), plan); err != nil {
+		return fmt.Errorf("write run plan: %w", err)
+	}
+	for _, task := range plan.Tasks {
+		if err := WriteJSONAtomic(filepath.Join(paths.TaskDir, task.TaskID+".json"), task); err != nil {
+			return fmt.Errorf("write task %s: %w", task.TaskID, err)
+		}
+	}
+	if err := m.InitializeMemoryBank(plan.RunID, plan); err != nil {
+		return fmt.Errorf("initialize memory bank: %w", err)
+	}
+	return nil
+}
+
+func (m *Manager) SetRunPhase(runID, phase string) error {
+	normalized := NormalizeRunPhase(phase)
+	if normalized == "" {
+		return fmt.Errorf("invalid run phase: %s", phase)
+	}
+	plan, err := m.LoadRunPlan(runID)
+	if err != nil {
+		return err
+	}
+	if NormalizeRunPhase(plan.Metadata.RunPhase) == normalized {
+		return nil
+	}
+	plan.Metadata.RunPhase = normalized
+	planPath := filepath.Join(BuildRunPaths(m.SessionsDir, runID).PlanDir, "plan.json")
+	return WriteJSONAtomic(planPath, plan)
+}
+
 func ValidatePlanForStart(plan RunPlan) error {
 	if err := ValidateRunPlan(plan); err != nil {
 		return err
+	}
+	if NormalizeRunPhase(plan.Metadata.RunPhase) == RunPhasePlanning {
+		return nil
 	}
 	if len(plan.Constraints) == 0 {
 		return fmt.Errorf("%w: constraints is required", ErrInvalidPlan)
@@ -319,4 +364,23 @@ func maxI64(a, b int64) int64 {
 		return a
 	}
 	return b
+}
+
+func removeJSONFiles(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, entry.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
 }

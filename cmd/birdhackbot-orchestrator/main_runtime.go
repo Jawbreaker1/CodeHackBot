@@ -21,6 +21,11 @@ func executeCoordinatorLoop(
 	stderr io.Writer,
 	announce bool,
 ) int {
+	if err := manager.SetRunPhase(runID, orchestrator.RunPhaseExecuting); err != nil {
+		fmt.Fprintf(stderr, "run failed setting phase: %v\n", err)
+		return 1
+	}
+	coord.SetRunPhase(orchestrator.RunPhaseExecuting)
 	ticker := time.NewTicker(tick)
 	defer ticker.Stop()
 
@@ -31,6 +36,7 @@ func executeCoordinatorLoop(
 			if status, err := manager.Status(runID); err == nil && status.State != "completed" && status.State != "stopped" {
 				_ = manager.Stop(runID)
 			}
+			_ = manager.SetRunPhase(runID, orchestrator.RunPhaseCompleted)
 			if announce {
 				fmt.Fprintf(stdout, "run interrupted: %s\n", runID)
 			}
@@ -44,6 +50,7 @@ func executeCoordinatorLoop(
 			if status.State == "stopped" {
 				_ = coord.StopAll(stopGrace)
 				emitRunReport(manager, runID, stdout, stderr, announce)
+				_ = manager.SetRunPhase(runID, orchestrator.RunPhaseCompleted)
 				if announce {
 					fmt.Fprintf(stdout, "run stopped: %s\n", runID)
 				}
@@ -67,6 +74,7 @@ func executeCoordinatorLoop(
 						return 1
 					}
 					emitRunReport(manager, runID, stdout, stderr, announce)
+					_ = manager.SetRunPhase(runID, orchestrator.RunPhaseCompleted)
 					if announce {
 						fmt.Fprintf(stdout, "run completed: %s\n", runID)
 					}
@@ -80,6 +88,7 @@ func executeCoordinatorLoop(
 					return 1
 				}
 				emitRunReport(manager, runID, stdout, stderr, announce)
+				_ = manager.SetRunPhase(runID, orchestrator.RunPhaseCompleted)
 				if announce {
 					fmt.Fprintf(stdout, "run stopped with failures: %s (%s)\n", runID, outcomeDetail)
 				}

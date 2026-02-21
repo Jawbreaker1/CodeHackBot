@@ -21,6 +21,7 @@ const plannerVersion = "planner_v1"
 const (
 	plannerModeStaticV1 = "goal_seed_v1"
 	plannerModeLLMV1    = "goal_llm_v1"
+	plannerModeTUIV1    = "interactive_tui_v1"
 
 	plannerLLMBaseURLEnv     = "BIRDHACKBOT_LLM_BASE_URL"
 	plannerLLMModelEnv       = "BIRDHACKBOT_LLM_MODEL"
@@ -175,14 +176,6 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "run invalid --plan-regenerate-count: must be >= 1")
 		return 2
 	}
-	if runID == "" && goal == "" {
-		fmt.Fprintln(stderr, "run requires --run or --goal")
-		return 2
-	}
-	if strings.TrimSpace(workerCmd) == "" && !(goal != "" && (planReview == "reject" || planReview == "edit")) {
-		fmt.Fprintln(stderr, "run requires --worker-cmd")
-		return 2
-	}
 	resolvedSessionsDir := strings.TrimSpace(sessionsDir)
 	if resolvedSessionsDir == "" {
 		resolvedSessionsDir = "sessions"
@@ -201,13 +194,40 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 	permissionMode := orchestrator.PermissionMode(strings.TrimSpace(permissionModeRaw))
 	workerConfigPath := detectWorkerConfigPath()
 	manager := orchestrator.NewManager(resolvedSessionsDir)
-	if goal != "" {
-		scope := orchestrator.Scope{
-			Networks:    compactStringFlags(scopeNetworks),
-			Targets:     compactStringFlags(scopeTargets),
-			DenyTargets: compactStringFlags(scopeDenyTargets),
+	scope := orchestrator.Scope{
+		Networks:    compactStringFlags(scopeNetworks),
+		Targets:     compactStringFlags(scopeTargets),
+		DenyTargets: compactStringFlags(scopeDenyTargets),
+	}
+	goalConstraints := compactStringFlags(constraints)
+
+	if goal == "" {
+		if runID == "" {
+			runID = generateRunID(time.Now().UTC())
 		}
-		goalConstraints := compactStringFlags(constraints)
+		runRoot := orchestrator.BuildRunPaths(resolvedSessionsDir, runID).Root
+		if _, statErr := os.Stat(runRoot); os.IsNotExist(statErr) {
+			plan := buildInteractivePlanningPlan(runID, time.Now().UTC(), scope, goalConstraints, maxParallelism)
+			if _, err := manager.StartFromPlan(plan, ""); err != nil {
+				fmt.Fprintf(stderr, "run failed creating planning run: %v\n", err)
+				return 1
+			}
+			fmt.Fprintf(stdout, "run started in planning mode: %s\n", runID)
+			if !useTUI {
+				fmt.Fprintf(stdout, "open with: birdhackbot-orchestrator tui --sessions-dir %s --run %s\n", resolvedSessionsDir, runID)
+				return 0
+			}
+		} else if statErr != nil {
+			fmt.Fprintf(stderr, "run failed reading run path: %v\n", statErr)
+			return 1
+		}
+	}
+
+	if strings.TrimSpace(workerCmd) == "" && goal != "" && !(planReview == "reject" || planReview == "edit") {
+		fmt.Fprintln(stderr, "run requires --worker-cmd")
+		return 2
+	}
+	if goal != "" {
 		if err := validateGoalSeedInputs(scope, goalConstraints); err != nil {
 			fmt.Fprintf(stderr, "run invalid goal input: %v\n", err)
 			return 2
@@ -269,6 +289,7 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 		if planReview == "regenerate" {
 			decision = "approve"
 		}
+		plan.Metadata.RunPhase = orchestrator.RunPhaseReview
 		plan.Metadata.PlannerVersion = plannerVersion
 		plan.Metadata.PlannerPromptHash = promptHash
 		plan.Metadata.PlannerDecision = decision
@@ -284,6 +305,7 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 		}
 		switch planReview {
 		case "reject":
+			plan.Metadata.RunPhase = orchestrator.RunPhaseReview
 			plan.Metadata.PlannerDecision = "reject"
 			planPath, auditPath, err := persistPlanReview(resolvedSessionsDir, plan, "plan.review.json")
 			if err != nil {
@@ -293,6 +315,7 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "plan rejected: %s\nreview log: %s\n", planPath, auditPath)
 			return 0
 		case "edit":
+			plan.Metadata.RunPhase = orchestrator.RunPhaseReview
 			plan.Metadata.PlannerDecision = "edit"
 			planPath, auditPath, err := persistPlanReview(resolvedSessionsDir, plan, "plan.draft.json")
 			if err != nil {
@@ -302,6 +325,7 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "plan draft written: %s\nedit and launch with: birdhackbot-orchestrator start --sessions-dir %s --plan %s\nreview log: %s\n", planPath, resolvedSessionsDir, planPath, auditPath)
 			return 0
 		}
+		plan.Metadata.RunPhase = orchestrator.RunPhaseApproved
 		startedRunID, err := manager.StartFromPlan(plan, "")
 		if err != nil {
 			fmt.Fprintf(stderr, "run failed creating goal plan: %v\n", err)
@@ -317,6 +341,55 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "run failed loading plan: %v\n", err)
 		return 1
+	}
+	runPhase := orchestrator.NormalizeRunPhase(plan.Metadata.RunPhase)
+	if runPhase == "" {
+		if len(plan.Tasks) == 0 {
+			runPhase = orchestrator.RunPhasePlanning
+		} else {
+			runPhase = orchestrator.RunPhaseApproved
+			if err := manager.SetRunPhase(runID, runPhase); err != nil {
+				fmt.Fprintf(stderr, "run failed setting default phase: %v\n", err)
+				return 1
+			}
+			plan.Metadata.RunPhase = runPhase
+		}
+	}
+	if runPhase == orchestrator.RunPhasePlanning || runPhase == orchestrator.RunPhaseReview {
+		if useTUI {
+			tuiRefresh := tick
+			if tuiRefresh < 500*time.Millisecond {
+				tuiRefresh = 500 * time.Millisecond
+			}
+			tuiCode := runTUI([]string{
+				"--sessions-dir", resolvedSessionsDir,
+				"--run", runID,
+				"--refresh", tuiRefresh.String(),
+			}, stdout, stderr)
+			if tuiCode != 0 {
+				return tuiCode
+			}
+			plan, err = manager.LoadRunPlan(runID)
+			if err != nil {
+				fmt.Fprintf(stderr, "run failed loading plan after tui: %v\n", err)
+				return 1
+			}
+			runPhase = orchestrator.NormalizeRunPhase(plan.Metadata.RunPhase)
+			if runPhase != orchestrator.RunPhaseApproved {
+				return 0
+			}
+		} else {
+			fmt.Fprintf(stdout, "run %s is in %s phase; no workers launched\n", runID, runPhase)
+			return 0
+		}
+	}
+	if len(plan.Tasks) == 0 {
+		fmt.Fprintf(stderr, "run %s has no executable tasks\n", runID)
+		return 1
+	}
+	if strings.TrimSpace(resolvedWorkerCmd) == "" {
+		fmt.Fprintln(stderr, "run requires --worker-cmd for execution")
+		return 2
 	}
 	scheduler, err := orchestrator.NewScheduler(plan, plan.MaxParallelism)
 	if err != nil {
@@ -355,6 +428,7 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "run failed creating coordinator: %v\n", err)
 		return 1
 	}
+	coord.SetRunPhase(runPhase)
 	if err := coord.Reconcile(); err != nil {
 		fmt.Fprintf(stderr, "run failed reconcile: %v\n", err)
 		return 1

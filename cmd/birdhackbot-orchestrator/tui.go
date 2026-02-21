@@ -31,6 +31,10 @@ type tuiCommand struct {
 	reason     string
 	eventLimit int
 	logCount   int
+	taskID     string
+	field      string
+	value      string
+	position   int
 }
 
 type tuiAssistantDecision struct {

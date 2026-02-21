@@ -145,6 +145,7 @@ func buildGoalLLMPlan(
 		Tasks:           tasks,
 		Metadata: orchestrator.PlanMetadata{
 			CreatedAt:      now.UTC(),
+			RunPhase:       orchestrator.RunPhaseReview,
 			Goal:           strings.TrimSpace(goal),
 			NormalizedGoal: normalizedGoal,
 			PlannerMode:    plannerModeLLMV1,
@@ -234,6 +235,7 @@ func buildGoalSeedPlan(runID, goal string, scope orchestrator.Scope, constraints
 		Tasks:           tasks,
 		Metadata: orchestrator.PlanMetadata{
 			CreatedAt:      now.UTC(),
+			RunPhase:       orchestrator.RunPhaseReview,
 			Goal:           strings.TrimSpace(goal),
 			NormalizedGoal: normalizedGoal,
 			PlannerMode:    plannerModeStaticV1,
@@ -244,6 +246,27 @@ func buildGoalSeedPlan(runID, goal string, scope orchestrator.Scope, constraints
 		return orchestrator.RunPlan{}, err
 	}
 	return plan, nil
+}
+
+func buildInteractivePlanningPlan(runID string, now time.Time, scope orchestrator.Scope, constraints []string, maxParallelism int) orchestrator.RunPlan {
+	if maxParallelism <= 0 {
+		maxParallelism = 1
+	}
+	return orchestrator.RunPlan{
+		RunID:           runID,
+		Scope:           scope,
+		Constraints:     constraints,
+		SuccessCriteria: []string{},
+		StopCriteria:    []string{},
+		MaxParallelism:  maxParallelism,
+		Tasks:           []orchestrator.TaskSpec{},
+		Metadata: orchestrator.PlanMetadata{
+			CreatedAt:      now.UTC(),
+			RunPhase:       orchestrator.RunPhasePlanning,
+			PlannerMode:    plannerModeTUIV1,
+			PlannerVersion: plannerVersion,
+		},
+	}
 }
 
 func normalizePlanReview(raw string) (string, error) {
@@ -317,6 +340,7 @@ func persistPlanReview(sessionsDir string, plan orchestrator.RunPlan, planFilena
 	reviewPath := filepath.Join(paths.PlanDir, "plan.review.audit.json")
 	review := map[string]any{
 		"run_id":              plan.RunID,
+		"run_phase":           plan.Metadata.RunPhase,
 		"planner_version":     plan.Metadata.PlannerVersion,
 		"planner_prompt_hash": plan.Metadata.PlannerPromptHash,
 		"decision":            plan.Metadata.PlannerDecision,

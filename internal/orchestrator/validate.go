@@ -40,16 +40,20 @@ func ValidateRunPlan(plan RunPlan) error {
 	if strings.TrimSpace(plan.RunID) == "" {
 		return fmt.Errorf("%w: run_id is required", ErrInvalidPlan)
 	}
-	if len(plan.SuccessCriteria) == 0 {
-		return fmt.Errorf("%w: success_criteria is required", ErrInvalidPlan)
-	}
-	if len(plan.StopCriteria) == 0 {
-		return fmt.Errorf("%w: stop_criteria is required", ErrInvalidPlan)
+	phase := NormalizeRunPhase(plan.Metadata.RunPhase)
+	if strings.TrimSpace(plan.Metadata.RunPhase) != "" && phase == "" {
+		return fmt.Errorf("%w: metadata.run_phase is invalid", ErrInvalidPlan)
 	}
 	if plan.MaxParallelism <= 0 {
 		return fmt.Errorf("%w: max_parallelism must be > 0", ErrInvalidPlan)
 	}
-	if len(plan.Tasks) == 0 {
+	if len(plan.SuccessCriteria) == 0 && phase != RunPhasePlanning {
+		return fmt.Errorf("%w: success_criteria is required", ErrInvalidPlan)
+	}
+	if len(plan.StopCriteria) == 0 && phase != RunPhasePlanning {
+		return fmt.Errorf("%w: stop_criteria is required", ErrInvalidPlan)
+	}
+	if len(plan.Tasks) == 0 && phase != RunPhasePlanning {
 		return fmt.Errorf("%w: tasks is required", ErrInvalidPlan)
 	}
 	ids := map[string]struct{}{}

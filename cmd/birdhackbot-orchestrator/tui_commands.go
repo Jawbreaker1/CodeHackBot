@@ -91,6 +91,50 @@ func parseTUICommand(raw string) (tuiCommand, error) {
 		return tuiCommand{name: "deny", approval: parts[1], reason: reason}, nil
 	case "stop":
 		return tuiCommand{name: "stop"}, nil
+	case "execute":
+		return tuiCommand{name: "execute"}, nil
+	case "regenerate":
+		return tuiCommand{name: "regenerate"}, nil
+	case "discard":
+		return tuiCommand{name: "discard"}, nil
+	case "task":
+		if len(parts) < 3 {
+			return tuiCommand{}, fmt.Errorf("usage: task <add|remove|set|move> ...")
+		}
+		sub := strings.ToLower(strings.TrimSpace(parts[1]))
+		switch sub {
+		case "add":
+			text := strings.TrimSpace(strings.TrimPrefix(trimmed, parts[0]+" "+parts[1]))
+			if text == "" {
+				return tuiCommand{}, fmt.Errorf("usage: task add <title/goal>")
+			}
+			return tuiCommand{name: "task_add", reason: text}, nil
+		case "remove":
+			if len(parts) < 3 {
+				return tuiCommand{}, fmt.Errorf("usage: task remove <task-id>")
+			}
+			return tuiCommand{name: "task_remove", taskID: strings.TrimSpace(parts[2])}, nil
+		case "set":
+			if len(parts) < 5 {
+				return tuiCommand{}, fmt.Errorf("usage: task set <task-id> <field> <value>")
+			}
+			value := strings.TrimSpace(strings.TrimPrefix(trimmed, parts[0]+" "+parts[1]+" "+parts[2]+" "+parts[3]))
+			if value == "" {
+				return tuiCommand{}, fmt.Errorf("usage: task set <task-id> <field> <value>")
+			}
+			return tuiCommand{name: "task_set", taskID: strings.TrimSpace(parts[2]), field: strings.ToLower(strings.TrimSpace(parts[3])), value: value}, nil
+		case "move":
+			if len(parts) < 4 {
+				return tuiCommand{}, fmt.Errorf("usage: task move <task-id> <position>")
+			}
+			position, err := strconv.Atoi(strings.TrimSpace(parts[3]))
+			if err != nil || position <= 0 {
+				return tuiCommand{}, fmt.Errorf("usage: task move <task-id> <position>")
+			}
+			return tuiCommand{name: "task_move", taskID: strings.TrimSpace(parts[2]), position: position}, nil
+		default:
+			return tuiCommand{}, fmt.Errorf("usage: task <add|remove|set|move> ...")
+		}
 	case "instruct":
 		if len(parts) < 2 {
 			return tuiCommand{}, fmt.Errorf("usage: instruct <instruction>")
@@ -131,7 +175,7 @@ func executeTUICommand(manager *orchestrator.Manager, runID string, eventLimit *
 	case "quit":
 		return true, "exiting tui"
 	case "help":
-		return false, "commands: help, plan, tasks, ask <question>, instruct <text>, refresh, events <n>, log <up|down|top|bottom> [n], approve <id> [scope] [reason], deny <id> [reason], stop, quit"
+		return false, "commands: help, plan, tasks, ask <question>, instruct <text>, execute, regenerate, discard, task add/remove/set/move, refresh, events <n>, log <up|down|top|bottom> [n], approve <id> [scope] [reason], deny <id> [reason], stop, quit"
 	case "plan":
 		plan, err := manager.LoadRunPlan(runID)
 		if err != nil {
@@ -210,12 +254,63 @@ func executeTUICommand(manager *orchestrator.Manager, runID string, eventLimit *
 			return false, "stop failed: " + err.Error()
 		}
 		return false, "stop requested"
+	case "execute":
+		msg, done, err := executeTUIPlanningCommand(manager, runID, "execute")
+		if err != nil {
+			return false, "execute failed: " + err.Error()
+		}
+		return done, msg
+	case "regenerate":
+		msg, done, err := executeTUIPlanningCommand(manager, runID, "regenerate")
+		if err != nil {
+			return false, "regenerate failed: " + err.Error()
+		}
+		return done, msg
+	case "discard":
+		msg, done, err := executeTUIPlanningCommand(manager, runID, "discard")
+		if err != nil {
+			return false, "discard failed: " + err.Error()
+		}
+		return done, msg
+	case "task_add":
+		msg, err := planningTaskAdd(manager, runID, cmd.reason)
+		if err != nil {
+			return false, "task add failed: " + err.Error()
+		}
+		return false, msg
+	case "task_remove":
+		msg, err := planningTaskRemove(manager, runID, cmd.taskID)
+		if err != nil {
+			return false, "task remove failed: " + err.Error()
+		}
+		return false, msg
+	case "task_set":
+		msg, err := planningTaskSetField(manager, runID, cmd.taskID, cmd.field, cmd.value)
+		if err != nil {
+			return false, "task set failed: " + err.Error()
+		}
+		return false, msg
+	case "task_move":
+		msg, err := planningTaskMove(manager, runID, cmd.taskID, cmd.position)
+		if err != nil {
+			return false, "task move failed: " + err.Error()
+		}
+		return false, msg
 	case "ask":
 		return false, handleTUIAsk(manager, runID, cmd.reason)
 	case "instruct":
 		instruction := strings.TrimSpace(cmd.reason)
 		if instruction == "" {
 			return false, "instruct failed: instruction is required"
+		}
+		if plan, err := manager.LoadRunPlan(runID); err == nil {
+			if isPlanningPhase(runPhaseFromPlan(plan)) {
+				msg, planErr := planningInstructionToDraft(manager, runID, instruction)
+				if planErr != nil {
+					return false, "instruct failed: " + planErr.Error()
+				}
+				return false, msg
+			}
 		}
 		if err := queueTUIInstruction(manager, runID, instruction); err != nil {
 			return false, "instruct failed: " + err.Error()
@@ -241,6 +336,7 @@ func handleTUIAsk(manager *orchestrator.Manager, runID, input string) string {
 
 	if reply, err := askTUIWithLLM(manager, runID, trimmed); err == nil {
 		lines := []string{fmt.Sprintf("assistant: %s", strings.TrimSpace(reply.Reply))}
+		queuedInstruction := ""
 		if reply.QueueInstruction {
 			instruction := strings.TrimSpace(reply.Instruction)
 			if instruction == "" {
@@ -250,8 +346,10 @@ func handleTUIAsk(manager *orchestrator.Manager, runID, input string) string {
 				lines = append(lines, "instruction failed: "+err.Error())
 			} else {
 				lines = append(lines, "instruction queued: "+instruction)
+				queuedInstruction = instruction
 			}
 		}
+		recordPlanningConversation(manager, runID, trimmed, strings.TrimSpace(reply.Reply), queuedInstruction)
 		return strings.Join(lines, "\n")
 	}
 
@@ -259,10 +357,38 @@ func handleTUIAsk(manager *orchestrator.Manager, runID, input string) string {
 	if looksLikeQuestion(trimmed) {
 		return fallback
 	}
+	if plan, err := manager.LoadRunPlan(runID); err == nil {
+		if isPlanningPhase(runPhaseFromPlan(plan)) {
+			msg, planErr := planningInstructionToDraft(manager, runID, trimmed)
+			if planErr != nil {
+				return fallback + "\nplanning update failed: " + planErr.Error()
+			}
+			return fallback + "\n" + msg
+		}
+	}
 	if err := queueTUIInstruction(manager, runID, trimmed); err != nil {
 		return fallback + "\ninstruction failed: " + err.Error()
 	}
+	recordPlanningConversation(manager, runID, trimmed, fallback, trimmed)
 	return fallback + "\ninstruction queued: " + trimmed
+}
+
+func recordPlanningConversation(manager *orchestrator.Manager, runID, operatorInput, assistantReply, queuedInstruction string) {
+	plan, err := manager.LoadRunPlan(runID)
+	if err != nil || !isPlanningPhase(runPhaseFromPlan(plan)) {
+		return
+	}
+	payload := map[string]any{
+		"action":          "ask",
+		"operator_input":  strings.TrimSpace(operatorInput),
+		"assistant_reply": strings.TrimSpace(assistantReply),
+		"task_count":      len(plan.Tasks),
+		"phase":           runPhaseFromPlan(plan),
+	}
+	if queued := strings.TrimSpace(queuedInstruction); queued != "" {
+		payload["queued_instruction"] = queued
+	}
+	_ = appendPlanningTranscript(manager, runID, payload)
 }
 
 func askTUIWithLLM(manager *orchestrator.Manager, runID, operatorInput string) (tuiAssistantDecision, error) {
@@ -375,7 +501,11 @@ func buildTUIAssistantContext(manager *orchestrator.Manager, runID string) (stri
 	if goal == "" {
 		goal = "(no goal metadata)"
 	}
-	fmt.Fprintf(&b, "run_id=%s state=%s active_workers=%d queued=%d running=%d\n", runID, snap.status.State, snap.status.ActiveWorkers, snap.status.QueuedTasks, snap.status.RunningTasks)
+	phase := orchestrator.NormalizeRunPhase(snap.plan.Metadata.RunPhase)
+	if phase == "" {
+		phase = "-"
+	}
+	fmt.Fprintf(&b, "run_id=%s state=%s phase=%s active_workers=%d queued=%d running=%d\n", runID, snap.status.State, phase, snap.status.ActiveWorkers, snap.status.QueuedTasks, snap.status.RunningTasks)
 	fmt.Fprintf(&b, "goal=%s\n", goal)
 	fmt.Fprintf(&b, "tasks_total=%d completed=%d running=%d queued=%d failed=%d awaiting_approval=%d\n",
 		len(snap.tasks),

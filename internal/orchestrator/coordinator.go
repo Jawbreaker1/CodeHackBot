@@ -8,6 +8,7 @@ import (
 
 type Coordinator struct {
 	runID                       string
+	runPhase                    string
 	manager                     *Manager
 	workers                     *WorkerManager
 	scheduler                   *Scheduler
@@ -62,6 +63,7 @@ func NewCoordinator(runID string, scope Scope, manager *Manager, workers *Worker
 	}
 	return &Coordinator{
 		runID:                       runID,
+		runPhase:                    RunPhaseExecuting,
 		manager:                     manager,
 		workers:                     workers,
 		scheduler:                   scheduler,
@@ -82,6 +84,12 @@ func NewCoordinator(runID string, scope Scope, manager *Manager, workers *Worker
 		seenReplanMutationKeys:      map[string]struct{}{},
 		seenMissingArtifactTasks:    map[string]struct{}{},
 	}, nil
+}
+
+func (c *Coordinator) SetRunPhase(phase string) {
+	if normalized := NormalizeRunPhase(phase); normalized != "" {
+		c.runPhase = normalized
+	}
 }
 
 func (c *Coordinator) Tick() error {

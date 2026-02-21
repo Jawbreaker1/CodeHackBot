@@ -23,9 +23,14 @@ func renderTUI(out io.Writer, runID string, snap tuiSnapshot, messages []string,
 
 	lines := make([]string, 0, height)
 	pane := computePaneLayout(width)
-	bar := fmt.Sprintf(" Orchestrator TUI | run:%s | state:%s | workers:%d | queued:%d | running:%d | approvals:%d | events:%d ",
+	runPhase := orchestrator.NormalizeRunPhase(snap.plan.Metadata.RunPhase)
+	if runPhase == "" {
+		runPhase = "-"
+	}
+	bar := fmt.Sprintf(" Orchestrator TUI | run:%s | state:%s | phase:%s | workers:%d | queued:%d | running:%d | approvals:%d | events:%d ",
 		runID,
 		snap.status.State,
+		runPhase,
 		snap.status.ActiveWorkers,
 		snap.status.QueuedTasks,
 		snap.status.RunningTasks,
@@ -44,6 +49,7 @@ func renderTUI(out io.Writer, runID string, snap tuiSnapshot, messages []string,
 		goal = "(no goal metadata)"
 	}
 	left = append(left, "  - Goal: "+goal)
+	left = append(left, "  - Phase: "+runPhase)
 	left = append(left, fmt.Sprintf("  - Tasks: %d | Success criteria: %d | Stop criteria: %d", len(snap.plan.Tasks), len(snap.plan.SuccessCriteria), len(snap.plan.StopCriteria)))
 	left = append(left, "")
 	left = append(left, "Execution:")

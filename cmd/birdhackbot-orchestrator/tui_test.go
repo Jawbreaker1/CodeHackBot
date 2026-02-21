@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +24,13 @@ func TestParseTUICommand(t *testing.T) {
 		{in: "tasks", name: "tasks"},
 		{in: "ask what is current status", name: "ask"},
 		{in: "instruct investigate target", name: "instruct"},
+		{in: "execute", name: "execute"},
+		{in: "regenerate", name: "regenerate"},
+		{in: "discard", name: "discard"},
+		{in: "task add verify tls configuration", name: "task_add"},
+		{in: "task remove task-manual-001", name: "task_remove"},
+		{in: "task set task-manual-001 risk active_probe", name: "task_set"},
+		{in: "task move task-manual-001 2", name: "task_move"},
 		{in: "Hello orchestrator", name: "ask"},
 		{in: "how many workers are running?", name: "ask"},
 		{in: "scan the current network again", name: "ask"},
@@ -58,6 +67,11 @@ func TestParseTUICommandRejectsInvalid(t *testing.T) {
 		"deny",
 		"ask",
 		"instruct",
+		"task",
+		"task add",
+		"task remove",
+		"task set task-1 risk",
+		"task move task-1 nope",
 	}
 	for _, in := range invalid {
 		in := in
@@ -68,6 +82,196 @@ func TestParseTUICommandRejectsInvalid(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestExecuteTUICommandTaskEditsMutatePlan(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-tui-plan-edits"
+	manager := orchestrator.NewManager(base)
+	plan := buildInteractivePlanningPlan(
+		runID,
+		time.Now().UTC(),
+		orchestrator.Scope{Targets: []string{"127.0.0.1"}},
+		[]string{"local_only"},
+		2,
+	)
+	if _, err := manager.StartFromPlan(plan, ""); err != nil {
+		t.Fatalf("StartFromPlan: %v", err)
+	}
+
+	scroll := 0
+	if done, log := executeTUICommand(manager, runID, nil, tuiCommand{name: "task_add", reason: "baseline recon"}, &scroll); done || !strings.Contains(log, "task added") {
+		t.Fatalf("expected task add success, got done=%v log=%q", done, log)
+	}
+	if done, log := executeTUICommand(manager, runID, nil, tuiCommand{name: "task_add", reason: "service validation"}, &scroll); done || !strings.Contains(log, "task added") {
+		t.Fatalf("expected second task add success, got done=%v log=%q", done, log)
+	}
+	if done, log := executeTUICommand(manager, runID, nil, tuiCommand{name: "task_set", taskID: "task-manual-001", field: "risk", value: "active_probe"}, &scroll); done || !strings.Contains(log, "task updated") {
+		t.Fatalf("expected task risk update, got done=%v log=%q", done, log)
+	}
+	if done, log := executeTUICommand(manager, runID, nil, tuiCommand{name: "task_set", taskID: "task-manual-001", field: "targets", value: "127.0.0.1,localhost"}, &scroll); done || !strings.Contains(log, "task updated") {
+		t.Fatalf("expected task target update, got done=%v log=%q", done, log)
+	}
+	if done, log := executeTUICommand(manager, runID, nil, tuiCommand{name: "task_move", taskID: "task-manual-002", position: 1}, &scroll); done || !strings.Contains(log, "task moved") {
+		t.Fatalf("expected task move success, got done=%v log=%q", done, log)
+	}
+	if done, log := executeTUICommand(manager, runID, nil, tuiCommand{name: "task_remove", taskID: "task-manual-001"}, &scroll); done || !strings.Contains(log, "task removed") {
+		t.Fatalf("expected task remove success, got done=%v log=%q", done, log)
+	}
+
+	updated, err := manager.LoadRunPlan(runID)
+	if err != nil {
+		t.Fatalf("LoadRunPlan: %v", err)
+	}
+	if len(updated.Tasks) != 1 {
+		t.Fatalf("expected 1 task after removal, got %d", len(updated.Tasks))
+	}
+	remaining := updated.Tasks[0]
+	if remaining.TaskID != "task-manual-002" {
+		t.Fatalf("expected remaining task-manual-002, got %s", remaining.TaskID)
+	}
+	if phase := orchestrator.NormalizeRunPhase(updated.Metadata.RunPhase); phase != orchestrator.RunPhaseReview {
+		t.Fatalf("expected review phase after task edits, got %q", updated.Metadata.RunPhase)
+	}
+	if remaining.RiskLevel == "" {
+		t.Fatalf("expected task risk level to be set")
+	}
+}
+
+func TestPlanningRefinementDeterministicAcrossRuns(t *testing.T) {
+	base := t.TempDir()
+	instructions := []string{
+		"map localhost services and summarize findings",
+		"also include tls checks and prioritize externally reachable services",
+	}
+	firstSig := runPlanningInstructionSequence(t, base, "run-plan-deterministic-a", instructions)
+	secondSig := runPlanningInstructionSequence(t, base, "run-plan-deterministic-b", instructions)
+	if firstSig != secondSig {
+		t.Fatalf("expected deterministic plan signature, got %q vs %q", firstSig, secondSig)
+	}
+}
+
+func TestPlanningArtifactsPersistRevisionsAndProvenance(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-tui-plan-artifacts"
+	manager := orchestrator.NewManager(base)
+	plan := buildInteractivePlanningPlan(
+		runID,
+		time.Now().UTC(),
+		orchestrator.Scope{Targets: []string{"127.0.0.1"}},
+		[]string{"local_only"},
+		2,
+	)
+	if _, err := manager.StartFromPlan(plan, ""); err != nil {
+		t.Fatalf("StartFromPlan: %v", err)
+	}
+
+	scroll := 0
+	if done, log := executeTUICommand(manager, runID, nil, tuiCommand{name: "instruct", reason: "scan localhost services and summarize findings"}, &scroll); done || !strings.Contains(log, "plan draft updated") {
+		t.Fatalf("expected instruct update, got done=%v log=%q", done, log)
+	}
+	if done, log := executeTUICommand(manager, runID, nil, tuiCommand{name: "task_add", reason: "manual validation pass"}, &scroll); done || !strings.Contains(log, "task added") {
+		t.Fatalf("expected task add update, got done=%v log=%q", done, log)
+	}
+	if done, log := executeTUICommand(manager, runID, nil, tuiCommand{name: "ask", reason: "can you summarize the current plan?"}, &scroll); done || !strings.Contains(log, "plan") {
+		t.Fatalf("expected ask response, got done=%v log=%q", done, log)
+	}
+	if done, log := executeTUICommand(manager, runID, nil, tuiCommand{name: "execute"}, &scroll); !done || !strings.Contains(log, "execution approved") {
+		t.Fatalf("expected execute approval, got done=%v log=%q", done, log)
+	}
+
+	paths := orchestrator.BuildRunPaths(base, runID)
+	indexPath := filepath.Join(paths.PlanDir, "revisions", "index.json")
+	indexData, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatalf("ReadFile revision index: %v", err)
+	}
+	var index []planRevisionRecord
+	if err := json.Unmarshal(indexData, &index); err != nil {
+		t.Fatalf("Unmarshal revision index: %v", err)
+	}
+	if len(index) < 2 {
+		t.Fatalf("expected >=2 revision records, got %d", len(index))
+	}
+	for _, record := range index {
+		if strings.TrimSpace(record.PlanPath) == "" || strings.TrimSpace(record.DiffPath) == "" {
+			t.Fatalf("expected revision record with plan/diff paths: %+v", record)
+		}
+		if _, err := os.Stat(filepath.Join(paths.PlanDir, "revisions", record.PlanPath)); err != nil {
+			t.Fatalf("missing revision plan file %s: %v", record.PlanPath, err)
+		}
+		if _, err := os.Stat(filepath.Join(paths.PlanDir, "revisions", record.DiffPath)); err != nil {
+			t.Fatalf("missing revision diff file %s: %v", record.DiffPath, err)
+		}
+	}
+
+	transcriptPath := filepath.Join(paths.PlanDir, "planner_transcript.jsonl")
+	transcriptData, err := os.ReadFile(transcriptPath)
+	if err != nil {
+		t.Fatalf("ReadFile transcript: %v", err)
+	}
+	text := string(transcriptData)
+	if !strings.Contains(text, "\"action\":\"instruction_draft\"") {
+		t.Fatalf("expected instruction draft transcript entry")
+	}
+	if !strings.Contains(text, "\"action\":\"task_add\"") {
+		t.Fatalf("expected task_add transcript entry")
+	}
+	if !strings.Contains(text, "\"action\":\"execute\"") {
+		t.Fatalf("expected execute transcript entry")
+	}
+
+	provenancePath := filepath.Join(paths.PlanDir, "final_approved_provenance.json")
+	provenanceData, err := os.ReadFile(provenancePath)
+	if err != nil {
+		t.Fatalf("ReadFile provenance: %v", err)
+	}
+	provenance := map[string]any{}
+	if err := json.Unmarshal(provenanceData, &provenance); err != nil {
+		t.Fatalf("Unmarshal provenance: %v", err)
+	}
+	if strings.TrimSpace(stringFromAny(provenance["planner_prompt_hash"])) == "" {
+		t.Fatalf("expected planner prompt hash in provenance")
+	}
+	if _, ok := provenance["operator_approvals"]; !ok {
+		t.Fatalf("expected operator_approvals field in provenance")
+	}
+}
+
+func runPlanningInstructionSequence(t *testing.T, base, runID string, instructions []string) string {
+	t.Helper()
+	manager := orchestrator.NewManager(base)
+	plan := buildInteractivePlanningPlan(
+		runID,
+		time.Now().UTC(),
+		orchestrator.Scope{Targets: []string{"127.0.0.1"}},
+		[]string{"local_only"},
+		2,
+	)
+	if _, err := manager.StartFromPlan(plan, ""); err != nil {
+		t.Fatalf("StartFromPlan: %v", err)
+	}
+	scroll := 0
+	for _, instruction := range instructions {
+		done, log := executeTUICommand(manager, runID, nil, tuiCommand{name: "instruct", reason: instruction}, &scroll)
+		if done || !strings.Contains(log, "plan draft updated") {
+			t.Fatalf("expected deterministic plan draft update for %q, got done=%v log=%q", instruction, done, log)
+		}
+	}
+	updated, err := manager.LoadRunPlan(runID)
+	if err != nil {
+		t.Fatalf("LoadRunPlan: %v", err)
+	}
+	normalized := make([]orchestrator.TaskSpec, len(updated.Tasks))
+	copy(normalized, updated.Tasks)
+	for i := range normalized {
+		normalized[i].IdempotencyKey = ""
+	}
+	data, err := json.Marshal(normalized)
+	if err != nil {
+		t.Fatalf("Marshal normalized tasks: %v", err)
+	}
+	return string(data)
 }
 
 func TestLooksLikeQuestion(t *testing.T) {
@@ -135,6 +339,190 @@ func TestExecuteTUICommandApproveDenyStop(t *testing.T) {
 	}
 	if !hasEvent(events, orchestrator.EventTypeOperatorInstruction) {
 		t.Fatalf("expected operator_instruction event")
+	}
+}
+
+func TestExecuteTUICommandInstructUpdatesPlanningDraft(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-tui-plan-draft"
+	manager := orchestrator.NewManager(base)
+	plan := buildInteractivePlanningPlan(
+		runID,
+		time.Now().UTC(),
+		orchestrator.Scope{Targets: []string{"127.0.0.1"}},
+		[]string{"local_only"},
+		2,
+	)
+	if _, err := manager.StartFromPlan(plan, ""); err != nil {
+		t.Fatalf("StartFromPlan: %v", err)
+	}
+
+	scroll := 0
+	done, log := executeTUICommand(manager, runID, nil, tuiCommand{name: "instruct", reason: "scan localhost services and summarize findings"}, &scroll)
+	if done {
+		t.Fatalf("expected tui to remain open")
+	}
+	if !strings.Contains(log, "plan draft updated:") {
+		t.Fatalf("unexpected command log: %q", log)
+	}
+
+	updated, err := manager.LoadRunPlan(runID)
+	if err != nil {
+		t.Fatalf("LoadRunPlan: %v", err)
+	}
+	if len(updated.Tasks) == 0 {
+		t.Fatalf("expected synthesized tasks after planning instruction")
+	}
+	if phase := orchestrator.NormalizeRunPhase(updated.Metadata.RunPhase); phase != orchestrator.RunPhaseReview {
+		t.Fatalf("expected review phase, got %q", updated.Metadata.RunPhase)
+	}
+	if strings.TrimSpace(updated.Metadata.Goal) == "" {
+		t.Fatalf("expected goal metadata after planning instruction")
+	}
+	diffPath := filepath.Join(orchestrator.BuildRunPaths(base, runID).PlanDir, "plan.diff.txt")
+	diffData, err := os.ReadFile(diffPath)
+	if err != nil {
+		t.Fatalf("ReadFile plan diff: %v", err)
+	}
+	if !strings.Contains(string(diffData), "diff +") {
+		t.Fatalf("expected plan diff summary, got %q", string(diffData))
+	}
+	events, err := manager.Events(runID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if hasEvent(events, orchestrator.EventTypeOperatorInstruction) {
+		t.Fatalf("did not expect operator instruction event in planning-mode instruct")
+	}
+}
+
+func TestExecuteTUICommandExecuteApprovesDraft(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-tui-plan-execute"
+	manager := orchestrator.NewManager(base)
+	plan := buildInteractivePlanningPlan(
+		runID,
+		time.Now().UTC(),
+		orchestrator.Scope{Targets: []string{"127.0.0.1"}},
+		[]string{"local_only"},
+		2,
+	)
+	if _, err := manager.StartFromPlan(plan, ""); err != nil {
+		t.Fatalf("StartFromPlan: %v", err)
+	}
+
+	scroll := 0
+	if done, log := executeTUICommand(manager, runID, nil, tuiCommand{name: "execute"}, &scroll); done || !strings.Contains(log, "no plan tasks") {
+		t.Fatalf("expected execute to fail without draft plan, got done=%v log=%q", done, log)
+	}
+	done, log := executeTUICommand(manager, runID, nil, tuiCommand{name: "instruct", reason: "scan localhost services and summarize findings"}, &scroll)
+	if done || !strings.Contains(log, "plan draft updated") {
+		t.Fatalf("expected instruct plan update, got done=%v log=%q", done, log)
+	}
+	done, log = executeTUICommand(manager, runID, nil, tuiCommand{name: "execute"}, &scroll)
+	if !done {
+		t.Fatalf("expected execute to exit planning tui, log=%q", log)
+	}
+	if !strings.Contains(log, "execution approved") {
+		t.Fatalf("unexpected execute log: %q", log)
+	}
+
+	updated, err := manager.LoadRunPlan(runID)
+	if err != nil {
+		t.Fatalf("LoadRunPlan: %v", err)
+	}
+	if phase := orchestrator.NormalizeRunPhase(updated.Metadata.RunPhase); phase != orchestrator.RunPhaseApproved {
+		t.Fatalf("expected approved phase, got %q", updated.Metadata.RunPhase)
+	}
+}
+
+func TestExecuteTUICommandExecuteBlocksInvalidDraft(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-tui-plan-invalid"
+	manager := orchestrator.NewManager(base)
+	plan := buildInteractivePlanningPlan(
+		runID,
+		time.Now().UTC(),
+		orchestrator.Scope{Targets: []string{"127.0.0.1"}},
+		[]string{"local_only"},
+		2,
+	)
+	if _, err := manager.StartFromPlan(plan, ""); err != nil {
+		t.Fatalf("StartFromPlan: %v", err)
+	}
+	scroll := 0
+	if done, log := executeTUICommand(manager, runID, nil, tuiCommand{name: "instruct", reason: "scan localhost services and summarize findings"}, &scroll); done || !strings.Contains(log, "plan draft updated") {
+		t.Fatalf("expected instruct plan update, got done=%v log=%q", done, log)
+	}
+
+	updated, err := manager.LoadRunPlan(runID)
+	if err != nil {
+		t.Fatalf("LoadRunPlan: %v", err)
+	}
+	if len(updated.Tasks) == 0 {
+		t.Fatalf("expected synthesized tasks")
+	}
+	updated.Tasks[0].Targets = []string{"8.8.8.8"}
+	updated.Metadata.RunPhase = orchestrator.RunPhaseReview
+	planPath := filepath.Join(orchestrator.BuildRunPaths(base, runID).PlanDir, "plan.json")
+	if err := orchestrator.WriteJSONAtomic(planPath, updated); err != nil {
+		t.Fatalf("WriteJSONAtomic: %v", err)
+	}
+
+	done, log := executeTUICommand(manager, runID, nil, tuiCommand{name: "execute"}, &scroll)
+	if done {
+		t.Fatalf("expected execute to remain in TUI on validation failure")
+	}
+	if !strings.Contains(log, "plan validation failed") {
+		t.Fatalf("expected validation failure, got %q", log)
+	}
+}
+
+func TestExecuteTUICommandRegenerateAndDiscard(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-tui-plan-regen"
+	manager := orchestrator.NewManager(base)
+	plan := buildInteractivePlanningPlan(
+		runID,
+		time.Now().UTC(),
+		orchestrator.Scope{Targets: []string{"127.0.0.1"}},
+		[]string{"local_only"},
+		2,
+	)
+	if _, err := manager.StartFromPlan(plan, ""); err != nil {
+		t.Fatalf("StartFromPlan: %v", err)
+	}
+
+	scroll := 0
+	if done, log := executeTUICommand(manager, runID, nil, tuiCommand{name: "instruct", reason: "scan localhost services and summarize findings"}, &scroll); done || !strings.Contains(log, "plan draft updated") {
+		t.Fatalf("expected instruct update, got done=%v log=%q", done, log)
+	}
+	if done, log := executeTUICommand(manager, runID, nil, tuiCommand{name: "regenerate"}, &scroll); done || !strings.Contains(log, "plan regenerated") {
+		t.Fatalf("expected regenerate update, got done=%v log=%q", done, log)
+	}
+	updated, err := manager.LoadRunPlan(runID)
+	if err != nil {
+		t.Fatalf("LoadRunPlan: %v", err)
+	}
+	if len(updated.Tasks) == 0 {
+		t.Fatalf("expected regenerated tasks")
+	}
+	if phase := orchestrator.NormalizeRunPhase(updated.Metadata.RunPhase); phase != orchestrator.RunPhaseReview {
+		t.Fatalf("expected review phase after regenerate, got %q", updated.Metadata.RunPhase)
+	}
+
+	if done, log := executeTUICommand(manager, runID, nil, tuiCommand{name: "discard"}, &scroll); done || !strings.Contains(log, "plan discarded") {
+		t.Fatalf("expected discard reset, got done=%v log=%q", done, log)
+	}
+	reset, err := manager.LoadRunPlan(runID)
+	if err != nil {
+		t.Fatalf("LoadRunPlan reset: %v", err)
+	}
+	if len(reset.Tasks) != 0 {
+		t.Fatalf("expected discarded plan to clear tasks, got %d", len(reset.Tasks))
+	}
+	if phase := orchestrator.NormalizeRunPhase(reset.Metadata.RunPhase); phase != orchestrator.RunPhasePlanning {
+		t.Fatalf("expected planning phase after discard, got %q", reset.Metadata.RunPhase)
 	}
 }
 
