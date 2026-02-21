@@ -90,15 +90,16 @@ func executeCoordinatorLoop(
 }
 
 func emitRunReport(manager *orchestrator.Manager, runID string, stdout, stderr io.Writer, announce bool) {
-	if !announce {
-		return
-	}
 	path, err := manager.AssembleRunReport(runID, "")
 	if err != nil {
-		fmt.Fprintf(stderr, "report generation failed: %v\n", err)
+		if announce {
+			fmt.Fprintf(stderr, "report generation failed: %v\n", err)
+		}
 		return
 	}
-	fmt.Fprintf(stdout, "report written: %s\n", path)
+	if announce {
+		fmt.Fprintf(stdout, "report written: %s\n", path)
+	}
 }
 
 type runOutcome string
