@@ -390,12 +390,12 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
   - [x] long-message rendering tests (no dropped critical lines)
 
 ## Sprint 31 — Evidence-First Reporting + Templates (planned)
-- [ ] Make report generation strictly evidence-backed:
-  - [ ] each finding requires linked artifact/log evidence
-  - [ ] unresolved claims are labeled `UNVERIFIED`
-- [ ] Add report validators for required sections per profile (`standard`, `owasp`, `nis2`, `internal`).
-- [ ] Improve orchestrator default report discoverability (path emitted in status/TUI and on terminal outcomes).
-- [ ] Add report quality tests using real run artifacts (network scan + web recon cases).
+- [x] Make report generation strictly evidence-backed:
+  - [x] each finding requires linked artifact/log evidence
+  - [x] unresolved claims are labeled `UNVERIFIED`
+- [x] Add report validators for required sections per profile (`standard`, `owasp`, `nis2`, `internal`).
+- [x] Improve orchestrator default report discoverability (path emitted in status/TUI and on terminal outcomes).
+- [x] Add report quality tests using real run artifacts (network scan + web recon cases).
 
 ## Sprint 32 — Maintainability Refactor Guardrails (planned)
 - [ ] Refactor high-complexity files into smaller units:

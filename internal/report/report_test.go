@@ -180,3 +180,37 @@ func TestGenerateReportSkipsUnverifiedPrivilegeFinding(t *testing.T) {
 		t.Fatalf("expected unverified privilege finding to be filtered")
 	}
 }
+
+func TestValidateRequiredSectionsByProfile(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		string(ProfileStandard): defaultTemplate,
+		string(ProfileOWASP):    owaspTemplate,
+		string(ProfileNIS2):     nis2Template,
+		string(ProfileInternal): internalTemplate,
+	}
+	for profile, content := range cases {
+		if err := ValidateRequiredSections(profile, content); err != nil {
+			t.Fatalf("ValidateRequiredSections(%s) error: %v", profile, err)
+		}
+	}
+}
+
+func TestGenerateWithProfileRejectsTemplateMissingRequiredSections(t *testing.T) {
+	t.Parallel()
+
+	temp := t.TempDir()
+	templatePath := filepath.Join(temp, "bad-template.md")
+	outPath := filepath.Join(temp, "report.md")
+	if err := os.WriteFile(templatePath, []byte("# OWASP Security Assessment Report\n\n## Executive Summary\n"), 0o644); err != nil {
+		t.Fatalf("write template: %v", err)
+	}
+	err := GenerateWithProfile("owasp", templatePath, outPath, Info{})
+	if err == nil {
+		t.Fatalf("expected missing required section error")
+	}
+	if !strings.Contains(err.Error(), "missing required sections") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

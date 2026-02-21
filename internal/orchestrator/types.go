@@ -19,6 +19,7 @@ const (
 	EventTypeWorkerStopped       = "worker_stopped"
 	EventTypeRunStopped          = "run_stopped"
 	EventTypeRunCompleted        = "run_completed"
+	EventTypeRunReportGenerated  = "run_report_generated"
 	EventTypeRunWarning          = "run_warning"
 	EventTypeRunStateUpdated     = "run_state_updated"
 	EventTypeRunReplanRequested  = "run_replan_requested"

@@ -10,9 +10,21 @@ import (
 	"time"
 )
 
+const (
+	reportFindingVerified   = "VERIFIED"
+	reportFindingUnverified = "UNVERIFIED"
+)
+
 type artifactRecord struct {
 	Artifact   Artifact
 	RecordPath string
+}
+
+type reportFinding struct {
+	Finding             Finding
+	Verification        string
+	LinkedEvidence      []string
+	UnverifiedRationale string
 }
 
 func (m *Manager) AssembleRunReport(runID, outPath string) (string, error) {
@@ -54,6 +66,14 @@ func (m *Manager) AssembleRunReport(runID, outPath string) (string, error) {
 		}
 		return findings[i].Title < findings[j].Title
 	})
+	reportFindings := buildReportFindings(findings, artifacts)
+	verifiedCount := 0
+	for _, item := range reportFindings {
+		if item.Verification == reportFindingVerified {
+			verifiedCount++
+		}
+	}
+	unverifiedCount := len(reportFindings) - verifiedCount
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Orchestrator Run Report\n\n")
@@ -63,7 +83,9 @@ func (m *Manager) AssembleRunReport(runID, outPath string) (string, error) {
 	fmt.Fprintf(&b, "- Active workers: %d\n", status.ActiveWorkers)
 	fmt.Fprintf(&b, "- Queued tasks: %d\n", status.QueuedTasks)
 	fmt.Fprintf(&b, "- Running tasks: %d\n", status.RunningTasks)
-	fmt.Fprintf(&b, "- Findings: %d\n", len(findings))
+	fmt.Fprintf(&b, "- Findings: %d\n", len(reportFindings))
+	fmt.Fprintf(&b, "- Verified findings: %d\n", verifiedCount)
+	fmt.Fprintf(&b, "- Unverified findings: %d\n", unverifiedCount)
 	fmt.Fprintf(&b, "- Artifacts: %d\n", len(artifacts))
 
 	fmt.Fprintf(&b, "\n## Scope\n\n")
@@ -82,11 +104,16 @@ func (m *Manager) AssembleRunReport(runID, outPath string) (string, error) {
 	}
 
 	fmt.Fprintf(&b, "\n## Findings\n\n")
-	if len(findings) == 0 {
+	if len(reportFindings) == 0 {
 		fmt.Fprintf(&b, "- No findings were merged for this run.\n")
 	} else {
-		for _, finding := range findings {
-			fmt.Fprintf(&b, "### %s (%s / %s)\n\n", finding.Title, strings.ToUpper(finding.Severity), strings.ToUpper(finding.Confidence))
+		for _, findingView := range reportFindings {
+			finding := findingView.Finding
+			fmt.Fprintf(&b, "### [%s] %s (%s / %s)\n\n", findingView.Verification, finding.Title, strings.ToUpper(finding.Severity), strings.ToUpper(finding.Confidence))
+			fmt.Fprintf(&b, "- Verification: `%s`\n", findingView.Verification)
+			if findingView.Verification == reportFindingUnverified && strings.TrimSpace(findingView.UnverifiedRationale) != "" {
+				fmt.Fprintf(&b, "- Claim status: `%s` (%s)\n", reportFindingUnverified, findingView.UnverifiedRationale)
+			}
 			if finding.Target != "" {
 				fmt.Fprintf(&b, "- Target: `%s`\n", finding.Target)
 			}
@@ -101,6 +128,17 @@ func (m *Manager) AssembleRunReport(runID, outPath string) (string, error) {
 				for _, evidence := range finding.Evidence {
 					fmt.Fprintf(&b, "  - %s\n", evidence)
 				}
+			} else if findingView.Verification == reportFindingUnverified {
+				fmt.Fprintf(&b, "- Evidence:\n")
+				fmt.Fprintf(&b, "  - %s: no direct evidence statements were recorded for this finding.\n", reportFindingUnverified)
+			}
+			if len(findingView.LinkedEvidence) > 0 {
+				fmt.Fprintf(&b, "- Linked artifact/log evidence:\n")
+				for _, link := range findingView.LinkedEvidence {
+					fmt.Fprintf(&b, "  - %s\n", link)
+				}
+			} else {
+				fmt.Fprintf(&b, "- Linked artifact/log evidence: `%s`\n", reportFindingUnverified)
 			}
 			if len(finding.Sources) > 0 {
 				fmt.Fprintf(&b, "- Sources:\n")
@@ -148,6 +186,104 @@ func (m *Manager) AssembleRunReport(runID, outPath string) (string, error) {
 	return outPath, nil
 }
 
+func buildReportFindings(findings []Finding, artifacts []artifactRecord) []reportFinding {
+	linksByTask := artifactLinksByTask(artifacts)
+	out := make([]reportFinding, 0, len(findings))
+	for _, finding := range findings {
+		links := make([]string, 0, 4)
+		links = append(links, linksByTask[strings.TrimSpace(finding.TaskID)]...)
+		for _, source := range finding.Sources {
+			links = append(links, linksByTask[strings.TrimSpace(source.TaskID)]...)
+		}
+		for _, evidence := range finding.Evidence {
+			link := evidencePathLike(evidence)
+			if link != "" {
+				links = append(links, link)
+			}
+		}
+		links = dedupeTrimmed(links)
+		view := reportFinding{
+			Finding:        finding,
+			Verification:   reportFindingVerified,
+			LinkedEvidence: links,
+		}
+		if len(links) == 0 {
+			view.Verification = reportFindingUnverified
+			view.UnverifiedRationale = "no linked artifact/log evidence"
+		}
+		out = append(out, view)
+	}
+	return out
+}
+
+func artifactLinksByTask(artifacts []artifactRecord) map[string][]string {
+	byTask := map[string][]string{}
+	for _, item := range artifacts {
+		taskID := strings.TrimSpace(item.Artifact.TaskID)
+		if taskID == "" {
+			continue
+		}
+		links := byTask[taskID]
+		if path := strings.TrimSpace(item.Artifact.Path); path != "" {
+			links = append(links, path)
+		}
+		if record := strings.TrimSpace(item.RecordPath); record != "" {
+			links = append(links, record)
+		}
+		byTask[taskID] = dedupeTrimmed(links)
+	}
+	return byTask
+}
+
+func evidencePathLike(value string) string {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return ""
+	}
+	lower := strings.ToLower(text)
+	if strings.Contains(lower, "://") {
+		return text
+	}
+	if strings.ContainsAny(text, " \t") {
+		return ""
+	}
+	if strings.Contains(text, "/") || strings.Contains(text, "\\") {
+		if strings.Contains(lower, "/logs/") || strings.Contains(lower, "/artifact/") ||
+			strings.Contains(lower, "\\logs\\") || strings.Contains(lower, "\\artifact\\") {
+			return text
+		}
+		if strings.HasPrefix(text, "/") || strings.HasPrefix(text, "./") || strings.HasPrefix(text, "../") || strings.Contains(text, "\\") {
+			if ext := strings.ToLower(filepath.Ext(text)); ext != "" {
+				return text
+			}
+		}
+	}
+	for _, ext := range []string{".log", ".txt", ".json", ".xml", ".html", ".md", ".pcap"} {
+		if strings.HasSuffix(lower, ext) {
+			return text
+		}
+	}
+	return ""
+}
+
+func dedupeTrimmed(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
+}
+
 func (m *Manager) listArtifactRecords(runID string) ([]artifactRecord, error) {
 	files, err := filepath.Glob(filepath.Join(BuildRunPaths(m.SessionsDir, runID).ArtifactDir, "*.json"))
 	if err != nil {
@@ -170,4 +306,41 @@ func (m *Manager) listArtifactRecords(runID string) ([]artifactRecord, error) {
 		})
 	}
 	return out, nil
+}
+
+func (m *Manager) ResolveRunReportPath(runID string) (string, bool, error) {
+	if strings.TrimSpace(runID) == "" {
+		return "", false, fmt.Errorf("run id is required")
+	}
+	defaultPath := filepath.Join(BuildRunPaths(m.SessionsDir, runID).Root, "report.md")
+	path := defaultPath
+	events, err := m.Events(runID, 0)
+	if err != nil {
+		return "", false, err
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		event := events[i]
+		if event.Type != EventTypeRunReportGenerated {
+			continue
+		}
+		payload := map[string]any{}
+		if len(event.Payload) > 0 {
+			_ = json.Unmarshal(event.Payload, &payload)
+		}
+		if raw, ok := payload["path"].(string); ok && strings.TrimSpace(raw) != "" {
+			path = strings.TrimSpace(raw)
+			break
+		}
+	}
+	info, statErr := os.Stat(path)
+	if statErr != nil {
+		if os.IsNotExist(statErr) {
+			return path, false, nil
+		}
+		return path, false, statErr
+	}
+	if info.IsDir() {
+		return path, false, nil
+	}
+	return path, true, nil
 }

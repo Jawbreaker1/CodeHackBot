@@ -71,7 +71,7 @@ func GenerateWithProfile(profile, templatePath, outPath string, info Info) error
 	if strings.TrimSpace(outPath) == "" {
 		return fmt.Errorf("output path is required")
 	}
-	return writeReportContent(content, outPath, info)
+	return writeReportContent(resolvedProfile, content, outPath, info)
 }
 
 func AvailableProfiles() []string {
@@ -122,7 +122,7 @@ func loadTemplateContent(profile, templatePath string) (string, error) {
 	return content, nil
 }
 
-func writeReportContent(content, outPath string, info Info) error {
+func writeReportContent(profile, content, outPath string, info Info) error {
 	date := info.Date
 	if date == "" {
 		date = time.Now().UTC().Format("2006-01-02")
@@ -151,6 +151,9 @@ func writeReportContent(content, outPath string, info Info) error {
 	content = appendSection(content, "Task Foundation", info.Focus)
 	content = appendSection(content, "Plan", info.Plan)
 	content = appendSection(content, "Inventory", info.Inventory)
+	if err := ValidateRequiredSections(profile, content); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
 		return fmt.Errorf("create output dir: %w", err)
 	}

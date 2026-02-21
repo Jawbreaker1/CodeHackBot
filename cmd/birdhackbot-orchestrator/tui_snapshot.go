@@ -49,6 +49,11 @@ func collectTUISnapshot(manager *orchestrator.Manager, runID string, eventLimit 
 	snap.tasks = buildTaskRows(plan, leases)
 	snap.progress = latestTaskProgressByTask(allEvents)
 	snap.events = events
+	reportPath, reportReady, reportErr := manager.ResolveRunReportPath(runID)
+	if reportErr == nil {
+		snap.reportPath = reportPath
+		snap.reportReady = reportReady
+	}
 	snap.lastFailure = latestFailureFromEvents(allEvents)
 	snap.updatedAt = time.Now().UTC()
 	return snap, nil

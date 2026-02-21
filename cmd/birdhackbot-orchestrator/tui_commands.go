@@ -544,8 +544,9 @@ func buildTUIAssistantContext(manager *orchestrator.Manager, runID string) (stri
 		countTaskState(snap.tasks, "failed"),
 		countTaskState(snap.tasks, "awaiting_approval"),
 	)
-	if path := latestReportPath(snap.events); path != "" {
+	if path := strings.TrimSpace(snap.reportPath); path != "" {
 		fmt.Fprintf(&b, "latest_report_path=%s\n", path)
+		fmt.Fprintf(&b, "latest_report_ready=%t\n", snap.reportReady)
 	}
 	if len(snap.approvals) > 0 {
 		fmt.Fprintln(&b, "pending_approvals:")
@@ -641,24 +642,6 @@ func parseTUIAssistantDecision(raw string) (tuiAssistantDecision, error) {
 		return tuiAssistantDecision{}, fmt.Errorf("parse assistant json: %w", err)
 	}
 	return decoded, nil
-}
-
-func latestReportPath(events []orchestrator.EventEnvelope) string {
-	for i := len(events) - 1; i >= 0; i-- {
-		event := events[i]
-		if event.Type != orchestrator.EventTypeTaskArtifact {
-			continue
-		}
-		payload := decodeEventPayload(event.Payload)
-		path := strings.TrimSpace(stringFromAny(payload["path"]))
-		if path == "" {
-			continue
-		}
-		if strings.HasSuffix(strings.ToLower(path), ".md") || strings.Contains(strings.ToLower(path), "report") {
-			return path
-		}
-	}
-	return ""
 }
 
 func emptyDash(value string) string {

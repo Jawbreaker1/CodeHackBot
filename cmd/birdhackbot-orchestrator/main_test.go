@@ -1029,6 +1029,67 @@ func TestReportCommand(t *testing.T) {
 	}
 }
 
+func TestStatusIncludesReportPathAndReadyFlag(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	planPath := filepath.Join(base, "plan-status-report.json")
+	plan := orchestrator.RunPlan{
+		RunID:           "run-cli-status-report",
+		Scope:           orchestrator.Scope{Targets: []string{"192.168.50.10"}},
+		Constraints:     []string{"internal_only"},
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks: []orchestrator.TaskSpec{
+			{
+				TaskID:            "t1",
+				Goal:              "scan",
+				DoneWhen:          []string{"artifact"},
+				FailWhen:          []string{"timeout"},
+				ExpectedArtifacts: []string{"out.txt"},
+				RiskLevel:         string(orchestrator.RiskReconReadonly),
+				Budget: orchestrator.TaskBudget{
+					MaxSteps:     1,
+					MaxToolCalls: 1,
+					MaxRuntime:   time.Second,
+				},
+			},
+		},
+	}
+	writePlanFile(t, planPath, plan)
+
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	if code := run([]string{"start", "--sessions-dir", base, "--plan", planPath}, &out, &errOut); code != 0 {
+		t.Fatalf("start failed: code=%d err=%s", code, errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"status", "--sessions-dir", base, "--run", "run-cli-status-report"}, &out, &errOut); code != 0 {
+		t.Fatalf("status failed: code=%d err=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "report_path:") || !strings.Contains(out.String(), "report_ready: false") {
+		t.Fatalf("expected report discoverability in status output: %q", out.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"report", "--sessions-dir", base, "--run", "run-cli-status-report"}, &out, &errOut); code != 0 {
+		t.Fatalf("report failed: code=%d err=%s", code, errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"status", "--sessions-dir", base, "--run", "run-cli-status-report"}, &out, &errOut); code != 0 {
+		t.Fatalf("status after report failed: code=%d err=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "report_ready: true") {
+		t.Fatalf("expected report_ready true after generation: %q", out.String())
+	}
+}
+
 func TestRunEndToEndLifecycleFanoutEvidenceAndReport(t *testing.T) {
 	t.Parallel()
 
@@ -1115,6 +1176,13 @@ func TestRunEndToEndLifecycleFanoutEvidenceAndReport(t *testing.T) {
 	}
 	if len(findings) < 2 {
 		t.Fatalf("expected merged findings from fan-out workers, got %d", len(findings))
+	}
+	events, err := manager.Events("run-cli-e2e", 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if !hasEventType(events, orchestrator.EventTypeRunReportGenerated) {
+		t.Fatalf("expected run_report_generated event in terminal outcome")
 	}
 
 	out.Reset()

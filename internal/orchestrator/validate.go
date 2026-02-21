@@ -26,6 +26,7 @@ var validEventTypes = map[string]struct{}{
 	EventTypeWorkerStopped:       {},
 	EventTypeRunStopped:          {},
 	EventTypeRunCompleted:        {},
+	EventTypeRunReportGenerated:  {},
 	EventTypeRunWarning:          {},
 	EventTypeRunStateUpdated:     {},
 	EventTypeRunReplanRequested:  {},

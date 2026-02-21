@@ -211,6 +211,8 @@ type tuiSnapshot struct {
 	tasks       []tuiTaskRow
 	progress    map[string]tuiTaskProgress
 	events      []orchestrator.EventEnvelope
+	reportPath  string
+	reportReady bool
 	lastFailure *tuiFailure
 	updatedAt   time.Time
 }

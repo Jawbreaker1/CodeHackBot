@@ -1102,6 +1102,57 @@ func TestAskInPlanningModeIsReadOnly(t *testing.T) {
 	}
 }
 
+func TestBuildTUIAssistantContextIncludesReportPath(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-tui-report-context"
+	manager := orchestrator.NewManager(base)
+	plan := orchestrator.RunPlan{
+		RunID:           runID,
+		Scope:           orchestrator.Scope{Targets: []string{"127.0.0.1"}},
+		Constraints:     []string{"local_only"},
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks: []orchestrator.TaskSpec{
+			{
+				TaskID:            "t1",
+				Goal:              "scan localhost",
+				DoneWhen:          []string{"done"},
+				FailWhen:          []string{"timeout"},
+				ExpectedArtifacts: []string{"scan.log"},
+				RiskLevel:         string(orchestrator.RiskReconReadonly),
+				Budget: orchestrator.TaskBudget{
+					MaxSteps:     2,
+					MaxToolCalls: 2,
+					MaxRuntime:   2 * time.Second,
+				},
+			},
+		},
+	}
+	if _, err := manager.StartFromPlan(plan, ""); err != nil {
+		t.Fatalf("StartFromPlan: %v", err)
+	}
+	reportPath, err := manager.AssembleRunReport(runID, "")
+	if err != nil {
+		t.Fatalf("AssembleRunReport: %v", err)
+	}
+	if err := manager.EmitEvent(runID, "orchestrator", "", orchestrator.EventTypeRunReportGenerated, map[string]any{
+		"path": reportPath,
+	}); err != nil {
+		t.Fatalf("emit run report event: %v", err)
+	}
+	contextText, err := buildTUIAssistantContext(manager, runID)
+	if err != nil {
+		t.Fatalf("buildTUIAssistantContext: %v", err)
+	}
+	if !strings.Contains(contextText, "latest_report_path="+reportPath) {
+		t.Fatalf("expected report path in context:\n%s", contextText)
+	}
+	if !strings.Contains(contextText, "latest_report_ready=true") {
+		t.Fatalf("expected report ready marker in context:\n%s", contextText)
+	}
+}
+
 func mustPayload(t *testing.T, payload map[string]any) json.RawMessage {
 	t.Helper()
 	data, err := json.Marshal(payload)

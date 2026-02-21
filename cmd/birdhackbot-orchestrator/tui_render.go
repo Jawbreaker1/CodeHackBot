@@ -51,6 +51,15 @@ func renderTUI(out io.Writer, runID string, snap tuiSnapshot, messages []string,
 	left = append(left, "  - Goal: "+goal)
 	left = append(left, "  - Phase: "+runPhase)
 	left = append(left, fmt.Sprintf("  - Tasks: %d | Success criteria: %d | Stop criteria: %d", len(snap.plan.Tasks), len(snap.plan.SuccessCriteria), len(snap.plan.StopCriteria)))
+	reportPath := strings.TrimSpace(snap.reportPath)
+	if reportPath == "" {
+		reportPath = "(pending)"
+	}
+	reportStatus := "pending"
+	if snap.reportReady {
+		reportStatus = "ready"
+	}
+	left = append(left, fmt.Sprintf("  - Report (%s): %s", reportStatus, reportPath))
 	left = append(left, "")
 	left = append(left, "Execution:")
 	stateByTaskID := map[string]tuiTaskRow{}

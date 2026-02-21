@@ -110,6 +110,12 @@ func emitRunReport(manager *orchestrator.Manager, runID string, stdout, stderr i
 		}
 		return
 	}
+	if err := manager.EmitEvent(runID, "orchestrator", "", orchestrator.EventTypeRunReportGenerated, map[string]any{
+		"path":   path,
+		"source": "run_terminal_outcome",
+	}); err != nil && announce {
+		fmt.Fprintf(stderr, "report event emit failed: %v\n", err)
+	}
 	if announce {
 		fmt.Fprintf(stdout, "report written: %s\n", path)
 	}
