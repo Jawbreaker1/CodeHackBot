@@ -61,6 +61,10 @@ func executeCoordinatorLoop(
 				return 1
 			}
 			if coord.Done() {
+				if _, err := manager.IngestEvidence(runID); err != nil {
+					fmt.Fprintf(stderr, "run final evidence ingest failed: %v\n", err)
+					return 1
+				}
 				outcome, outcomeDetail, err := evaluateRunTerminalOutcome(manager, runID)
 				if err != nil {
 					fmt.Fprintf(stderr, "run completion evaluation failed: %v\n", err)

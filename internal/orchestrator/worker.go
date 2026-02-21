@@ -24,7 +24,6 @@ type WorkerManager struct {
 	mu                sync.Mutex
 	running           map[string]*runningWorker
 	completed         map[string]completedWorker
-	nextSeq           map[string]int64
 }
 
 type runningWorker struct {
@@ -65,7 +64,6 @@ func NewWorkerManager(manager *Manager) *WorkerManager {
 		HeartbeatInterval: 5 * time.Second,
 		running:           map[string]*runningWorker{},
 		completed:         map[string]completedWorker{},
-		nextSeq:           map[string]int64{},
 	}
 }
 
@@ -140,7 +138,6 @@ func (wm *WorkerManager) Launch(runID string, spec WorkerSpec) error {
 	}
 
 	wm.mu.Lock()
-	wm.nextSeq[key] = seq + 1
 	wm.running[key] = &runningWorker{
 		spec:     spec,
 		cmd:      cmd,
@@ -337,20 +334,7 @@ func (wm *WorkerManager) startHeartbeatLoop(key string) {
 }
 
 func (wm *WorkerManager) claimNextSeq(runID, workerID string) (int64, error) {
-	key := workerKey(runID, workerID)
-	wm.mu.Lock()
-	defer wm.mu.Unlock()
-	seq, ok := wm.nextSeq[key]
-	if !ok || seq <= 0 {
-		next, err := wm.manager.nextSeq(runID, workerID)
-		if err != nil {
-			return 0, err
-		}
-		wm.nextSeq[key] = next + 1
-		return next, nil
-	}
-	wm.nextSeq[key] = seq + 1
-	return seq, nil
+	return wm.manager.nextSeq(runID, workerID)
 }
 
 func workerKey(runID, workerID string) string {

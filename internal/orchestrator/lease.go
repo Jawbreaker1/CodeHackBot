@@ -207,7 +207,10 @@ func (m *Manager) emitReclaimedEvents(runID string, lease TaskLease) error {
 	if err := AppendEventJSONL(m.eventPath(runID), fail); err != nil {
 		return err
 	}
-	seq++
+	seq, err = m.nextSeq(runID, orchestratorWorkerID)
+	if err != nil {
+		return err
+	}
 	requeued := EventEnvelope{
 		EventID:  NewEventID(),
 		RunID:    runID,
@@ -248,7 +251,10 @@ func (m *Manager) emitStaleReclaimedEvents(runID string, lease TaskLease) error 
 	if err := AppendEventJSONL(m.eventPath(runID), fail); err != nil {
 		return err
 	}
-	seq++
+	seq, err = m.nextSeq(runID, orchestratorWorkerID)
+	if err != nil {
+		return err
+	}
 	requeued := EventEnvelope{
 		EventID:  NewEventID(),
 		RunID:    runID,

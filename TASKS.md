@@ -352,16 +352,16 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
   - [x] deny-target rules are enforced in both execution paths
 
 ## Sprint 28 — Event Pipeline Performance + Robustness (planned)
-- [ ] Add incremental event ingestion (cursor/offset) so evidence merge processes only new events.
-- [ ] Replace repeated full-log `nextSeq` scans with per-worker sequence state persisted atomically.
-- [ ] Add resilient event reading mode:
-  - [ ] quarantine/skip malformed lines with explicit warning events
-  - [ ] avoid aborting whole run on a single corrupt event line
-- [ ] Add run-state/materialized snapshots to reduce repeated recomputation in TUI/status paths.
-- [ ] Tests:
-  - [ ] long-run event growth benchmark guard
-  - [ ] malformed event line does not kill run status processing
-  - [ ] seq monotonicity remains correct under concurrent workers
+- [x] Add incremental event ingestion (cursor/offset) so evidence merge processes only new events.
+- [x] Replace repeated full-log `nextSeq` scans with per-worker sequence state persisted atomically.
+- [x] Add resilient event reading mode:
+  - [x] quarantine/skip malformed lines with explicit warning events
+  - [x] avoid aborting whole run on a single corrupt event line
+- [x] Add run-state/materialized snapshots to reduce repeated recomputation in TUI/status paths.
+- [x] Tests:
+  - [x] long-run event growth benchmark guard
+  - [x] malformed event line does not kill run status processing
+  - [x] seq monotonicity remains correct under concurrent workers
 
 ## Sprint 29 — Worker Assist Reliability Modes (planned)
 - [ ] Add worker assist modes:

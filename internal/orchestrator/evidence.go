@@ -18,12 +18,30 @@ type EvidenceIngestResult struct {
 	FindingsWritten  int
 }
 
+type evidenceIngestCursor struct {
+	Offset int64 `json:"offset"`
+}
+
 func (m *Manager) IngestEvidence(runID string) (EvidenceIngestResult, error) {
 	var out EvidenceIngestResult
-	events, err := m.Events(runID, 0)
+	cursor, err := m.readEvidenceCursor(runID)
 	if err != nil {
 		return out, err
 	}
+	events, nextOffset, malformed, err := readEventsFromOffsetResilient(m.eventPath(runID), cursor.Offset)
+	if err != nil {
+		return out, err
+	}
+	if len(malformed) > 0 {
+		m.mu.Lock()
+		cache := m.ensureEventCacheLocked(runID)
+		_, malformedErr := m.handleMalformedLinesLocked(runID, cache, malformed)
+		m.mu.Unlock()
+		if malformedErr != nil {
+			return out, malformedErr
+		}
+	}
+	events = DedupeEvents(events)
 	paths := BuildRunPaths(m.SessionsDir, runID)
 
 	for _, event := range events {
@@ -69,7 +87,40 @@ func (m *Manager) IngestEvidence(runID string) (EvidenceIngestResult, error) {
 			out.FindingsWritten++
 		}
 	}
+	if err := m.writeEvidenceCursor(runID, evidenceIngestCursor{Offset: nextOffset}); err != nil {
+		return out, err
+	}
 	return out, nil
+}
+
+func (m *Manager) readEvidenceCursor(runID string) (evidenceIngestCursor, error) {
+	path := m.evidenceCursorPath(runID)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return evidenceIngestCursor{}, nil
+		}
+		return evidenceIngestCursor{}, fmt.Errorf("read evidence cursor: %w", err)
+	}
+	var cursor evidenceIngestCursor
+	if err := json.Unmarshal(data, &cursor); err != nil {
+		return evidenceIngestCursor{}, fmt.Errorf("parse evidence cursor: %w", err)
+	}
+	if cursor.Offset < 0 {
+		cursor.Offset = 0
+	}
+	return cursor, nil
+}
+
+func (m *Manager) writeEvidenceCursor(runID string, cursor evidenceIngestCursor) error {
+	if cursor.Offset < 0 {
+		cursor.Offset = 0
+	}
+	return WriteJSONAtomic(m.evidenceCursorPath(runID), cursor)
+}
+
+func (m *Manager) evidenceCursorPath(runID string) string {
+	return filepath.Join(BuildRunPaths(m.SessionsDir, runID).EventDir, "evidence.cursor.json")
 }
 
 func FindingDedupeKey(f Finding) string {

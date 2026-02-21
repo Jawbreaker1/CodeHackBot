@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 )
 
@@ -14,6 +15,10 @@ const orchestratorWorkerID = "orchestrator"
 type Manager struct {
 	SessionsDir string
 	Now         func() time.Time
+
+	mu         sync.Mutex
+	eventCache map[string]*runEventCache
+	seqState   map[string]map[string]int64
 }
 
 type WorkerStatus struct {
@@ -28,6 +33,8 @@ func NewManager(sessionsDir string) *Manager {
 	return &Manager{
 		SessionsDir: sessionsDir,
 		Now:         func() time.Time { return time.Now().UTC() },
+		eventCache:  map[string]*runEventCache{},
+		seqState:    map[string]map[string]int64{},
 	}
 }
 
@@ -110,38 +117,46 @@ func (m *Manager) Stop(runID string) error {
 }
 
 func (m *Manager) Status(runID string) (RunStatus, error) {
-	events, err := m.Events(runID, 0)
+	if runID == "" {
+		return RunStatus{}, fmt.Errorf("run id is required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cache, err := m.refreshEventCacheLocked(runID)
 	if err != nil {
 		return RunStatus{}, err
 	}
-	return BuildRunStatus(runID, events), nil
+	return buildRunStatusFromCache(runID, cache), nil
 }
 
 func (m *Manager) Workers(runID string) ([]WorkerStatus, error) {
-	events, err := m.Events(runID, 0)
+	if runID == "" {
+		return nil, fmt.Errorf("run id is required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cache, err := m.refreshEventCacheLocked(runID)
 	if err != nil {
 		return nil, err
 	}
-	return BuildWorkerStatus(events), nil
+	return buildWorkerStatusFromCache(cache), nil
 }
 
 func (m *Manager) Events(runID string, limit int) ([]EventEnvelope, error) {
 	if runID == "" {
 		return nil, fmt.Errorf("run id is required")
 	}
-	path := m.eventPath(runID)
-	events, err := ReadEvents(path)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cache, err := m.refreshEventCacheLocked(runID)
 	if err != nil {
 		return nil, err
 	}
-	events = DedupeEvents(events)
-	if err := ValidateMonotonicSequences(events); err != nil {
-		return nil, err
-	}
+	events := cache.events
 	if limit > 0 && len(events) > limit {
-		return events[len(events)-limit:], nil
+		events = events[len(events)-limit:]
 	}
-	return events, nil
+	return append([]EventEnvelope{}, events...), nil
 }
 
 func (m *Manager) eventPath(runID string) string {
@@ -149,24 +164,9 @@ func (m *Manager) eventPath(runID string) string {
 }
 
 func (m *Manager) nextSeq(runID, workerID string) (int64, error) {
-	path := m.eventPath(runID)
-	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) {
-			return 1, nil
-		}
-		return 0, fmt.Errorf("stat event log: %w", err)
-	}
-	events, err := ReadEvents(path)
-	if err != nil {
-		return 0, err
-	}
-	var maxSeq int64
-	for _, event := range events {
-		if event.WorkerID == workerID && event.Seq > maxSeq {
-			maxSeq = event.Seq
-		}
-	}
-	return maxSeq + 1, nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.nextSeqLocked(runID, workerID)
 }
 
 func ReadRunPlan(path string) (RunPlan, error) {
