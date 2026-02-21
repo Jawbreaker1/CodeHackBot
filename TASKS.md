@@ -378,16 +378,16 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
   - [x] loop guard catches semantic repeats
 
 ## Sprint 30 — TUI Operator UX Semantics (planned)
-- [ ] Lock command semantics:
-  - [ ] `ask` is read-only and never queues instructions
-  - [ ] `instruct` always queues execution changes
-- [ ] Expand command log viewport and preserve full assistant replies (no premature truncation).
-- [ ] Add scroll controls for both command log and recent events.
-- [ ] Keep active workers pinned at top of worker debug pane; completed/stopped workers collapsed by default.
-- [ ] Tests:
-  - [ ] `ask` vs `instruct` behavior contract tests
-  - [ ] snapshot tests for worker pane ordering/collapse
-  - [ ] long-message rendering tests (no dropped critical lines)
+- [x] Lock command semantics:
+  - [x] `ask` is read-only and never queues instructions
+  - [x] `instruct` always queues execution changes
+- [x] Expand command log viewport and preserve full assistant replies (no premature truncation).
+- [x] Add scroll controls for both command log and recent events.
+- [x] Keep active workers pinned at top of worker debug pane; completed/stopped workers collapsed by default.
+- [x] Tests:
+  - [x] `ask` vs `instruct` behavior contract tests
+  - [x] snapshot tests for worker pane ordering/collapse
+  - [x] long-message rendering tests (no dropped critical lines)
 
 ## Sprint 31 — Evidence-First Reporting + Templates (planned)
 - [ ] Make report generation strictly evidence-backed:

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -36,6 +37,8 @@ func TestParseTUICommand(t *testing.T) {
 		{in: "scan the current network again", name: "ask"},
 		{in: "q", name: "quit"},
 		{in: "events 25", name: "events"},
+		{in: "events up 3", name: "events"},
+		{in: "events down", name: "events"},
 		{in: "log up 3", name: "log"},
 		{in: "log down", name: "log"},
 		{in: "approve apr-1 task ok", name: "approve"},
@@ -62,6 +65,7 @@ func TestParseTUICommandRejectsInvalid(t *testing.T) {
 
 	invalid := []string{
 		"events nope",
+		"events up nope",
 		"log sideways",
 		"approve",
 		"deny",
@@ -339,6 +343,41 @@ func TestExecuteTUICommandApproveDenyStop(t *testing.T) {
 	}
 	if !hasEvent(events, orchestrator.EventTypeOperatorInstruction) {
 		t.Fatalf("expected operator_instruction event")
+	}
+}
+
+func TestAskReadOnlyAndInstructQueuesExecutionChange(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-tui-ask-instruct-contract"
+	manager := orchestrator.NewManager(base)
+	if _, err := orchestrator.EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	if err := manager.EmitEvent(runID, "orchestrator", "", orchestrator.EventTypeRunStarted, map[string]any{
+		"source": "test",
+	}); err != nil {
+		t.Fatalf("EmitEvent run_started: %v", err)
+	}
+
+	scroll := 0
+	if done, log := executeTUICommand(manager, runID, nil, tuiCommand{name: "ask", reason: "scan localhost services"}, &scroll); done || strings.TrimSpace(log) == "" || strings.Contains(strings.ToLower(log), "instruction queued") {
+		t.Fatalf("expected ask response without exit, got done=%v log=%q", done, log)
+	}
+	if done, log := executeTUICommand(manager, runID, nil, tuiCommand{name: "instruct", reason: "scan localhost services"}, &scroll); done || !strings.Contains(log, "instruction queued") {
+		t.Fatalf("expected instruct queue log, got done=%v log=%q", done, log)
+	}
+	events, err := manager.Events(runID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	count := 0
+	for _, event := range events {
+		if event.Type == orchestrator.EventTypeOperatorInstruction {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly one queued operator instruction from instruct, got %d", count)
 	}
 }
 
@@ -748,11 +787,35 @@ func TestAppendLogLinesSplitsAndCaps(t *testing.T) {
 	}
 
 	over := append([]string{}, updated...)
-	for i := 0; i < 200; i++ {
+	for i := 0; i < 320; i++ {
 		over = appendLogLines(over, "entry")
 	}
 	if len(over) != tuiCommandLogStoreLines {
 		t.Fatalf("expected capped log length %d, got %d", tuiCommandLogStoreLines, len(over))
+	}
+}
+
+func TestRenderCommandLogPreservesLongAssistantReplyWithScroll(t *testing.T) {
+	t.Parallel()
+
+	messages := []string{}
+	lines := []string{"assistant: CRITICAL-START"}
+	for i := 0; i < 24; i++ {
+		lines = append(lines, "assistant: detail line "+strconv.Itoa(i+1))
+	}
+	lines = append(lines, "assistant: CRITICAL-END")
+	messages = appendLogLines(messages, strings.Join(lines, "\n"))
+
+	scroll := 0
+	bottom := strings.Join(renderCommandLog(messages, 80, &scroll), "\n")
+	if !strings.Contains(bottom, "CRITICAL-END") {
+		t.Fatalf("expected bottom view to include end marker, got %q", bottom)
+	}
+
+	scroll = 1 << 20
+	top := strings.Join(renderCommandLog(messages, 80, &scroll), "\n")
+	if !strings.Contains(top, "CRITICAL-START") {
+		t.Fatalf("expected top view to include start marker, got %q", top)
 	}
 }
 
@@ -782,6 +845,32 @@ func TestExecuteTUICommandLogScroll(t *testing.T) {
 	}
 }
 
+func TestExecuteTUICommandEventScroll(t *testing.T) {
+	t.Parallel()
+
+	manager := orchestrator.NewManager(t.TempDir())
+	eventScroll := 0
+
+	if done, log := executeTUICommandWithScroll(manager, "run-any", nil, tuiCommand{name: "events", scope: "up", eventLimit: 3}, nil, &eventScroll); done || !strings.Contains(log, "up 3") {
+		t.Fatalf("unexpected events up result: done=%v log=%q", done, log)
+	}
+	if eventScroll != 3 {
+		t.Fatalf("expected event scroll=3, got %d", eventScroll)
+	}
+	if done, _ := executeTUICommandWithScroll(manager, "run-any", nil, tuiCommand{name: "events", scope: "down", eventLimit: 2}, nil, &eventScroll); done {
+		t.Fatalf("expected events down to continue")
+	}
+	if eventScroll != 1 {
+		t.Fatalf("expected event scroll=1 after down, got %d", eventScroll)
+	}
+	if done, _ := executeTUICommandWithScroll(manager, "run-any", nil, tuiCommand{name: "events", scope: "bottom"}, nil, &eventScroll); done {
+		t.Fatalf("expected events bottom to continue")
+	}
+	if eventScroll != 0 {
+		t.Fatalf("expected event scroll reset to 0, got %d", eventScroll)
+	}
+}
+
 func TestRenderTwoPaneWide(t *testing.T) {
 	t.Parallel()
 
@@ -797,6 +886,35 @@ func TestRenderTwoPaneWide(t *testing.T) {
 	}
 	if !strings.Contains(lines[0], "Plan:") || !strings.Contains(lines[0], "Worker Debug:") {
 		t.Fatalf("expected left/right content on same row, got %q", lines[0])
+	}
+}
+
+func TestRenderRecentEventsSupportsScroll(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 2, 21, 12, 0, 0, 0, time.UTC)
+	events := make([]orchestrator.EventEnvelope, 0, 14)
+	for i := 0; i < 14; i++ {
+		events = append(events, orchestrator.EventEnvelope{
+			EventID:  "e-" + strconv.Itoa(i),
+			RunID:    "run-1",
+			WorkerID: "worker-1",
+			TaskID:   "task-1",
+			Seq:      int64(i + 1),
+			TS:       now.Add(time.Duration(i) * time.Second),
+			Type:     orchestrator.EventTypeTaskProgress,
+		})
+	}
+	scroll := 0
+	bottom := strings.Join(renderRecentEvents(events, &scroll), "\n")
+	if !strings.Contains(bottom, "12:00:13") {
+		t.Fatalf("expected newest event in bottom view, got %q", bottom)
+	}
+
+	scroll = 1 << 20
+	top := strings.Join(renderRecentEvents(events, &scroll), "\n")
+	if !strings.Contains(top, "12:00:00") {
+		t.Fatalf("expected oldest event in top view, got %q", top)
 	}
 }
 
@@ -855,22 +973,57 @@ func TestRenderWorkerBoxesOrdersActiveBeforeStopped(t *testing.T) {
 		},
 	}
 
-	lines := renderWorkerBoxes(workers, map[string]tuiWorkerDebug{}, 60)
+	lines := renderWorkerBoxes(workers, map[string]tuiWorkerDebug{
+		"worker-stopped": {Reason: "completed"},
+	}, 60)
 	idxActive := -1
-	idxStopped := -1
+	idxCollapsed := -1
 	for i, line := range lines {
 		if strings.Contains(line, "Worker worker-active") {
 			idxActive = i
 		}
-		if strings.Contains(line, "Worker worker-stopped") {
-			idxStopped = i
+		if strings.Contains(line, "Collapsed Workers") {
+			idxCollapsed = i
 		}
 	}
-	if idxActive < 0 || idxStopped < 0 {
-		t.Fatalf("expected both worker titles in output")
+	if idxActive < 0 || idxCollapsed < 0 {
+		t.Fatalf("expected active and collapsed worker sections in output")
 	}
-	if idxActive >= idxStopped {
-		t.Fatalf("expected active worker box before stopped worker box (active=%d stopped=%d)", idxActive, idxStopped)
+	if idxActive >= idxCollapsed {
+		t.Fatalf("expected active worker section before collapsed section (active=%d collapsed=%d)", idxActive, idxCollapsed)
+	}
+	output := strings.Join(lines, "\n")
+	if !strings.Contains(output, "worker-stopped state=stopped") {
+		t.Fatalf("expected stopped worker summary in collapsed section, got %q", output)
+	}
+}
+
+func TestRenderWorkerBoxesSnapshotCollapsedByDefault(t *testing.T) {
+	t.Parallel()
+
+	workers := []orchestrator.WorkerStatus{
+		{WorkerID: "worker-active-1", State: "active", CurrentTask: "task-a", LastSeq: 12},
+		{WorkerID: "worker-stopped-1", State: "stopped", CurrentTask: "task-b"},
+		{WorkerID: "worker-stopped-2", State: "stopped", CurrentTask: "task-c"},
+	}
+	debug := map[string]tuiWorkerDebug{
+		"worker-active-1":  {Message: "running nmap"},
+		"worker-stopped-1": {Reason: "completed"},
+		"worker-stopped-2": {Reason: "failed"},
+	}
+	lines := renderWorkerBoxes(workers, debug, 72)
+	output := strings.Join(lines, "\n")
+	if !strings.Contains(output, "Worker worker-active-1") {
+		t.Fatalf("snapshot missing expanded active worker block: %q", output)
+	}
+	if !strings.Contains(output, "Collapsed Workers") {
+		t.Fatalf("snapshot missing collapsed workers block: %q", output)
+	}
+	if !strings.Contains(output, "2 stopped/completed worker(s) collapsed by default") {
+		t.Fatalf("snapshot missing collapsed worker count: %q", output)
+	}
+	if !strings.Contains(output, "worker-stopped-1 state=stopped task=task-b reason=completed") {
+		t.Fatalf("snapshot missing stopped worker summary: %q", output)
 	}
 }
 
@@ -911,6 +1064,41 @@ func TestAnswerTUIQuestionPlan(t *testing.T) {
 	}
 	if !strings.Contains(answer, "1)Seed reconnaissance") {
 		t.Fatalf("expected step title in answer: %s", answer)
+	}
+}
+
+func TestAskInPlanningModeIsReadOnly(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-tui-ask-read-only-planning"
+	manager := orchestrator.NewManager(base)
+	plan := buildInteractivePlanningPlan(
+		runID,
+		time.Now().UTC(),
+		orchestrator.Scope{Targets: []string{"127.0.0.1"}},
+		[]string{"local_only"},
+		2,
+	)
+	if _, err := manager.StartFromPlan(plan, ""); err != nil {
+		t.Fatalf("StartFromPlan: %v", err)
+	}
+
+	scroll := 0
+	if done, log := executeTUICommand(manager, runID, nil, tuiCommand{name: "ask", reason: "scan localhost services and summarize findings"}, &scroll); done || strings.TrimSpace(log) == "" || strings.Contains(strings.ToLower(log), "instruction queued") {
+		t.Fatalf("expected ask response, got done=%v log=%q", done, log)
+	}
+	updated, err := manager.LoadRunPlan(runID)
+	if err != nil {
+		t.Fatalf("LoadRunPlan: %v", err)
+	}
+	if len(updated.Tasks) != 0 {
+		t.Fatalf("expected ask to be read-only in planning mode, got %d tasks", len(updated.Tasks))
+	}
+	events, err := manager.Events(runID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if hasEvent(events, orchestrator.EventTypeOperatorInstruction) {
+		t.Fatalf("did not expect queued operator instruction from ask command")
 	}
 }
 

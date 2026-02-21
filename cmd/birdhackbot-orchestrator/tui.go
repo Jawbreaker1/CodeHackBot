@@ -17,11 +17,11 @@ const (
 	tuiStyleBar    = "\x1b[48;5;238m\x1b[38;5;250m"
 	tuiStyleReset  = "\x1b[0m"
 
-	tuiCommandLogStoreLines = 120
-	tuiCommandLogViewLines  = 10
+	tuiCommandLogStoreLines = 240
+	tuiCommandLogViewLines  = 16
 	tuiAskEventWindow       = 32
 	tuiAskLLMMaxContext     = 7000
-	tuiRecentEventsMax      = 6
+	tuiRecentEventsView     = 8
 )
 
 type tuiCommand struct {
@@ -96,6 +96,7 @@ func runTUI(args []string, stdout, stderr io.Writer) int {
 	input := ""
 	messages := []string{"TUI ready. Type 'help' for commands."}
 	commandLogScroll := 0
+	eventScroll := 0
 	escSeq := []byte{}
 	running := true
 	for running {
@@ -105,10 +106,10 @@ func runTUI(args []string, stdout, stderr io.Writer) int {
 		}
 		if exitOnDone && (snapshot.status.State == "completed" || snapshot.status.State == "stopped") {
 			messages = appendLogLines(messages, fmt.Sprintf("run %s %s; exiting tui", runID, snapshot.status.State))
-			renderTUI(stdout, runID, snapshot, messages, input, &commandLogScroll, eventLimit)
+			renderTUI(stdout, runID, snapshot, messages, input, &commandLogScroll, &eventScroll, eventLimit)
 			break
 		}
-		renderTUI(stdout, runID, snapshot, messages, input, &commandLogScroll, eventLimit)
+		renderTUI(stdout, runID, snapshot, messages, input, &commandLogScroll, &eventScroll, eventLimit)
 
 		select {
 		case <-ticker.C:
@@ -138,6 +139,12 @@ func runTUI(args []string, stdout, stderr io.Writer) int {
 							if commandLogScroll > 0 {
 								commandLogScroll--
 							}
+						case 'C':
+							if eventScroll > 0 {
+								eventScroll--
+							}
+						case 'D':
+							eventScroll++
 						}
 					}
 					escSeq = nil
@@ -157,7 +164,7 @@ func runTUI(args []string, stdout, stderr io.Writer) int {
 					commandLogScroll = 0
 					continue
 				}
-				done, logLine := executeTUICommand(manager, runID, &eventLimit, cmd, &commandLogScroll)
+				done, logLine := executeTUICommandWithScroll(manager, runID, &eventLimit, cmd, &commandLogScroll, &eventScroll)
 				if logLine != "" {
 					messages = appendLogLines(messages, logLine)
 					commandLogScroll = 0

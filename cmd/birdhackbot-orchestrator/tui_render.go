@@ -12,7 +12,7 @@ import (
 	"golang.org/x/term"
 )
 
-func renderTUI(out io.Writer, runID string, snap tuiSnapshot, messages []string, input string, commandLogScroll *int, eventLimit int) {
+func renderTUI(out io.Writer, runID string, snap tuiSnapshot, messages []string, input string, commandLogScroll *int, eventScroll *int, eventLimit int) {
 	width, height, err := term.GetSize(int(os.Stdout.Fd()))
 	if err != nil || width <= 0 {
 		width = 120
@@ -190,16 +190,8 @@ func renderTUI(out io.Writer, runID string, snap tuiSnapshot, messages []string,
 	}
 	left = append(left, "")
 	left = append(left, "Recent Events:")
-	if len(snap.events) == 0 {
-		left = append(left, "  (no events)")
-	} else {
-		start := 0
-		if len(snap.events) > tuiRecentEventsMax {
-			start = len(snap.events) - tuiRecentEventsMax
-		}
-		for _, event := range snap.events[start:] {
-			left = append(left, fmt.Sprintf("  - %s | %s | worker=%s | task=%s", event.TS.Format("15:04:05"), event.Type, event.WorkerID, event.TaskID))
-		}
+	for _, line := range renderRecentEvents(snap.events, eventScroll) {
+		left = append(left, line)
 	}
 	left = append(left, "")
 	left = append(left, "Command Log:")
@@ -336,6 +328,46 @@ func renderCommandLog(messages []string, wrapWidth int, scroll *int) []string {
 	}
 	if end < len(rendered) {
 		view = append(view, fmt.Sprintf("  ... %d newer line(s)", len(rendered)-end))
+	}
+	return view
+}
+
+func renderRecentEvents(events []orchestrator.EventEnvelope, scroll *int) []string {
+	rendered := make([]string, 0, len(events))
+	for _, event := range events {
+		rendered = append(rendered, fmt.Sprintf("  - %s | %s | worker=%s | task=%s", event.TS.Format("15:04:05"), event.Type, event.WorkerID, event.TaskID))
+	}
+	if len(rendered) == 0 {
+		rendered = append(rendered, "  (no events)")
+	}
+	maxScroll := 0
+	if len(rendered) > tuiRecentEventsView {
+		maxScroll = len(rendered) - tuiRecentEventsView
+	}
+	offset := 0
+	if scroll != nil {
+		offset = *scroll
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > maxScroll {
+		offset = maxScroll
+	}
+	if scroll != nil {
+		*scroll = offset
+	}
+	end := len(rendered) - offset
+	start := end - tuiRecentEventsView
+	if start < 0 {
+		start = 0
+	}
+	view := append([]string{}, rendered[start:end]...)
+	if start > 0 {
+		view = append([]string{fmt.Sprintf("  ... %d older event(s) (events up/down to scroll)", start)}, view...)
+	}
+	if end < len(rendered) {
+		view = append(view, fmt.Sprintf("  ... %d newer event(s)", len(rendered)-end))
 	}
 	return view
 }
@@ -512,8 +544,20 @@ func renderWorkerBoxes(workers []orchestrator.WorkerStatus, debug map[string]tui
 		return renderBox("Worker", []string{"no workers running"}, width)
 	}
 	sortedWorkers := sortWorkersForDebug(workers, debug)
+	expanded := make([]orchestrator.WorkerStatus, 0, len(sortedWorkers))
+	collapsed := make([]orchestrator.WorkerStatus, 0, len(sortedWorkers))
+	for _, worker := range sortedWorkers {
+		if workerShouldCollapse(worker) {
+			collapsed = append(collapsed, worker)
+			continue
+		}
+		expanded = append(expanded, worker)
+	}
 	out := make([]string, 0, len(sortedWorkers)*8)
-	for idx, worker := range sortedWorkers {
+	if len(expanded) == 0 {
+		out = append(out, renderBox("Worker", []string{"no active workers"}, width)...)
+	}
+	for idx, worker := range expanded {
 		task := strings.TrimSpace(worker.CurrentTask)
 		if task == "" {
 			task = "-"
@@ -551,11 +595,46 @@ func renderWorkerBoxes(workers []orchestrator.WorkerStatus, debug map[string]tui
 		}
 		title := "Worker " + worker.WorkerID
 		out = append(out, renderBox(title, body, width)...)
-		if idx < len(sortedWorkers)-1 {
+		if idx < len(expanded)-1 {
 			out = append(out, fitLine("", width))
 		}
 	}
+	if len(collapsed) > 0 {
+		if len(out) > 0 {
+			out = append(out, fitLine("", width))
+		}
+		body := []string{
+			fmt.Sprintf("%d stopped/completed worker(s) collapsed by default", len(collapsed)),
+		}
+		for i, worker := range collapsed {
+			if i >= 6 {
+				body = append(body, fmt.Sprintf("... %d more", len(collapsed)-i))
+				break
+			}
+			task := strings.TrimSpace(worker.CurrentTask)
+			if task == "" {
+				task = "-"
+			}
+			line := fmt.Sprintf("%s state=%s task=%s", worker.WorkerID, strings.TrimSpace(worker.State), task)
+			if snapshot, ok := debug[worker.WorkerID]; ok {
+				if reason := strings.TrimSpace(snapshot.Reason); reason != "" {
+					line += " reason=" + reason
+				}
+			}
+			body = append(body, line)
+		}
+		out = append(out, renderBox("Collapsed Workers", body, width)...)
+	}
 	return out
+}
+
+func workerShouldCollapse(worker orchestrator.WorkerStatus) bool {
+	switch strings.ToLower(strings.TrimSpace(worker.State)) {
+	case "stopped", "completed":
+		return true
+	default:
+		return false
+	}
 }
 
 func sortWorkersForDebug(workers []orchestrator.WorkerStatus, debug map[string]tuiWorkerDebug) []orchestrator.WorkerStatus {
@@ -642,6 +721,8 @@ func failureHint(reason string) string {
 		return "LLM call timed out before task budget completed."
 	case orchestrator.WorkerFailureAssistUnavailable:
 		return "LLM was unreachable or returned an invalid response."
+	case orchestrator.WorkerFailureAssistParseFailure:
+		return "LLM responded but output could not be parsed into a valid suggestion."
 	case orchestrator.WorkerFailureCommandTimeout:
 		return "Tool command timed out."
 	case "execution_timeout":

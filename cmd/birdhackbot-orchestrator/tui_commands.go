@@ -34,11 +34,26 @@ func parseTUICommand(raw string) (tuiCommand, error) {
 		return tuiCommand{name: "refresh"}, nil
 	case "events":
 		if len(parts) < 2 {
-			return tuiCommand{}, fmt.Errorf("usage: events <count>")
+			return tuiCommand{}, fmt.Errorf("usage: events <count|up|down|top|bottom> [count]")
+		}
+		action := strings.ToLower(strings.TrimSpace(parts[1]))
+		switch action {
+		case "up", "down":
+			count := 1
+			if len(parts) >= 3 {
+				n, err := strconv.Atoi(parts[2])
+				if err != nil || n <= 0 {
+					return tuiCommand{}, fmt.Errorf("events count must be a positive integer")
+				}
+				count = n
+			}
+			return tuiCommand{name: "events", scope: action, eventLimit: count}, nil
+		case "top", "bottom":
+			return tuiCommand{name: "events", scope: action}, nil
 		}
 		n, err := strconv.Atoi(parts[1])
 		if err != nil || n <= 0 {
-			return tuiCommand{}, fmt.Errorf("events count must be a positive integer")
+			return tuiCommand{}, fmt.Errorf("usage: events <count|up|down|top|bottom> [count]")
 		}
 		return tuiCommand{name: "events", eventLimit: n}, nil
 	case "log":
@@ -171,11 +186,15 @@ func looksLikeQuestion(input string) bool {
 }
 
 func executeTUICommand(manager *orchestrator.Manager, runID string, eventLimit *int, cmd tuiCommand, commandLogScroll *int) (bool, string) {
+	return executeTUICommandWithScroll(manager, runID, eventLimit, cmd, commandLogScroll, nil)
+}
+
+func executeTUICommandWithScroll(manager *orchestrator.Manager, runID string, eventLimit *int, cmd tuiCommand, commandLogScroll *int, eventScroll *int) (bool, string) {
 	switch cmd.name {
 	case "quit":
 		return true, "exiting tui"
 	case "help":
-		return false, "commands: help, plan, tasks, ask <question>, instruct <text>, execute, regenerate, discard, task add/remove/set/move, refresh, events <n>, log <up|down|top|bottom> [n], approve <id> [scope] [reason], deny <id> [reason], stop, quit"
+		return false, "commands: help, plan, tasks, ask <question>, instruct <text>, execute, regenerate, discard, task add/remove/set/move, refresh, events <count|up|down|top|bottom> [n], log <up|down|top|bottom> [n], approve <id> [scope] [reason], deny <id> [reason], stop, quit"
 	case "plan":
 		plan, err := manager.LoadRunPlan(runID)
 		if err != nil {
@@ -204,8 +223,43 @@ func executeTUICommand(manager *orchestrator.Manager, runID string, eventLimit *
 	case "refresh":
 		return false, "refreshed"
 	case "events":
+		if cmd.scope != "" {
+			if eventScroll == nil {
+				return false, "recent events scrolling unavailable"
+			}
+			switch cmd.scope {
+			case "up":
+				step := cmd.eventLimit
+				if step <= 0 {
+					step = 1
+				}
+				*eventScroll += step
+				return false, fmt.Sprintf("recent events scrolled up %d", step)
+			case "down":
+				step := cmd.eventLimit
+				if step <= 0 {
+					step = 1
+				}
+				*eventScroll -= step
+				if *eventScroll < 0 {
+					*eventScroll = 0
+				}
+				return false, fmt.Sprintf("recent events scrolled down %d", step)
+			case "top":
+				*eventScroll = 1 << 20
+				return false, "recent events moved to oldest entries"
+			case "bottom":
+				*eventScroll = 0
+				return false, "recent events moved to latest entries"
+			default:
+				return false, "usage: events <count|up|down|top|bottom> [count]"
+			}
+		}
 		if eventLimit != nil {
 			*eventLimit = cmd.eventLimit
+		}
+		if eventScroll != nil {
+			*eventScroll = 0
 		}
 		return false, fmt.Sprintf("event window set to %d", cmd.eventLimit)
 	case "log":
@@ -335,42 +389,14 @@ func handleTUIAsk(manager *orchestrator.Manager, runID, input string) string {
 	}
 
 	if reply, err := askTUIWithLLM(manager, runID, trimmed); err == nil {
-		lines := []string{fmt.Sprintf("assistant: %s", strings.TrimSpace(reply.Reply))}
-		queuedInstruction := ""
-		if reply.QueueInstruction {
-			instruction := strings.TrimSpace(reply.Instruction)
-			if instruction == "" {
-				instruction = trimmed
-			}
-			if err := queueTUIInstruction(manager, runID, instruction); err != nil {
-				lines = append(lines, "instruction failed: "+err.Error())
-			} else {
-				lines = append(lines, "instruction queued: "+instruction)
-				queuedInstruction = instruction
-			}
-		}
-		recordPlanningConversation(manager, runID, trimmed, strings.TrimSpace(reply.Reply), queuedInstruction)
-		return strings.Join(lines, "\n")
+		assistantReply := strings.TrimSpace(reply.Reply)
+		recordPlanningConversation(manager, runID, trimmed, assistantReply, "")
+		return fmt.Sprintf("assistant: %s", assistantReply)
 	}
 
 	fallback := answerTUIQuestion(manager, runID, trimmed)
-	if looksLikeQuestion(trimmed) {
-		return fallback
-	}
-	if plan, err := manager.LoadRunPlan(runID); err == nil {
-		if isPlanningPhase(runPhaseFromPlan(plan)) {
-			msg, planErr := planningInstructionToDraft(manager, runID, trimmed)
-			if planErr != nil {
-				return fallback + "\nplanning update failed: " + planErr.Error()
-			}
-			return fallback + "\n" + msg
-		}
-	}
-	if err := queueTUIInstruction(manager, runID, trimmed); err != nil {
-		return fallback + "\ninstruction failed: " + err.Error()
-	}
-	recordPlanningConversation(manager, runID, trimmed, fallback, trimmed)
-	return fallback + "\ninstruction queued: " + trimmed
+	recordPlanningConversation(manager, runID, trimmed, fallback, "")
+	return fallback
 }
 
 func recordPlanningConversation(manager *orchestrator.Manager, runID, operatorInput, assistantReply, queuedInstruction string) {
@@ -410,9 +436,9 @@ func askTUIWithLLM(manager *orchestrator.Manager, runID, operatorInput string) (
 			{
 				Role: "system",
 				Content: "You are BirdHackBot Orchestrator's operator assistant for authorized internal lab security testing. " +
-					"You must answer the operator based on run context and decide whether to queue a new operator instruction. " +
+					"The `ask` command is read-only and must never queue operator instructions. " +
 					"Return strict JSON only with keys: reply (string), queue_instruction (boolean), instruction (string). " +
-					"Set queue_instruction=true only when the operator asks to change execution or run a new action. " +
+					"Always set queue_instruction=false and instruction=\"\". " +
 					"Keep reply concise and specific.",
 			},
 			{
@@ -434,13 +460,15 @@ func askTUIWithLLM(manager *orchestrator.Manager, runID, operatorInput string) (
 		}
 		return tuiAssistantDecision{
 			Reply:            reply,
-			QueueInstruction: !looksLikeQuestion(operatorInput),
+			QueueInstruction: false,
 		}, nil
 	}
 	parsed.Reply = strings.TrimSpace(parsed.Reply)
 	if parsed.Reply == "" {
 		parsed.Reply = "I did not generate a usable answer."
 	}
+	parsed.QueueInstruction = false
+	parsed.Instruction = ""
 	parsed.Instruction = strings.TrimSpace(parsed.Instruction)
 	return parsed, nil
 }
