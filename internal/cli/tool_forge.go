@@ -14,6 +14,7 @@ import (
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/assist"
 	"github.com/Jawbreaker1/CodeHackBot/internal/exec"
+	"github.com/Jawbreaker1/CodeHackBot/internal/msf"
 )
 
 const (
@@ -439,17 +440,16 @@ func (r *Runner) executeToolRun(command string, args []string) error {
 	if command == "" {
 		return fmt.Errorf("tool run: empty command")
 	}
-	if patchedPath, patched, patchErr := maybePatchMSFConsoleScript(command, args); patchErr != nil {
-		r.logger.Printf("Runtime adaptation failed: %v", patchErr)
-	} else if patched {
-		r.logger.Printf("Runtime adaptation: patched msfconsole -e to -x in %s", patchedPath)
-	}
-	if adaptedCmd, adaptedArgs, note, adaptErr := maybeAdaptRubyMSFScript(command, args); adaptErr != nil {
+	if adaptedCmd, adaptedArgs, notes, adaptErr := msf.AdaptRuntimeCommand(command, args, r.currentWorkingDir()); adaptErr != nil {
 		r.logger.Printf("Runtime adaptation failed: %v", adaptErr)
-	} else if adaptedCmd != command || !equalStringSlices(adaptedArgs, args) {
-		command, args = adaptedCmd, adaptedArgs
-		if strings.TrimSpace(note) != "" {
-			r.logger.Printf("%s", note)
+	} else {
+		if adaptedCmd != command || !equalStringSlices(adaptedArgs, args) {
+			command, args = adaptedCmd, adaptedArgs
+		}
+		for _, note := range notes {
+			if strings.TrimSpace(note) != "" {
+				r.logger.Printf("%s", note)
+			}
 		}
 	}
 

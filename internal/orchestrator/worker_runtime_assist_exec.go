@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/assist"
+	"github.com/Jawbreaker1/CodeHackBot/internal/msf"
 )
 
 func executeWorkerAssistCommand(ctx context.Context, command string, args []string, workDir string) workerToolResult {
@@ -31,11 +32,24 @@ func executeWorkerAssistCommand(ctx context.Context, command string, args []stri
 		output, err := builtinBrowse(ctx, args)
 		return workerToolResult{command: "browse", args: args, output: output, runErr: err}
 	}
+	adaptedCmd, adaptedArgs, notes, adaptErr := msf.AdaptRuntimeCommand(command, args, workDir)
+	if adaptErr != nil {
+		return workerToolResult{command: command, args: args, output: []byte(adaptErr.Error() + "\n"), runErr: adaptErr}
+	}
+	command = adaptedCmd
+	args = adaptedArgs
 
 	cmd := exec.Command(command, args...)
 	cmd.Dir = workDir
 	cmd.Env = os.Environ()
 	output, err := runWorkerCommand(ctx, cmd, workerCommandStopGrace)
+	if len(notes) > 0 {
+		prefix := strings.Join(notes, "\n")
+		if prefix != "" {
+			prefix += "\n"
+		}
+		output = append([]byte(prefix), output...)
+	}
 	return workerToolResult{command: command, args: args, output: output, runErr: err}
 }
 
@@ -90,6 +104,17 @@ func executeWorkerAssistTool(ctx context.Context, cfg WorkerRunConfig, task Task
 	args, _, _ = applyCommandTargetFallback(scopePolicy, task, runCommand, args)
 	var adaptedNote string
 	runCommand, args, adaptedNote, _ = adaptCommandForRuntime(scopePolicy, runCommand, args)
+	adaptedCmd, adaptedArgs, msfNotes, adaptErr := msf.AdaptRuntimeCommand(runCommand, args, workDir)
+	if adaptErr != nil {
+		return workerToolResult{}, adaptErr
+	}
+	runCommand = adaptedCmd
+	args = adaptedArgs
+	for _, note := range msfNotes {
+		if strings.TrimSpace(note) != "" {
+			_, _ = fmt.Fprintf(&builder, "%s\n", note)
+		}
+	}
 	if err := scopePolicy.ValidateCommandTargets(runCommand, args); err != nil {
 		return workerToolResult{}, fmt.Errorf("%s: %w", WorkerFailureScopeDenied, err)
 	}

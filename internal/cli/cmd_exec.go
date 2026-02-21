@@ -17,7 +17,22 @@ func (r *Runner) handleRun(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: /run <command> [args...]")
 	}
-	r.setTask(formatWorkingCommandTask("run", args[0], args[1:]))
+	runCommand := strings.TrimSpace(args[0])
+	runArgs := append([]string{}, args[1:]...)
+	if adaptedCmd, adaptedArgs, notes, err := msf.AdaptRuntimeCommand(runCommand, runArgs, r.currentWorkingDir()); err != nil {
+		r.logger.Printf("Runtime adaptation failed: %v", err)
+	} else {
+		if adaptedCmd != runCommand || !equalStringSlices(adaptedArgs, runArgs) {
+			runCommand = adaptedCmd
+			runArgs = adaptedArgs
+		}
+		for _, note := range notes {
+			if strings.TrimSpace(note) != "" {
+				r.logger.Printf("%s", note)
+			}
+		}
+	}
+	r.setTask(formatWorkingCommandTask("run", runCommand, runArgs))
 	defer r.clearTask()
 	if !r.cfg.Tools.Shell.Enabled {
 		return fmt.Errorf("shell execution disabled by config")
@@ -28,13 +43,13 @@ func (r *Runner) handleRun(args []string) error {
 	start := time.Now()
 	requireApproval := r.cfg.Permissions.Level == "default" && r.cfg.Permissions.RequireApproval
 	timeout := time.Duration(r.cfg.Tools.Shell.TimeoutSeconds) * time.Second
-	resolvedTimeout := resolveShellIdleTimeout(timeout, args[0], args[1:])
+	resolvedTimeout := resolveShellIdleTimeout(timeout, runCommand, runArgs)
 	if resolvedTimeout != timeout && !r.cfg.UI.Verbose {
-		r.logger.Printf("Adjusted idle timeout to %s for command: %s", resolvedTimeout, args[0])
+		r.logger.Printf("Adjusted idle timeout to %s for command: %s", resolvedTimeout, runCommand)
 	}
 	timeout = resolvedTimeout
 	if requireApproval {
-		approved, err := r.confirm(fmt.Sprintf("Run command: %s %s?", args[0], strings.Join(args[1:], " ")))
+		approved, err := r.confirm(fmt.Sprintf("Run command: %s %s?", runCommand, strings.Join(runArgs, " ")))
 		if err != nil {
 			return err
 		}
@@ -77,7 +92,7 @@ func (r *Runner) handleRun(args []string) error {
 		}()
 	}
 
-	result, err := runner.RunCommandWithContext(ctx, args[0], args[1:]...)
+	result, err := runner.RunCommandWithContext(ctx, runCommand, runArgs...)
 	wasCanceled := errors.Is(err, context.Canceled)
 	if stopInterrupt != nil {
 		stopInterrupt()
@@ -95,7 +110,7 @@ func (r *Runner) handleRun(args []string) error {
 			ledgerStatus = "skipped"
 		} else {
 			sessionDir := filepath.Join(r.cfg.Session.LogDir, r.sessionID)
-			if ledgerErr := session.AppendLedger(sessionDir, r.cfg.Session.LedgerFilename, strings.Join(append([]string{args[0]}, args[1:]...), " "), result.LogPath, ""); ledgerErr != nil {
+			if ledgerErr := session.AppendLedger(sessionDir, r.cfg.Session.LedgerFilename, strings.Join(append([]string{runCommand}, runArgs...), " "), result.LogPath, ""); ledgerErr != nil {
 				r.logger.Printf("Ledger update failed: %v", ledgerErr)
 				ledgerStatus = "error"
 			} else {
@@ -103,7 +118,7 @@ func (r *Runner) handleRun(args []string) error {
 			}
 		}
 	}
-	safePrint(renderExecSummary(r.currentTask, args[0], args[1:], time.Since(start), result.LogPath, ledgerStatus, result.Output, err))
+	safePrint(renderExecSummary(r.currentTask, runCommand, runArgs, time.Since(start), result.LogPath, ledgerStatus, result.Output, err))
 	if err != nil {
 		if wasCanceled {
 			err = fmt.Errorf("command interrupted")

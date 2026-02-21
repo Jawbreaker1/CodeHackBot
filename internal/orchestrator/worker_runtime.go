@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Jawbreaker1/CodeHackBot/internal/msf"
 )
 
 const (
@@ -183,6 +185,34 @@ func RunWorkerTask(cfg WorkerRunConfig) error {
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureWorkingDirCreate, nil)
 		return fmt.Errorf("create action working dir: %w", err)
+	}
+	if action.Type != "assist" {
+		if adaptedCmd, adaptedArgs, notes, adaptErr := msf.AdaptRuntimeCommand(action.Command, action.Args, workDir); adaptErr != nil {
+			_ = emitWorkerFailure(manager, cfg, task, adaptErr, WorkerFailureBootstrapFailed, map[string]any{
+				"command": action.Command,
+				"args":    action.Args,
+			})
+			return adaptErr
+		} else {
+			action.Command = adaptedCmd
+			action.Args = adaptedArgs
+			for _, note := range notes {
+				if strings.TrimSpace(note) == "" {
+					continue
+				}
+				_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskProgress, map[string]any{
+					"message":   note,
+					"step":      0,
+					"tool_call": 0,
+					"command":   action.Command,
+					"args":      action.Args,
+				})
+			}
+		}
+		if err := scopePolicy.ValidateCommandTargets(action.Command, action.Args); err != nil {
+			_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureScopeDenied, nil)
+			return err
+		}
 	}
 
 	timeout := resolveActionTimeout(task.Budget.MaxRuntime, action.TimeoutSeconds)
