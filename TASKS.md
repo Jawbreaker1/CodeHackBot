@@ -328,28 +328,28 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
   - [x] regression test that deterministic planner path remains unchanged
 
 ## Sprint 26 — Completion Contract Enforcement (planned)
-- [ ] Enforce task completion contracts in coordinator before accepting `task_completed`:
-  - [ ] verify required artifacts exist and are non-empty
-  - [ ] verify required finding types were emitted for the task/target
-  - [ ] emit `task_failed` with reason `missing_required_artifacts` when contract is not met
-- [ ] Stop marking `completion_contract.verification_status="satisfied"` unconditionally in workers.
-- [ ] Add contract-check diagnostics to TUI (`why task marked failed/completed`).
-- [ ] Tests:
-  - [ ] completion event with missing artifacts is converted to failure
-  - [ ] completion with valid artifacts/findings remains completed
-  - [ ] replan trigger on repeated `missing_required_artifacts` still works
+- [x] Enforce task completion contracts in coordinator before accepting `task_completed`:
+  - [x] verify required artifacts exist and are non-empty
+  - [x] verify required finding types were emitted for the task/target
+  - [x] emit `task_failed` with reason `missing_required_artifacts` when contract is not met
+- [x] Stop marking `completion_contract.verification_status="satisfied"` unconditionally in workers.
+- [x] Add contract-check diagnostics to TUI (`why task marked failed/completed`).
+- [x] Tests:
+  - [x] completion event with missing artifacts is converted to failure
+  - [x] completion with valid artifacts/findings remains completed
+  - [x] replan trigger on repeated `missing_required_artifacts` still works
 
 ## Sprint 27 — Scope Engine Unification + Fail-Closed Wrappers (planned)
-- [ ] Introduce shared scope package and remove duplicated logic between:
-  - [ ] `internal/exec/scope.go`
-  - [ ] `internal/orchestrator/scope.go`
-- [ ] Enforce fail-closed behavior for network-capable wrapper commands (`bash -c`, `sh -c`, `zsh -c`) when scope is enabled.
-- [ ] Add target extraction for wrapped network commands and URLs (including script body parsing for common patterns).
-- [ ] Add policy parity tests so CLI and orchestrator enforce identical scope decisions.
-- [ ] Tests:
-  - [ ] wrapper bypass attempts are denied when target is missing/out-of-scope
-  - [ ] in-scope wrapped commands are allowed
-  - [ ] deny-target rules are enforced in both execution paths
+- [x] Introduce shared scope package and remove duplicated logic between:
+  - [x] `internal/exec/scope.go`
+  - [x] `internal/orchestrator/scope.go`
+- [x] Enforce fail-closed behavior for network-capable wrapper commands (`bash -c`, `sh -c`, `zsh -c`) when scope is enabled.
+- [x] Add target extraction for wrapped network commands and URLs (including script body parsing for common patterns).
+- [x] Add policy parity tests so CLI and orchestrator enforce identical scope decisions.
+- [x] Tests:
+  - [x] wrapper bypass attempts are denied when target is missing/out-of-scope
+  - [x] in-scope wrapped commands are allowed
+  - [x] deny-target rules are enforced in both execution paths
 
 ## Sprint 28 — Event Pipeline Performance + Robustness (planned)
 - [ ] Add incremental event ingestion (cursor/offset) so evidence merge processes only new events.

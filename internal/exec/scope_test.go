@@ -89,3 +89,59 @@ func TestRunCommandScopeNoTarget(t *testing.T) {
 		t.Fatalf("expected no target to be allowed, got %v", err)
 	}
 }
+
+func TestRunCommandScopeWrappedNetworkMissingTargetDenied(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skip on windows: bash may not be available")
+	}
+	runner := Runner{
+		Permissions:   PermissionAll,
+		ScopeNetworks: []string{"10.0.0.0/8"},
+	}
+	_, err := runner.RunCommand("bash", "-lc", "nmap -sV")
+	if err == nil || !strings.Contains(err.Error(), "scope violation") {
+		t.Fatalf("expected wrapped command scope violation, got %v", err)
+	}
+}
+
+func TestRunCommandScopeWrappedNetworkInScopeAllowed(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skip on windows: bash may not be available")
+	}
+	runner := Runner{
+		Permissions:   PermissionAll,
+		ScopeNetworks: []string{"10.0.0.0/8"},
+	}
+	if _, err := runner.RunCommand("bash", "-lc", "echo 10.1.2.3"); err != nil {
+		t.Fatalf("expected wrapped in-scope command allowed, got %v", err)
+	}
+}
+
+func TestRunCommandScopeWrappedNetworkOutOfScopeDenied(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skip on windows: bash may not be available")
+	}
+	runner := Runner{
+		Permissions:   PermissionAll,
+		ScopeNetworks: []string{"10.0.0.0/8"},
+	}
+	_, err := runner.RunCommand("bash", "-lc", "echo 8.8.8.8")
+	if err == nil || !strings.Contains(err.Error(), "scope violation") {
+		t.Fatalf("expected wrapped out-of-scope command denied, got %v", err)
+	}
+}
+
+func TestRunCommandScopeWrappedNetworkDeniedTargetDenied(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skip on windows: bash may not be available")
+	}
+	runner := Runner{
+		Permissions:      PermissionAll,
+		ScopeNetworks:    []string{"10.0.0.0/8"},
+		ScopeDenyTargets: []string{"10.0.0.9"},
+	}
+	_, err := runner.RunCommand("bash", "-lc", "echo 10.0.0.9")
+	if err == nil || !strings.Contains(err.Error(), "scope violation") {
+		t.Fatalf("expected wrapped denied target to fail, got %v", err)
+	}
+}

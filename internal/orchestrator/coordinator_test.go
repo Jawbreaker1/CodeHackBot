@@ -65,6 +65,195 @@ func TestCoordinator_DependencyAndCompletion(t *testing.T) {
 	}
 }
 
+func TestCoordinator_CompletionContractMissingArtifactsConvertsToFailure(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-coord-completion-contract-fail"
+	manager := NewManager(base)
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	if err := AppendEventJSONL(manager.eventPath(runID), EventEnvelope{
+		EventID:  "e-run-start",
+		RunID:    runID,
+		WorkerID: orchestratorWorkerID,
+		Seq:      1,
+		TS:       time.Now().UTC(),
+		Type:     EventTypeRunStarted,
+	}); err != nil {
+		t.Fatalf("append run_started: %v", err)
+	}
+
+	plan := RunPlan{
+		RunID:           runID,
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks: []TaskSpec{
+			task("t1", nil, 1),
+		},
+	}
+	scheduler, err := NewScheduler(plan, 1)
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	workers := NewWorkerManager(manager)
+	var launchedWorkerID string
+	coord, err := NewCoordinator(runID, Scope{}, manager, workers, scheduler, 1, 2*time.Second, 4*time.Second, 3*time.Second, func(task TaskSpec, attempt int, workerID string) WorkerSpec {
+		launchedWorkerID = workerID
+		return helperWorkerSpec(t, workerID, "ok")
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	if err := coord.Tick(); err != nil {
+		t.Fatalf("tick launch: %v", err)
+	}
+	waitUntil(t, 3*time.Second, func() bool {
+		return workers.CompletedCount() == 1
+	})
+	signalWorkerID := WorkerSignalID(launchedWorkerID)
+	if err := manager.EmitEvent(runID, signalWorkerID, "t1", EventTypeTaskCompleted, map[string]any{
+		"worker_id": launchedWorkerID,
+		"completion_contract": map[string]any{
+			"required_artifacts": []string{"artifact"},
+			"produced_artifacts": []string{filepath.Join(base, "missing.log")},
+			"required_findings":  []string{"task_execution_result"},
+		},
+	}); err != nil {
+		t.Fatalf("EmitEvent task_completed: %v", err)
+	}
+
+	if err := coord.Tick(); err != nil {
+		t.Fatalf("tick completion: %v", err)
+	}
+
+	st, _ := scheduler.State("t1")
+	if st != TaskStateFailed {
+		t.Fatalf("expected failed state after completion contract violation, got %s", st)
+	}
+	events, err := manager.Events(runID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	failed := latestTaskFailedByReason(events, "missing_required_artifacts")
+	if failed == nil {
+		t.Fatalf("expected task_failed with missing_required_artifacts reason")
+	}
+	payload := map[string]any{}
+	if len(failed.Payload) > 0 {
+		_ = json.Unmarshal(failed.Payload, &payload)
+	}
+	if status := toString(payload["verification_status"]); status != "failed" {
+		t.Fatalf("expected verification_status failed, got %q", status)
+	}
+	if len(sliceFromAny(payload["missing_artifacts"])) == 0 {
+		t.Fatalf("expected missing_artifacts diagnostics in failure payload")
+	}
+}
+
+func TestCoordinator_CompletionContractValidRemainsCompleted(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-coord-completion-contract-success"
+	manager := NewManager(base)
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	if err := AppendEventJSONL(manager.eventPath(runID), EventEnvelope{
+		EventID:  "e-run-start",
+		RunID:    runID,
+		WorkerID: orchestratorWorkerID,
+		Seq:      1,
+		TS:       time.Now().UTC(),
+		Type:     EventTypeRunStarted,
+	}); err != nil {
+		t.Fatalf("append run_started: %v", err)
+	}
+
+	plan := RunPlan{
+		RunID:           runID,
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks: []TaskSpec{
+			task("t1", nil, 1),
+		},
+	}
+	scheduler, err := NewScheduler(plan, 1)
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	workers := NewWorkerManager(manager)
+	var launchedWorkerID string
+	coord, err := NewCoordinator(runID, Scope{}, manager, workers, scheduler, 1, 2*time.Second, 4*time.Second, 3*time.Second, func(task TaskSpec, attempt int, workerID string) WorkerSpec {
+		launchedWorkerID = workerID
+		return helperWorkerSpec(t, workerID, "ok")
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	if err := coord.Tick(); err != nil {
+		t.Fatalf("tick launch: %v", err)
+	}
+	waitUntil(t, 3*time.Second, func() bool {
+		return workers.CompletedCount() == 1
+	})
+	artifactPath := filepath.Join(base, "artifact.log")
+	if err := os.WriteFile(artifactPath, []byte("ok\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile artifact: %v", err)
+	}
+	signalWorkerID := WorkerSignalID(launchedWorkerID)
+	if err := manager.EmitEvent(runID, signalWorkerID, "t1", EventTypeTaskArtifact, map[string]any{
+		"path":  artifactPath,
+		"title": "artifact",
+		"type":  "command_log",
+	}); err != nil {
+		t.Fatalf("EmitEvent task_artifact: %v", err)
+	}
+	if err := manager.EmitEvent(runID, signalWorkerID, "t1", EventTypeTaskFinding, map[string]any{
+		"target":       "192.168.50.0/24",
+		"finding_type": "task_execution_result",
+		"title":        "execution complete",
+		"severity":     "info",
+		"confidence":   "high",
+		"evidence":     []string{artifactPath},
+	}); err != nil {
+		t.Fatalf("EmitEvent task_finding: %v", err)
+	}
+	if err := manager.EmitEvent(runID, signalWorkerID, "t1", EventTypeTaskCompleted, map[string]any{
+		"worker_id": launchedWorkerID,
+		"log_path":  artifactPath,
+		"completion_contract": map[string]any{
+			"required_artifacts": []string{"artifact"},
+			"produced_artifacts": []string{artifactPath},
+			"required_findings":  []string{"task_execution_result"},
+		},
+	}); err != nil {
+		t.Fatalf("EmitEvent task_completed: %v", err)
+	}
+
+	if err := coord.Tick(); err != nil {
+		t.Fatalf("tick completion: %v", err)
+	}
+
+	st, _ := scheduler.State("t1")
+	if st != TaskStateCompleted {
+		t.Fatalf("expected completed state, got %s", st)
+	}
+	events, err := manager.Events(runID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if latestTaskFailedByReason(events, "missing_required_artifacts") != nil {
+		t.Fatalf("did not expect missing_required_artifacts failure for valid completion contract")
+	}
+}
+
 func TestCoordinator_RetryFailedTask(t *testing.T) {
 	t.Parallel()
 
@@ -1677,4 +1866,21 @@ func replanEventsByTrigger(events []EventEnvelope, trigger string) []EventEnvelo
 		}
 	}
 	return out
+}
+
+func latestTaskFailedByReason(events []EventEnvelope, reason string) *EventEnvelope {
+	for i := len(events) - 1; i >= 0; i-- {
+		event := events[i]
+		if event.Type != EventTypeTaskFailed {
+			continue
+		}
+		payload := map[string]any{}
+		if len(event.Payload) > 0 {
+			_ = json.Unmarshal(event.Payload, &payload)
+		}
+		if toString(payload["reason"]) == reason {
+			return &event
+		}
+	}
+	return nil
 }

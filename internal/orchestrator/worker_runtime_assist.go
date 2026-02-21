@@ -213,7 +213,7 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 					"produced_artifacts":  []string{logPath},
 					"required_findings":   []string{"task_execution_result"},
 					"produced_findings":   []string{"task_execution_result"},
-					"verification_status": "satisfied",
+					"verification_status": "reported_by_worker",
 				},
 			})
 			return nil

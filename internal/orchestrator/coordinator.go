@@ -259,6 +259,52 @@ func (c *Coordinator) handleWorkerExits() error {
 				return err
 			}
 		}
+		signalWorkerID := WorkerSignalID(exit.WorkerID)
+		completionPayload, hasCompletionPayload := latestWorkerTaskCompletedPayload(events, taskID, signalWorkerID)
+		if hasCompletionPayload {
+			taskSpec, ok := c.scheduler.Task(taskID)
+			if !ok {
+				var readErr error
+				taskSpec, readErr = c.manager.ReadTask(c.runID, taskID)
+				if readErr != nil {
+					return readErr
+				}
+			}
+			check, err := c.validateTaskCompletionContract(taskSpec, taskID, signalWorkerID, events, completionPayload)
+			if err != nil {
+				return err
+			}
+			if check.Status != "satisfied" {
+				failurePayload := map[string]any{
+					"reason":              "missing_required_artifacts",
+					"error":               "completion contract verification failed",
+					"worker_id":           exit.WorkerID,
+					"log_path":            exit.LogPath,
+					"required_artifacts":  check.RequiredArtifacts,
+					"produced_artifacts":  check.ProducedArtifacts,
+					"verified_artifacts":  check.VerifiedArtifacts,
+					"missing_artifacts":   check.MissingArtifacts,
+					"required_findings":   check.RequiredFindings,
+					"produced_findings":   check.ProducedFindings,
+					"missing_findings":    check.MissingFindings,
+					"verification_status": check.Status,
+				}
+				if err := c.manager.EmitEvent(c.runID, orchestratorWorkerID, taskID, EventTypeTaskFailed, failurePayload); err != nil {
+					return err
+				}
+				if err := c.markFailedWithReplan(taskID, "missing_required_artifacts", true, failurePayload); err != nil {
+					return err
+				}
+				if st, ok := c.scheduler.State(taskID); ok {
+					leaseStatus := LeaseStatusFailed
+					if st == TaskStateQueued {
+						leaseStatus = LeaseStatusQueued
+					}
+					_ = c.manager.UpdateLeaseStatus(c.runID, taskID, leaseStatus, "")
+				}
+				continue
+			}
+		}
 		if err := c.scheduler.MarkCompleted(taskID); err != nil {
 			return err
 		}

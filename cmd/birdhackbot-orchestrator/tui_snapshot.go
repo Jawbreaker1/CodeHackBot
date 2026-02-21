@@ -176,6 +176,22 @@ func latestFailureFromEvents(events []orchestrator.EventEnvelope) *tuiFailure {
 			if reason == "" {
 				reason = "task_failed"
 			}
+			details := make([]string, 0)
+			missingArtifacts := stringSliceFromAny(payload["missing_artifacts"])
+			if len(missingArtifacts) > 0 {
+				details = append(details, "missing artifacts: "+strings.Join(missingArtifacts, ", "))
+			}
+			missingFindings := stringSliceFromAny(payload["missing_findings"])
+			if len(missingFindings) > 0 {
+				details = append(details, "missing findings: "+strings.Join(missingFindings, ", "))
+			}
+			verifiedArtifacts := stringSliceFromAny(payload["verified_artifacts"])
+			if len(verifiedArtifacts) > 0 {
+				details = append(details, fmt.Sprintf("verified artifacts: %d", len(verifiedArtifacts)))
+			}
+			if verificationStatus := strings.TrimSpace(stringFromAny(payload["verification_status"])); verificationStatus != "" {
+				details = append(details, "contract: "+verificationStatus)
+			}
 			return &tuiFailure{
 				TS:      event.TS,
 				TaskID:  event.TaskID,
@@ -183,6 +199,7 @@ func latestFailureFromEvents(events []orchestrator.EventEnvelope) *tuiFailure {
 				Reason:  reason,
 				Error:   strings.TrimSpace(stringFromAny(payload["error"])),
 				LogPath: strings.TrimSpace(stringFromAny(payload["log_path"])),
+				Details: details,
 			}
 		case orchestrator.EventTypeWorkerStopped:
 			status := strings.ToLower(strings.TrimSpace(stringFromAny(payload["status"])))

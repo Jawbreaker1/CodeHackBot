@@ -69,3 +69,25 @@ func TestScopePolicyValidateCommandTargetsFailClosedWhenMissingNetworkTarget(t *
 		t.Fatalf("expected non-network command without target to pass, got %v", err)
 	}
 }
+
+func TestScopePolicyValidateCommandTargetsWrappedNetworkCommands(t *testing.T) {
+	t.Parallel()
+
+	policy := NewScopePolicy(Scope{
+		Networks:    []string{"192.168.50.0/24"},
+		DenyTargets: []string{"192.168.50.99"},
+	})
+
+	if err := policy.ValidateCommandTargets("bash", []string{"-lc", "nmap -sV"}); err == nil {
+		t.Fatalf("expected wrapped network command without target to fail closed")
+	}
+	if err := policy.ValidateCommandTargets("bash", []string{"-lc", "nmap -sV 192.168.50.10"}); err != nil {
+		t.Fatalf("expected wrapped in-scope command target to pass, got %v", err)
+	}
+	if err := policy.ValidateCommandTargets("bash", []string{"-lc", "nmap -sV 8.8.8.8"}); err == nil {
+		t.Fatalf("expected wrapped out-of-scope command target to fail")
+	}
+	if err := policy.ValidateCommandTargets("bash", []string{"-lc", "nmap -sV 192.168.50.99"}); err == nil {
+		t.Fatalf("expected wrapped denied command target to fail")
+	}
+}

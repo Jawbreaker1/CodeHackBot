@@ -225,6 +225,7 @@ type tuiFailure struct {
 	Reason  string
 	Error   string
 	LogPath string
+	Details []string
 }
 
 type tuiTaskProgress struct {

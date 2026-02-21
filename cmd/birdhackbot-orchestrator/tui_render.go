@@ -184,6 +184,9 @@ func renderTUI(out io.Writer, runID string, snap tuiSnapshot, messages []string,
 		if strings.TrimSpace(snap.lastFailure.LogPath) != "" {
 			left = append(left, "    log: "+snap.lastFailure.LogPath)
 		}
+		for _, detail := range snap.lastFailure.Details {
+			left = append(left, "    detail: "+detail)
+		}
 	}
 	left = append(left, "")
 	left = append(left, "Recent Events:")

@@ -107,8 +107,8 @@ func TestRunWorkerTaskCommandAction(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected completion_contract payload")
 	}
-	if status, _ := contract["verification_status"].(string); status != "satisfied" {
-		t.Fatalf("expected verification_status satisfied, got %q", status)
+	if status, _ := contract["verification_status"].(string); status != "reported_by_worker" {
+		t.Fatalf("expected verification_status reported_by_worker, got %q", status)
 	}
 }
 
