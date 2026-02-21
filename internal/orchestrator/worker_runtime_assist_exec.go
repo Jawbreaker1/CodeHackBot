@@ -303,6 +303,10 @@ var assistActionCommandAliases = map[string]string{
 	"parse_links": "parse_links",
 }
 
+var assistActionOrderInsensitiveCommands = map[string]struct{}{
+	"list_dir": {},
+}
+
 func canonicalAssistActionCommand(command string) string {
 	normalized := strings.ToLower(strings.TrimSpace(command))
 	if normalized == "" {
@@ -331,6 +335,9 @@ func canonicalAssistActionArgs(command string, args []string) []string {
 		return out
 	}
 	if isAssistShellWrapper(command) {
+		return out
+	}
+	if _, ok := assistActionOrderInsensitiveCommands[command]; !ok {
 		return out
 	}
 	sort.Strings(out)

@@ -11,6 +11,14 @@ import (
 	"time"
 )
 
+func TestNormalizeWorkerAssistModeRejectsInvalidValue(t *testing.T) {
+	t.Parallel()
+
+	if _, err := normalizeWorkerAssistMode("invalid-mode"); err == nil {
+		t.Fatalf("expected invalid worker assist mode to return error")
+	}
+}
+
 func TestRunWorkerTaskAssistStrictModeFailsWithoutFallback(t *testing.T) {
 	base := t.TempDir()
 	runID := "run-worker-task-assist-strict"
@@ -72,6 +80,70 @@ func TestRunWorkerTaskAssistStrictModeFailsWithoutFallback(t *testing.T) {
 	}
 	if hasEventType(events, EventTypeTaskCompleted) {
 		t.Fatalf("did not expect task_completed in strict mode parse failure")
+	}
+	failEvent, ok := firstEventByType(events, EventTypeTaskFailed)
+	if !ok {
+		t.Fatalf("expected task_failed event")
+	}
+	payload := map[string]any{}
+	if len(failEvent.Payload) > 0 {
+		_ = json.Unmarshal(failEvent.Payload, &payload)
+	}
+	if got, _ := payload["reason"].(string); got != WorkerFailureAssistUnavailable {
+		t.Fatalf("expected %s reason, got %q", WorkerFailureAssistUnavailable, got)
+	}
+}
+
+func TestRunWorkerTaskAssistInvalidModeFailsFast(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-worker-task-assist-invalid-mode"
+	taskID := "t1"
+	workerID := "worker-t1-a1"
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	writeWorkerPlan(t, base, runID, Scope{Targets: []string{"127.0.0.1"}})
+	writeAssistTask(t, base, runID, TaskSpec{
+		TaskID:            taskID,
+		Goal:              "assist invalid mode",
+		Targets:           []string{"127.0.0.1"},
+		DoneWhen:          []string{"task complete"},
+		FailWhen:          []string{"task failed"},
+		ExpectedArtifacts: []string{"assist logs"},
+		RiskLevel:         string(RiskReconReadonly),
+		Action: TaskAction{
+			Type:   "assist",
+			Prompt: "Run assist mode validation.",
+		},
+		Budget: TaskBudget{
+			MaxSteps:     2,
+			MaxToolCalls: 2,
+			MaxRuntime:   5 * time.Second,
+		},
+	})
+
+	t.Setenv(workerConfigPathEnv, "")
+	t.Setenv(workerLLMBaseURLEnv, "http://127.0.0.1:1")
+	t.Setenv(workerLLMModelEnv, "test-model")
+	t.Setenv(workerLLMTimeoutSeconds, "10")
+	t.Setenv(workerAssistModeEnv, "typo-mode")
+
+	err := RunWorkerTask(WorkerRunConfig{
+		SessionsDir: base,
+		RunID:       runID,
+		TaskID:      taskID,
+		WorkerID:    workerID,
+		Attempt:     1,
+	})
+	if err == nil {
+		t.Fatalf("expected invalid assist mode to fail")
+	}
+	if !strings.Contains(err.Error(), "invalid worker assist mode") {
+		t.Fatalf("expected invalid mode error, got %v", err)
+	}
+	events, evErr := NewManager(base).Events(runID, 0)
+	if evErr != nil {
+		t.Fatalf("Events: %v", evErr)
 	}
 	failEvent, ok := firstEventByType(events, EventTypeTaskFailed)
 	if !ok {

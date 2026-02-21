@@ -39,3 +39,13 @@ func TestBuildAssistActionKeyCanonicalizesAliasAndArgOrder(t *testing.T) {
 		t.Fatalf("expected semantic key match for alias/reordered args, got %q vs %q", keyA, keyB)
 	}
 }
+
+func TestBuildAssistActionKeyKeepsArgOrderForOrderSensitiveCommands(t *testing.T) {
+	t.Parallel()
+
+	keyA := buildAssistActionKey("nmap", []string{"--script", "safe", "10.0.0.5"})
+	keyB := buildAssistActionKey("nmap", []string{"10.0.0.5", "--script", "safe"})
+	if keyA == keyB {
+		t.Fatalf("expected different keys for reordered args on order-sensitive command")
+	}
+}

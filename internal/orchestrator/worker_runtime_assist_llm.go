@@ -53,7 +53,10 @@ func buildWorkerAssistant() (string, string, workerAssistant, error) {
 	if model == "" {
 		return "", "", nil, fmt.Errorf("llm model is required (set %s or config llm.model)", workerLLMModelEnv)
 	}
-	mode := normalizeWorkerAssistMode(cfg.Agent.WorkerAssistMode)
+	mode, modeErr := normalizeWorkerAssistMode(cfg.Agent.WorkerAssistMode)
+	if modeErr != nil {
+		return "", "", nil, modeErr
+	}
 	client := llm.NewLMStudioClient(cfg)
 	assistTemp, assistTokens := cfg.ResolveLLMRoleOptions("assist", 0.15, 1200)
 	recoveryTemp, recoveryTokens := cfg.ResolveLLMRoleOptions("recovery", 0.1, 900)
@@ -134,15 +137,15 @@ func classifyAssistFallbackReason(err error) string {
 	return "primary_error"
 }
 
-func normalizeWorkerAssistMode(raw string) workerAssistMode {
+func normalizeWorkerAssistMode(raw string) (workerAssistMode, error) {
 	mode := strings.ToLower(strings.TrimSpace(raw))
 	switch mode {
 	case string(workerAssistModeStrict):
-		return workerAssistModeStrict
+		return workerAssistModeStrict, nil
 	case "", string(workerAssistModeDegraded):
-		return workerAssistModeDegraded
+		return workerAssistModeDegraded, nil
 	default:
-		return workerAssistModeDegraded
+		return "", fmt.Errorf("invalid worker assist mode %q (expected strict or degraded)", strings.TrimSpace(raw))
 	}
 }
 
