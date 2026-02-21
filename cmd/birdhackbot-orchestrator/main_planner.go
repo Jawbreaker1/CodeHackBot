@@ -77,9 +77,9 @@ func buildGoalPlanFromMode(
 	now time.Time,
 ) (orchestrator.RunPlan, string, error) {
 	if plannerMode == "llm" || plannerMode == "auto" {
-		client, model, llmCfgErr := resolvePlannerLLMClient(workerConfigPath)
+		cfg, client, model, llmCfgErr := resolvePlannerLLMClient(workerConfigPath)
 		if llmCfgErr == nil && client != nil && strings.TrimSpace(model) != "" {
-			plan, llmRationale, err := buildGoalLLMPlan(ctx, client, model, runID, goal, scope, constraints, successCriteria, stopCriteria, maxParallelism, hypothesisLimit, now)
+			plan, llmRationale, err := buildGoalLLMPlan(ctx, cfg, client, model, runID, goal, scope, constraints, successCriteria, stopCriteria, maxParallelism, hypothesisLimit, now)
 			if err == nil {
 				return plan, llmRationale, nil
 			}
@@ -112,6 +112,7 @@ func buildGoalPlanFromMode(
 
 func buildGoalLLMPlan(
 	ctx context.Context,
+	cfg config.Config,
 	client llm.Client,
 	model string,
 	runID, goal string,
@@ -122,7 +123,21 @@ func buildGoalLLMPlan(
 ) (orchestrator.RunPlan, string, error) {
 	normalizedGoal := normalizeGoal(goal)
 	hypotheses := orchestrator.GenerateHypotheses(normalizedGoal, scope, hypothesisLimit)
-	tasks, llmRationale, err := orchestrator.SynthesizeTaskGraphWithLLM(ctx, client, model, normalizedGoal, scope, constraints, hypotheses, maxParallelism)
+	temperature, maxTokens := cfg.ResolveLLMRoleOptions("planner", 0.05, 1800)
+	tasks, llmRationale, err := orchestrator.SynthesizeTaskGraphWithLLMWithOptions(
+		ctx,
+		client,
+		model,
+		normalizedGoal,
+		scope,
+		constraints,
+		hypotheses,
+		maxParallelism,
+		orchestrator.LLMPlannerOptions{
+			Temperature: float32Ptr(temperature),
+			MaxTokens:   intPtrPositive(maxTokens),
+		},
+	)
 	if err != nil {
 		return orchestrator.RunPlan{}, "", err
 	}
@@ -158,22 +173,22 @@ func buildGoalLLMPlan(
 	return plan, strings.TrimSpace(llmRationale), nil
 }
 
-func resolvePlannerLLMClient(workerConfigPath string) (llm.Client, string, error) {
+func resolvePlannerLLMClient(workerConfigPath string) (config.Config, llm.Client, string, error) {
 	cfg, err := loadPlannerLLMConfig(workerConfigPath)
 	if err != nil {
-		return nil, "", err
+		return config.Config{}, nil, "", err
 	}
 	if strings.TrimSpace(cfg.LLM.BaseURL) == "" {
-		return nil, "", fmt.Errorf("llm planner requires %s or llm.base_url in config", plannerLLMBaseURLEnv)
+		return config.Config{}, nil, "", fmt.Errorf("llm planner requires %s or llm.base_url in config", plannerLLMBaseURLEnv)
 	}
 	model := strings.TrimSpace(cfg.LLM.Model)
 	if model == "" {
 		model = strings.TrimSpace(cfg.Agent.Model)
 	}
 	if model == "" {
-		return nil, "", fmt.Errorf("llm planner requires %s or llm.model in config", plannerLLMModelEnv)
+		return config.Config{}, nil, "", fmt.Errorf("llm planner requires %s or llm.model in config", plannerLLMModelEnv)
 	}
-	return llm.NewLMStudioClient(cfg), model, nil
+	return cfg, llm.NewLMStudioClient(cfg), model, nil
 }
 
 func loadPlannerLLMConfig(workerConfigPath string) (config.Config, error) {
@@ -326,6 +341,17 @@ func printPlanSummary(stdout io.Writer, plan orchestrator.RunPlan) {
 		}
 		fmt.Fprintf(stdout, "  task[%d] %s risk=%s depends_on=%d strategy=%s\n", i+1, task.TaskID, task.RiskLevel, len(task.DependsOn), task.Strategy)
 	}
+}
+
+func float32Ptr(v float32) *float32 {
+	return &v
+}
+
+func intPtrPositive(v int) *int {
+	if v <= 0 {
+		return nil
+	}
+	return &v
 }
 
 func persistPlanReview(sessionsDir string, plan orchestrator.RunPlan, planFilename string) (string, string, error) {

@@ -13,7 +13,31 @@
     "timeout_seconds": 120,
     "api_key": "",
     "max_failures": 3,
-    "cooldown_seconds": 300
+    "cooldown_seconds": 300,
+    "temperature": 0.15,
+    "max_tokens": 1200,
+    "roles": {
+      "assist": {
+        "temperature": 0.15,
+        "max_tokens": 1200
+      },
+      "planner": {
+        "temperature": 0.05,
+        "max_tokens": 1800
+      },
+      "summarize": {
+        "temperature": 0.1,
+        "max_tokens": 1000
+      },
+      "recovery": {
+        "temperature": 0.1,
+        "max_tokens": 900
+      },
+      "tui_assistant": {
+        "temperature": 0.1,
+        "max_tokens": 600
+      }
+    }
   },
   "permissions": {
     "level": "default",

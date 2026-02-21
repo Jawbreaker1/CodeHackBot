@@ -301,7 +301,16 @@ func fallbackBlock(content string) string {
 }
 
 func (r *Runner) assistGenerator() assist.Assistant {
-	llmAssistant := assist.LLMAssistant{Client: llm.NewLMStudioClient(r.cfg), Model: r.cfg.LLM.Model}
+	assistTemp, assistTokens := r.llmRoleOptions("assist", 0.15, 1200)
+	recoveryTemp, recoveryTokens := r.llmRoleOptions("recovery", 0.1, 900)
+	llmAssistant := assist.LLMAssistant{
+		Client:            llm.NewLMStudioClient(r.cfg),
+		Model:             r.cfg.LLM.Model,
+		Temperature:       r.float32Ptr(assistTemp),
+		MaxTokens:         r.intPtr(assistTokens),
+		RepairTemperature: r.float32Ptr(recoveryTemp),
+		RepairMaxTokens:   r.intPtr(recoveryTokens),
+	}
 	fallback := assist.FallbackAssistant{}
 	return guardedAssistant{
 		allow:     r.llmAllowed,

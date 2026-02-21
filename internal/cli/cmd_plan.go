@@ -218,7 +218,13 @@ func (r *Runner) planInput(sessionDir string) (plan.Input, error) {
 }
 
 func (r *Runner) planGenerator() plan.Planner {
-	llmPlanner := plan.LLMPlanner{Client: llm.NewLMStudioClient(r.cfg), Model: r.cfg.LLM.Model}
+	temperature, maxTokens := r.llmRoleOptions("planner", 0.05, 1800)
+	llmPlanner := plan.LLMPlanner{
+		Client:      llm.NewLMStudioClient(r.cfg),
+		Model:       r.cfg.LLM.Model,
+		Temperature: r.float32Ptr(temperature),
+		MaxTokens:   r.intPtr(maxTokens),
+	}
 	fallback := plan.FallbackPlanner{}
 	return guardedPlanner{
 		allow:     r.llmAllowed,

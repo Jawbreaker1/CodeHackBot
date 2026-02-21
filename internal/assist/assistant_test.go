@@ -27,9 +27,11 @@ type scriptedClient struct {
 	contents []string
 	errs     []error
 	calls    int
+	reqs     []llm.ChatRequest
 }
 
-func (s *scriptedClient) Chat(_ context.Context, _ llm.ChatRequest) (llm.ChatResponse, error) {
+func (s *scriptedClient) Chat(_ context.Context, req llm.ChatRequest) (llm.ChatResponse, error) {
+	s.reqs = append(s.reqs, req)
 	idx := s.calls
 	s.calls++
 	if idx < len(s.errs) && s.errs[idx] != nil {
@@ -238,6 +240,38 @@ func TestLLMAssistantRepairRetryParsesSecondResponse(t *testing.T) {
 	}
 	if client.calls != 2 {
 		t.Fatalf("expected 2 model calls, got %d", client.calls)
+	}
+}
+
+func TestLLMAssistantUsesConfiguredTemperaturesAndTokens(t *testing.T) {
+	primaryTemp := float32(0.33)
+	primaryTokens := 777
+	repairTemp := float32(0.07)
+	repairTokens := 222
+	client := &scriptedClient{
+		contents: []string{
+			"I cannot help with that request.",
+			`{"type":"command","command":"ls","args":["-la"]}`,
+		},
+	}
+	assistant := LLMAssistant{
+		Client:            client,
+		Temperature:       &primaryTemp,
+		MaxTokens:         &primaryTokens,
+		RepairTemperature: &repairTemp,
+		RepairMaxTokens:   &repairTokens,
+	}
+	if _, err := assistant.Suggest(context.Background(), Input{SessionID: "s"}); err != nil {
+		t.Fatalf("suggest error: %v", err)
+	}
+	if len(client.reqs) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(client.reqs))
+	}
+	if client.reqs[0].Temperature != primaryTemp || client.reqs[0].MaxTokens != primaryTokens {
+		t.Fatalf("unexpected primary llm options: %+v", client.reqs[0])
+	}
+	if client.reqs[1].Temperature != repairTemp || client.reqs[1].MaxTokens != repairTokens {
+		t.Fatalf("unexpected repair llm options: %+v", client.reqs[1])
 	}
 }
 

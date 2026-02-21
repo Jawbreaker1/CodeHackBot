@@ -17,12 +17,15 @@ type Config struct {
 		ToolMaxFiles int    `json:"tool_max_files"`
 	} `json:"agent"`
 	LLM struct {
-		BaseURL         string `json:"base_url"`
-		Model           string `json:"model"`
-		TimeoutSeconds  int    `json:"timeout_seconds"`
-		APIKey          string `json:"api_key"`
-		MaxFailures     int    `json:"max_failures"`
-		CooldownSeconds int    `json:"cooldown_seconds"`
+		BaseURL         string                `json:"base_url"`
+		Model           string                `json:"model"`
+		TimeoutSeconds  int                   `json:"timeout_seconds"`
+		APIKey          string                `json:"api_key"`
+		MaxFailures     int                   `json:"max_failures"`
+		CooldownSeconds int                   `json:"cooldown_seconds"`
+		Temperature     *float32              `json:"temperature,omitempty"`
+		MaxTokens       *int                  `json:"max_tokens,omitempty"`
+		Roles           map[string]LLMRoleCfg `json:"roles,omitempty"`
 	} `json:"llm"`
 	Permissions struct {
 		Level           string `json:"level"`
@@ -64,6 +67,11 @@ type Config struct {
 	UI struct {
 		Verbose bool `json:"verbose"`
 	} `json:"ui"`
+}
+
+type LLMRoleCfg struct {
+	Temperature *float32 `json:"temperature,omitempty"`
+	MaxTokens   *int     `json:"max_tokens,omitempty"`
 }
 
 func DefaultPath() string {

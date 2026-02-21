@@ -440,11 +440,11 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
   - [x] `--goal` automation path remains unchanged (regression)
 
 ## Sprint 34 — LLM Stability Controls (planned)
-- [ ] Make LLM behavior tunable via config/env (with safe defaults):
-  - [ ] `llm.temperature` base setting
-  - [ ] optional per-role overrides (`assist`, `planner`, `summarize`, `recovery`, `tui_assistant`)
-  - [ ] optional `max_tokens` controls per role
-- [ ] Lower default temperatures for high-trust paths:
-  - [ ] planner and evaluation/repair paths deterministic (`0.0-0.1`)
-  - [ ] summaries/recovery conservative (`~0.1`)
-- [ ] Add tests ensuring configured values are actually used by call sites.
+- [x] Make LLM behavior tunable via config/env (with safe defaults):
+  - [x] `llm.temperature` base setting
+  - [x] optional per-role overrides (`assist`, `planner`, `summarize`, `recovery`, `tui_assistant`)
+  - [x] optional `max_tokens` controls per role
+- [x] Lower default temperatures for high-trust paths:
+  - [x] planner and evaluation/repair paths deterministic (`0.0-0.1`)
+  - [x] summaries/recovery conservative (`~0.1`)
+- [x] Add tests ensuring configured values are actually used by call sites.

@@ -392,10 +392,11 @@ func recordPlanningConversation(manager *orchestrator.Manager, runID, operatorIn
 }
 
 func askTUIWithLLM(manager *orchestrator.Manager, runID, operatorInput string) (tuiAssistantDecision, error) {
-	client, model, timeout, err := resolveTUIAssistantClient()
+	cfg, client, model, timeout, err := resolveTUIAssistantClient()
 	if err != nil {
 		return tuiAssistantDecision{}, err
 	}
+	temperature, maxTokens := cfg.ResolveLLMRoleOptions("tui_assistant", 0.1, 600)
 	contextText, err := buildTUIAssistantContext(manager, runID)
 	if err != nil {
 		return tuiAssistantDecision{}, err
@@ -419,8 +420,8 @@ func askTUIWithLLM(manager *orchestrator.Manager, runID, operatorInput string) (
 				Content: "RUN CONTEXT:\n" + contextText + "\n\nOPERATOR INPUT:\n" + operatorInput,
 			},
 		},
-		Temperature: 0.2,
-		MaxTokens:   280,
+		Temperature: temperature,
+		MaxTokens:   maxTokens,
 	})
 	if err != nil {
 		return tuiAssistantDecision{}, err
@@ -444,7 +445,7 @@ func askTUIWithLLM(manager *orchestrator.Manager, runID, operatorInput string) (
 	return parsed, nil
 }
 
-func resolveTUIAssistantClient() (llm.Client, string, time.Duration, error) {
+func resolveTUIAssistantClient() (config.Config, llm.Client, string, time.Duration, error) {
 	cfg := config.Config{}
 	cfg.LLM.TimeoutSeconds = 45
 
@@ -452,7 +453,7 @@ func resolveTUIAssistantClient() (llm.Client, string, time.Duration, error) {
 	if loadPath != "" {
 		loaded, _, err := config.Load(loadPath, "", "")
 		if err != nil {
-			return nil, "", 0, fmt.Errorf("load config from %s: %w", loadPath, err)
+			return config.Config{}, nil, "", 0, fmt.Errorf("load config from %s: %w", loadPath, err)
 		}
 		cfg = loaded
 		if cfg.LLM.TimeoutSeconds <= 0 {
@@ -479,7 +480,7 @@ func resolveTUIAssistantClient() (llm.Client, string, time.Duration, error) {
 		model = strings.TrimSpace(cfg.Agent.Model)
 	}
 	if strings.TrimSpace(cfg.LLM.BaseURL) == "" || model == "" {
-		return nil, "", 0, fmt.Errorf("llm configuration unavailable")
+		return config.Config{}, nil, "", 0, fmt.Errorf("llm configuration unavailable")
 	}
 	timeout := time.Duration(cfg.LLM.TimeoutSeconds) * time.Second
 	if timeout <= 0 {
@@ -488,7 +489,7 @@ func resolveTUIAssistantClient() (llm.Client, string, time.Duration, error) {
 	if timeout > 45*time.Second {
 		timeout = 45 * time.Second
 	}
-	return llm.NewLMStudioClient(cfg), model, timeout, nil
+	return cfg, llm.NewLMStudioClient(cfg), model, timeout, nil
 }
 
 func buildTUIAssistantContext(manager *orchestrator.Manager, runID string) (string, error) {

@@ -51,12 +51,14 @@ func (r *Runner) handleAsk(text string) error {
 	prompt := r.buildAskPrompt(sessionDir, text)
 	r.appendConversation("User", text)
 	client := llm.NewLMStudioClient(r.cfg)
+	temperature, maxTokens := r.llmRoleOptions("assist", 0.15, 1200)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	stopIndicator := r.startLLMIndicatorIfAllowed("ask")
 	resp, err := client.Chat(ctx, llm.ChatRequest{
 		Model:       r.cfg.LLM.Model,
-		Temperature: 0.2,
+		Temperature: temperature,
+		MaxTokens:   maxTokens,
 		Messages: []llm.Message{
 			{
 				Role:    "system",
@@ -99,7 +101,13 @@ func (r *Runner) memoryManager(sessionDir string) memory.Manager {
 }
 
 func (r *Runner) summaryGenerator() memory.Summarizer {
-	primary := memory.LLMSummarizer{Client: llm.NewLMStudioClient(r.cfg), Model: r.cfg.LLM.Model}
+	temperature, maxTokens := r.llmRoleOptions("summarize", 0.1, 1000)
+	primary := memory.LLMSummarizer{
+		Client:      llm.NewLMStudioClient(r.cfg),
+		Model:       r.cfg.LLM.Model,
+		Temperature: r.float32Ptr(temperature),
+		MaxTokens:   r.intPtr(maxTokens),
+	}
 	fallback := memory.FallbackSummarizer{}
 	return guardedSummarizer{
 		allow:     r.llmAllowed,
@@ -169,6 +177,21 @@ func (r *Runner) recordLLMFailure(err error) {
 
 func (r *Runner) recordLLMSuccess() {
 	r.llmGuard.RecordSuccess()
+}
+
+func (r *Runner) llmRoleOptions(role string, fallbackTemp float32, fallbackMaxTokens int) (float32, int) {
+	return r.cfg.ResolveLLMRoleOptions(role, fallbackTemp, fallbackMaxTokens)
+}
+
+func (r *Runner) float32Ptr(v float32) *float32 {
+	return &v
+}
+
+func (r *Runner) intPtr(v int) *int {
+	if v <= 0 {
+		return nil
+	}
+	return &v
 }
 
 func (r *Runner) handleAssistGoal(goal string, dryRun bool) error {

@@ -21,6 +21,16 @@ func (f fakeClient) Chat(_ context.Context, _ llm.ChatRequest) (llm.ChatResponse
 	return llm.ChatResponse{Content: f.content}, nil
 }
 
+type capturePlannerClient struct {
+	content string
+	reqs    []llm.ChatRequest
+}
+
+func (c *capturePlannerClient) Chat(_ context.Context, req llm.ChatRequest) (llm.ChatResponse, error) {
+	c.reqs = append(c.reqs, req)
+	return llm.ChatResponse{Content: c.content}, nil
+}
+
 func TestFallbackPlannerPlan(t *testing.T) {
 	input := Input{
 		SessionID: "session-1",
@@ -81,5 +91,26 @@ func TestLLMPlannerNextParsesJSONInFence(t *testing.T) {
 	}
 	if len(steps) != 1 || steps[0] != "one" {
 		t.Fatalf("unexpected steps: %v", steps)
+	}
+}
+
+func TestLLMPlannerUsesConfiguredOptions(t *testing.T) {
+	temperature := float32(0.08)
+	maxTokens := 700
+	client := &capturePlannerClient{content: `{"next":["one"]}`}
+	planner := LLMPlanner{
+		Client:      client,
+		Model:       "test-model",
+		Temperature: &temperature,
+		MaxTokens:   &maxTokens,
+	}
+	if _, err := planner.Next(context.Background(), Input{SessionID: "s"}); err != nil {
+		t.Fatalf("Next error: %v", err)
+	}
+	if len(client.reqs) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(client.reqs))
+	}
+	if client.reqs[0].Temperature != temperature || client.reqs[0].MaxTokens != maxTokens {
+		t.Fatalf("unexpected llm options: %+v", client.reqs[0])
 	}
 }

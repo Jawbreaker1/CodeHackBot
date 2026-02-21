@@ -58,6 +58,11 @@ type llmPlannerTaskBudget struct {
 	MaxRuntimeSeconds int `json:"max_runtime_seconds"`
 }
 
+type LLMPlannerOptions struct {
+	Temperature *float32
+	MaxTokens   *int
+}
+
 func SynthesizeTaskGraphWithLLM(
 	ctx context.Context,
 	client llm.Client,
@@ -67,6 +72,30 @@ func SynthesizeTaskGraphWithLLM(
 	constraints []string,
 	hypotheses []Hypothesis,
 	maxParallelism int,
+) ([]TaskSpec, string, error) {
+	return SynthesizeTaskGraphWithLLMWithOptions(
+		ctx,
+		client,
+		model,
+		goal,
+		scope,
+		constraints,
+		hypotheses,
+		maxParallelism,
+		LLMPlannerOptions{},
+	)
+}
+
+func SynthesizeTaskGraphWithLLMWithOptions(
+	ctx context.Context,
+	client llm.Client,
+	model string,
+	goal string,
+	scope Scope,
+	constraints []string,
+	hypotheses []Hypothesis,
+	maxParallelism int,
+	options LLMPlannerOptions,
 ) ([]TaskSpec, string, error) {
 	if client == nil {
 		return nil, "", fmt.Errorf("llm planner client is required")
@@ -90,9 +119,18 @@ func SynthesizeTaskGraphWithLLM(
 		return nil, "", fmt.Errorf("marshal planner payload: %w", err)
 	}
 
+	temperature := float32(0.1)
+	if options.Temperature != nil {
+		temperature = *options.Temperature
+	}
+	maxTokens := 0
+	if options.MaxTokens != nil && *options.MaxTokens > 0 {
+		maxTokens = *options.MaxTokens
+	}
 	resp, err := client.Chat(ctx, llm.ChatRequest{
 		Model:       strings.TrimSpace(model),
-		Temperature: 0.1,
+		Temperature: temperature,
+		MaxTokens:   maxTokens,
 		Messages: []llm.Message{
 			{Role: "system", Content: llmPlannerSystemPrompt},
 			{Role: "user", Content: string(data)},

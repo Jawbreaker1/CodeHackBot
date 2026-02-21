@@ -235,12 +235,14 @@ func (r *Runner) summarizeFromLatestArtifact(goal string) error {
 	prompt.WriteString("Provide: 1) concise summary, 2) known findings, 3) unknown/missing data, 4) next 2-3 concrete steps.")
 
 	client := llm.NewLMStudioClient(r.cfg)
+	temperature, maxTokens := r.llmRoleOptions("summarize", 0.1, 1000)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	stopIndicator := r.startLLMIndicatorIfAllowed("summary")
 	resp, err := client.Chat(ctx, llm.ChatRequest{
 		Model:       r.cfg.LLM.Model,
-		Temperature: 0.2,
+		Temperature: temperature,
+		MaxTokens:   maxTokens,
 		Messages: []llm.Message{
 			{
 				Role:    "system",

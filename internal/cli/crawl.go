@@ -270,13 +270,15 @@ func (r *Runner) maybeSummarizeCrawl(indexPath string, pages int) error {
 	}
 
 	client := llm.NewLMStudioClient(r.cfg)
+	temperature, maxTokens := r.llmRoleOptions("summarize", 0.1, 1000)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	stopIndicator := r.startLLMIndicatorIfAllowed("crawl summarize")
 	defer stopIndicator()
 	resp, err := client.Chat(ctx, llm.ChatRequest{
 		Model:       r.cfg.LLM.Model,
-		Temperature: 0.2,
+		Temperature: temperature,
+		MaxTokens:   maxTokens,
 		Messages: []llm.Message{
 			{Role: "system", Content: "Return a concise, actionable summary. Do not ask the user to paste files; use the provided crawl index."},
 			{Role: "user", Content: prompt.String()},

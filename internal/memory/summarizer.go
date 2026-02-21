@@ -82,8 +82,10 @@ func (c ChainedSummarizer) Summarize(ctx context.Context, input SummaryInput) (S
 }
 
 type LLMSummarizer struct {
-	Client llm.Client
-	Model  string
+	Client      llm.Client
+	Model       string
+	Temperature *float32
+	MaxTokens   *int
 }
 
 func (s LLMSummarizer) Summarize(ctx context.Context, input SummaryInput) (SummaryOutput, error) {
@@ -92,7 +94,9 @@ func (s LLMSummarizer) Summarize(ctx context.Context, input SummaryInput) (Summa
 	}
 	model := strings.TrimSpace(s.Model)
 	req := llm.ChatRequest{
-		Model: model,
+		Model:       model,
+		Temperature: selectFloat32(s.Temperature, 0.2),
+		MaxTokens:   selectInt(s.MaxTokens, 0),
 		Messages: []llm.Message{
 			{
 				Role:    "system",
@@ -103,7 +107,6 @@ func (s LLMSummarizer) Summarize(ctx context.Context, input SummaryInput) (Summa
 				Content: buildPrompt(input),
 			},
 		},
-		Temperature: 0.2,
 	}
 	resp, err := s.Client.Chat(ctx, req)
 	if err != nil {
@@ -169,6 +172,20 @@ func fallbackReason(reason string) string {
 		return "manual"
 	}
 	return trimmed
+}
+
+func selectFloat32(value *float32, fallback float32) float32 {
+	if value == nil {
+		return fallback
+	}
+	return *value
+}
+
+func selectInt(value *int, fallback int) int {
+	if value == nil {
+		return fallback
+	}
+	return *value
 }
 
 var (

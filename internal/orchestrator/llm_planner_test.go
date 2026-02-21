@@ -13,9 +13,11 @@ import (
 type fakePlannerClient struct {
 	content string
 	err     error
+	reqs    []llm.ChatRequest
 }
 
-func (f fakePlannerClient) Chat(_ context.Context, _ llm.ChatRequest) (llm.ChatResponse, error) {
+func (f *fakePlannerClient) Chat(_ context.Context, req llm.ChatRequest) (llm.ChatResponse, error) {
+	f.reqs = append(f.reqs, req)
 	if f.err != nil {
 		return llm.ChatResponse{}, f.err
 	}
@@ -25,7 +27,7 @@ func (f fakePlannerClient) Chat(_ context.Context, _ llm.ChatRequest) (llm.ChatR
 func TestSynthesizeTaskGraphWithLLMParsesTasks(t *testing.T) {
 	t.Parallel()
 
-	client := fakePlannerClient{
+	client := &fakePlannerClient{
 		content: `{
 			"rationale":"fan out recon and validate findings",
 			"tasks":[
@@ -90,7 +92,7 @@ func TestSynthesizeTaskGraphWithLLMParsesTasks(t *testing.T) {
 func TestSynthesizeTaskGraphWithLLMRejectsInvalidTask(t *testing.T) {
 	t.Parallel()
 
-	client := fakePlannerClient{
+	client := &fakePlannerClient{
 		content: `{"tasks":[{"task_id":"t1","goal":"missing required fields"}]}`,
 	}
 	_, _, err := SynthesizeTaskGraphWithLLM(
@@ -111,7 +113,7 @@ func TestSynthesizeTaskGraphWithLLMRejectsInvalidTask(t *testing.T) {
 func TestSynthesizeTaskGraphWithLLMAppliesBudgetFloors(t *testing.T) {
 	t.Parallel()
 
-	client := fakePlannerClient{
+	client := &fakePlannerClient{
 		content: `{
 			"tasks":[
 				{
@@ -211,7 +213,7 @@ func TestParsePlannerMode(t *testing.T) {
 func TestSynthesizeTaskGraphWithLLMAnchorsRouterAndVulnGoal(t *testing.T) {
 	t.Parallel()
 
-	client := fakePlannerClient{
+	client := &fakePlannerClient{
 		content: `{
 			"rationale":"generic recon split",
 			"tasks":[
@@ -286,7 +288,7 @@ func TestSynthesizeTaskGraphWithLLMAnchorsRouterAndVulnGoal(t *testing.T) {
 func TestSynthesizeTaskGraphWithLLMRewritesOutOfScopePlaceholderTargets(t *testing.T) {
 	t.Parallel()
 
-	client := fakePlannerClient{
+	client := &fakePlannerClient{
 		content: `{
 			"rationale":"router focus with placeholder target",
 			"tasks":[
@@ -327,5 +329,57 @@ func TestSynthesizeTaskGraphWithLLMRewritesOutOfScopePlaceholderTargets(t *testi
 	}
 	if got := tasks[0].Targets; len(got) != 1 || got[0] != "192.168.50.0/24" {
 		t.Fatalf("expected placeholder target rewritten to scoped network, got %#v", got)
+	}
+}
+
+func TestSynthesizeTaskGraphWithLLMWithOptionsUsesConfiguredValues(t *testing.T) {
+	t.Parallel()
+
+	temperature := float32(0.02)
+	maxTokens := 444
+	client := &fakePlannerClient{
+		content: `{
+			"rationale":"single task",
+			"tasks":[
+				{
+					"task_id":"task-1",
+					"title":"Recon",
+					"goal":"Collect recon",
+					"targets":["127.0.0.1"],
+					"priority":90,
+					"strategy":"recon_seed",
+					"risk_level":"recon_readonly",
+					"done_when":["done"],
+					"fail_when":["failed"],
+					"expected_artifacts":["recon.log"],
+					"action":{"type":"assist","prompt":"collect recon"},
+					"budget":{"max_steps":8,"max_tool_calls":10,"max_runtime_seconds":120}
+				}
+			]
+		}`,
+	}
+
+	_, _, err := SynthesizeTaskGraphWithLLMWithOptions(
+		context.Background(),
+		client,
+		"model",
+		"goal",
+		Scope{Targets: []string{"127.0.0.1"}},
+		[]string{"local_only"},
+		nil,
+		1,
+		LLMPlannerOptions{
+			Temperature: &temperature,
+			MaxTokens:   &maxTokens,
+		},
+	)
+	if err != nil {
+		t.Fatalf("SynthesizeTaskGraphWithLLMWithOptions: %v", err)
+	}
+	if len(client.reqs) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(client.reqs))
+	}
+	if client.reqs[0].Temperature != temperature || client.reqs[0].MaxTokens != maxTokens {
+		t.Fatalf("unexpected llm options: %+v", client.reqs[0])
 	}
 }

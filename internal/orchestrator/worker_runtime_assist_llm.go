@@ -27,8 +27,17 @@ func buildWorkerAssistant() (string, assist.Assistant, error) {
 		return "", nil, fmt.Errorf("llm model is required (set %s or config llm.model)", workerLLMModelEnv)
 	}
 	client := llm.NewLMStudioClient(cfg)
+	assistTemp, assistTokens := cfg.ResolveLLMRoleOptions("assist", 0.15, 1200)
+	recoveryTemp, recoveryTokens := cfg.ResolveLLMRoleOptions("recovery", 0.1, 900)
 	return model, assist.ChainedAssistant{
-		Primary:  assist.LLMAssistant{Client: client, Model: model},
+		Primary: assist.LLMAssistant{
+			Client:            client,
+			Model:             model,
+			Temperature:       float32Ptr(assistTemp),
+			MaxTokens:         intPtrPositive(assistTokens),
+			RepairTemperature: float32Ptr(recoveryTemp),
+			RepairMaxTokens:   intPtrPositive(recoveryTokens),
+		},
 		Fallback: assist.FallbackAssistant{},
 	}, nil
 }
@@ -134,4 +143,15 @@ func minDuration(a, b time.Duration) time.Duration {
 		return a
 	}
 	return b
+}
+
+func float32Ptr(v float32) *float32 {
+	return &v
+}
+
+func intPtrPositive(v int) *int {
+	if v <= 0 {
+		return nil
+	}
+	return &v
 }

@@ -10,8 +10,10 @@ import (
 )
 
 type LLMPlanner struct {
-	Client llm.Client
-	Model  string
+	Client      llm.Client
+	Model       string
+	Temperature *float32
+	MaxTokens   *int
 }
 
 func (p LLMPlanner) Plan(ctx context.Context, input Input) (string, error) {
@@ -20,7 +22,8 @@ func (p LLMPlanner) Plan(ctx context.Context, input Input) (string, error) {
 	}
 	req := llm.ChatRequest{
 		Model:       strings.TrimSpace(p.Model),
-		Temperature: 0.2,
+		Temperature: selectFloat32(p.Temperature, 0.2),
+		MaxTokens:   selectInt(p.MaxTokens, 0),
 		Messages: []llm.Message{
 			{
 				Role:    "system",
@@ -50,7 +53,8 @@ func (p LLMPlanner) Next(ctx context.Context, input Input) ([]string, error) {
 	}
 	req := llm.ChatRequest{
 		Model:       strings.TrimSpace(p.Model),
-		Temperature: 0.2,
+		Temperature: selectFloat32(p.Temperature, 0.2),
+		MaxTokens:   selectInt(p.MaxTokens, 0),
 		Messages: []llm.Message{
 			{
 				Role:    "system",
@@ -144,4 +148,18 @@ func extractJSON(content string) string {
 		return trimmed[start : end+1]
 	}
 	return trimmed
+}
+
+func selectFloat32(value *float32, fallback float32) float32 {
+	if value == nil {
+		return fallback
+	}
+	return *value
+}
+
+func selectInt(value *int, fallback int) int {
+	if value == nil {
+		return fallback
+	}
+	return *value
 }

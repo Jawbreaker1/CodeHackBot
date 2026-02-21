@@ -93,12 +93,14 @@ func (r *Runner) evaluateGoalFromLatestArtifact(goal string) (goalEvalResult, er
 	prompt.WriteString("\n\nDecide if the goal is already satisfied by this artifact alone.")
 
 	client := llm.NewLMStudioClient(r.cfg)
+	temperature, maxTokens := r.llmRoleOptions("recovery", 0.05, 900)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	stopIndicator := r.startLLMIndicatorIfAllowed("eval")
 	resp, err := client.Chat(ctx, llm.ChatRequest{
 		Model:       r.cfg.LLM.Model,
-		Temperature: 0,
+		Temperature: temperature,
+		MaxTokens:   maxTokens,
 		Messages: []llm.Message{
 			{
 				Role: "system",

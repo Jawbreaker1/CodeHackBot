@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Jawbreaker1/CodeHackBot/internal/config"
 	"github.com/Jawbreaker1/CodeHackBot/internal/llm"
 	"github.com/Jawbreaker1/CodeHackBot/internal/orchestrator"
 )
@@ -367,6 +368,7 @@ func TestBuildGoalLLMPlanUsesLLMSynthesizedGraph(t *testing.T) {
 
 	plan, note, err := buildGoalLLMPlan(
 		context.Background(),
+		config.Config{},
 		fake,
 		"qwen/qwen3-coder-30b",
 		"run-llm-plan",
