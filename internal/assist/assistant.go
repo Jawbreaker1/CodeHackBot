@@ -328,9 +328,24 @@ type LLMAssistant struct {
 	MaxTokens         *int
 	RepairTemperature *float32
 	RepairMaxTokens   *int
+	OnSuggestMeta     func(LLMSuggestMetadata)
+}
+
+type LLMSuggestMetadata struct {
+	Model           string
+	ParseRepairUsed bool
 }
 
 func (a LLMAssistant) Suggest(ctx context.Context, input Input) (Suggestion, error) {
+	meta := LLMSuggestMetadata{
+		Model: strings.TrimSpace(a.Model),
+	}
+	defer func() {
+		if a.OnSuggestMeta != nil {
+			a.OnSuggestMeta(meta)
+		}
+	}()
+
 	if a.Client == nil {
 		return Suggestion{}, fmt.Errorf("llm client missing")
 	}
@@ -357,6 +372,7 @@ func (a LLMAssistant) Suggest(ctx context.Context, input Input) (Suggestion, err
 	if parseErr == nil {
 		return suggestion, nil
 	}
+	meta.ParseRepairUsed = true
 
 	// One strict repair retry improves reliability on models that sometimes
 	// answer in prose or wrap JSON in extra text.

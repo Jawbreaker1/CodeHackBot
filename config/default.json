@@ -5,7 +5,8 @@
     "system_prompt": "prompts/system.md",
     "max_steps": 6,
     "tool_max_fixes": 2,
-    "tool_max_files": 20
+    "tool_max_files": 20,
+    "worker_assist_mode": "degraded"
   },
   "llm": {
     "base_url": "http://192.168.50.212:1234/v1,http://192.168.50.213:1234/v1",

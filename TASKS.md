@@ -364,18 +364,18 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
   - [x] seq monotonicity remains correct under concurrent workers
 
 ## Sprint 29 — Worker Assist Reliability Modes (planned)
-- [ ] Add worker assist modes:
-  - [ ] `strict` (no fallback assistant, fail-fast on LLM failure/parse failure)
-  - [ ] `degraded` (allow fallback assistant)
-- [ ] Emit explicit metadata per assist turn: model, timeout, parse-repair used, fallback used.
-- [ ] Improve loop handling:
-  - [ ] semantic repeat detection (same intent via alias/arg reorder)
-  - [ ] stronger recovery constraints after repeated failures
-- [ ] Add assistant output schema hardening for tool suggestions (`steps`, `tool.files`, `run`).
-- [ ] Tests:
-  - [ ] strict mode fails loudly without silent fallback
-  - [ ] degraded mode keeps progressing and surfaces fallback reason in events
-  - [ ] loop guard catches semantic repeats
+- [x] Add worker assist modes:
+  - [x] `strict` (no fallback assistant, fail-fast on LLM failure/parse failure)
+  - [x] `degraded` (allow fallback assistant)
+- [x] Emit explicit metadata per assist turn: model, timeout, parse-repair used, fallback used.
+- [x] Improve loop handling:
+  - [x] semantic repeat detection (same intent via alias/arg reorder)
+  - [x] stronger recovery constraints after repeated failures
+- [x] Add assistant output schema hardening for tool suggestions (`steps`, `tool.files`, `run`).
+- [x] Tests:
+  - [x] strict mode fails loudly without silent fallback
+  - [x] degraded mode keeps progressing and surfaces fallback reason in events
+  - [x] loop guard catches semantic repeats
 
 ## Sprint 30 — TUI Operator UX Semantics (planned)
 - [ ] Lock command semantics:

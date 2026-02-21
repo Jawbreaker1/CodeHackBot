@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,23 +15,52 @@ import (
 	"github.com/Jawbreaker1/CodeHackBot/internal/llm"
 )
 
-func buildWorkerAssistant() (string, assist.Assistant, error) {
+type workerAssistMode string
+
+const (
+	workerAssistModeStrict   workerAssistMode = "strict"
+	workerAssistModeDegraded workerAssistMode = "degraded"
+)
+
+type workerAssistantTurnMeta struct {
+	Model           string
+	AssistMode      string
+	ParseRepairUsed bool
+	FallbackUsed    bool
+	FallbackReason  string
+}
+
+type workerAssistant interface {
+	Suggest(ctx context.Context, input assist.Input) (assist.Suggestion, workerAssistantTurnMeta, error)
+}
+
+type workerAssistRuntime struct {
+	mode     workerAssistMode
+	model    string
+	primary  assist.LLMAssistant
+	fallback assist.Assistant
+}
+
+func buildWorkerAssistant() (string, string, workerAssistant, error) {
 	cfg, err := loadWorkerLLMConfig()
 	if err != nil {
-		return "", nil, err
+		return "", "", nil, err
 	}
 	model := strings.TrimSpace(cfg.LLM.Model)
 	if model == "" {
 		model = strings.TrimSpace(cfg.Agent.Model)
 	}
 	if model == "" {
-		return "", nil, fmt.Errorf("llm model is required (set %s or config llm.model)", workerLLMModelEnv)
+		return "", "", nil, fmt.Errorf("llm model is required (set %s or config llm.model)", workerLLMModelEnv)
 	}
+	mode := normalizeWorkerAssistMode(cfg.Agent.WorkerAssistMode)
 	client := llm.NewLMStudioClient(cfg)
 	assistTemp, assistTokens := cfg.ResolveLLMRoleOptions("assist", 0.15, 1200)
 	recoveryTemp, recoveryTokens := cfg.ResolveLLMRoleOptions("recovery", 0.1, 900)
-	return model, assist.ChainedAssistant{
-		Primary: assist.LLMAssistant{
+	runtime := &workerAssistRuntime{
+		mode:  mode,
+		model: model,
+		primary: assist.LLMAssistant{
 			Client:            client,
 			Model:             model,
 			Temperature:       float32Ptr(assistTemp),
@@ -38,8 +68,82 @@ func buildWorkerAssistant() (string, assist.Assistant, error) {
 			RepairTemperature: float32Ptr(recoveryTemp),
 			RepairMaxTokens:   intPtrPositive(recoveryTokens),
 		},
-		Fallback: assist.FallbackAssistant{},
-	}, nil
+	}
+	if mode == workerAssistModeDegraded {
+		runtime.fallback = assist.FallbackAssistant{}
+	}
+	return model, string(mode), runtime, nil
+}
+
+func (r *workerAssistRuntime) Suggest(ctx context.Context, input assist.Input) (assist.Suggestion, workerAssistantTurnMeta, error) {
+	meta := workerAssistantTurnMeta{
+		Model:      strings.TrimSpace(r.model),
+		AssistMode: string(r.mode),
+	}
+	parseRepairUsed := false
+	primary := r.primary
+	primary.OnSuggestMeta = func(primaryMeta assist.LLMSuggestMetadata) {
+		parseRepairUsed = primaryMeta.ParseRepairUsed
+		if model := strings.TrimSpace(primaryMeta.Model); model != "" {
+			meta.Model = model
+		}
+	}
+	suggestion, primaryErr := primary.Suggest(ctx, input)
+	meta.ParseRepairUsed = parseRepairUsed
+	if primaryErr == nil && strings.TrimSpace(suggestion.Type) != "" {
+		return suggestion, meta, nil
+	}
+	if r.mode == workerAssistModeStrict || r.fallback == nil {
+		if primaryErr != nil {
+			return assist.Suggestion{}, meta, primaryErr
+		}
+		return assist.Suggestion{}, meta, fmt.Errorf("assistant returned empty suggestion type")
+	}
+
+	meta.FallbackUsed = true
+	if primaryErr != nil {
+		meta.FallbackReason = classifyAssistFallbackReason(primaryErr)
+	} else {
+		meta.FallbackReason = "empty_primary_suggestion"
+	}
+	fallbackSuggestion, fallbackErr := r.fallback.Suggest(ctx, input)
+	if fallbackErr != nil {
+		if primaryErr != nil {
+			return assist.Suggestion{}, meta, fmt.Errorf("primary suggestion failed: %w; fallback failed: %v", primaryErr, fallbackErr)
+		}
+		return assist.Suggestion{}, meta, fallbackErr
+	}
+	if strings.TrimSpace(fallbackSuggestion.Type) == "" {
+		return assist.Suggestion{}, meta, fmt.Errorf("fallback assistant returned empty suggestion type")
+	}
+	return fallbackSuggestion, meta, nil
+}
+
+func classifyAssistFallbackReason(err error) string {
+	if err == nil {
+		return ""
+	}
+	var parseErr assist.SuggestionParseError
+	if errors.As(err, &parseErr) {
+		return "parse_failure"
+	}
+	lower := strings.ToLower(err.Error())
+	if strings.Contains(lower, "deadline exceeded") || strings.Contains(lower, "timeout") {
+		return "timeout"
+	}
+	return "primary_error"
+}
+
+func normalizeWorkerAssistMode(raw string) workerAssistMode {
+	mode := strings.ToLower(strings.TrimSpace(raw))
+	switch mode {
+	case string(workerAssistModeStrict):
+		return workerAssistModeStrict
+	case "", string(workerAssistModeDegraded):
+		return workerAssistModeDegraded
+	default:
+		return workerAssistModeDegraded
+	}
 }
 
 func loadWorkerLLMConfig() (config.Config, error) {
@@ -80,6 +184,9 @@ func loadWorkerLLMConfig() (config.Config, error) {
 		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
 			loaded.LLM.TimeoutSeconds = parsed
 		}
+	}
+	if v := strings.TrimSpace(os.Getenv(workerAssistModeEnv)); v != "" {
+		loaded.Agent.WorkerAssistMode = v
 	}
 	return loaded, nil
 }

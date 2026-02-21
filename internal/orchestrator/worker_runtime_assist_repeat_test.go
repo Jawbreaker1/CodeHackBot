@@ -29,3 +29,13 @@ func TestTrackAssistActionStreakEmptyActionClearsState(t *testing.T) {
 		t.Fatalf("expected empty action to clear streak, got key=%q streak=%d", key, streak)
 	}
 }
+
+func TestBuildAssistActionKeyCanonicalizesAliasAndArgOrder(t *testing.T) {
+	t.Parallel()
+
+	keyA := buildAssistActionKey("ls", []string{"-la", "."})
+	keyB := buildAssistActionKey("list_dir", []string{".", "-la"})
+	if keyA != keyB {
+		t.Fatalf("expected semantic key match for alias/reordered args, got %q vs %q", keyA, keyB)
+	}
+}
