@@ -39,6 +39,7 @@ const (
 	WorkerFailurePolicyInvalid      = "policy_invalid"
 	WorkerFailureBootstrapFailed    = "worker_bootstrap_failed"
 	WorkerFailureAssistUnavailable  = "assist_unavailable"
+	WorkerFailureAssistParseFailure = "assist_parse_failure"
 	WorkerFailureAssistTimeout      = "assist_timeout"
 	WorkerFailureAssistNeedsInput   = "assist_needs_input"
 	WorkerFailureAssistNoAction     = "assist_no_action"
@@ -222,7 +223,7 @@ func RunWorkerTask(cfg WorkerRunConfig) error {
 	defer cancel()
 
 	if action.Type == "assist" {
-		return runWorkerAssistTask(ctx, manager, cfg, task, action, scopePolicy, workDir)
+		return runWorkerAssistTask(ctx, manager, cfg, task, action, scopePolicy, plan.Scope, workDir)
 	}
 
 	_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskProgress, map[string]any{

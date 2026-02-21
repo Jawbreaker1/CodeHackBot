@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -89,8 +90,8 @@ func TestRunWorkerTaskAssistStrictModeFailsWithoutFallback(t *testing.T) {
 	if len(failEvent.Payload) > 0 {
 		_ = json.Unmarshal(failEvent.Payload, &payload)
 	}
-	if got, _ := payload["reason"].(string); got != WorkerFailureAssistUnavailable {
-		t.Fatalf("expected %s reason, got %q", WorkerFailureAssistUnavailable, got)
+	if got, _ := payload["reason"].(string); got != WorkerFailureAssistParseFailure {
+		t.Fatalf("expected %s reason, got %q", WorkerFailureAssistParseFailure, got)
 	}
 }
 
@@ -331,6 +332,86 @@ func TestRunWorkerTaskAssistLoopGuardDetectsSemanticRepeats(t *testing.T) {
 	}
 	if got, _ := payload["reason"].(string); got != WorkerFailureAssistLoopDetected {
 		t.Fatalf("expected %s reason, got %q", WorkerFailureAssistLoopDetected, got)
+	}
+}
+
+func TestRunWorkerTaskAssistPromptIncludesFullRunScope(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-worker-task-assist-scope-prompt"
+	taskID := "t1"
+	workerID := "worker-t1-a1"
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	writeWorkerPlan(t, base, runID, Scope{
+		Networks:    []string{"192.168.50.0/24"},
+		Targets:     []string{"corp.internal"},
+		DenyTargets: []string{"192.168.50.99"},
+	})
+	writeAssistTask(t, base, runID, TaskSpec{
+		TaskID:            taskID,
+		Goal:              "verify assist scope prompt",
+		Targets:           []string{"192.168.50.10"},
+		DoneWhen:          []string{"task complete"},
+		FailWhen:          []string{"task failed"},
+		ExpectedArtifacts: []string{"assist logs"},
+		RiskLevel:         string(RiskReconReadonly),
+		Action: TaskAction{
+			Type:   "assist",
+			Prompt: "Summarize scope and complete.",
+		},
+		Budget: TaskBudget{
+			MaxSteps:     2,
+			MaxToolCalls: 2,
+			MaxRuntime:   10 * time.Second,
+		},
+	})
+
+	seenScopePrompt := ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.NotFound(w, r)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		payload := struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}{}
+		_ = json.Unmarshal(body, &payload)
+		for _, msg := range payload.Messages {
+			if msg.Role == "user" {
+				seenScopePrompt = msg.Content
+				break
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"complete\",\"final\":\"ok\"}"}}]}`))
+	}))
+	defer server.Close()
+
+	t.Setenv(workerConfigPathEnv, "")
+	t.Setenv(workerLLMBaseURLEnv, server.URL)
+	t.Setenv(workerLLMModelEnv, "test-model")
+	t.Setenv(workerLLMTimeoutSeconds, "10")
+	t.Setenv(workerAssistModeEnv, "strict")
+
+	if err := RunWorkerTask(WorkerRunConfig{
+		SessionsDir: base,
+		RunID:       runID,
+		TaskID:      taskID,
+		WorkerID:    workerID,
+		Attempt:     1,
+	}); err != nil {
+		t.Fatalf("RunWorkerTask assist scope prompt: %v", err)
+	}
+	if !strings.Contains(seenScopePrompt, "Scope: 192.168.50.0/24, corp.internal, deny:192.168.50.99") {
+		t.Fatalf("expected full run scope in prompt, got: %q", seenScopePrompt)
+	}
+	if !strings.Contains(seenScopePrompt, "Targets: 192.168.50.10") {
+		t.Fatalf("expected task targets in prompt, got: %q", seenScopePrompt)
 	}
 }
 

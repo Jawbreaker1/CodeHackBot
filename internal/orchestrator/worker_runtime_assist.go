@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -41,7 +42,7 @@ type workerToolResult struct {
 	runErr  error
 }
 
-func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunConfig, task TaskSpec, action TaskAction, scopePolicy *ScopePolicy, workDir string) error {
+func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunConfig, task TaskSpec, action TaskAction, scopePolicy *ScopePolicy, runScope Scope, workDir string) error {
 	assistantModel, assistMode, assistant, err := buildWorkerAssistant()
 	if err != nil {
 		_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureAssistUnavailable, nil)
@@ -81,6 +82,7 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 	loopBlocks := 0
 	questionLoops := 0
 	recoveryTransitions := 0
+	promptScope := buildAssistPromptScope(runScope, task.Targets)
 
 	assistTurnMetadata := func(turnMeta workerAssistantTurnMeta, callTimeout time.Duration, remainingBudget time.Duration) map[string]any {
 		model := strings.TrimSpace(turnMeta.Model)
@@ -167,7 +169,7 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 		}
 		suggestion, turnMeta, suggestErr := assistant.Suggest(suggestCtx, assist.Input{
 			SessionID:   cfg.RunID,
-			Scope:       task.Targets,
+			Scope:       promptScope,
 			Targets:     task.Targets,
 			Goal:        goal,
 			Summary:     fmt.Sprintf("Task %s attempt %d (%s)", task.TaskID, cfg.Attempt, assistantModel),
@@ -183,6 +185,11 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			failureReason := WorkerFailureAssistUnavailable
 			if isAssistTimeoutError(suggestErr, suggestCtx.Err(), ctx.Err()) {
 				failureReason = WorkerFailureAssistTimeout
+			} else {
+				var parseErr assist.SuggestionParseError
+				if errors.As(suggestErr, &parseErr) {
+					failureReason = WorkerFailureAssistParseFailure
+				}
 			}
 			details := map[string]any{
 				"step":                     actionSteps,
@@ -656,4 +663,40 @@ func trackAssistActionStreak(lastKey string, lastStreak int, currentKey string) 
 		return currentKey, lastStreak + 1
 	}
 	return currentKey, 1
+}
+
+func buildAssistPromptScope(runScope Scope, taskTargets []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(runScope.Networks)+len(runScope.Targets)+len(runScope.DenyTargets))
+	add := func(value string) {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			return
+		}
+		if _, ok := seen[trimmed]; ok {
+			return
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	for _, network := range runScope.Networks {
+		add(network)
+	}
+	for _, target := range runScope.Targets {
+		add(target)
+	}
+	for _, deny := range runScope.DenyTargets {
+		trimmed := strings.TrimSpace(deny)
+		if trimmed == "" {
+			continue
+		}
+		add("deny:" + trimmed)
+	}
+	if len(out) > 0 {
+		return out
+	}
+	for _, target := range taskTargets {
+		add(target)
+	}
+	return out
 }
