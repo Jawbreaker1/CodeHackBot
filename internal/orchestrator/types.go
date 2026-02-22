@@ -49,6 +49,8 @@ type PlanMetadata struct {
 	NormalizedGoal    string       `json:"normalized_goal,omitempty"`
 	PlannerMode       string       `json:"planner_mode,omitempty"`
 	PlannerVersion    string       `json:"planner_version,omitempty"`
+	PlannerModel      string       `json:"planner_model,omitempty"`
+	PlannerPlaybooks  []string     `json:"planner_playbooks,omitempty"`
 	PlannerPromptHash string       `json:"planner_prompt_hash,omitempty"`
 	PlannerDecision   string       `json:"planner_decision,omitempty"`
 	PlannerRationale  string       `json:"planner_rationale,omitempty"`

@@ -20,6 +20,7 @@ const llmPlannerSystemPrompt = "You are the BirdHackBot Orchestrator planner. Re
 	"for broad CIDR targets, prefer discovery-first fan-out (discovery -> host subsets -> validation/summarize) instead of one monolithic scan; " +
 	"only keep work serialized when there is a clear dependency/safety reason, and state that reason in rationale; " +
 	"ground tasks in the operator goal: preserve goal-specific entities (for example router/gateway/firewall/webapp) and include at least one explicit task focused on that entity; " +
+	"when input.playbooks is provided, use it as bounded procedural guidance and adapt tasks to those playbooks without copying blindly; " +
 	"if the goal asks for vulnerabilities, include a dedicated vulnerability-mapping step tied to discovered versions/configuration."
 
 type llmPlannerResponse struct {
@@ -61,6 +62,7 @@ type llmPlannerTaskBudget struct {
 type LLMPlannerOptions struct {
 	Temperature *float32
 	MaxTokens   *int
+	Playbooks   string
 }
 
 func SynthesizeTaskGraphWithLLM(
@@ -113,6 +115,9 @@ func SynthesizeTaskGraphWithLLMWithOptions(
 		"constraints":     constraints,
 		"max_parallelism": maxParallelism,
 		"hypotheses":      hypotheses,
+	}
+	if trimmed := strings.TrimSpace(options.Playbooks); trimmed != "" {
+		payload["playbooks"] = trimmed
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {

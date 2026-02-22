@@ -242,7 +242,6 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 
 		success := compactStringFlags(successCriteria)
 		stop := compactStringFlags(stopCriteria)
-		promptHash := plannerPromptHash(goal, plannerMode, scope, goalConstraints, success, stop, maxParallelism)
 		hypothesisLimit := 5
 		plan, plannerBuildNote, err := buildGoalPlanFromMode(
 			context.Background(),
@@ -291,7 +290,16 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 		}
 		plan.Metadata.RunPhase = orchestrator.RunPhaseReview
 		plan.Metadata.PlannerVersion = plannerVersion
-		plan.Metadata.PlannerPromptHash = promptHash
+		plan.Metadata.PlannerPromptHash = plannerPromptHash(
+			goal,
+			plan.Metadata.PlannerMode,
+			scope,
+			goalConstraints,
+			success,
+			stop,
+			maxParallelism,
+			plan.Metadata.PlannerPlaybooks,
+		)
 		plan.Metadata.PlannerDecision = decision
 		plan.Metadata.PlannerRationale = mergePlannerRationale(planReviewRationale, plannerBuildNote)
 		plan.Metadata.RegenerationCount = 0

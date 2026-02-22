@@ -319,12 +319,12 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
 ## Sprint 25 — LLM Planner Mode + Playbook Grounding (planned)
 - [x] Add optional planner mode `--planner static|llm|auto` (default static for deterministic safety).
 - [x] Implement LLM-based hypothesis + task-graph synthesis with strict JSON schema validation.
-- [ ] Ground planner prompts in relevant playbooks (bounded read) so plans reuse repo guidance.
+- [x] Ground planner prompts in relevant playbooks (bounded read) so plans reuse repo guidance.
 - [x] Add deterministic fallback when LLM planner is unavailable or returns invalid plan.
-- [ ] Persist planner provenance (`mode`, model, prompt hash, playbooks used) in run metadata.
-- [ ] Tests:
+- [x] Persist planner provenance (`mode`, model, prompt hash, playbooks used) in run metadata.
+- [x] Tests:
   - [x] unit tests for planner validation/fallback behavior
-  - [ ] integration test for `run --planner llm` with mocked LLM output
+  - [x] integration test for `run --planner llm` with mocked LLM output
   - [x] regression test that deterministic planner path remains unchanged
 
 ## Sprint 26 — Completion Contract Enforcement (planned)

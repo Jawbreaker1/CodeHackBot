@@ -16,6 +16,12 @@ import (
 	"github.com/Jawbreaker1/CodeHackBot/internal/config"
 	"github.com/Jawbreaker1/CodeHackBot/internal/llm"
 	"github.com/Jawbreaker1/CodeHackBot/internal/orchestrator"
+	"github.com/Jawbreaker1/CodeHackBot/internal/playbook"
+)
+
+const (
+	defaultPlannerPlaybookMax   = 2
+	defaultPlannerPlaybookLines = 60
 )
 
 func normalizeGoal(raw string) string {
@@ -79,7 +85,8 @@ func buildGoalPlanFromMode(
 	if plannerMode == "llm" || plannerMode == "auto" {
 		cfg, client, model, llmCfgErr := resolvePlannerLLMClient(workerConfigPath)
 		if llmCfgErr == nil && client != nil && strings.TrimSpace(model) != "" {
-			plan, llmRationale, err := buildGoalLLMPlan(ctx, cfg, client, model, runID, goal, scope, constraints, successCriteria, stopCriteria, maxParallelism, hypothesisLimit, now)
+			playbookHints, playbookNames := plannerPlaybookHints(goal, constraints, cfg)
+			plan, llmRationale, err := buildGoalLLMPlan(ctx, cfg, client, model, runID, goal, scope, constraints, successCriteria, stopCriteria, maxParallelism, hypothesisLimit, playbookHints, playbookNames, now)
 			if err == nil {
 				return plan, llmRationale, nil
 			}
@@ -119,6 +126,8 @@ func buildGoalLLMPlan(
 	scope orchestrator.Scope,
 	constraints, successCriteria, stopCriteria []string,
 	maxParallelism, hypothesisLimit int,
+	playbookHints string,
+	playbookNames []string,
 	now time.Time,
 ) (orchestrator.RunPlan, string, error) {
 	normalizedGoal := normalizeGoal(goal)
@@ -136,6 +145,7 @@ func buildGoalLLMPlan(
 		orchestrator.LLMPlannerOptions{
 			Temperature: float32Ptr(temperature),
 			MaxTokens:   intPtrPositive(maxTokens),
+			Playbooks:   strings.TrimSpace(playbookHints),
 		},
 	)
 	if err != nil {
@@ -159,12 +169,14 @@ func buildGoalLLMPlan(
 		MaxParallelism:  maxParallelism,
 		Tasks:           tasks,
 		Metadata: orchestrator.PlanMetadata{
-			CreatedAt:      now.UTC(),
-			RunPhase:       orchestrator.RunPhaseReview,
-			Goal:           strings.TrimSpace(goal),
-			NormalizedGoal: normalizedGoal,
-			PlannerMode:    plannerModeLLMV1,
-			Hypotheses:     hypotheses,
+			CreatedAt:        now.UTC(),
+			RunPhase:         orchestrator.RunPhaseReview,
+			Goal:             strings.TrimSpace(goal),
+			NormalizedGoal:   normalizedGoal,
+			PlannerMode:      plannerModeLLMV1,
+			PlannerModel:     strings.TrimSpace(model),
+			PlannerPlaybooks: compactStrings(playbookNames),
+			Hypotheses:       hypotheses,
 		},
 	}
 	if err := orchestrator.ValidateSynthesizedPlan(plan); err != nil {
@@ -306,16 +318,17 @@ func mergePlannerRationale(reviewRationale, plannerNote string) string {
 	return strings.Join(parts, " | ")
 }
 
-func plannerPromptHash(goal, plannerMode string, scope orchestrator.Scope, constraints, successCriteria, stopCriteria []string, maxParallelism int) string {
+func plannerPromptHash(goal, plannerMode string, scope orchestrator.Scope, constraints, successCriteria, stopCriteria []string, maxParallelism int, playbooks []string) string {
 	payload := map[string]any{
-		"version":          plannerVersion,
-		"planner_mode":     strings.TrimSpace(plannerMode),
-		"goal":             normalizeGoal(goal),
-		"scope":            scope,
-		"constraints":      constraints,
-		"success_criteria": successCriteria,
-		"stop_criteria":    stopCriteria,
-		"max_parallelism":  maxParallelism,
+		"version":           plannerVersion,
+		"planner_mode":      strings.TrimSpace(plannerMode),
+		"goal":              normalizeGoal(goal),
+		"scope":             scope,
+		"constraints":       constraints,
+		"success_criteria":  successCriteria,
+		"stop_criteria":     stopCriteria,
+		"max_parallelism":   maxParallelism,
+		"planner_playbooks": compactStrings(playbooks),
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -367,7 +380,10 @@ func persistPlanReview(sessionsDir string, plan orchestrator.RunPlan, planFilena
 	review := map[string]any{
 		"run_id":              plan.RunID,
 		"run_phase":           plan.Metadata.RunPhase,
+		"planner_mode":        plan.Metadata.PlannerMode,
 		"planner_version":     plan.Metadata.PlannerVersion,
+		"planner_model":       plan.Metadata.PlannerModel,
+		"planner_playbooks":   plan.Metadata.PlannerPlaybooks,
 		"planner_prompt_hash": plan.Metadata.PlannerPromptHash,
 		"decision":            plan.Metadata.PlannerDecision,
 		"rationale":           plan.Metadata.PlannerRationale,
@@ -389,6 +405,93 @@ func minInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func plannerPlaybookHints(goal string, constraints []string, cfg config.Config) (string, []string) {
+	query := plannerPlaybookQuery(goal, constraints)
+	if query == "" {
+		return "", nil
+	}
+	maxEntries, maxLines := plannerPlaybookBounds(cfg)
+	if maxEntries <= 0 || maxLines <= 0 {
+		return "", nil
+	}
+	entries, err := playbook.Load(plannerPlaybookDir())
+	if err != nil || len(entries) == 0 {
+		return "", nil
+	}
+	matches := playbook.Match(entries, query, maxEntries)
+	if len(matches) == 0 {
+		return "", nil
+	}
+	names := make([]string, 0, len(matches))
+	for _, match := range matches {
+		names = append(names, match.Name)
+	}
+	return strings.TrimSpace(playbook.Render(matches, maxLines)), compactStrings(names)
+}
+
+func plannerPlaybookQuery(goal string, constraints []string) string {
+	parts := make([]string, 0, len(constraints)+1)
+	if trimmed := normalizeGoal(goal); trimmed != "" {
+		parts = append(parts, trimmed)
+	}
+	for _, constraint := range constraints {
+		if trimmed := strings.TrimSpace(constraint); trimmed != "" {
+			parts = append(parts, trimmed)
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+func plannerPlaybookBounds(cfg config.Config) (int, int) {
+	maxEntries := cfg.Context.PlaybookMax
+	if maxEntries <= 0 {
+		maxEntries = defaultPlannerPlaybookMax
+	}
+	maxLines := cfg.Context.PlaybookLines
+	if maxLines <= 0 {
+		maxLines = defaultPlannerPlaybookLines
+	}
+	return maxEntries, maxLines
+}
+
+func plannerPlaybookDir() string {
+	wd, err := os.Getwd()
+	if err != nil || strings.TrimSpace(wd) == "" {
+		return filepath.Join("docs", "playbooks")
+	}
+	current := wd
+	for {
+		candidate := filepath.Join(current, "docs", "playbooks")
+		info, statErr := os.Stat(candidate)
+		if statErr == nil && info.IsDir() {
+			return candidate
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			break
+		}
+		current = parent
+	}
+	return filepath.Join("docs", "playbooks")
+}
+
+func compactStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
 }
 
 func detectWorkerConfigPath() string {

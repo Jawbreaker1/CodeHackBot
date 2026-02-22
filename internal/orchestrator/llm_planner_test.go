@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -381,5 +382,59 @@ func TestSynthesizeTaskGraphWithLLMWithOptionsUsesConfiguredValues(t *testing.T)
 	}
 	if client.reqs[0].Temperature != temperature || client.reqs[0].MaxTokens != maxTokens {
 		t.Fatalf("unexpected llm options: %+v", client.reqs[0])
+	}
+}
+
+func TestSynthesizeTaskGraphWithLLMWithOptionsIncludesPlaybooksInPayload(t *testing.T) {
+	t.Parallel()
+
+	client := &fakePlannerClient{
+		content: `{
+			"rationale":"single task",
+			"tasks":[
+				{
+					"task_id":"task-1",
+					"title":"Recon",
+					"goal":"Collect recon",
+					"targets":["127.0.0.1"],
+					"priority":90,
+					"strategy":"recon_seed",
+					"risk_level":"recon_readonly",
+					"done_when":["done"],
+					"fail_when":["failed"],
+					"expected_artifacts":["recon.log"],
+					"action":{"type":"assist","prompt":"collect recon"},
+					"budget":{"max_steps":8,"max_tool_calls":10,"max_runtime_seconds":120}
+				}
+			]
+		}`,
+	}
+
+	_, _, err := SynthesizeTaskGraphWithLLMWithOptions(
+		context.Background(),
+		client,
+		"model",
+		"goal",
+		Scope{Targets: []string{"127.0.0.1"}},
+		[]string{"local_only"},
+		nil,
+		1,
+		LLMPlannerOptions{
+			Playbooks: "- Network Scan (network-scan.md)\nStep 1",
+		},
+	)
+	if err != nil {
+		t.Fatalf("SynthesizeTaskGraphWithLLMWithOptions: %v", err)
+	}
+	if len(client.reqs) != 1 || len(client.reqs[0].Messages) < 2 {
+		t.Fatalf("expected one llm request with user payload")
+	}
+	payload := map[string]any{}
+	if err := json.Unmarshal([]byte(client.reqs[0].Messages[1].Content), &payload); err != nil {
+		t.Fatalf("unmarshal llm payload: %v", err)
+	}
+	playbooks, _ := payload["playbooks"].(string)
+	if got := strings.TrimSpace(playbooks); got == "" {
+		t.Fatalf("expected playbooks in llm payload")
 	}
 }

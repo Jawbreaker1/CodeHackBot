@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -379,6 +382,8 @@ func TestBuildGoalLLMPlanUsesLLMSynthesizedGraph(t *testing.T) {
 		nil,
 		2,
 		5,
+		"",
+		nil,
 		time.Now().UTC(),
 	)
 	if err != nil {
@@ -395,6 +400,97 @@ func TestBuildGoalLLMPlanUsesLLMSynthesizedGraph(t *testing.T) {
 	}
 	if strings.TrimSpace(note) == "" {
 		t.Fatalf("expected llm planner rationale note")
+	}
+}
+
+func TestRunPlannerLLMModeWithMockedOutputPersistsProvenance(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-cli-llm-integration"
+
+	var (
+		mu          sync.Mutex
+		userPayload string
+	)
+	server := newHTTPTestServerOrSkip(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+		req := llm.ChatRequest{}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		for _, message := range req.Messages {
+			if strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+				mu.Lock()
+				userPayload = message.Content
+				mu.Unlock()
+				break
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"rationale\":\"llm plan generated\",\"tasks\":[{\"task_id\":\"task-llm-recon\",\"title\":\"LLM Recon\",\"goal\":\"Collect passive recon evidence\",\"targets\":[\"192.168.50.0/24\"],\"depends_on\":[],\"priority\":90,\"strategy\":\"recon_seed\",\"risk_level\":\"recon_readonly\",\"done_when\":[\"recon_done\"],\"fail_when\":[\"recon_failed\"],\"expected_artifacts\":[\"recon.log\"],\"action\":{\"type\":\"assist\",\"prompt\":\"run passive recon\"},\"budget\":{\"max_steps\":8,\"max_tool_calls\":12,\"max_runtime_seconds\":240}}]}"}}]}`))
+	}))
+	defer server.Close()
+
+	t.Setenv(plannerLLMBaseURLEnv, server.URL)
+	t.Setenv(plannerLLMModelEnv, "mock-planner-model")
+	t.Setenv(plannerLLMAPIKeyEnv, "")
+
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	args := []string{
+		"run",
+		"--sessions-dir", base,
+		"--run", runID,
+		"--goal", "perform a network scan and map host exposure",
+		"--scope-network", "192.168.50.0/24",
+		"--constraint", "internal_lab_only",
+		"--planner", "llm",
+		"--plan-review", "reject",
+	}
+	if code := run(args, &out, &errOut); code != 0 {
+		t.Fatalf("run llm planner failed: code=%d err=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "plan rejected:") {
+		t.Fatalf("expected rejected-plan output, got %q", out.String())
+	}
+
+	planPath := filepath.Join(base, runID, "orchestrator", "plan", "plan.review.json")
+	data, err := os.ReadFile(planPath)
+	if err != nil {
+		t.Fatalf("read plan.review.json: %v", err)
+	}
+	plan := orchestrator.RunPlan{}
+	if err := json.Unmarshal(data, &plan); err != nil {
+		t.Fatalf("unmarshal plan.review.json: %v", err)
+	}
+	if plan.Metadata.PlannerMode != plannerModeLLMV1 {
+		t.Fatalf("unexpected planner mode: %q", plan.Metadata.PlannerMode)
+	}
+	if plan.Metadata.PlannerModel != "mock-planner-model" {
+		t.Fatalf("unexpected planner model: %q", plan.Metadata.PlannerModel)
+	}
+	if len(plan.Metadata.PlannerPlaybooks) == 0 {
+		t.Fatalf("expected planner playbooks in metadata")
+	}
+	if strings.TrimSpace(plan.Metadata.PlannerPromptHash) == "" {
+		t.Fatalf("expected planner prompt hash in metadata")
+	}
+
+	mu.Lock()
+	captured := userPayload
+	mu.Unlock()
+	if strings.TrimSpace(captured) == "" {
+		t.Fatalf("expected user payload to be sent to llm")
+	}
+	payload := map[string]any{}
+	if err := json.Unmarshal([]byte(captured), &payload); err != nil {
+		t.Fatalf("unmarshal planner payload: %v", err)
+	}
+	if strings.TrimSpace(payloadString(payload["playbooks"])) == "" {
+		t.Fatalf("expected playbooks grounding in llm payload, got %v", payload["playbooks"])
 	}
 }
 
@@ -1517,6 +1613,23 @@ func buildBirdHackBotBinary(t *testing.T, repoRoot, outDir string) string {
 		t.Fatalf("build birdhackbot: %v\n%s", err, string(output))
 	}
 	return binPath
+}
+
+func newHTTPTestServerOrSkip(t *testing.T, handler http.Handler) *httptest.Server {
+	t.Helper()
+	var server *httptest.Server
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				t.Skipf("skipping: local listener unavailable in this environment: %v", recovered)
+			}
+		}()
+		server = httptest.NewServer(handler)
+	}()
+	if server == nil {
+		t.Skip("skipping: local listener unavailable in this environment")
+	}
+	return server
 }
 
 func waitForApprovalID(t *testing.T, manager *orchestrator.Manager, runID string, timeout time.Duration) string {

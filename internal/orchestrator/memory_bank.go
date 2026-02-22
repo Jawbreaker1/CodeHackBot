@@ -21,7 +21,10 @@ type MemoryContext struct {
 	RunID              string    `json:"run_id"`
 	Goal               string    `json:"goal,omitempty"`
 	NormalizedGoal     string    `json:"normalized_goal,omitempty"`
+	PlannerMode        string    `json:"planner_mode,omitempty"`
 	PlannerVersion     string    `json:"planner_version,omitempty"`
+	PlannerModel       string    `json:"planner_model,omitempty"`
+	PlannerPlaybooks   []string  `json:"planner_playbooks,omitempty"`
 	PlannerPromptHash  string    `json:"planner_prompt_hash,omitempty"`
 	PlannerDecision    string    `json:"planner_decision,omitempty"`
 	PlannerRationale   string    `json:"planner_rationale,omitempty"`
@@ -53,7 +56,10 @@ func (m *Manager) InitializeMemoryBank(runID string, plan RunPlan) error {
 		RunID:              runID,
 		Goal:               plan.Metadata.Goal,
 		NormalizedGoal:     plan.Metadata.NormalizedGoal,
+		PlannerMode:        plan.Metadata.PlannerMode,
 		PlannerVersion:     plan.Metadata.PlannerVersion,
+		PlannerModel:       plan.Metadata.PlannerModel,
+		PlannerPlaybooks:   append([]string{}, plan.Metadata.PlannerPlaybooks...),
 		PlannerPromptHash:  plan.Metadata.PlannerPromptHash,
 		PlannerDecision:    plan.Metadata.PlannerDecision,
 		PlannerRationale:   plan.Metadata.PlannerRationale,
@@ -109,7 +115,10 @@ func (m *Manager) RefreshMemoryBank(runID string) error {
 		RunID:              runID,
 		Goal:               plan.Metadata.Goal,
 		NormalizedGoal:     plan.Metadata.NormalizedGoal,
+		PlannerMode:        plan.Metadata.PlannerMode,
 		PlannerVersion:     plan.Metadata.PlannerVersion,
+		PlannerModel:       plan.Metadata.PlannerModel,
+		PlannerPlaybooks:   append([]string{}, plan.Metadata.PlannerPlaybooks...),
 		PlannerPromptHash:  plan.Metadata.PlannerPromptHash,
 		PlannerDecision:    plan.Metadata.PlannerDecision,
 		PlannerRationale:   plan.Metadata.PlannerRationale,
@@ -195,7 +204,13 @@ func renderPlanSummaryMD(ctx MemoryContext) string {
 	b.WriteString("# Plan Summary\n\n")
 	b.WriteString(fmt.Sprintf("- Run: `%s`\n", ctx.RunID))
 	b.WriteString(fmt.Sprintf("- Goal: %s\n", ctx.NormalizedGoal))
-	b.WriteString(fmt.Sprintf("- Planner: %s\n", ctx.PlannerVersion))
+	b.WriteString(fmt.Sprintf("- Planner: %s (%s)\n", ctx.PlannerVersion, ctx.PlannerMode))
+	if strings.TrimSpace(ctx.PlannerModel) != "" {
+		b.WriteString(fmt.Sprintf("- Planner model: %s\n", ctx.PlannerModel))
+	}
+	if len(ctx.PlannerPlaybooks) > 0 {
+		b.WriteString(fmt.Sprintf("- Planner playbooks: %s\n", strings.Join(ctx.PlannerPlaybooks, ", ")))
+	}
 	b.WriteString(fmt.Sprintf("- Prompt hash: `%s`\n", ctx.PlannerPromptHash))
 	b.WriteString(fmt.Sprintf("- Decision: %s\n", ctx.PlannerDecision))
 	if strings.TrimSpace(ctx.PlannerRationale) != "" {

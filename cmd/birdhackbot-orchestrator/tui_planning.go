@@ -85,7 +85,7 @@ func planningInstructionToDraft(manager *orchestrator.Manager, runID, instructio
 		}
 		nextPlan.Metadata.RunPhase = orchestrator.RunPhaseReview
 		nextPlan.Metadata.PlannerVersion = plannerVersion
-		nextPlan.Metadata.PlannerPromptHash = plannerPromptHash(trimmed, plannerMode, scope, constraints, nextPlan.SuccessCriteria, nextPlan.StopCriteria, maxParallelism)
+		nextPlan.Metadata.PlannerPromptHash = plannerPromptHash(trimmed, nextPlan.Metadata.PlannerMode, scope, constraints, nextPlan.SuccessCriteria, nextPlan.StopCriteria, maxParallelism, nextPlan.Metadata.PlannerPlaybooks)
 		nextPlan.Metadata.PlannerDecision = "draft"
 		nextPlan.Metadata.PlannerRationale = mergePlannerRationale("operator instruction: "+trimmed, plannerBuildNote)
 		return nextPlan, nil
@@ -577,6 +577,7 @@ func writeFinalApprovedProvenance(manager *orchestrator.Manager, runID string, p
 		"task_count":          len(plan.Tasks),
 		"planner_mode":        plan.Metadata.PlannerMode,
 		"planner_version":     plan.Metadata.PlannerVersion,
+		"planner_playbooks":   plan.Metadata.PlannerPlaybooks,
 		"planner_prompt_hash": plan.Metadata.PlannerPromptHash,
 		"planner_decision":    plan.Metadata.PlannerDecision,
 		"planner_model":       plannerModelForProvenance(plan),
@@ -587,6 +588,9 @@ func writeFinalApprovedProvenance(manager *orchestrator.Manager, runID string, p
 }
 
 func plannerModelForProvenance(plan orchestrator.RunPlan) string {
+	if trimmed := strings.TrimSpace(plan.Metadata.PlannerModel); trimmed != "" {
+		return trimmed
+	}
 	mode := strings.ToLower(strings.TrimSpace(plan.Metadata.PlannerMode))
 	if mode != plannerModeLLMV1 && mode != "llm" && mode != "auto" {
 		return ""
