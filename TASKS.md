@@ -121,9 +121,10 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
 - [x] Step 4: Refine fallback assistant behavior to be domain-aware (local-file/web/network) without defaulting to scan-only prompts.
 - [x] Step 5: Add focused tests for each refinement and keep `go test ./...` + `go build ./cmd/birdhackbot` green.
 
-## Sprint 18 — Chat vs Act UX (future)
-- [ ] Lightweight “answer vs act” classification so normal conversation feels like Codex/Claude while still being agentic.
-- [ ] Reduce noise in non-verbose mode (only show task headers + key outputs).
+## Sprint 18 — Chat vs Act UX (closed - deferred)
+- [x] Closed on 2026-02-22 to keep focus on current sprint execution; remaining items deferred.
+- [x] [Deferred] Lightweight “answer vs act” classification so normal conversation feels like Codex/Claude while still being agentic.
+- [x] [Deferred] Reduce noise in non-verbose mode (only show task headers + key outputs).
 
 ## Sprint 19 — Orchestrator Contracts + Binary Skeleton (planned)
 - [x] Enforce test-first baseline for orchestrator core (new behavior requires tests in same change).
@@ -153,37 +154,37 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
   - [x] reject `start` when scope/constraints/success/stop criteria are missing
   - [x] validate task quality fields before lease (`done_when`, `fail_when`, `expected_artifacts`, `risk_level`, budgets)
 
-## Sprint 20 — Worker Lifecycle + Scheduler (planned)
+## Sprint 20 — Worker Lifecycle + Scheduler (done)
 - [x] Implement subprocess worker launcher (spawn new `birdhackbot` workers on demand).
-- [ ] Implement worker lifecycle manager:
+- [x] Implement worker lifecycle manager:
   - [x] `worker_started` / `worker_stopped` events
   - [x] cleanup of idle/completed workers
   - [x] failed worker recovery path
 - [x] Implement dependency-aware scheduler with configurable `max_workers`.
-- [ ] Implement explicit task state machine with transition validator:
+- [x] Implement explicit task state machine with transition validator:
   - [x] states: `queued`, `leased`, `running`, `awaiting_approval`, `completed`, `failed`, `blocked`, `canceled`
   - [x] reject invalid transitions with typed errors
   - [x] retry transition policy (`failed -> queued`, retryable-only, bounded attempts)
-- [ ] Implement lease + heartbeat flow:
+- [x] Implement lease + heartbeat flow:
   - [x] lease acquisition/release
   - [x] heartbeat every `5s`
   - [x] stale lease detection + reclaim at `20s`
   - [x] soft-stall grace handling at `30s`
   - [x] bounded retries (`2`) with backoff (`5s`, `15s`)
-- [ ] Implement centralized approval broker (orchestrator-owned):
+- [x] Implement centralized approval broker (orchestrator-owned):
   - [x] workers emit `approval_requested` events instead of blocking on stdin
   - [x] queue + resolution flow for approve/deny/expire
   - [x] approval scopes: once, task, session (never outside existing scope/permissions)
-- [ ] Implement risk-tier policy engine:
+- [x] Implement risk-tier policy engine:
   - [x] classify actions into `recon_readonly`, `active_probe`, `exploit_controlled`, `priv_esc`, `disruptive`
   - [x] enforce permission-mode matrix (`readonly`, `default`, `all`) against tier
   - [x] deny out-of-scope targets before approval flow
   - [x] enforce `disruptive` deny-by-default unless explicit session opt-in is present
-- [ ] Implement session pre-approval grants with expiry:
+- [x] Implement session pre-approval grants with expiry:
   - [x] scopes: once/task/session
   - [x] attach actor, reason, expiry metadata
   - [x] never widen scope beyond run/session scope constraints
-- [ ] Implement timer semantics for `awaiting_approval`:
+- [x] Implement timer semantics for `awaiting_approval`:
   - [x] pause execution timeout while waiting
   - [x] pause lease stale timer while waiting
   - [x] separate approval wait timeout (`45m` default) -> mark task `blocked` on expiry
@@ -192,18 +193,18 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
   - [x] per-worker stop
   - [x] SIGTERM -> SIGKILL escalation timeout
   - [x] orchestrator control commands (`worker-stop`, `stop`) emit stop-request events for the run loop
-- [ ] Validate worker isolation behavior:
+- [x] Validate worker isolation behavior:
   - [x] per-worker session/artifact directory isolation
   - [x] confirm normal PATH tool execution works outside session directories
 - [x] Add scheduler simulation tests (parallelism, reclaim, retry, stop propagation).
-- [ ] Add approval-flow tests:
+- [x] Add approval-flow tests:
   - [x] no false timeout while approval is pending
   - [x] approval expiry marks task blocked (not failed)
   - [x] scoped approval reuse works for task/session scopes
   - [x] risk-tier matrix tests (mode x tier expected decision)
   - [x] disruptive-action default deny tests
   - [x] out-of-scope action deny-before-approval tests
-- [ ] Add task-state-machine tests:
+- [x] Add task-state-machine tests:
   - [x] valid transition matrix
   - [x] invalid transition rejection
   - [x] blocked vs failed reason mapping
@@ -228,39 +229,40 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
   - [x] budget guard test (`max_steps`/`max_tool_calls`/`max_runtime`) and deterministic stop on exhaustion.
   - [x] env-gated integration scenario: create encrypted zip and validate solvable vs unsolved orchestrated outcomes.
 
-## Sprint 22 — Orchestrator UI (future)
-- [ ] Framework decision (locked):
-  - [ ] Frontend: React + TypeScript + Vite
-  - [ ] Backend API: existing Go codebase with WebSocket/SSE stream endpoints
-- [ ] Terminal TUI mode (Codex-like operator cockpit):
+## Sprint 22 — Orchestrator UI (closed - deferred)
+- [x] Closed on 2026-02-22 to keep focus on current sprint execution; remaining items deferred.
+- [x] [Deferred] Framework decision (locked):
+  - [x] [Deferred] Frontend: React + TypeScript + Vite
+  - [x] [Deferred] Backend API: existing Go codebase with WebSocket/SSE stream endpoints
+- [x] [Deferred] Terminal TUI mode (Codex-like operator cockpit):
   - [x] static status bar (run id, mode, risk, active tools, context/budget usage)
   - [x] command prompt line (interactive action input at bottom of TUI)
   - [x] plan summary panel (goal + task/criteria counts)
   - [x] task board panel (per-task state/worker/strategy)
   - [x] operator instruction command (`instruct <text>`) to inject new goals during active run
-  - [ ] plain-text chat bridge to orchestrator LLM (ask “what is the plan?” style questions without command syntax)
-  - [ ] continue-from-complete flow: accept new top-level instruction after run completion and start follow-up phase without leaving TUI
-  - [ ] pipeline stage row (recon -> hypothesis -> verify -> report) with current-step summary
+  - [x] [Deferred] plain-text chat bridge to orchestrator LLM (ask “what is the plan?” style questions without command syntax)
+  - [x] [Deferred] continue-from-complete flow: accept new top-level instruction after run completion and start follow-up phase without leaving TUI
+  - [x] [Deferred] pipeline stage row (recon -> hypothesis -> verify -> report) with current-step summary
   - [x] multi-agent pane (state, heartbeat age, current task, last tool, queue depth)
-  - [ ] approval pane with keyboard actions (approve/deny) and risk metadata
-  - [ ] evidence/log tail pane with bounded scroll + filter
-  - [ ] stable render loop (no ghost lines), resize-safe redraw, ANSI fallback support
-- [ ] Implement local dashboard shell:
-  - [ ] Runs view (active/completed orchestrator runs)
-  - [ ] Agents view (worker status, heartbeat, current task, elapsed time)
-  - [ ] Plan graph view (queued/running/blocked/completed nodes)
-  - [ ] Evidence view (artifacts/findings timeline)
-- [ ] Control actions:
-  - [ ] pause/resume/stop run
-  - [ ] stop single worker
-  - [ ] broadcast kill to all workers
-- [ ] Live communication:
-  - [ ] stream `event.jsonl` updates into UI
-  - [ ] highlight stale workers and failed tasks in real time
-- [ ] Tests:
-  - [ ] backend API contract tests
-  - [ ] frontend component tests for critical state transitions
-  - [ ] e2e smoke test for one orchestrated run lifecycle
+  - [x] [Deferred] approval pane with keyboard actions (approve/deny) and risk metadata
+  - [x] [Deferred] evidence/log tail pane with bounded scroll + filter
+  - [x] [Deferred] stable render loop (no ghost lines), resize-safe redraw, ANSI fallback support
+- [x] [Deferred] Implement local dashboard shell:
+  - [x] [Deferred] Runs view (active/completed orchestrator runs)
+  - [x] [Deferred] Agents view (worker status, heartbeat, current task, elapsed time)
+  - [x] [Deferred] Plan graph view (queued/running/blocked/completed nodes)
+  - [x] [Deferred] Evidence view (artifacts/findings timeline)
+- [x] [Deferred] Control actions:
+  - [x] [Deferred] pause/resume/stop run
+  - [x] [Deferred] stop single worker
+  - [x] [Deferred] broadcast kill to all workers
+- [x] [Deferred] Live communication:
+  - [x] [Deferred] stream `event.jsonl` updates into UI
+  - [x] [Deferred] highlight stale workers and failed tasks in real time
+- [x] [Deferred] Tests:
+  - [x] [Deferred] backend API contract tests
+  - [x] [Deferred] frontend component tests for critical state transitions
+  - [x] [Deferred] e2e smoke test for one orchestrated run lifecycle
 
 ## Sprint 23 — Production Worker Mode + Kali Deployment (done)
 - [x] Implement production worker mode in `birdhackbot` (non-test helper):
@@ -448,3 +450,66 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
   - [x] planner and evaluation/repair paths deterministic (`0.0-0.1`)
   - [x] summaries/recovery conservative (`~0.1`)
 - [x] Add tests ensuring configured values are actually used by call sites.
+
+## Sprint 35 — Autonomy Benchmark Harness + Baseline (in progress)
+- [x] Create a fixed benchmark scenario pack under `docs/runbooks/autonomy-benchmark-program.md`.
+- [x] Add one-command benchmark runner for orchestrator runs (repeatable seeds, fixed scopes).
+- [x] Persist per-run scorecard artifacts with machine-readable metrics JSON.
+- [x] Run baseline 5x per scenario and record median + P90 as the locked baseline.
+- [ ] Exit criteria:
+  - [ ] baseline is reproducible on the same commit
+  - [ ] scorecard artifacts are complete for every scenario run
+
+## Sprint 36 — Evidence-Backed Exploration State (planned)
+- [ ] Add explicit hypothesis/evidence state tracking for assist worker decisions.
+- [ ] Require exploratory pivots to cite either new evidence or a concrete unknown/hypothesis gap.
+- [ ] Add finding lifecycle states in runtime flow: `hypothesis -> candidate -> verified|rejected`.
+- [ ] Enforce discovery-time verification (`verify-now`) immediately after any vulnerability claim before downstream planning continues.
+- [ ] Ensure planner/recovery context only treats `verified` findings as assumptions.
+- [ ] Add tests for evidence-linked pivots vs blind repeat pivots.
+- [ ] Add tests that hallucinated findings are marked `rejected` and do not influence subsequent steps.
+- [ ] Exit criteria:
+  - [ ] reduced blind pivots in benchmark traces
+  - [ ] improved verified finding precision vs Sprint 35 baseline
+  - [ ] verification lag (claim -> verified/rejected) stays within bounded step budget
+
+## Sprint 37 — Recovery Strategy Diversification (planned)
+- [ ] Add recovery policy that enforces strategy-class changes after repeated failures.
+- [ ] Prevent near-duplicate retry loops (semantic intent class, not just exact command string).
+- [ ] Add tests for forced alternative strategy paths after repeated blocks.
+- [ ] Add independent finding validation lane in orchestrator:
+  - [ ] route candidate findings to a separate verifier worker/agent
+  - [ ] verifier must reproduce or reject without reusing discoverer conclusions as truth
+  - [ ] discoverer cannot self-mark findings as `verified`
+- [ ] Add high-severity skeptic pass (attempt falsification) before `critical/high` findings are accepted.
+- [ ] Exit criteria:
+  - [ ] loop incident rate reduced vs baseline
+  - [ ] recovery success rate improved vs baseline
+  - [ ] reduced false-positive carry-forward from initial discovery steps
+
+## Sprint 38 — Novelty Scoring + Anti-Redundancy (planned)
+- [ ] Add novelty scoring for actions/evidence and feed score into recovery/planning prompts.
+- [ ] Penalize repeated low-value actions when no new evidence is produced.
+- [ ] Add tests for novelty gain and anti-redundancy behavior.
+- [ ] Exit criteria:
+  - [ ] higher novel-evidence-per-step vs baseline
+  - [ ] no regression in safety metrics
+
+## Sprint 39 — Kali Controlled Pilot (planned)
+- [ ] Run the same benchmark pack on Kali in authorized internal lab only.
+- [ ] Compare Kali metrics to local baseline with documented tolerance bands.
+- [ ] Capture full event/artifact bundles for reproducibility.
+- [ ] Exercise independent validator flow on Kali scenarios (discoverer -> verifier -> skeptic for high severity).
+- [ ] Exit criteria:
+  - [ ] Kali medians within tolerance on core metrics
+  - [ ] no policy/scope violations during pilot runs
+  - [ ] no candidate finding is reported as verified without validator evidence
+
+## Sprint 40 — Regression Gates + Revert Discipline (planned)
+- [ ] Add benchmark regression gate to CI for key scorecard metrics.
+- [ ] Add explicit revert policy and threshold checks (auto-fail gate on severe regressions).
+- [ ] Keep report-time backstop gate strict: only `verified` findings in confirmed findings section; all other claims excluded or labeled `UNVERIFIED`.
+- [ ] Document operator workflow for rollback when metrics degrade.
+- [ ] Exit criteria:
+  - [ ] merge blocked on benchmark regression
+  - [ ] revert decision path documented and tested

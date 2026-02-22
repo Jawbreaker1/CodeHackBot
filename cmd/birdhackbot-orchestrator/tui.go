@@ -16,6 +16,15 @@ const (
 	tuiStylePrompt = "\x1b[48;5;236m\x1b[38;5;252m"
 	tuiStyleBar    = "\x1b[48;5;238m\x1b[38;5;250m"
 	tuiStyleReset  = "\x1b[0m"
+	tuiStyleGood   = "\x1b[38;5;82m"
+	tuiStyleWarn   = "\x1b[38;5;214m"
+	tuiStyleBad    = "\x1b[38;5;203m"
+	tuiStyleInfo   = "\x1b[38;5;117m"
+	tuiStyleMuted  = "\x1b[38;5;244m"
+
+	tuiStyleBarGood = "\x1b[48;5;22m\x1b[38;5;255m"
+	tuiStyleBarWarn = "\x1b[48;5;130m\x1b[38;5;255m"
+	tuiStyleBarBad  = "\x1b[48;5;52m\x1b[38;5;255m"
 
 	tuiCommandLogStoreLines = 240
 	tuiCommandLogViewLines  = 16

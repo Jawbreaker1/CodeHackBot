@@ -789,6 +789,44 @@ func TestStyleLineAppliesResetAndWidthClamp(t *testing.T) {
 	}
 }
 
+func TestTUIBarStyleForRunState(t *testing.T) {
+	t.Parallel()
+
+	if got := tuiBarStyleForRunState("completed"); got != tuiStyleBarGood {
+		t.Fatalf("completed should use good bar style, got %q", got)
+	}
+	if got := tuiBarStyleForRunState("stopped"); got != tuiStyleBarBad {
+		t.Fatalf("stopped should use bad bar style, got %q", got)
+	}
+	if got := tuiBarStyleForRunState("planning"); got != tuiStyleBarWarn {
+		t.Fatalf("planning should use warn bar style, got %q", got)
+	}
+}
+
+func TestColorizeTUIRowsAppliesStateStyles(t *testing.T) {
+	t.Parallel()
+
+	rows := []string{
+		"Updated: 2026-02-22 13:00:00 UTC",
+		"  - task-1 [running] worker=worker-1 strategy=recon",
+		"  - task-2 [failed] worker=worker-2 strategy=exploit",
+		"already-styled \x1b[38;5;82mline\x1b[0m",
+	}
+	colored := colorizeTUIRows(rows)
+	if !strings.HasPrefix(colored[0], tuiStyleMuted) {
+		t.Fatalf("expected muted style for updated row, got %q", colored[0])
+	}
+	if !strings.HasPrefix(colored[1], tuiStyleGood) {
+		t.Fatalf("expected good style for running row, got %q", colored[1])
+	}
+	if !strings.HasPrefix(colored[2], tuiStyleBad) {
+		t.Fatalf("expected bad style for failed row, got %q", colored[2])
+	}
+	if colored[3] != rows[3] {
+		t.Fatalf("expected pre-styled row to remain unchanged")
+	}
+}
+
 func TestAppendLogLinesSplitsAndCaps(t *testing.T) {
 	t.Parallel()
 

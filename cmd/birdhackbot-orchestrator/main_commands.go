@@ -276,5 +276,5 @@ func runStop(args []string, stdout, stderr io.Writer) int {
 
 func printUsage(stderr io.Writer) {
 	fmt.Fprintln(stderr, "usage: birdhackbot-orchestrator <command> [flags]")
-	fmt.Fprintln(stderr, "commands: start, run, status, workers, events, approvals, approve, deny, worker-stop, report, stop, tui")
+	fmt.Fprintln(stderr, "commands: start, run, benchmark, status, workers, events, approvals, approve, deny, worker-stop, report, stop, tui")
 }

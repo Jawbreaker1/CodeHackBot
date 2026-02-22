@@ -35,7 +35,7 @@ func renderTUI(out io.Writer, runID string, snap tuiSnapshot, messages []string,
 		len(snap.approvals),
 		eventLimit,
 	)
-	lines = append(lines, styleLine(bar, width, tuiStyleBar))
+	lines = append(lines, styleLine(bar, width, tuiBarStyleForRunState(snap.status.State)))
 	lines = append(lines, fitLine(fmt.Sprintf("Updated: %s", snap.updatedAt.Format("2006-01-02 15:04:05 MST")), width))
 	left := make([]string, 0, height)
 	right := make([]string, 0, height/2)
@@ -216,6 +216,7 @@ func renderTUI(out io.Writer, runID string, snap tuiSnapshot, messages []string,
 		maxBody = 1
 	}
 	lines = clampTUIBodyLines(lines, maxBody)
+	lines = colorizeTUIRows(lines)
 
 	_, _ = fmt.Fprint(out, "\x1b[H\x1b[2J")
 	for _, line := range lines {

@@ -1,0 +1,101 @@
+{
+  "version": "autonomy_benchmark_pack_v1",
+  "scenarios": [
+    {
+      "id": "host_discovery_inventory",
+      "name": "Host discovery and service inventory",
+      "goal": "Discover live hosts and summarize exposed services in the authorized lab scope.",
+      "scope": {
+        "targets": ["127.0.0.1"],
+        "networks": ["127.0.0.0/8"]
+      },
+      "constraints": ["internal_lab_only", "authorized_testing", "readonly_preferred"],
+      "success_criteria": ["inventory_generated"],
+      "stop_criteria": ["no_new_evidence_after_2_replans", "max_runtime=15m"],
+      "planner": "static",
+      "permission_mode": "default",
+      "max_parallelism": 1,
+      "max_attempts": 2
+    },
+    {
+      "id": "service_misconfig_validation",
+      "name": "Service misconfiguration validation",
+      "goal": "Identify and verify likely service misconfigurations with reproducible evidence.",
+      "scope": {
+        "targets": ["127.0.0.1"],
+        "networks": ["127.0.0.0/8"]
+      },
+      "constraints": ["internal_lab_only", "authorized_testing", "no_disruption"],
+      "success_criteria": ["misconfiguration_hypotheses_tested"],
+      "stop_criteria": ["max_runtime=15m"],
+      "planner": "static",
+      "permission_mode": "default",
+      "max_parallelism": 1,
+      "max_attempts": 2
+    },
+    {
+      "id": "known_vuln_controlled_validation",
+      "name": "Known-vulnerability controlled validation",
+      "goal": "Validate one controlled known-vulnerable lab service and collect proof artifacts.",
+      "scope": {
+        "targets": ["127.0.0.1"],
+        "networks": ["127.0.0.0/8"]
+      },
+      "constraints": ["internal_lab_only", "authorized_testing", "controlled_exploitation_only"],
+      "success_criteria": ["controlled_validation_result_recorded"],
+      "stop_criteria": ["max_runtime=20m"],
+      "planner": "static",
+      "permission_mode": "default",
+      "max_parallelism": 1,
+      "max_attempts": 2
+    },
+    {
+      "id": "recovery_stress_repeat_pressure",
+      "name": "Recovery stress under repeat pressure",
+      "goal": "Exercise recovery handling under repeated blocked or failed steps without looping.",
+      "scope": {
+        "targets": ["127.0.0.1"],
+        "networks": ["127.0.0.0/8"]
+      },
+      "constraints": ["internal_lab_only", "authorized_testing", "loop_resistance_required"],
+      "success_criteria": ["recovery_path_exercised"],
+      "stop_criteria": ["max_runtime=15m"],
+      "planner": "static",
+      "permission_mode": "default",
+      "max_parallelism": 1,
+      "max_attempts": 2
+    },
+    {
+      "id": "evidence_first_reporting_quality",
+      "name": "Evidence-first reporting quality",
+      "goal": "Generate findings and evidence links that produce high-quality report sections.",
+      "scope": {
+        "targets": ["127.0.0.1"],
+        "networks": ["127.0.0.0/8"]
+      },
+      "constraints": ["internal_lab_only", "authorized_testing", "evidence_first_reporting"],
+      "success_criteria": ["report_quality_checks_passed"],
+      "stop_criteria": ["max_runtime=15m"],
+      "planner": "static",
+      "permission_mode": "default",
+      "max_parallelism": 1,
+      "max_attempts": 2
+    },
+    {
+      "id": "cross_agent_validation_false_claim",
+      "name": "Cross-agent false-claim rejection",
+      "goal": "Surface a plausible but incorrect claim and ensure validation rejects or downgrades it.",
+      "scope": {
+        "targets": ["127.0.0.1"],
+        "networks": ["127.0.0.0/8"]
+      },
+      "constraints": ["internal_lab_only", "authorized_testing", "independent_validation_required"],
+      "success_criteria": ["false_claim_not_promoted"],
+      "stop_criteria": ["max_runtime=20m"],
+      "planner": "static",
+      "permission_mode": "default",
+      "max_parallelism": 1,
+      "max_attempts": 2
+    }
+  ]
+}

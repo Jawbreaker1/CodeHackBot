@@ -26,6 +26,47 @@ The goal is simple: help teams find real security weaknesses earlier, with clear
 - Evidence-first logging: session artifacts, command logs, and reproducible outputs.
 - Report support: structured findings and security reporting workflows.
 
+## Orchestration Layer
+
+BirdHackBot includes a second layer for larger campaigns: `birdhackbot-orchestrator`.
+
+- Control multiple worker runs from one place (including parallel task execution).
+- Keep operations safer with explicit task leases, retries, approvals, and bounded budgets.
+- Preserve stronger operational visibility through a live TUI (tasks, workers, approvals, failures, events).
+- Merge artifacts/findings into one run-level view for cleaner handoff and reporting.
+- Run repeatable autonomy benchmarks with per-run scorecards and baseline locking.
+
+In short: the CLI is your hands-on AI tester, while the orchestrator is the control tower for repeatable multi-step execution.
+
+### Orchestrator Roles (Current Model)
+
+- `Operator` (you): defines goals, approves riskier actions, and steers runs through TUI/CLI (`ask`, `instruct`, approvals).
+- `Planner`: turns goals + constraints into structured task plans (static or LLM-backed).
+- `Coordinator/Manager`: enforces contracts, scheduling, scope limits, retries/replans, and run state transitions.
+- `Workers`: execute scoped tasks, emit evidence/findings/events, and remain isolated per worker workspace.
+- `Approval Broker`: centralizes policy/risk-tier decisions so approvals are consistent and auditable.
+- `Reporting Layer`: merges evidence/findings into run-level reports and benchmark scorecards.
+
+This role split is the main value-add: stronger control, safer autonomy, and more reproducible outcomes than a single-agent loop.
+
+### Quick Architecture View
+
+```text
+Operator (TUI/CLI)
+        |
+        v
+Planner -----> Coordinator/Manager -----> Approval Broker
+                       |
+                       v
+                Worker Pool (N)
+                       |
+                       v
+            Evidence + Findings + Events
+                       |
+                       v
+          Reporting + Benchmark Scorecards
+```
+
 ## Who It’s For
 
 BirdHackBot is designed for authorized security testing in controlled environments — from hands-on testers to technical leads who need clear, credible security insights without stitching together dozens of disconnected tools.

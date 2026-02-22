@@ -24,6 +24,7 @@ All authorization/scope constraints in `AGENTS.md` are mandatory.
 - `go build -buildvcs=false ./cmd/birdhackbot-orchestrator` — build orchestrator binary (avoids VCS stat-cache warnings in restricted environments).
 - `go run ./cmd/birdhackbot --profile <name>` — run directly with optional profile.
 - `./birdhackbot-orchestrator tui --sessions-dir sessions --run <run-id>` — interactive orchestrator TUI (status, workers, approvals, events, prompt commands).
+- `./birdhackbot-orchestrator benchmark --sessions-dir sessions --worker-cmd ./birdhackbot --worker-arg worker --repeat 5 --seed 42 --lock-baseline` — run autonomy benchmark pack and optionally lock baseline metrics.
 - `./birdhackbot --resume <session-id>` — continue an interrupted session.
 - `./birdhackbot --replay <session-id>` — replay `sessions/<id>/replay.txt` with current scope/permissions.
 
@@ -70,6 +71,7 @@ Minimum session outputs:
 - OWASP-style reporting is baseline.
 - Findings must be reproducible and linked to evidence (commands + log paths).
 - Include impact, reproduction steps, and remediation guidance.
+- Runtime finding policy: vulnerability claims must be re-evaluated near discovery time and only promoted to trusted context after verification.
 
 ## Third-Party Inspiration Policy
 - Cline is reference-only for concepts/workflow.
@@ -80,6 +82,7 @@ Minimum session outputs:
 - Continue hardening the generic agent loop (recovery, progress detection, anti-loop behavior).
 - Improve report quality/templates (OWASP + NIS2-aligned output structure).
 - Prepare orchestrator contracts (`plan/task/event/artifact/finding`) for multi-agent future work.
+- Execute the autonomy benchmark program and Kali transfer gate in `docs/runbooks/autonomy-benchmark-program.md`.
 
 ## Orchestrator Decisions (Locked for MVP)
 ### Binary and Runtime Boundary
@@ -226,6 +229,7 @@ Minimum session outputs:
   - split task into smaller tasks,
   - terminate task as `blocked`/`failed` with reason.
 - Silent infinite retries are prohibited; each replan consumes bounded budget and emits reasoned events.
+- Finding promotion policy: candidate vulnerability findings should be independently validated by a separate worker/agent before being promoted to verified context (especially for high/critical severity).
 - End-of-task output contract:
   - `result` status,
   - `summary`,

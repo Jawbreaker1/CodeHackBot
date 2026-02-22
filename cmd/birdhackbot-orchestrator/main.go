@@ -70,6 +70,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runStart(rest[1:], stdout, stderr)
 	case "run":
 		return runRun(rest[1:], stdout, stderr)
+	case "benchmark":
+		return runBenchmark(rest[1:], stdout, stderr)
 	case "status":
 		return runStatus(rest[1:], stdout, stderr)
 	case "events":
