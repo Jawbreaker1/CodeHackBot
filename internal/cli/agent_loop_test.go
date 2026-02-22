@@ -532,20 +532,27 @@ func TestAssistConcludesZipPresenceFromArtifactImmediately(t *testing.T) {
 	}
 }
 
-func TestAssistRepeatedCommandLoopPausesForGuidance(t *testing.T) {
+func TestAssistRepeatedCommandLoopAttemptsRecoveryThenContinues(t *testing.T) {
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/chat/completions" {
 			http.NotFound(w, r)
 			return
 		}
-		atomic.AddInt32(&calls, 1)
+		n := atomic.AddInt32(&calls, 1)
+		content := `{"type":"complete","final":"done"}`
+		switch n {
+		case 1, 2, 3, 4:
+			content = `{"type":"command","command":"ls","args":["-la"],"summary":"check files"}`
+		case 5:
+			content = `{"type":"command","command":"pwd","args":[],"summary":"try a different local action"}`
+		}
 		resp := map[string]any{
 			"choices": []map[string]any{
 				{
 					"message": map[string]any{
 						"role":    "assistant",
-						"content": `{"type":"command","command":"ls","args":["-la"],"summary":"check files"}`,
+						"content": content,
 					},
 				},
 			},
@@ -575,15 +582,24 @@ func TestAssistRepeatedCommandLoopPausesForGuidance(t *testing.T) {
 	var buf bytes.Buffer
 	_, _ = io.Copy(&buf, rOut)
 	out := buf.String()
-	if !strings.Contains(out, "Repeated step loop detected. Pausing for guidance") {
-		t.Fatalf("expected repeated-loop pause, got:\n%s", out)
+	if !strings.Contains(out, "Repeated step loop detected; attempting automated recovery.") {
+		t.Fatalf("expected automated recovery message, got:\n%s", out)
 	}
-	if strings.TrimSpace(r.pendingAssistGoal) == "" {
-		t.Fatalf("expected pendingAssistGoal to be set for follow-up")
+	if strings.Contains(out, "Repeated step loop detected. Pausing for guidance") {
+		t.Fatalf("did not expect pause-for-guidance path, got:\n%s", out)
+	}
+	if !strings.Contains(out, "done") {
+		t.Fatalf("expected flow to continue to completion, got:\n%s", out)
+	}
+	if strings.TrimSpace(r.pendingAssistGoal) != "" {
+		t.Fatalf("did not expect pendingAssistGoal to be set")
+	}
+	if atomic.LoadInt32(&calls) < 6 {
+		t.Fatalf("expected recovery + completion llm calls, got %d", calls)
 	}
 }
 
-func TestAssistRepeatedLoopDoesNotConsumeStepBudget(t *testing.T) {
+func TestAssistRepeatedLoopFallsBackToBudgetWithoutPause(t *testing.T) {
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/chat/completions" {
@@ -626,11 +642,11 @@ func TestAssistRepeatedLoopDoesNotConsumeStepBudget(t *testing.T) {
 	var buf bytes.Buffer
 	_, _ = io.Copy(&buf, rOut)
 	out := buf.String()
-	if !strings.Contains(out, "Repeated step loop detected. Pausing for guidance") {
-		t.Fatalf("expected loop pause, got:\n%s", out)
+	if strings.Contains(out, "Repeated step loop detected. Pausing for guidance") {
+		t.Fatalf("did not expect loop pause, got:\n%s", out)
 	}
-	if strings.Contains(out, "Reached max steps") {
-		t.Fatalf("expected pause before max-steps exhaustion, got:\n%s", out)
+	if !strings.Contains(out, "Reached dynamic step budget without a final answer.") {
+		t.Fatalf("expected budget fallback, got:\n%s", out)
 	}
 }
 

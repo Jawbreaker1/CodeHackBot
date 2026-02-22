@@ -446,7 +446,10 @@ func plannerPlaybookQuery(goal string, constraints []string) string {
 
 func plannerPlaybookBounds(cfg config.Config) (int, int) {
 	maxEntries := cfg.Context.PlaybookMax
-	if maxEntries <= 0 {
+	if maxEntries == 0 {
+		return 0, 0
+	}
+	if maxEntries < 0 {
 		maxEntries = defaultPlannerPlaybookMax
 	}
 	maxLines := cfg.Context.PlaybookLines

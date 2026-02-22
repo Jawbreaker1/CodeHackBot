@@ -355,6 +355,25 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 				budget.onStall("repeated step blocked")
 				r.updateAssistRuntime("recover", budget)
 				if repeatedGuardHits >= 2 {
+					budget.consume("repeated loop recovery")
+					r.updateAssistRuntime("recover", budget)
+					if !dryRun {
+						if r.cfg.UI.Verbose {
+							r.logger.Printf("Repeated step loop detected; attempting automated recovery.")
+						} else {
+							safePrintln("Repeated step loop detected; attempting automated recovery.")
+						}
+					}
+					if r.handleAssistCommandFailure(goal, suggestion, err) {
+						if shouldPauseAfterHandledFailure(dryRun, r.pendingAssistGoal, r.pendingAssistQ) {
+							r.maybeEmitGoalSummary(goal, dryRun)
+							r.maybeFinalizeReport(goal, dryRun)
+							return nil
+						}
+						repeatedGuardHits = 0
+						stepMode = "recover"
+						continue
+					}
 					msg := "Repeated step loop detected. Pausing for guidance: share the exact next action/target and I will continue."
 					safePrintln(msg)
 					r.appendConversation("Assistant", msg)
@@ -376,9 +395,13 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 			budget.onStall("step execution failed")
 			r.updateAssistRuntime("recover", budget)
 			if r.handleAssistCommandFailure(goal, suggestion, err) {
-				r.maybeEmitGoalSummary(goal, dryRun)
-				r.maybeFinalizeReport(goal, dryRun)
-				return nil
+				if shouldPauseAfterHandledFailure(dryRun, r.pendingAssistGoal, r.pendingAssistQ) {
+					r.maybeEmitGoalSummary(goal, dryRun)
+					r.maybeFinalizeReport(goal, dryRun)
+					return nil
+				}
+				stepMode = "recover"
+				continue
 			}
 			r.maybeFinalizeReport(goal, dryRun)
 			return err
@@ -492,6 +515,13 @@ func assistStepDescription(suggestion assist.Suggestion) string {
 	default:
 		return ""
 	}
+}
+
+func shouldPauseAfterHandledFailure(dryRun bool, pendingGoal, pendingQuestion string) bool {
+	if dryRun {
+		return true
+	}
+	return strings.TrimSpace(pendingGoal) != "" || strings.TrimSpace(pendingQuestion) != ""
 }
 
 func (r *Runner) handleAssistNoop(goal string, dryRun bool) error {

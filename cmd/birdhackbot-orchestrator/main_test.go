@@ -437,6 +437,7 @@ func TestRunPlannerLLMModeWithMockedOutputPersistsProvenance(t *testing.T) {
 	t.Setenv(plannerLLMBaseURLEnv, server.URL)
 	t.Setenv(plannerLLMModelEnv, "mock-planner-model")
 	t.Setenv(plannerLLMAPIKeyEnv, "")
+	t.Setenv("BIRDHACKBOT_CONFIG_PATH", filepath.Join(testRepoRoot(t), "config", "default.json"))
 
 	var out bytes.Buffer
 	var errOut bytes.Buffer
@@ -491,6 +492,35 @@ func TestRunPlannerLLMModeWithMockedOutputPersistsProvenance(t *testing.T) {
 	}
 	if strings.TrimSpace(payloadString(payload["playbooks"])) == "" {
 		t.Fatalf("expected playbooks grounding in llm payload, got %v", payload["playbooks"])
+	}
+}
+
+func TestPlannerPlaybookBoundsDisabledWhenMaxIsZero(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Config{}
+	cfg.Context.PlaybookMax = 0
+	cfg.Context.PlaybookLines = 60
+
+	maxEntries, maxLines := plannerPlaybookBounds(cfg)
+	if maxEntries != 0 || maxLines != 0 {
+		t.Fatalf("expected playbooks disabled, got max=%d lines=%d", maxEntries, maxLines)
+	}
+}
+
+func TestPlannerPlaybookHintsDisabledWhenMaxIsZero(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Config{}
+	cfg.Context.PlaybookMax = 0
+	cfg.Context.PlaybookLines = 60
+
+	hints, names := plannerPlaybookHints("perform network scan", []string{"internal_lab_only"}, cfg)
+	if strings.TrimSpace(hints) != "" {
+		t.Fatalf("expected no playbook hints when disabled, got %q", hints)
+	}
+	if len(names) != 0 {
+		t.Fatalf("expected no playbook names when disabled, got %#v", names)
 	}
 }
 
