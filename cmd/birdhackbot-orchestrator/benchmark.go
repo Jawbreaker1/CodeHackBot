@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -11,11 +12,13 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/orchestrator"
@@ -180,6 +183,18 @@ type benchmarkBaselineScenario struct {
 }
 
 func runBenchmark(args []string, stdout, stderr io.Writer) int {
+	signalCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+	return runBenchmarkWith(args, stdout, stderr, signalCtx, runRun)
+}
+
+func runBenchmarkWith(args []string, stdout, stderr io.Writer, signalCtx context.Context, runExecutor func(args []string, stdout, stderr io.Writer) int) int {
+	if signalCtx == nil {
+		signalCtx = context.Background()
+	}
+	if runExecutor == nil {
+		runExecutor = runRun
+	}
 	fs := flag.NewFlagSet("benchmark", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var (
@@ -317,7 +332,13 @@ func runBenchmark(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "benchmark started: id=%s scenarios=%d repeat=%d seed=%d\n", benchmarkID, len(selected), repeat, seed)
 
 	anyFailures := false
+	interrupted := false
+scenarioLoop:
 	for scenarioIndex, scenario := range selected {
+		if signalCtx.Err() != nil {
+			interrupted = true
+			break
+		}
 		scenarioRuns := make([]benchmarkRunScorecard, 0, repeat)
 		scenarioDir := filepath.Join(benchmarkRoot, benchmarkSlug(scenario.ID))
 		if err := os.MkdirAll(scenarioDir, 0o755); err != nil {
@@ -325,6 +346,10 @@ func runBenchmark(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		for iteration := 1; iteration <= repeat; iteration++ {
+			if signalCtx.Err() != nil {
+				interrupted = true
+				break
+			}
 			runSeed := seed + int64(scenarioIndex*1000) + int64(iteration)
 			runID := benchmarkRunID(benchmarkID, scenario.ID, iteration)
 			uniqueRunID, err := ensureBenchmarkRunIDAvailable(sessionsDir, runID)
@@ -369,7 +394,7 @@ func runBenchmark(args []string, stdout, stderr io.Writer) int {
 			)
 			var runStdout bytes.Buffer
 			var runStderr bytes.Buffer
-			exitCode := runRun(runArgs, &runStdout, &runStderr)
+			exitCode := runExecutor(runArgs, &runStdout, &runStderr)
 			finishedAt := time.Now().UTC()
 			_ = os.WriteFile(runStdoutPath, runStdout.Bytes(), 0o644)
 			_ = os.WriteFile(runStderrPath, runStderr.Bytes(), 0o644)
@@ -402,6 +427,16 @@ func runBenchmark(args []string, stdout, stderr io.Writer) int {
 				}
 				scorecard.Error = truncateForScorecard(errText, 600)
 			}
+			if signalCtx.Err() != nil {
+				interrupted = true
+				scorecard.Succeeded = false
+				if scorecard.ExitCode == 0 {
+					scorecard.ExitCode = 130
+				}
+				if strings.TrimSpace(scorecard.Error) == "" {
+					scorecard.Error = "benchmark interrupted by signal"
+				}
+			}
 			if writeErr := writeBenchmarkJSON(scorecardPath, scorecard); writeErr != nil {
 				fmt.Fprintf(stderr, "benchmark failed writing scorecard: %v\n", writeErr)
 				return 1
@@ -412,8 +447,14 @@ func runBenchmark(args []string, stdout, stderr io.Writer) int {
 			if !scorecard.Succeeded {
 				status = "failed"
 				anyFailures = true
+				if interrupted {
+					status = "interrupted"
+				}
 			}
 			fmt.Fprintf(stdout, "benchmark run: scenario=%s iter=%d/%d run=%s status=%s scorecard=%s\n", scenario.ID, iteration, repeat, runID, status, filepath.ToSlash(scorecardPath))
+			if interrupted {
+				break
+			}
 			if !scorecard.Succeeded && !continueOnErr {
 				fmt.Fprintln(stderr, "benchmark stopping on first failure (--continue-on-error=false)")
 				break
@@ -425,6 +466,9 @@ func runBenchmark(args []string, stdout, stderr io.Writer) int {
 			Aggregate: aggregateBenchmarkRuns(scenarioRuns),
 		}
 		summary.Scenarios = append(summary.Scenarios, scenarioSummary)
+		if interrupted {
+			break scenarioLoop
+		}
 		if len(scenarioRuns) < repeat && !continueOnErr {
 			break
 		}
@@ -448,7 +492,7 @@ func runBenchmark(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	if lockBaseline {
+	if lockBaseline && !interrupted {
 		baseline := benchmarkBaseline{
 			Version:     "benchmark_baseline_v1",
 			GeneratedAt: summary.GeneratedAt,
@@ -472,9 +516,15 @@ func runBenchmark(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		fmt.Fprintf(stdout, "baseline locked: %s\n", filepath.ToSlash(baselineOut))
+	} else if lockBaseline && interrupted {
+		fmt.Fprintln(stderr, "benchmark baseline not locked: run interrupted")
 	}
 
 	fmt.Fprintf(stdout, "benchmark complete: summary=%s markdown=%s\n", filepath.ToSlash(summaryPath), filepath.ToSlash(markdownPath))
+	if interrupted {
+		fmt.Fprintln(stderr, "benchmark interrupted; partial summary written")
+		return 130
+	}
 	if anyFailures {
 		return 1
 	}

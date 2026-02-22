@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -175,6 +177,51 @@ func TestRunBenchmarkLocksBaseline(t *testing.T) {
 	}
 	if baseline.Scenarios[0].Aggregate.Runs != 2 {
 		t.Fatalf("expected baseline aggregate runs=2, got %d", baseline.Scenarios[0].Aggregate.Runs)
+	}
+}
+
+func TestRunBenchmarkStopsOnCanceledContext(t *testing.T) {
+	base := t.TempDir()
+	packPath := filepath.Join(base, "scenario-pack.json")
+	writeBenchmarkScenarioPack(t, packPath, benchmarkScenarioPack{
+		Version: "test-pack-v1",
+		Scenarios: []benchmarkScenario{
+			{
+				ID:          "scenario-cancel",
+				Name:        "Cancel scenario",
+				Goal:        "This run should not execute.",
+				Scope:       benchmarkScopeLocalhost(),
+				Constraints: []string{"internal_lab_only"},
+			},
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	executedRuns := 0
+	runExecutor := func(args []string, stdout, stderr io.Writer) int {
+		executedRuns++
+		return 0
+	}
+
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	code := runBenchmarkWith([]string{
+		"--sessions-dir", base,
+		"--scenario-pack", packPath,
+		"--out-dir", filepath.Join(base, "bench-out"),
+		"--benchmark-id", "bench-cancel",
+		"--repeat", "3",
+		"--worker-cmd", "dummy-worker",
+	}, &out, &errOut, ctx, runExecutor)
+	if code != 130 {
+		t.Fatalf("expected interrupt exit code 130, got %d (stderr=%q)", code, errOut.String())
+	}
+	if executedRuns != 0 {
+		t.Fatalf("expected 0 subruns when already canceled, got %d", executedRuns)
+	}
+	if !strings.Contains(errOut.String(), "benchmark interrupted") {
+		t.Fatalf("expected interruption message in stderr, got %q", errOut.String())
 	}
 }
 
