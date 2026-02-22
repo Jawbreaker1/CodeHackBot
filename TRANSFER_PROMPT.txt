@@ -1,0 +1,39 @@
+CodeHackBot handoff prompt for Kali
+
+You are continuing work in the CodeHackBot repo on branch main.
+
+Current state:
+- Sprint 35 benchmark harness is implemented.
+- `birdhackbot-orchestrator benchmark` exists and writes scorecards/summary/baseline.
+- Interrupt handling was fixed: Ctrl-C now cancels the full benchmark loop and writes partial summary.
+- Latest commits:
+  - c52ecde fix: stop benchmark loop on interrupt and write partial summary
+  - 64f8155 feat: add orchestrator benchmark harness and role-focused UX docs
+
+Important context:
+- Work only within authorized internal lab scope.
+- Avoid customer/third-party targets.
+- Keep sprint structure strict.
+
+Immediate validation goal on Kali:
+1) Build:
+   - go build -buildvcs=false ./cmd/birdhackbot
+   - go build -buildvcs=false ./cmd/birdhackbot-orchestrator
+2) Run a small benchmark smoke first:
+   - ./birdhackbot-orchestrator benchmark --sessions-dir sessions --worker-cmd ./birdhackbot --worker-arg worker --repeat 1 --seed 42 --scenario host_discovery_inventory --approval-timeout 2m
+3) If smoke is healthy, run full baseline:
+   - ./birdhackbot-orchestrator benchmark --sessions-dir sessions --worker-cmd ./birdhackbot --worker-arg worker --repeat 5 --seed 42 --lock-baseline --approval-timeout 2m
+
+If benchmark appears stuck:
+- Check status:
+  - ./birdhackbot-orchestrator status --sessions-dir sessions --run <run-id>
+- Check approvals:
+  - ./birdhackbot-orchestrator approvals --sessions-dir sessions --run <run-id>
+- Tail events:
+  - tail -n 40 sessions/<run-id>/orchestrator/event/event.jsonl
+
+After baseline run:
+- Report median/P90 metrics and any blockers.
+- If needed, prioritize next hardening within Sprint 35 before moving to Sprint 36.
+
+This file is temporary for transfer convenience and should be deleted after handoff is done.
