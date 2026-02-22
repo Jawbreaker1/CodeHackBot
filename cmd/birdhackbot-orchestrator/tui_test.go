@@ -774,6 +774,21 @@ func TestClampTUIBodyLinesKeepsTopBar(t *testing.T) {
 	}
 }
 
+func TestStyleLineAppliesResetAndWidthClamp(t *testing.T) {
+	t.Parallel()
+
+	styled := styleLine("0123456789", 8, tuiStyleBar)
+	if !strings.HasPrefix(styled, tuiStyleBar) {
+		t.Fatalf("expected style prefix in %q", styled)
+	}
+	if !strings.HasSuffix(styled, tuiStyleReset) {
+		t.Fatalf("expected style reset suffix in %q", styled)
+	}
+	if !strings.Contains(styled, "0123...") {
+		t.Fatalf("expected clamped content in %q", styled)
+	}
+}
+
 func TestAppendLogLinesSplitsAndCaps(t *testing.T) {
 	t.Parallel()
 

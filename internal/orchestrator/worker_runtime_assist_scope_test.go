@@ -26,3 +26,15 @@ func TestBuildAssistPromptScopeIncludesDenyMarkers(t *testing.T) {
 		t.Fatalf("unexpected run scope prompt entries: %#v", scope)
 	}
 }
+
+func TestBuildAssistPromptScopeDeduplicatesEntries(t *testing.T) {
+	t.Parallel()
+
+	scope := buildAssistPromptScope(Scope{
+		Networks: []string{"192.168.50.0/24", "192.168.50.0/24"},
+		Targets:  []string{"corp.internal", "corp.internal"},
+	}, nil)
+	if len(scope) != 2 {
+		t.Fatalf("expected deduplicated prompt scope, got %#v", scope)
+	}
+}

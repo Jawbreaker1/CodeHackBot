@@ -398,13 +398,13 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
 - [x] Add report quality tests using real run artifacts (network scan + web recon cases).
 
 ## Sprint 32 — Maintainability Refactor Guardrails (planned)
-- [ ] Refactor high-complexity files into smaller units:
-  - [ ] `internal/assist/assistant.go`
-  - [ ] `internal/cli/assist_state.go`
-  - [ ] `internal/orchestrator/worker_runtime_assist.go`
-  - [ ] `cmd/birdhackbot-orchestrator/tui_render.go`
-- [ ] Add package-level architecture notes for assist loop, scope enforcement, and event pipeline.
-- [ ] Add CI checks for complexity/size thresholds and enforce test updates for refactors.
+- [x] Refactor high-complexity files into smaller units:
+  - [x] `internal/assist/assistant.go`
+  - [x] `internal/cli/assist_state.go`
+  - [x] `internal/orchestrator/worker_runtime_assist.go`
+  - [x] `cmd/birdhackbot-orchestrator/tui_render.go`
+- [x] Add package-level architecture notes for assist loop, scope enforcement, and event pipeline.
+- [x] Add CI checks for complexity/size thresholds and enforce test updates for refactors.
 
 ## Sprint 33 — Interactive Orchestrator Planning Mode (planned)
 - [x] Make `--goal` optional for orchestrator startup:
