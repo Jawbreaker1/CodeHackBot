@@ -42,10 +42,16 @@ func executeWorkerAssistCommand(ctx context.Context, command string, args []stri
 
 	cmd := exec.Command(command, args...)
 	cmd.Dir = workDir
-	cmd.Env = os.Environ()
+	env, guardrailNotes, envErr := applyWorkerRuntimeGuardrails(os.Environ(), workDir)
+	if envErr != nil {
+		return workerToolResult{command: command, args: args, output: []byte(envErr.Error() + "\n"), runErr: envErr}
+	}
+	cmd.Env = env
 	output, err := runWorkerCommand(ctx, cmd, workerCommandStopGrace)
-	if len(notes) > 0 {
-		prefix := strings.Join(notes, "\n")
+	noteLines := append([]string{}, guardrailNotes...)
+	noteLines = append(noteLines, notes...)
+	if len(noteLines) > 0 {
+		prefix := strings.Join(noteLines, "\n")
 		if prefix != "" {
 			prefix += "\n"
 		}
@@ -102,9 +108,23 @@ func executeWorkerAssistTool(ctx context.Context, cfg WorkerRunConfig, task Task
 
 	args := normalizeArgs(spec.Run.Args)
 	runCommand, args = normalizeWorkerAssistCommand(runCommand, args)
+	if isWorkerLocalBuiltin(runCommand) {
+		result := executeWorkerAssistCommand(ctx, runCommand, args, workDir)
+		builder.Write(result.output)
+		return workerToolResult{
+			command: result.command,
+			args:    result.args,
+			output:  capBytes([]byte(builder.String()), workerAssistOutputLimit),
+			runErr:  result.runErr,
+		}, nil
+	}
 	args, _, _ = applyCommandTargetFallback(scopePolicy, task, runCommand, args)
 	var adaptedNote string
 	runCommand, args, adaptedNote, _ = adaptCommandForRuntime(scopePolicy, runCommand, args)
+	if nextArgs, injected, target := applyCommandTargetFallback(scopePolicy, task, runCommand, args); injected {
+		args = nextArgs
+		_, _ = fmt.Fprintf(&builder, "Runtime adaptation follow-up: auto-injected target %s for command %s\n", target, runCommand)
+	}
 	adaptedCmd, adaptedArgs, msfNotes, adaptErr := msf.AdaptRuntimeCommand(runCommand, args, workDir)
 	if adaptErr != nil {
 		return workerToolResult{}, adaptErr
@@ -121,7 +141,16 @@ func executeWorkerAssistTool(ctx context.Context, cfg WorkerRunConfig, task Task
 	}
 	cmd := exec.Command(runCommand, args...)
 	cmd.Dir = workDir
-	cmd.Env = os.Environ()
+	env, guardrailNotes, envErr := applyWorkerRuntimeGuardrails(os.Environ(), workDir)
+	if envErr != nil {
+		return workerToolResult{}, envErr
+	}
+	cmd.Env = env
+	for _, note := range guardrailNotes {
+		if strings.TrimSpace(note) != "" {
+			_, _ = fmt.Fprintf(&builder, "%s\n", note)
+		}
+	}
 	output, runErr := runWorkerCommand(ctx, cmd, workerCommandStopGrace)
 	if adaptedNote != "" {
 		_, _ = fmt.Fprintf(&builder, "Runtime adaptation: %s\n", adaptedNote)
@@ -143,9 +172,37 @@ func normalizeWorkerAssistCommand(command string, args []string) (string, []stri
 	}
 	parts := strings.Fields(command)
 	if len(parts) > 1 && len(args) == 0 {
-		return parts[0], parts[1:]
+		command = parts[0]
+		args = parts[1:]
+	}
+	base := strings.ToLower(filepath.Base(strings.TrimSpace(command)))
+	if base == "bash" || base == "sh" || base == "zsh" {
+		if normalized, rewritten := normalizeSingleArgShellCommand(args); rewritten {
+			return command, normalized
+		}
 	}
 	return command, args
+}
+
+func normalizeSingleArgShellCommand(args []string) ([]string, bool) {
+	if len(args) != 1 {
+		return args, false
+	}
+	payload := strings.TrimSpace(args[0])
+	if payload == "" || strings.HasPrefix(payload, "-") {
+		return args, false
+	}
+	if !strings.ContainsAny(payload, " \t\r\n;&|<>`$()") {
+		return args, false
+	}
+	lower := strings.ToLower(payload)
+	if strings.Contains(payload, "/") ||
+		strings.HasSuffix(lower, ".sh") ||
+		strings.HasSuffix(lower, ".bash") ||
+		strings.HasSuffix(lower, ".zsh") {
+		return args, false
+	}
+	return []string{"-lc", payload}, true
 }
 
 func isAssistInvalidToolSpecError(err error) bool {
@@ -178,6 +235,9 @@ func applyCommandTargetFallback(scopePolicy *ScopePolicy, task TaskSpec, command
 	if command == "" || !isNetworkSensitiveCommand(command) {
 		return args, false, ""
 	}
+	if isNmapCommand(command) && nmapHasInputListArg(args) {
+		return args, false, ""
+	}
 	if len(scopePolicy.extractTargets(command, args)) > 0 {
 		return args, false, ""
 	}
@@ -190,6 +250,16 @@ func applyCommandTargetFallback(scopePolicy *ScopePolicy, task TaskSpec, command
 	}
 	updated := append(append([]string{}, args...), fallback)
 	return updated, true, fallback
+}
+
+func nmapHasInputListArg(args []string) bool {
+	for _, raw := range args {
+		arg := strings.ToLower(strings.TrimSpace(raw))
+		if arg == "-il" || strings.HasPrefix(arg, "-il") {
+			return true
+		}
+	}
+	return false
 }
 
 func firstTaskTarget(targets []string) string {

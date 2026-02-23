@@ -456,11 +456,94 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
 - [x] Add one-command benchmark runner for orchestrator runs (repeatable seeds, fixed scopes).
 - [x] Persist per-run scorecard artifacts with machine-readable metrics JSON.
 - [x] Run baseline 5x per scenario and record median + P90 as the locked baseline.
-- [ ] Exit criteria:
-  - [ ] baseline is reproducible on the same commit
-  - [ ] scorecard artifacts are complete for every scenario run
+- [x] Harden run terminalization:
+  - [x] if no active workers and no runnable tasks remain, force deterministic terminal state (avoid `state=running` with `running_tasks=1` deadlock).
+  - [x] add regression test for "stopped worker + no pending approvals + one stale running task" to guarantee report finalization.
+- [x] Improve benchmark diagnostics to speed adaptation:
+  - [x] include dominant failure reason breakdown in scorecard/summary (`assist_loop_detected`, `assist_timeout`, `assist_no_action`, timeout).
+  - [x] include terminalization reason in summary when run is manually or automatically stopped.
+  - [x] auto-approve pending benchmark approvals during `benchmark` runs (avoid `approval_timeout`-driven blocked tasks in unattended runs).
+- [ ] Address current `host_discovery_inventory` smoke blockers before re-locking baseline:
+  - [x] fix terminal-state task counter consistency (`state=stopped` still reports `running_tasks=1` in status/report).
+  - [x] cap recon artifact size/output volume (observed ~800MB `nmap_hosts.txt` from `/8` host sweep).
+  - [x] enforce runtime nmap guardrails for direct commands and worker-generated scripts (`-n`, `--host-timeout`, `--max-retries`, `--max-rate`, loopback `/8` cap) to reduce host DNS/network instability.
+  - [x] prevent repeated `assist_loop_detected` failure on `task-h02` across retries.
+  - [x] reduce/route `scope_denied` outcomes so baseline failures reflect capability gaps rather than scope-policy collisions.
+  - [x] treat local script filenames (for example `scan.sh`) as file-like tokens in scope extraction to avoid false `scope_denied` host matches.
+  - [x] sanitize unsupported nmap `--script` entries and auto-resolve bare shell script names to `tools/<name>.sh` when present.
+  - [x] reduce `assist_no_action` failures from recover-mode `plan`/`question` churn (recover non-action loops now classified/handled as `assist_loop_detected`; latest smoke did not emit `assist_no_action`).
+  - [x] add bounded no-new-evidence completion fallback for repeated recover churn (identical results, extended recover tool churn, and recover tool-call cap).
+  - [x] reduce remaining `assist_loop_detected` churn on `task-h01`/`task-h02` under approved active-probe runs (`host_discovery_inventory` targeted `repeat=2` now 2/2 with loop incident rate 0 and no `assist_loop_detected` on `task-h01`/`task-h02`).
+  - [ ] reduce `assist_no_new_evidence` dependence for `task-h01`/`task-h02` auth/recon loops when the model alternates helper scripts instead of issuing explicit completion (latest spot checks still show mixed `assist_complete` vs `assist_no_new_evidence` behavior across seeds).
+  - [ ] tighten bounded fallback trigger so long-lived recover churn terminates earlier without masking genuine progress (improved from `task-h01` fallback at step/tool-call 14 to step/tool-call 8 in `benchmark-20260223-124754` and `benchmark-20260223-125200`; keep open for variance in scenario runtime).
+  - [x] fix `goal_llm_v1` completion-contract artifact mismatch that can fail successful scans (`missing_required_artifacts` for planner-named files like `service_version_output.txt`) and block downstream CVE/report tasks (observed in `run-20260223-130819-7e29`; fixed via expected-artifact materialization + dependency-input path repair, validated in `run-20260223-132458-094a`).
+  - [x] add regression coverage for goal-seeded router-style runs so downstream vulnerability-mapping/report tasks continue when planner artifact names are not emitted verbatim (`TestRunWorkerTaskRepairsMissingDependencyInputPaths` + existing expected-artifact materialization coverage).
+  - [x] normalize LLM planner risk tiers for synthesized safety bounds (clamp `exploit_controlled`/higher to `active_probe`, invalid to `recon_readonly`) to avoid run-start failure from out-of-policy planner output (seen before `run-20260223-132458-094a`).
+  - [x] add profile-aware nmap runtime guardrails for synthesized command tasks (`discovery`/`service_enum`/`vuln_mapping`) plus one-shot relaxed retry when host timeout is detected.
+  - [x] add deep-scan evidence gate: mark task as `insufficient_evidence` when nmap host-timeout persists without actionable service/vulnerability output (prevents false-success reports).
+  - [x] calibrate generic service-enum/vuln bounds so host-level scans complete within 2m budgets more consistently (`--top-ports` cap, `--version-light`, `--script vuln` -> `vuln and safe`, `--script-timeout 20s`); validated by actionable `T-02` output in `run-20260223-142849-69c5`.
+  - [x] reject synthetic placeholder vuln-mapping command output (for example `python -c ... Example: ... CVE-...`) as `insufficient_evidence` to avoid false-positive CVE claims.
+  - [x] harden LLM planner prompt to forbid placeholder/demo-only command actions and require concrete tool-backed execution against in-scope targets/artifacts.
+  - [x] improve planner/runtime contract for vulnerability-mapping tasks to avoid passthrough/placeholder execution:
+    - weak vuln-mapping commands (`cat`/`echo`/placeholder shell/python) now auto-rewrite to concrete bounded `nmap` vuln-mapping action against in-scope targets.
+    - local shell artifact-processing commands no longer fail closed on wrapper scope checks when no network-sensitive command is present.
+    - validated with concrete vuln-script output in `run-20260223-144000-9687` (`http-vuln-cve2010-0738` evidence in `T-03`/`T-04` logs).
+  - [x] improve report-task contract so OWASP report generation is tool-backed synthesis from prior artifacts (not fallback vulnerability re-scan) while retaining evidence integrity:
+    - weak OWASP/report commands (`cat`/`echo`/placeholder shell-python/network rescans) now auto-rewrite to a local deterministic synthesis action over dependency artifacts.
+    - vulnerability-command rewrite now skips report-synthesis tasks to prevent report steps from being hijacked into new scans.
+    - added runtime/unit coverage for rewrite behavior and synthesized CVE evidence rendering in report-task logs.
+  - [x] harden vulnerability-mapping execution reliability for goal-seeded runs where planner emits tool-wrapper commands (`python3 -c subprocess ... cve-search`):
+    - classify shell/python wrappers as weak for vulnerability-mapping tasks and rewrite to bounded concrete `nmap --script "vuln and safe"` action against in-scope targets.
+    - keeps CVE-capable evidence generation deterministic when optional tools are unavailable in the worker runtime.
+  - [x] prevent duplicate/conflicting nmap script flags in enforced vulnerability evidence profile:
+    - when vulnerability evidence enforcement applies, normalize to a single `--script "vuln and safe"` and a single `--script-timeout 20s` (replace existing values instead of appending).
+    - avoids unstable runtime behavior observed with stacked script expressions during vuln-mapping retries.
+  - [x] tighten report-synthesis classification and CVE extraction quality:
+    - avoid misclassifying CVE-mapping tasks as report generation unless task intent is explicitly report-generation (`generate`/`compile`/`aggregate` + report semantics or `owasp`).
+    - normalize non-canonical NSE CVE tokens (for example `http-vuln-cve2010-0738`) into canonical `CVE-YYYY-NNNN` identifiers in synthesized OWASP findings.
+  - [x] harden subnet-to-device targeting contract for host-specific goals (for example "identify iPhone then scan that host"):
+    - require concrete target attribution for vulnerability/report command tasks: pinned host target or dependency `resolved_target.json`; unresolved attribution now fails as `insufficient_evidence` instead of scanning a broad CIDR.
+    - persist and consume generic target-attribution artifacts (`resolved_target.json`) so downstream tasks can bind to an attributed host without device-specific hardcoding.
+    - enforce attributed nmap execution target rewriting to avoid broad-target drift once a concrete host is resolved.
+    - include attribution metadata in synthesized OWASP output (`Attribution confidence` + `Attribution source`) to keep report claims explicit.
+  - [x] extend missing-input artifact repair to local shell wrappers (`bash -lc`, `sh -c`) so parser tasks consuming dependency artifacts do not fail on planner `/tmp/...` paths.
+    - added shell-wrapper-aware path repair for `bash/sh/zsh -c/-lc` command bodies and regression coverage (`TestRunWorkerTaskRepairsMissingDependencyInputPathsForShellWrapper`).
+    - tightened shell path matching boundaries to avoid corrupting embedded relative path literals in quoted strings (regression: `TestRepairMissingCommandInputPathsForShellWrapperSkipsEmbeddedRelativeSegments`).
+  - [x] improve dependency-artifact selection quality for repaired report tasks so report commands prefer semantically strongest scan artifacts over generic worker logs when multiple candidates overlap (current heuristic succeeded but selected `T-03` worker log in `run-20260223-132458-094a`).
+    - strengthened artifact-hint scoring to downweight generic tokens (`log`/`output`/`report`) and promote scan/vulnerability semantic overlap instead of generic worker-log matches.
+    - added tie-break specificity scoring that penalizes generic `worker-*.log` command logs when better artifact candidates are available.
+    - added regression coverage for candidate ranking (`TestBestArtifactCandidateForMissingPathPrefersSpecificArtifactOverWorkerLog`, `TestBestArtifactCandidateForMissingPathFallsBackToExactBaseMatch`).
+  - [x] cap adaptive `execution_failure` replan fan-out for repeated identical `command_failed` paths (deduped mutation key for adaptive execution-failure chains + regression test).
+  - [x] prevent `task-plan-summary` recover question/plan churn from failing runs (summary-task bounded autocomplete fallback + tests).
+  - [x] add local-goal scope UX alias for non-network tasks:
+    - `birdhackbot-orchestrator run --goal ... --scope-local` now maps to local-only targets (`127.0.0.1`, `localhost`) so local file workflows do not require network CIDR flags.
+    - goal-input validation/help text updated to include `--scope-local`.
+    - CLI tests added for missing-scope messaging and `--scope-local` acceptance.
+  - [x] prevent report-command rewrite hijack for non-OWASP local workflows:
+    - tightened report-rewrite predicate to explicit OWASP/security-report intent (OWASP markers, security-report artifact naming, or report+security context), while excluding generic local report tasks.
+    - added regression tests for local archive-report classification and rewrite skip behavior.
+    - validated in `run-20260223-172947-zipsecret8`: `t5` executed native bash report command, produced `zip_crack_report.md`, and emitted zero `rewrote weak report command` events.
+  - [x] fix expected-artifact materialization for command tasks:
+    - prefer copying produced files from task working directory into orchestrator artifact store when present; use stdout fallback only when no produced file exists.
+    - validated in local encrypted-archive workflow rerun (`run-20260223-172436-zipsecret5`): `t2/john_show.txt`, `t4/recovered_password.txt`, `t4/extraction_status.txt`, and `t4/extracted_preview.txt` now preserve real produced content instead of placeholder fallback text.
+  - [x] add regression coverage for local encrypted-archive workflow:
+    - added `TestLocalArchiveWorkflowArtifactsAndReportNoRewrite` to validate parallel crack-task execution (`t2`/`t3`), real artifact propagation (`john_show.txt`, `recovered_password.txt`, `extraction_status.txt`, `extracted_preview.txt`), and final `zip_crack_report.md` content in orchestrator artifact paths.
+    - asserts local non-security report task (`t5`) is not auto-rewritten into OWASP synthesis (no `rewrote weak report command` event for `t5`).
+  - [x] reduce benchmark terminal failures still dominated by `assist_loop_detected`/`assist_budget_exhausted` in `cross_agent_validation_false_claim` and `evidence_first_reporting_quality` (targeted `repeat=2` reruns now 2/2 pass each; post-hardening spot checks also 1/1 pass each in `benchmark-20260223-115835` and `benchmark-20260223-120100`; full-suite confirmation deferred to Sprint 36).
+    - latest targeted stability check (`benchmark-20260223-170436`, `repeat=2` over both risky scenarios) regressed only on `evidence_first_reporting_quality-r02` with `command_failed` + downstream `assist_loop_detected`; failure trace shows assist emitted `bash` with a single string arg (`"nmap -sV -p- 127.0.0.1"`) causing `bash: ... No such file or directory` before recovery loop failure.
+    - post-fix reruns recovered stability: `benchmark-20260223-170955` (`evidence_first_reporting_quality`, `repeat=2`) and `benchmark-20260223-171117` (both risky scenarios, `repeat=2`) completed `4/4` with zero loop incidents and zero failures.
+  - [x] normalize assist-command shell invocation when assistant emits `bash`/`sh` with a single string command arg (auto-rewrite to `-lc <cmd>`) to prevent false `command_failed` on valid shell payloads.
+    - `normalizeWorkerAssistCommand` now rewrites shell invocations like `bash ["nmap -sV -p- 127.0.0.1"]` to `bash ["-lc", "nmap -sV -p- 127.0.0.1"]` while preserving real script execution args.
+    - added regression coverage: `TestNormalizeWorkerAssistCommandRewritesSingleArgShellCommand` and `TestNormalizeWorkerAssistCommandKeepsSingleArgShellScript`.
+    - revalidated with targeted scenario rerun `benchmark-20260223-170955` (`evidence_first_reporting_quality`, `repeat=2`): both runs completed (`2/2`) with zero loop incidents and zero failures.
+- [x] Re-run 5x baseline on current commit and refresh locked baseline after smoke is healthy (`benchmark-20260223-092006` locked to `docs/runbooks/autonomy-benchmark-baseline.json`).
+- [x] Exit criteria deferred to Sprint 36 (full-suite rerun postponed by operator request).
 
 ## Sprint 36 — Evidence-Backed Exploration State (planned)
+- [ ] [Deferred from Sprint 35] Full benchmark-suite confirmation:
+  - [ ] rerun full benchmark suite (`repeat=5`) on current hardening commit.
+  - [ ] confirm baseline is reproducible on the same commit.
+  - [ ] confirm scorecard artifacts are complete for every scenario run.
 - [ ] Add explicit hypothesis/evidence state tracking for assist worker decisions.
 - [ ] Require exploratory pivots to cite either new evidence or a concrete unknown/hypothesis gap.
 - [ ] Add finding lifecycle states in runtime flow: `hypothesis -> candidate -> verified|rejected`.
@@ -476,6 +559,8 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
 ## Sprint 37 — Recovery Strategy Diversification (planned)
 - [ ] Add recovery policy that enforces strategy-class changes after repeated failures.
 - [ ] Prevent near-duplicate retry loops (semantic intent class, not just exact command string).
+- [ ] Add bounded guard for repeated non-tool churn (`command`/`plan`) similar to tool-loop guard.
+- [ ] Add benchmark regression test where assistant alternates near-duplicate command intents and verify fail-fast classification.
 - [ ] Add tests for forced alternative strategy paths after repeated blocks.
 - [ ] Add independent finding validation lane in orchestrator:
   - [ ] route candidate findings to a separate verifier worker/agent

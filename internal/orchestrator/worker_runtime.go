@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/msf"
 )
@@ -26,30 +29,53 @@ const (
 )
 
 const (
-	WorkerFailureInvalidTaskAction  = "invalid_task_action"
-	WorkerFailureWorkspaceCreate    = "workspace_create_failed"
-	WorkerFailureInvalidWorkingDir  = "invalid_working_dir"
-	WorkerFailureWorkingDirCreate   = "working_dir_create_failed"
-	WorkerFailureArtifactWrite      = "artifact_write_failed"
-	WorkerFailureCommandFailed      = "command_failed"
-	WorkerFailureCommandTimeout     = "command_timeout"
-	WorkerFailureCommandInterrupted = "command_interrupted"
-	WorkerFailureScopeDenied        = "scope_denied"
-	WorkerFailurePolicyDenied       = "policy_denied"
-	WorkerFailurePolicyInvalid      = "policy_invalid"
-	WorkerFailureBootstrapFailed    = "worker_bootstrap_failed"
-	WorkerFailureAssistUnavailable  = "assist_unavailable"
-	WorkerFailureAssistParseFailure = "assist_parse_failure"
-	WorkerFailureAssistTimeout      = "assist_timeout"
-	WorkerFailureAssistNeedsInput   = "assist_needs_input"
-	WorkerFailureAssistNoAction     = "assist_no_action"
-	WorkerFailureAssistLoopDetected = "assist_loop_detected"
-	WorkerFailureAssistExhausted    = "assist_budget_exhausted"
+	WorkerFailureInvalidTaskAction    = "invalid_task_action"
+	WorkerFailureWorkspaceCreate      = "workspace_create_failed"
+	WorkerFailureInvalidWorkingDir    = "invalid_working_dir"
+	WorkerFailureWorkingDirCreate     = "working_dir_create_failed"
+	WorkerFailureArtifactWrite        = "artifact_write_failed"
+	WorkerFailureCommandFailed        = "command_failed"
+	WorkerFailureCommandTimeout       = "command_timeout"
+	WorkerFailureCommandInterrupted   = "command_interrupted"
+	WorkerFailureScopeDenied          = "scope_denied"
+	WorkerFailurePolicyDenied         = "policy_denied"
+	WorkerFailurePolicyInvalid        = "policy_invalid"
+	WorkerFailureBootstrapFailed      = "worker_bootstrap_failed"
+	WorkerFailureInsufficientEvidence = "insufficient_evidence"
+	WorkerFailureAssistUnavailable    = "assist_unavailable"
+	WorkerFailureAssistParseFailure   = "assist_parse_failure"
+	WorkerFailureAssistTimeout        = "assist_timeout"
+	WorkerFailureAssistNeedsInput     = "assist_needs_input"
+	WorkerFailureAssistNoAction       = "assist_no_action"
+	WorkerFailureAssistLoopDetected   = "assist_loop_detected"
+	WorkerFailureAssistExhausted      = "assist_budget_exhausted"
 )
 
 var (
 	errWorkerCommandTimeout     = errors.New("worker command timeout")
 	errWorkerCommandInterrupted = errors.New("worker command interrupted")
+	shellPathArgPattern         = regexp.MustCompile(`(?:\.\./|\./|/)[^\s"'` + "`" + `|&;<>]+`)
+	genericArtifactHintTokens   = map[string]struct{}{
+		"log":       {},
+		"logs":      {},
+		"output":    {},
+		"outputs":   {},
+		"result":    {},
+		"results":   {},
+		"report":    {},
+		"reports":   {},
+		"artifact":  {},
+		"artifacts": {},
+		"file":      {},
+		"files":     {},
+		"data":      {},
+		"raw":       {},
+		"txt":       {},
+		"json":      {},
+		"xml":       {},
+		"md":        {},
+		"csv":       {},
+	}
 )
 
 const workerCommandStopGrace = 1500 * time.Millisecond
@@ -134,7 +160,30 @@ func RunWorkerTask(cfg WorkerRunConfig) error {
 		_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureInvalidTaskAction, nil)
 		return err
 	}
+	requiredAttribution := targetAttribution{}
 	if action.Type != "assist" {
+		if taskNeedsTargetAttribution(task) {
+			requiredAttribution, err = resolveTaskTargetAttribution(cfg, task, scopePolicy)
+			if err != nil {
+				_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureInsufficientEvidence, map[string]any{
+					"detail": "target_attribution_unresolved",
+				})
+				return err
+			}
+			if strings.TrimSpace(requiredAttribution.Target) != "" {
+				task.Targets = []string{strings.TrimSpace(requiredAttribution.Target)}
+			}
+			if nextArgs, note, rewritten := enforceAttributedCommandTarget(action.Command, action.Args, requiredAttribution.Target); rewritten {
+				action.Args = nextArgs
+				_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskProgress, map[string]any{
+					"message":   note,
+					"step":      0,
+					"tool_call": 0,
+					"command":   action.Command,
+					"args":      action.Args,
+				})
+			}
+		}
 		var injected bool
 		var target string
 		action.Args, injected, target = applyCommandTargetFallback(scopePolicy, task, action.Command, action.Args)
@@ -158,10 +207,54 @@ func RunWorkerTask(cfg WorkerRunConfig) error {
 				"args":      action.Args,
 			})
 		}
+		action.Args, injected, target = applyCommandTargetFallback(scopePolicy, task, action.Command, action.Args)
+		if injected {
+			_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskProgress, map[string]any{
+				"message":   fmt.Sprintf("auto-injected target %s for command %s after runtime adaptation", target, action.Command),
+				"step":      0,
+				"tool_call": 0,
+				"command":   action.Command,
+				"args":      action.Args,
+			})
+		}
+		if nextCommand, nextArgs, note, rewritten := adaptWeakReportAction(cfg, task, scopePolicy, action.Command, action.Args, requiredAttribution); rewritten {
+			action.Command = nextCommand
+			action.Args = nextArgs
+			_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskProgress, map[string]any{
+				"message":   note,
+				"step":      0,
+				"tool_call": 0,
+				"command":   action.Command,
+				"args":      action.Args,
+			})
+		}
+		if nextArgs, note, rewritten := ensureVulnerabilityEvidenceAction(task, action.Command, action.Args); rewritten {
+			action.Args = nextArgs
+			_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskProgress, map[string]any{
+				"message":   note,
+				"step":      0,
+				"tool_call": 0,
+				"command":   action.Command,
+				"args":      action.Args,
+			})
+		}
+		if nextCommand, nextArgs, note, rewritten := adaptWeakVulnerabilityAction(task, scopePolicy, action.Command, action.Args); rewritten {
+			action.Command = nextCommand
+			action.Args = nextArgs
+			_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskProgress, map[string]any{
+				"message":   note,
+				"step":      0,
+				"tool_call": 0,
+				"command":   action.Command,
+				"args":      action.Args,
+			})
+		}
 	}
-	if err := scopePolicy.ValidateCommandTargets(action.Command, action.Args); err != nil {
-		_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureScopeDenied, nil)
-		return err
+	if requiresCommandScopeValidation(action.Command, action.Args) {
+		if err := scopePolicy.ValidateCommandTargets(action.Command, action.Args); err != nil {
+			_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureScopeDenied, nil)
+			return err
+		}
 	}
 	if reason, err := enforceWorkerRiskPolicy(task, cfg); err != nil {
 		_ = emitWorkerFailure(manager, cfg, task, err, reason, nil)
@@ -210,9 +303,34 @@ func RunWorkerTask(cfg WorkerRunConfig) error {
 				})
 			}
 		}
-		if err := scopePolicy.ValidateCommandTargets(action.Command, action.Args); err != nil {
-			_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureScopeDenied, nil)
-			return err
+		if repairedArgs, repairNotes, repaired, repairErr := repairMissingCommandInputPaths(cfg, task, action.Command, action.Args); repairErr != nil {
+			_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskProgress, map[string]any{
+				"message":   fmt.Sprintf("runtime input repair skipped: %v", repairErr),
+				"step":      0,
+				"tool_call": 0,
+				"command":   action.Command,
+				"args":      action.Args,
+			})
+		} else if repaired {
+			action.Args = repairedArgs
+			for _, note := range repairNotes {
+				if strings.TrimSpace(note) == "" {
+					continue
+				}
+				_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskProgress, map[string]any{
+					"message":   note,
+					"step":      0,
+					"tool_call": 0,
+					"command":   action.Command,
+					"args":      action.Args,
+				})
+			}
+		}
+		if requiresCommandScopeValidation(action.Command, action.Args) {
+			if err := scopePolicy.ValidateCommandTargets(action.Command, action.Args); err != nil {
+				_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureScopeDenied, nil)
+				return err
+			}
 		}
 	}
 
@@ -236,10 +354,30 @@ func RunWorkerTask(cfg WorkerRunConfig) error {
 		"timeout":    timeout.String(),
 	})
 
-	cmd := exec.Command(action.Command, action.Args...)
+	execArgs := append([]string{}, action.Args...)
+	cmd := exec.Command(action.Command, execArgs...)
 	cmd.Dir = workDir
 	cmd.Env = os.Environ()
 	output, runErr := runWorkerCommand(ctx, cmd, workerCommandStopGrace)
+	if shouldRetryNmapForHostTimeout(action.Command, execArgs, output, runErr) {
+		remaining := remainingContextDuration(ctx)
+		if retryArgs, retryNote, retryOK := buildNmapEvidenceRetryArgs(execArgs, remaining); retryOK {
+			_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskProgress, map[string]any{
+				"message":   retryNote,
+				"step":      1,
+				"tool_call": 2,
+				"command":   action.Command,
+				"args":      retryArgs,
+			})
+			retryCmd := exec.Command(action.Command, retryArgs...)
+			retryCmd.Dir = workDir
+			retryCmd.Env = os.Environ()
+			retryOutput, retryErr := runWorkerCommand(ctx, retryCmd, workerCommandStopGrace)
+			output = mergeRetryOutput(output, retryOutput, retryNote)
+			runErr = retryErr
+			execArgs = retryArgs
+		}
+	}
 	exitCode := 0
 	if runErr != nil {
 		exitCode = commandExitCode(runErr)
@@ -261,9 +399,10 @@ func RunWorkerTask(cfg WorkerRunConfig) error {
 		"title":     fmt.Sprintf("worker command output (%s)", cfg.TaskID),
 		"path":      logPath,
 		"command":   action.Command,
-		"args":      action.Args,
+		"args":      execArgs,
 		"exit_code": exitCode,
 	})
+	producedArtifacts := []string{logPath}
 
 	if runErr != nil {
 		reason := WorkerFailureCommandFailed
@@ -274,11 +413,77 @@ func RunWorkerTask(cfg WorkerRunConfig) error {
 		}
 		_ = emitWorkerFailure(manager, cfg, task, runErr, reason, map[string]any{
 			"command":   action.Command,
-			"args":      action.Args,
+			"args":      execArgs,
 			"log_path":  logPath,
 			"exit_code": exitCode,
 		})
 		return runErr
+	}
+	if evidenceErr := validateCommandOutputEvidence(action.Command, execArgs, output); evidenceErr != nil {
+		_ = emitWorkerFailure(manager, cfg, task, evidenceErr, WorkerFailureInsufficientEvidence, map[string]any{
+			"command":   action.Command,
+			"args":      execArgs,
+			"log_path":  logPath,
+			"exit_code": exitCode,
+		})
+		return evidenceErr
+	}
+	if evidenceErr := validateVulnerabilityEvidenceAuthenticity(task, action.Command, execArgs, output); evidenceErr != nil {
+		_ = emitWorkerFailure(manager, cfg, task, evidenceErr, WorkerFailureInsufficientEvidence, map[string]any{
+			"command":   action.Command,
+			"args":      execArgs,
+			"log_path":  logPath,
+			"exit_code": exitCode,
+		})
+		return evidenceErr
+	}
+	// Goal-seeded plans frequently specify semantic artifact names (for example
+	// "service_version_output.txt") that command tasks may not publish into the
+	// orchestrator artifact store by default. Prefer copying real files produced
+	// in the action working directory; fall back to command output only when no
+	// produced file exists for the expected artifact name.
+	materializedArtifacts, materializeErr := writeExpectedCommandArtifacts(cfg, task, workDir, output, logPath)
+	if materializeErr != nil {
+		_ = emitWorkerFailure(manager, cfg, task, materializeErr, WorkerFailureArtifactWrite, map[string]any{
+			"command":  action.Command,
+			"args":     execArgs,
+			"log_path": logPath,
+		})
+		return materializeErr
+	}
+	for _, artifactPath := range materializedArtifacts {
+		producedArtifacts = appendUnique(producedArtifacts, artifactPath)
+		_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskArtifact, map[string]any{
+			"type":      "derived_command_output",
+			"title":     fmt.Sprintf("derived expected artifact (%s)", cfg.TaskID),
+			"path":      artifactPath,
+			"command":   action.Command,
+			"args":      execArgs,
+			"exit_code": exitCode,
+		})
+	}
+	attrForArtifact := inferTaskCompletionTargetAttribution(task, output)
+	if strings.TrimSpace(requiredAttribution.Target) != "" {
+		attrForArtifact = requiredAttribution
+	}
+	if attrPath, attrErr := writeTargetAttributionArtifact(cfg, task, attrForArtifact); attrErr != nil {
+		_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskProgress, map[string]any{
+			"message":   fmt.Sprintf("target attribution artifact skipped: %v", attrErr),
+			"step":      1,
+			"tool_call": 1,
+			"command":   action.Command,
+			"args":      execArgs,
+		})
+	} else if strings.TrimSpace(attrPath) != "" {
+		producedArtifacts = appendUnique(producedArtifacts, attrPath)
+		_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskArtifact, map[string]any{
+			"type":       "target_attribution",
+			"title":      fmt.Sprintf("resolved target attribution (%s)", cfg.TaskID),
+			"path":       attrPath,
+			"target":     attrForArtifact.Target,
+			"confidence": attrForArtifact.Confidence,
+			"source":     attrForArtifact.Source,
+		})
 	}
 	_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskFinding, map[string]any{
 		"target":       primaryTaskTarget(task),
@@ -287,7 +492,7 @@ func RunWorkerTask(cfg WorkerRunConfig) error {
 		"severity":     "info",
 		"confidence":   "high",
 		"source":       "worker_runtime",
-		"evidence":     []string{logPath},
+		"evidence":     producedArtifacts,
 		"metadata": map[string]any{
 			"attempt": cfg.Attempt,
 			"reason":  "action_completed",
@@ -302,7 +507,7 @@ func RunWorkerTask(cfg WorkerRunConfig) error {
 		"completion_contract": map[string]any{
 			"status_reason":       "action_completed",
 			"required_artifacts":  task.ExpectedArtifacts,
-			"produced_artifacts":  []string{logPath},
+			"produced_artifacts":  producedArtifacts,
 			"required_findings":   []string{"task_execution_result"},
 			"produced_findings":   []string{"task_execution_result"},
 			"verification_status": "reported_by_worker",
@@ -450,6 +655,898 @@ func writeWorkerCommandLog(cfg WorkerRunConfig, output []byte) (string, error) {
 		return "", fmt.Errorf("write command log: %w", err)
 	}
 	return path, nil
+}
+
+func writeExpectedCommandArtifacts(cfg WorkerRunConfig, task TaskSpec, workDir string, output []byte, commandLogPath string) ([]string, error) {
+	if len(task.ExpectedArtifacts) == 0 {
+		return nil, nil
+	}
+	artifactDir := filepath.Join(BuildRunPaths(cfg.SessionsDir, cfg.RunID).ArtifactDir, cfg.TaskID)
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create artifact dir: %w", err)
+	}
+	cleanLogPath := filepath.Clean(commandLogPath)
+	written := []string{}
+	seen := map[string]struct{}{}
+	for _, expected := range task.ExpectedArtifacts {
+		expected = strings.TrimSpace(expected)
+		name := strings.TrimSpace(filepath.Base(expected))
+		if name == "" || name == "." {
+			continue
+		}
+		path := filepath.Join(artifactDir, name)
+		cleanPath := filepath.Clean(path)
+		if cleanPath == cleanLogPath {
+			continue
+		}
+		if _, ok := seen[cleanPath]; ok {
+			continue
+		}
+		seen[cleanPath] = struct{}{}
+		content, _, err := loadExpectedArtifactContent(workDir, expected, name)
+		if err != nil {
+			return nil, fmt.Errorf("load expected artifact %q: %w", name, err)
+		}
+		if len(content) == 0 {
+			content = output
+		}
+		if len(content) == 0 {
+			content = []byte("no command output captured\n")
+		}
+		if err := os.WriteFile(cleanPath, content, 0o644); err != nil {
+			return nil, fmt.Errorf("write expected artifact %q: %w", name, err)
+		}
+		written = append(written, cleanPath)
+	}
+	return appendUnique(nil, written...), nil
+}
+
+func loadExpectedArtifactContent(workDir, expected, baseName string) ([]byte, string, error) {
+	sourcePath, ok := resolveExpectedArtifactSourcePath(workDir, expected, baseName)
+	if !ok {
+		return nil, "", nil
+	}
+	data, err := os.ReadFile(sourcePath)
+	if err != nil {
+		return nil, sourcePath, err
+	}
+	return data, sourcePath, nil
+}
+
+func resolveExpectedArtifactSourcePath(workDir, expected, baseName string) (string, bool) {
+	candidates := []string{}
+	expected = strings.TrimSpace(expected)
+	if expected != "" {
+		if filepath.IsAbs(expected) {
+			candidates = append(candidates, filepath.Clean(expected))
+		} else {
+			trimmed := strings.TrimPrefix(expected, "."+string(filepath.Separator))
+			if trimmed != "" {
+				candidates = append(candidates, filepath.Clean(filepath.Join(workDir, trimmed)))
+			}
+		}
+	}
+	if strings.TrimSpace(baseName) != "" {
+		candidates = append(candidates, filepath.Clean(filepath.Join(workDir, baseName)))
+	}
+	seen := map[string]struct{}{}
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		if _, done := seen[candidate]; done {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		info, err := os.Stat(candidate)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		return candidate, true
+	}
+	return "", false
+}
+
+func repairMissingCommandInputPaths(cfg WorkerRunConfig, task TaskSpec, command string, args []string) ([]string, []string, bool, error) {
+	if len(args) == 0 || len(task.DependsOn) == 0 {
+		return args, nil, false, nil
+	}
+	candidates, err := collectDependencyArtifactCandidates(cfg, task.DependsOn)
+	if err != nil || len(candidates) == 0 {
+		return args, nil, false, err
+	}
+	if repairedArgs, repairNotes, repaired := repairMissingCommandInputPathsForShellWrapper(command, args, candidates); repaired {
+		return repairedArgs, appendUnique(nil, repairNotes...), true, nil
+	}
+	if !commandLikelyReadsLocalFiles(command) {
+		return args, nil, false, nil
+	}
+
+	nextArgs := append([]string{}, args...)
+	notes := []string{}
+	changed := false
+	used := map[string]struct{}{}
+
+	for i, arg := range args {
+		if !looksLikePathArg(arg) {
+			continue
+		}
+		candidate := strings.TrimSpace(arg)
+		if candidate == "" {
+			continue
+		}
+		if _, statErr := os.Stat(candidate); statErr == nil {
+			continue
+		}
+		replacement := bestArtifactCandidateForMissingPath(candidate, candidates, used)
+		if replacement == "" {
+			continue
+		}
+		nextArgs[i] = replacement
+		used[replacement] = struct{}{}
+		changed = true
+		notes = append(notes, fmt.Sprintf("runtime input repair: replaced missing path %s with dependency artifact %s", candidate, replacement))
+	}
+
+	if !changed {
+		return args, nil, false, nil
+	}
+	return nextArgs, appendUnique(nil, notes...), true, nil
+}
+
+func repairMissingCommandInputPathsForShellWrapper(command string, args []string, candidates []string) ([]string, []string, bool) {
+	base := strings.ToLower(strings.TrimSpace(filepath.Base(command)))
+	if base != "bash" && base != "sh" && base != "zsh" {
+		return args, nil, false
+	}
+	if len(args) < 2 {
+		return args, nil, false
+	}
+	mode := strings.TrimSpace(args[0])
+	if mode != "-c" && mode != "-lc" {
+		return args, nil, false
+	}
+	body := strings.TrimSpace(args[1])
+	if body == "" || !shellScriptLikelyReadsLocalFiles(body) {
+		return args, nil, false
+	}
+
+	changedBody := body
+	notes := []string{}
+	changed := false
+	used := map[string]struct{}{}
+	fields := strings.Fields(body)
+	skipNextAsOutputPath := false
+
+	for _, field := range fields {
+		token := strings.TrimSpace(field)
+		if token == "" {
+			continue
+		}
+		if isOutputRedirectionOperatorToken(token) {
+			skipNextAsOutputPath = true
+			continue
+		}
+		if skipNextAsOutputPath {
+			skipNextAsOutputPath = false
+			continue
+		}
+		if tokenStartsWithOutputRedirection(token) {
+			continue
+		}
+
+		for _, match := range shellPathArgPattern.FindAllStringIndex(token, -1) {
+			if len(match) != 2 {
+				continue
+			}
+			start := match[0]
+			end := match[1]
+			if start < 0 || end <= start || end > len(token) {
+				continue
+			}
+			if !isShellPathMatchBoundary(token, start) {
+				continue
+			}
+			candidate := token[start:end]
+			if !looksLikePathArg(candidate) {
+				continue
+			}
+			if _, statErr := os.Stat(candidate); statErr == nil {
+				continue
+			}
+			replacement := bestArtifactCandidateForMissingPath(candidate, candidates, used)
+			if replacement == "" {
+				continue
+			}
+			replacementToken := replacement
+			if !tokenContainsQuotedPath(token, candidate) {
+				replacementToken = shellQuotePath(replacement)
+			}
+			changedBody = strings.Replace(changedBody, candidate, replacementToken, 1)
+			used[replacement] = struct{}{}
+			changed = true
+			notes = append(notes, fmt.Sprintf("runtime input repair: replaced missing path %s with dependency artifact %s", candidate, replacement))
+		}
+	}
+
+	if !changed {
+		return args, nil, false
+	}
+	nextArgs := append([]string{}, args...)
+	nextArgs[1] = changedBody
+	return nextArgs, notes, true
+}
+
+func shellScriptLikelyReadsLocalFiles(body string) bool {
+	for _, token := range shellCommandTokens(body) {
+		if commandLikelyReadsLocalFiles(token) {
+			return true
+		}
+	}
+	return false
+}
+
+func isOutputRedirectionOperatorToken(token string) bool {
+	switch strings.TrimSpace(token) {
+	case ">", ">>", "1>", "1>>", "2>", "2>>", "&>", "&>>":
+		return true
+	default:
+		return false
+	}
+}
+
+func tokenStartsWithOutputRedirection(token string) bool {
+	trimmed := strings.TrimSpace(token)
+	if trimmed == "" {
+		return false
+	}
+	return strings.HasPrefix(trimmed, ">") ||
+		strings.HasPrefix(trimmed, "1>") ||
+		strings.HasPrefix(trimmed, "2>") ||
+		strings.HasPrefix(trimmed, "&>")
+}
+
+func tokenContainsQuotedPath(token, path string) bool {
+	return strings.Contains(token, `"`+path+`"`) || strings.Contains(token, `'`+path+`'`)
+}
+
+func shellQuotePath(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return path
+	}
+	if !strings.ContainsAny(trimmed, " \t\n\r\"'`$&;|<>") {
+		return trimmed
+	}
+	escaped := strings.ReplaceAll(trimmed, `'`, `'"'"'`)
+	return "'" + escaped + "'"
+}
+
+func isShellPathMatchBoundary(token string, start int) bool {
+	if start <= 0 || start >= len(token) {
+		return true
+	}
+	prev := rune(token[start-1])
+	return !unicode.IsLetter(prev) && !unicode.IsDigit(prev) && prev != '_' && prev != '-' && prev != '.'
+}
+
+func commandLikelyReadsLocalFiles(command string) bool {
+	base := strings.ToLower(strings.TrimSpace(filepath.Base(command)))
+	switch base {
+	case "awk", "cat", "cut", "egrep", "fgrep", "grep", "head", "jq", "less", "more", "sed", "sort", "tail", "uniq", "wc":
+		return true
+	default:
+		return false
+	}
+}
+
+func looksLikePathArg(arg string) bool {
+	trimmed := strings.TrimSpace(arg)
+	if trimmed == "" {
+		return false
+	}
+	return strings.HasPrefix(trimmed, "/") || strings.HasPrefix(trimmed, "./") || strings.HasPrefix(trimmed, "../")
+}
+
+func collectDependencyArtifactCandidates(cfg WorkerRunConfig, dependencies []string) ([]string, error) {
+	base := BuildRunPaths(cfg.SessionsDir, cfg.RunID).ArtifactDir
+	candidates := []string{}
+	for _, dep := range compactStringSlice(dependencies) {
+		depDir := filepath.Join(base, dep)
+		info, err := os.Stat(depDir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, err
+		}
+		if !info.IsDir() {
+			continue
+		}
+		if err := filepath.WalkDir(depDir, func(path string, d fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if d.IsDir() {
+				return nil
+			}
+			candidates = append(candidates, path)
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+	}
+	return appendUnique(nil, candidates...), nil
+}
+
+func bestArtifactCandidateForMissingPath(missingPath string, candidates []string, used map[string]struct{}) string {
+	missingBase := strings.ToLower(strings.TrimSpace(filepath.Base(missingPath)))
+	if missingBase == "" {
+		return ""
+	}
+
+	for _, candidate := range candidates {
+		if _, alreadyUsed := used[candidate]; alreadyUsed {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(filepath.Base(candidate)), missingBase) {
+			return candidate
+		}
+	}
+
+	missingTokens := tokenizeArtifactHint(missingBase)
+	if len(missingTokens) == 0 {
+		return ""
+	}
+	bestPath := ""
+	bestScore := 0
+	bestSpecificity := -1
+	for _, candidate := range candidates {
+		if _, alreadyUsed := used[candidate]; alreadyUsed {
+			continue
+		}
+		candidateTokens := tokenizeArtifactHint(filepath.Base(candidate))
+		if len(candidateTokens) == 0 {
+			continue
+		}
+		score := artifactTokenMatchScore(missingTokens, candidateTokens)
+		specificity := artifactCandidateSpecificity(candidate, candidateTokens)
+		if score < bestScore {
+			continue
+		}
+		if score == bestScore && specificity <= bestSpecificity {
+			continue
+		}
+		bestScore = score
+		bestSpecificity = specificity
+		bestPath = candidate
+	}
+	if bestScore < 2 {
+		return ""
+	}
+	return bestPath
+}
+
+func tokenizeArtifactHint(value string) []string {
+	parts := strings.FieldsFunc(strings.ToLower(strings.TrimSpace(value)), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		token := strings.TrimSpace(part)
+		if len(token) < 3 {
+			continue
+		}
+		out = append(out, token)
+	}
+	return appendUnique(nil, out...)
+}
+
+func artifactTokenMatchScore(needles, haystack []string) int {
+	score := 0
+	for _, needle := range needles {
+		bestTokenScore := 0
+		for _, candidate := range haystack {
+			if needle == candidate {
+				if isGenericArtifactHintToken(needle) {
+					bestTokenScore = max(bestTokenScore, 1)
+				} else {
+					bestTokenScore = max(bestTokenScore, 4)
+				}
+				continue
+			}
+			if commonPrefixLen(needle, candidate) >= 4 {
+				if isGenericArtifactHintToken(needle) || isGenericArtifactHintToken(candidate) {
+					bestTokenScore = max(bestTokenScore, 1)
+				} else {
+					bestTokenScore = max(bestTokenScore, 2)
+				}
+			}
+		}
+		score += bestTokenScore
+	}
+	score += artifactSemanticOverlapScore(needles, haystack)
+	return score
+}
+
+func artifactCandidateSpecificity(path string, tokens []string) int {
+	base := strings.ToLower(strings.TrimSpace(filepath.Base(path)))
+	score := 0
+	for _, token := range tokens {
+		if isGenericArtifactHintToken(token) {
+			continue
+		}
+		score++
+	}
+	if strings.HasPrefix(base, "worker-") && strings.HasSuffix(base, ".log") {
+		score -= 2
+	}
+	return score
+}
+
+func isGenericArtifactHintToken(token string) bool {
+	_, ok := genericArtifactHintTokens[strings.ToLower(strings.TrimSpace(token))]
+	return ok
+}
+
+func artifactSemanticOverlapScore(needles, haystack []string) int {
+	needleGroups := semanticGroupsForTokens(needles)
+	if len(needleGroups) == 0 {
+		return 0
+	}
+	candidateGroups := semanticGroupsForTokens(haystack)
+	if len(candidateGroups) == 0 {
+		return 0
+	}
+	score := 0
+	for group := range needleGroups {
+		if _, ok := candidateGroups[group]; !ok {
+			continue
+		}
+		if group == "vuln" {
+			score += 2
+			continue
+		}
+		if group == "scan" {
+			score += 2
+			continue
+		}
+		score++
+	}
+	return score
+}
+
+func semanticGroupsForTokens(tokens []string) map[string]struct{} {
+	if len(tokens) == 0 {
+		return nil
+	}
+	groups := map[string]struct{}{}
+	for _, token := range tokens {
+		group := semanticGroupForToken(token)
+		if group == "" {
+			continue
+		}
+		groups[group] = struct{}{}
+	}
+	if len(groups) == 0 {
+		return nil
+	}
+	return groups
+}
+
+func semanticGroupForToken(token string) string {
+	switch strings.ToLower(strings.TrimSpace(token)) {
+	case "scan", "service", "version", "port", "host", "nmap", "inventory", "discovery", "enum", "enumeration":
+		return "scan"
+	case "vuln", "vulnerability", "cve", "exploit", "misconfig", "misconfiguration", "exposure":
+		return "vuln"
+	case "report", "owasp", "finding", "evidence", "remediation", "summary":
+		return "report"
+	default:
+		return ""
+	}
+}
+
+func commonPrefixLen(a, b string) int {
+	maxLen := min(len(a), len(b))
+	count := 0
+	for i := 0; i < maxLen; i++ {
+		if a[i] != b[i] {
+			break
+		}
+		count++
+	}
+	return count
+}
+
+func shouldRetryNmapForHostTimeout(command string, args []string, output []byte, runErr error) bool {
+	if runErr != nil {
+		return false
+	}
+	if !isNmapCommand(command) || !nmapRequiresActionableEvidence(args) {
+		return false
+	}
+	return nmapOutputIndicatesHostTimeout(output)
+}
+
+func buildNmapEvidenceRetryArgs(args []string, remaining time.Duration) ([]string, string, bool) {
+	if !nmapRequiresActionableEvidence(args) {
+		return args, "", false
+	}
+	profile := selectNmapGuardrailProfile(args)
+	targetHostTimeout := "75s"
+	targetMaxRetries := "2"
+	targetMaxRate := "900"
+	if profile.name == "vuln_mapping" {
+		targetHostTimeout = "120s"
+		targetMaxRetries = "3"
+		targetMaxRate = "600"
+	}
+	if bounded := fitRetryHostTimeoutToRemaining(targetHostTimeout, remaining); bounded != "" {
+		targetHostTimeout = bounded
+	} else if remaining > 0 {
+		return args, "", false
+	}
+	next := setNmapOptionValue(args, "--host-timeout", targetHostTimeout)
+	next = setNmapOptionValue(next, "--max-retries", targetMaxRetries)
+	next = setNmapOptionValue(next, "--max-rate", targetMaxRate)
+	if stringSlicesEqual(next, args) {
+		return args, "", false
+	}
+	note := fmt.Sprintf("nmap host-timeout detected; retrying once with relaxed evidence profile (--host-timeout %s --max-retries %s --max-rate %s)", targetHostTimeout, targetMaxRetries, targetMaxRate)
+	return next, note, true
+}
+
+func remainingContextDuration(ctx context.Context) time.Duration {
+	if ctx == nil {
+		return 0
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return 0
+	}
+	return time.Until(deadline)
+}
+
+func fitRetryHostTimeoutToRemaining(target string, remaining time.Duration) string {
+	if remaining <= 0 {
+		return target
+	}
+	targetDur, err := time.ParseDuration(strings.TrimSpace(target))
+	if err != nil || targetDur <= 0 {
+		return target
+	}
+	// Reserve budget for process startup/teardown and result handling.
+	available := remaining - 20*time.Second
+	if available < 15*time.Second {
+		return ""
+	}
+	if targetDur > available {
+		targetDur = available
+	}
+	targetDur = targetDur.Round(time.Second)
+	if targetDur < 15*time.Second {
+		return ""
+	}
+	return targetDur.String()
+}
+
+func setNmapOptionValue(args []string, option, value string) []string {
+	option = strings.ToLower(strings.TrimSpace(option))
+	if option == "" || strings.TrimSpace(value) == "" {
+		return append([]string{}, args...)
+	}
+	out := make([]string, 0, len(args)+2)
+	set := false
+	for i := 0; i < len(args); i++ {
+		arg := strings.TrimSpace(args[i])
+		lower := strings.ToLower(arg)
+		if lower == option {
+			if !set {
+				out = append(out, arg)
+				out = append(out, value)
+				set = true
+			}
+			if i+1 < len(args) {
+				i++
+			}
+			continue
+		}
+		if strings.HasPrefix(lower, option+"=") {
+			if !set {
+				out = append(out, option+"="+value)
+				set = true
+			}
+			continue
+		}
+		out = append(out, arg)
+	}
+	if !set {
+		out = append(out, option, value)
+	}
+	return out
+}
+
+func mergeRetryOutput(first, second []byte, note string) []byte {
+	const divider = "\n--- nmap retry ---\n"
+	out := append([]byte{}, first...)
+	if len(out) > 0 && out[len(out)-1] != '\n' {
+		out = append(out, '\n')
+	}
+	if strings.TrimSpace(note) != "" {
+		out = append(out, []byte(note)...)
+		out = append(out, '\n')
+	}
+	out = append(out, []byte(divider)...)
+	out = append(out, second...)
+	return out
+}
+
+func validateCommandOutputEvidence(command string, args []string, output []byte) error {
+	if !isNmapCommand(command) || !nmapRequiresActionableEvidence(args) {
+		return nil
+	}
+	if nmapOutputIndicatesHostTimeout(output) && !nmapOutputContainsActionableEvidence(output) {
+		return fmt.Errorf("nmap output indicates host timeout without actionable service/vulnerability evidence")
+	}
+	return nil
+}
+
+func nmapRequiresActionableEvidence(args []string) bool {
+	return nmapArgsSuggestServiceEnumeration(args) || nmapArgsContainScriptToken(args, "vuln")
+}
+
+func nmapOutputIndicatesHostTimeout(output []byte) bool {
+	text := strings.ToLower(string(output))
+	return strings.Contains(text, "skipping host") && strings.Contains(text, "due to host timeout")
+}
+
+var (
+	nmapPortHeaderPattern = regexp.MustCompile(`(?m)^PORT\s+STATE\s+SERVICE`)
+	nmapPortLinePattern   = regexp.MustCompile(`(?m)^\d+/(tcp|udp)\s+\S+`)
+	nmapAllPortsPattern   = regexp.MustCompile(`(?m)all\s+\d+\s+scanned ports`)
+	nmapCVEPattern        = regexp.MustCompile(`(?i)CVE-\d{4}-\d{4,}`)
+)
+
+func nmapOutputContainsActionableEvidence(output []byte) bool {
+	text := string(output)
+	return nmapPortHeaderPattern.MatchString(text) ||
+		nmapPortLinePattern.MatchString(text) ||
+		nmapAllPortsPattern.MatchString(strings.ToLower(text)) ||
+		nmapCVEPattern.MatchString(text)
+}
+
+func adaptWeakVulnerabilityAction(task TaskSpec, scopePolicy *ScopePolicy, command string, args []string) (string, []string, string, bool) {
+	if taskRequiresReportSynthesis(task) {
+		return command, args, "", false
+	}
+	if !taskRequiresVulnerabilityEvidence(task) {
+		return command, args, "", false
+	}
+	if !isWeakVulnerabilityMappingCommand(command, args) {
+		return command, args, "", false
+	}
+	target := firstTaskTarget(task.Targets)
+	if target == "" && scopePolicy != nil {
+		target = scopePolicy.FirstAllowedTarget()
+	}
+	if strings.TrimSpace(target) == "" {
+		return command, args, "", false
+	}
+	nextCommand := "nmap"
+	nextArgs := []string{
+		"--script", "vuln and safe",
+		"--script-timeout", "20s",
+		"-sV",
+		"--version-light",
+		"--top-ports", "20",
+		"-Pn",
+		target,
+	}
+	note := fmt.Sprintf("rewrote weak vulnerability-mapping command (%s) to concrete nmap vuln-mapping action against %s", command, target)
+	return nextCommand, nextArgs, note, true
+}
+
+func isWeakVulnerabilityMappingCommand(command string, args []string) bool {
+	base := strings.ToLower(strings.TrimSpace(filepath.Base(command)))
+	switch base {
+	case "nmap", "searchsploit", "msfconsole", "metasploit", "nikto", "nuclei":
+		return false
+	}
+	switch base {
+	case "cat", "echo", "printf", "true", "false":
+		return true
+	case "python", "python3":
+		return true
+	case "bash", "sh", "zsh":
+		return true
+	}
+	return false
+}
+
+func isWeakPythonVulnMappingArgs(args []string) bool {
+	code := inlinePythonCodeArg(args)
+	if code == "" {
+		return false
+	}
+	lower := strings.ToLower(code)
+	if !strings.Contains(lower, "print(") {
+		return false
+	}
+	if strings.Contains(lower, "subprocess") || strings.Contains(lower, "nmap") || strings.Contains(lower, "searchsploit") || strings.Contains(lower, "metasploit") {
+		return false
+	}
+	return true
+}
+
+func inlinePythonCodeArg(args []string) string {
+	for i := 0; i < len(args); i++ {
+		arg := strings.TrimSpace(args[i])
+		if arg == "-c" && i+1 < len(args) {
+			return strings.TrimSpace(args[i+1])
+		}
+	}
+	return ""
+}
+
+func isWeakShellVulnMappingArgs(args []string) bool {
+	if len(args) < 2 {
+		return false
+	}
+	if strings.TrimSpace(args[0]) != "-c" && strings.TrimSpace(args[0]) != "-lc" {
+		return false
+	}
+	body := strings.ToLower(strings.TrimSpace(args[1]))
+	if body == "" {
+		return false
+	}
+	if containsAnySubstring(body, "nmap ", "searchsploit", "msfconsole", "metasploit", "nikto", "nuclei") {
+		return false
+	}
+	return strings.Contains(body, "cat ") || strings.Contains(body, "echo ") || strings.Contains(body, "printf ")
+}
+
+func validateVulnerabilityEvidenceAuthenticity(task TaskSpec, command string, args []string, output []byte) error {
+	if !taskRequiresVulnerabilityEvidence(task) {
+		return nil
+	}
+	if !isLikelyPlaceholderVulnOutput(command, args, output) {
+		return nil
+	}
+	return fmt.Errorf("vulnerability mapping output appears to be placeholder/example text without tool-backed evidence")
+}
+
+func ensureVulnerabilityEvidenceAction(task TaskSpec, command string, args []string) ([]string, string, bool) {
+	if taskRequiresReportSynthesis(task) {
+		return args, "", false
+	}
+	if !taskRequiresVulnerabilityEvidence(task) {
+		return args, "", false
+	}
+	if !isNmapCommand(command) {
+		return args, "", false
+	}
+	if nmapArgsContainScriptToken(args, "vuln") {
+		return args, "", false
+	}
+	nextArgs := append([]string{}, args...)
+	nextArgs = setNmapOptionValue(nextArgs, "--script", "vuln and safe")
+	nextArgs = setNmapOptionValue(nextArgs, "--script-timeout", "20s")
+	note := "enforced vulnerability evidence profile: set --script \"vuln and safe\" and --script-timeout 20s for CVE-capable output"
+	return nextArgs, note, true
+}
+
+func taskRequiresVulnerabilityEvidence(task TaskSpec) bool {
+	fields := []string{
+		task.Title,
+		task.Goal,
+		strings.Join(task.DoneWhen, " "),
+		strings.Join(task.ExpectedArtifacts, " "),
+	}
+	text := strings.ToLower(strings.TrimSpace(strings.Join(fields, " ")))
+	if text == "" {
+		return false
+	}
+	return strings.Contains(text, "vulnerab") ||
+		strings.Contains(text, "cve") ||
+		strings.Contains(text, "exploit") ||
+		strings.Contains(text, "weakness")
+}
+
+func isLikelyPlaceholderVulnOutput(command string, args []string, output []byte) bool {
+	text := strings.TrimSpace(string(output))
+	if text == "" {
+		return true
+	}
+	lower := strings.ToLower(text)
+	if !strings.Contains(lower, "example:") {
+		return false
+	}
+	if !nmapCVEPattern.MatchString(text) {
+		return false
+	}
+	if containsAnySubstring(lower,
+		"nmap scan report",
+		"searchsploit",
+		"metasploit",
+		"nse:",
+		"vulners",
+		"osv",
+	) {
+		return false
+	}
+	base := strings.ToLower(strings.TrimSpace(filepath.Base(command)))
+	switch base {
+	case "python", "python3", "bash", "sh", "zsh":
+		return true
+	default:
+		if base == "" {
+			return false
+		}
+	}
+	if len(args) == 0 {
+		return false
+	}
+	lineCount := len(strings.Split(text, "\n"))
+	return lineCount <= 12
+}
+
+func containsAnySubstring(text string, needles ...string) bool {
+	for _, needle := range needles {
+		if strings.Contains(text, strings.ToLower(strings.TrimSpace(needle))) {
+			return true
+		}
+	}
+	return false
+}
+
+func requiresCommandScopeValidation(command string, args []string) bool {
+	base := strings.ToLower(strings.TrimSpace(filepath.Base(command)))
+	if base != "bash" && base != "sh" && base != "zsh" {
+		return true
+	}
+	if len(args) < 2 {
+		return true
+	}
+	mode := strings.TrimSpace(args[0])
+	if mode != "-c" && mode != "-lc" {
+		return true
+	}
+	body := strings.TrimSpace(args[1])
+	if body == "" {
+		return true
+	}
+	// Conservative fail-closed: uncertain shell expansions still require scope validation.
+	if strings.Contains(body, "$(") || strings.Contains(body, "`") {
+		return true
+	}
+	for _, token := range shellCommandTokens(body) {
+		if isNetworkSensitiveCommand(token) {
+			return true
+		}
+	}
+	return false
+}
+
+func shellCommandTokens(body string) []string {
+	segments := strings.FieldsFunc(body, func(r rune) bool {
+		switch r {
+		case '|', ';', '&', '\n':
+			return true
+		default:
+			return false
+		}
+	})
+	out := make([]string, 0, len(segments))
+	for _, segment := range segments {
+		fields := strings.Fields(strings.TrimSpace(segment))
+		if len(fields) == 0 {
+			continue
+		}
+		out = append(out, fields[0])
+	}
+	return out
 }
 
 func sanitizePathComponent(v string) string {

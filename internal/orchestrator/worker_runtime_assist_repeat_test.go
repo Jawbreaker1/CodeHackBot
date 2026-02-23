@@ -49,3 +49,86 @@ func TestBuildAssistActionKeyKeepsArgOrderForOrderSensitiveCommands(t *testing.T
 		t.Fatalf("expected different keys for reordered args on order-sensitive command")
 	}
 }
+
+func TestIsNoNewEvidenceCandidateShellScripts(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		command string
+		args    []string
+		want    bool
+	}{
+		{
+			name:    "network command",
+			command: "nmap",
+			args:    []string{"127.0.0.1"},
+			want:    true,
+		},
+		{
+			name:    "tools relative script",
+			command: "bash",
+			args:    []string{"tools/check_loopback.sh"},
+			want:    true,
+		},
+		{
+			name:    "bare shell script",
+			command: "bash",
+			args:    []string{"check_loopback.sh"},
+			want:    true,
+		},
+		{
+			name:    "absolute shell script",
+			command: "bash",
+			args:    []string{"/tmp/tools/validate_loopback.sh"},
+			want:    true,
+		},
+		{
+			name:    "shell inline command",
+			command: "bash",
+			args:    []string{"-lc", "echo ok"},
+			want:    false,
+		},
+		{
+			name:    "non-network non-script command",
+			command: "list_dir",
+			args:    []string{"."},
+			want:    false,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := isNoNewEvidenceCandidate(tc.command, tc.args)
+			if got != tc.want {
+				t.Fatalf("isNoNewEvidenceCandidate(%q, %v) = %v, want %v", tc.command, tc.args, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeWorkerAssistCommandRewritesSingleArgShellCommand(t *testing.T) {
+	t.Parallel()
+
+	command, args := normalizeWorkerAssistCommand("bash", []string{"nmap -sV -p- 127.0.0.1"})
+	if command != "bash" {
+		t.Fatalf("expected command bash, got %q", command)
+	}
+	if len(args) != 2 || args[0] != "-lc" || args[1] != "nmap -sV -p- 127.0.0.1" {
+		t.Fatalf("expected -lc wrapped shell command, got %#v", args)
+	}
+}
+
+func TestNormalizeWorkerAssistCommandKeepsSingleArgShellScript(t *testing.T) {
+	t.Parallel()
+
+	command, args := normalizeWorkerAssistCommand("bash", []string{"scan.sh"})
+	if command != "bash" {
+		t.Fatalf("expected command bash, got %q", command)
+	}
+	if len(args) != 1 || args[0] != "scan.sh" {
+		t.Fatalf("expected shell script arg unchanged, got %#v", args)
+	}
+}
