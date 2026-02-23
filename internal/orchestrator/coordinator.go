@@ -223,6 +223,21 @@ func (c *Coordinator) handleWorkerExits() error {
 			if workerReason, ok := latestWorkerFailureReason(events, taskID, WorkerSignalID(exit.WorkerID)); ok {
 				reason = workerReason
 				retryable = retryableWorkerFailureReason(workerReason)
+				if retryable && workerReason == WorkerFailureAssistLoopDetected {
+					taskSpec, hasTask := c.scheduler.Task(taskID)
+					if !hasTask {
+						if loaded, readErr := c.manager.ReadTask(c.runID, taskID); readErr == nil {
+							taskSpec = loaded
+							hasTask = true
+						}
+					}
+					if !hasTask || !allowAssistLoopRetry(taskSpec) {
+						retryable = false
+					}
+				}
+				if retryable && hasRepeatedTaskFailureReason(events, taskID, workerReason) {
+					retryable = false
+				}
 			} else {
 				if err := c.manager.EmitEvent(c.runID, orchestratorWorkerID, taskID, EventTypeTaskFailed, map[string]any{
 					"reason":    reason,

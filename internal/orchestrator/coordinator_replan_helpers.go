@@ -167,8 +167,46 @@ func (c *Coordinator) runScopeTargets() []string {
 }
 
 func (c *Coordinator) replanMutationKey(trigger string, source EventEnvelope) string {
+	if trigger == "execution_failure" {
+		if keyBase := c.executionFailureMutationKeyBase(source); keyBase != "" {
+			return "rp:" + hashKey(keyBase)
+		}
+	}
 	keyBase := strings.Join([]string{c.runID, trigger, source.EventID, source.TaskID}, "|")
 	return "rp:" + hashKey(keyBase)
+}
+
+func (c *Coordinator) executionFailureMutationKeyBase(source EventEnvelope) string {
+	payload := map[string]any{}
+	if len(source.Payload) > 0 {
+		_ = json.Unmarshal(source.Payload, &payload)
+	}
+	reason := strings.TrimSpace(toString(payload["reason"]))
+	if reason != WorkerFailureCommandFailed {
+		return ""
+	}
+	command := strings.TrimSpace(toString(payload["command"]))
+	args := payloadStringSlice(payload["args"])
+	if command == "" {
+		return ""
+	}
+	fingerprintParts := []string{reason, strings.ToLower(command)}
+	for _, arg := range args {
+		fingerprintParts = append(fingerprintParts, strings.TrimSpace(arg))
+	}
+	scopeKey := strings.TrimSpace(source.TaskID)
+	if scopeKey == "" {
+		scopeKey = "run"
+	}
+	if c.isAdaptiveReplanTask(source.TaskID) {
+		scopeKey = "adaptive_replan_execution_failure"
+	}
+	return strings.Join([]string{
+		c.runID,
+		"execution_failure",
+		scopeKey,
+		hashKey(strings.Join(fingerprintParts, "\x1f")),
+	}, "|")
 }
 
 func (c *Coordinator) ensureReplanBudget() {
@@ -363,9 +401,57 @@ func hasWorkerTaskCompleted(events []EventEnvelope, taskID, workerID string) boo
 
 func retryableWorkerFailureReason(reason string) bool {
 	switch reason {
-	case WorkerFailureScopeDenied, WorkerFailurePolicyDenied, WorkerFailurePolicyInvalid, WorkerFailureInvalidTaskAction, WorkerFailureCommandInterrupted:
+	case WorkerFailureScopeDenied,
+		WorkerFailurePolicyDenied,
+		WorkerFailurePolicyInvalid,
+		WorkerFailureInvalidTaskAction,
+		WorkerFailureCommandInterrupted:
 		return false
 	default:
 		return true
 	}
+}
+
+func hasRepeatedTaskFailureReason(events []EventEnvelope, taskID, reason string) bool {
+	taskID = strings.TrimSpace(taskID)
+	reason = strings.TrimSpace(reason)
+	if taskID == "" || reason == "" {
+		return false
+	}
+	count := 0
+	for _, event := range events {
+		if event.Type != EventTypeTaskFailed || event.TaskID != taskID {
+			continue
+		}
+		payload := map[string]any{}
+		if len(event.Payload) > 0 {
+			_ = json.Unmarshal(event.Payload, &payload)
+		}
+		eventReason := strings.TrimSpace(toString(payload["reason"]))
+		if eventReason == "" {
+			eventReason = "worker_exit"
+		}
+		if eventReason != reason {
+			continue
+		}
+		count++
+		if count >= 2 {
+			return true
+		}
+	}
+	return false
+}
+
+func allowAssistLoopRetry(task TaskSpec) bool {
+	strategy := strings.ToLower(strings.TrimSpace(task.Strategy))
+	if strategy == "" {
+		return false
+	}
+	if strategy == "recon_seed" {
+		return true
+	}
+	if strings.HasPrefix(strategy, "adaptive_replan_") {
+		return false
+	}
+	return false
 }

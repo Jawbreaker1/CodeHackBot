@@ -25,6 +25,16 @@ const (
 	workerAssistTurnFactor    = 4
 	workerAssistMaxLoopBlocks = 6
 	workerAssistMaxRecoveries = 4
+	// Guard against long "tool churn" loops where the model keeps emitting tool
+	// actions that do not converge toward completion.
+	workerAssistMaxConsecutiveToolTurns        = 6
+	workerAssistMaxConsecutiveRecoverToolTurns = 3
+	workerAssistNoNewEvidenceResultRepeat      = 3
+	workerAssistNoNewEvidenceToolCallCap       = 8
+	workerAssistResultFingerprintBytes         = 512
+	workerAssistSummaryRecoverStepCap          = 4
+	workerAssistSummaryRecoverLoopCap          = 3
+	workerAssistSummaryRecoverQuestionCap      = 2
 )
 
 var htmlTitlePattern = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)

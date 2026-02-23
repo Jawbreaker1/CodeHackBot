@@ -89,23 +89,25 @@ func (s *benchmarkScenario) UnmarshalJSON(data []byte) error {
 }
 
 type benchmarkRunMetrics struct {
-	TotalTasks                          int     `json:"total_tasks"`
-	CompletedTasks                      int     `json:"completed_tasks"`
-	FailedTasks                         int     `json:"failed_tasks"`
-	BlockedTasks                        int     `json:"blocked_tasks"`
-	CanceledTasks                       int     `json:"canceled_tasks"`
-	TaskSuccessRate                     float64 `json:"task_success_rate"`
-	TotalFailures                       int     `json:"total_failures"`
-	RecoveredFailures                   int     `json:"recovered_failures"`
-	RecoverySuccessRate                 float64 `json:"recovery_success_rate"`
-	LoopIncidents                       int     `json:"loop_incidents"`
-	LoopIncidentRate                    float64 `json:"loop_incident_rate"`
-	TotalFindings                       int     `json:"total_findings"`
-	VerifiedFindings                    int     `json:"verified_findings"`
-	UnverifiedFindings                  int     `json:"unverified_findings"`
-	VerifiedFindingPrecision            float64 `json:"verified_finding_precision"`
-	TimeToFirstVerifiedFindingSeconds   float64 `json:"time_to_first_verified_finding_seconds"`
-	TimeToFirstVerifiedFindingAvailable bool    `json:"time_to_first_verified_finding_available"`
+	TotalTasks                          int            `json:"total_tasks"`
+	CompletedTasks                      int            `json:"completed_tasks"`
+	FailedTasks                         int            `json:"failed_tasks"`
+	BlockedTasks                        int            `json:"blocked_tasks"`
+	CanceledTasks                       int            `json:"canceled_tasks"`
+	TaskSuccessRate                     float64        `json:"task_success_rate"`
+	TotalFailures                       int            `json:"total_failures"`
+	RecoveredFailures                   int            `json:"recovered_failures"`
+	RecoverySuccessRate                 float64        `json:"recovery_success_rate"`
+	LoopIncidents                       int            `json:"loop_incidents"`
+	LoopIncidentRate                    float64        `json:"loop_incident_rate"`
+	TotalFindings                       int            `json:"total_findings"`
+	VerifiedFindings                    int            `json:"verified_findings"`
+	UnverifiedFindings                  int            `json:"unverified_findings"`
+	VerifiedFindingPrecision            float64        `json:"verified_finding_precision"`
+	TimeToFirstVerifiedFindingSeconds   float64        `json:"time_to_first_verified_finding_seconds"`
+	TimeToFirstVerifiedFindingAvailable bool           `json:"time_to_first_verified_finding_available"`
+	FailureReasonCounts                 map[string]int `json:"failure_reason_counts,omitempty"`
+	TerminalReason                      string         `json:"terminal_reason,omitempty"`
 }
 
 type benchmarkRunScorecard struct {
@@ -143,6 +145,8 @@ type benchmarkScenarioAggregate struct {
 	RecoverySuccessRate           benchmarkDistribution `json:"recovery_success_rate"`
 	TimeToFirstVerifiedFindingSec benchmarkDistribution `json:"time_to_first_verified_finding_seconds"`
 	DurationSec                   benchmarkDistribution `json:"duration_seconds"`
+	FailureReasonCounts           map[string]int        `json:"failure_reason_counts,omitempty"`
+	TerminalReasonCounts          map[string]int        `json:"terminal_reason_counts,omitempty"`
 }
 
 type benchmarkScenarioSummary struct {
@@ -394,7 +398,11 @@ scenarioLoop:
 			)
 			var runStdout bytes.Buffer
 			var runStderr bytes.Buffer
+			autoApproveCtx, stopAutoApprove := context.WithCancel(signalCtx)
+			waitAutoApprove := startBenchmarkAutoApproveLoop(autoApproveCtx, sessionsDir, runID, stderr)
 			exitCode := runExecutor(runArgs, &runStdout, &runStderr)
+			stopAutoApprove()
+			waitAutoApprove()
 			finishedAt := time.Now().UTC()
 			_ = os.WriteFile(runStdoutPath, runStdout.Bytes(), 0o644)
 			_ = os.WriteFile(runStderrPath, runStderr.Bytes(), 0o644)
@@ -531,6 +539,56 @@ scenarioLoop:
 	return 0
 }
 
+func startBenchmarkAutoApproveLoop(ctx context.Context, sessionsDir, runID string, stderr io.Writer) func() {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		manager := orchestrator.NewManager(sessionsDir)
+		approved := map[string]struct{}{}
+		approvePending := func() {
+			pending, err := manager.PendingApprovals(runID)
+			if err != nil {
+				return
+			}
+			for _, req := range pending {
+				if _, seen := approved[req.ApprovalID]; seen {
+					continue
+				}
+				if err := manager.SubmitApprovalDecision(
+					runID,
+					req.ApprovalID,
+					true,
+					string(orchestrator.ApprovalScopeSession),
+					"codex",
+					"benchmark auto-approve",
+					0,
+				); err != nil {
+					if stderr != nil {
+						fmt.Fprintf(stderr, "benchmark auto-approve failed: run=%s approval=%s err=%v\n", runID, req.ApprovalID, err)
+					}
+					continue
+				}
+				approved[req.ApprovalID] = struct{}{}
+			}
+		}
+
+		approvePending()
+		ticker := time.NewTicker(250 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				approvePending()
+			}
+		}
+	}()
+	return func() {
+		<-done
+	}
+}
+
 func benchmarkScenarioRunArgs(
 	sessionsDir string,
 	runID string,
@@ -634,7 +692,9 @@ func collectBenchmarkRunMetrics(sessionsDir, runID string) (benchmarkRunMetrics,
 	if err != nil {
 		return benchmarkRunMetrics{}, err
 	}
-	metrics := benchmarkRunMetrics{}
+	metrics := benchmarkRunMetrics{
+		FailureReasonCounts: map[string]int{},
+	}
 	finalStateByTask := map[string]string{}
 	for _, task := range plan.Tasks {
 		finalStateByTask[task.TaskID] = orchestrator.LeaseStatusQueued
@@ -667,11 +727,17 @@ func collectBenchmarkRunMetrics(sessionsDir, runID string) (benchmarkRunMetrics,
 	loopTaskIDs := map[string]struct{}{}
 	var runStartTS time.Time
 	var firstFindingTS time.Time
+	var terminalEvent *orchestrator.EventEnvelope
 	for _, event := range events {
 		switch event.Type {
 		case orchestrator.EventTypeRunStarted:
 			if runStartTS.IsZero() || event.TS.Before(runStartTS) {
 				runStartTS = event.TS
+			}
+		case orchestrator.EventTypeRunCompleted, orchestrator.EventTypeRunStopped:
+			if terminalEvent == nil || event.TS.After(terminalEvent.TS) || (event.TS.Equal(terminalEvent.TS) && event.Seq > terminalEvent.Seq) {
+				candidate := event
+				terminalEvent = &candidate
 			}
 		case orchestrator.EventTypeTaskFinding:
 			if firstFindingTS.IsZero() || event.TS.Before(firstFindingTS) {
@@ -686,11 +752,20 @@ func collectBenchmarkRunMetrics(sessionsDir, runID string) (benchmarkRunMetrics,
 			if len(event.Payload) > 0 {
 				_ = json.Unmarshal(event.Payload, &payload)
 			}
-			if strings.TrimSpace(toString(payload["reason"])) == "assist_loop_detected" && taskID != "" {
+			reason := strings.TrimSpace(toString(payload["reason"]))
+			if reason == "" {
+				reason = "unknown"
+			}
+			metrics.FailureReasonCounts[reason]++
+			if reason == "assist_loop_detected" && taskID != "" {
 				loopTaskIDs[taskID] = struct{}{}
 			}
 		}
 	}
+	if len(metrics.FailureReasonCounts) == 0 {
+		metrics.FailureReasonCounts = nil
+	}
+	metrics.TerminalReason = benchmarkTerminalReason(terminalEvent)
 	metrics.TotalFailures = len(failedTaskIDs)
 	for taskID := range failedTaskIDs {
 		if finalStateByTask[taskID] == orchestrator.LeaseStatusCompleted {
@@ -745,6 +820,28 @@ func collectBenchmarkRunMetrics(sessionsDir, runID string) (benchmarkRunMetrics,
 	return metrics, nil
 }
 
+func benchmarkTerminalReason(event *orchestrator.EventEnvelope) string {
+	if event == nil {
+		return "none"
+	}
+	payload := map[string]any{}
+	if len(event.Payload) > 0 {
+		_ = json.Unmarshal(event.Payload, &payload)
+	}
+	source := strings.TrimSpace(toString(payload["source"]))
+	switch event.Type {
+	case orchestrator.EventTypeRunCompleted:
+		return "completed"
+	case orchestrator.EventTypeRunStopped:
+		if source == "" {
+			return "stopped"
+		}
+		return "stopped:" + source
+	default:
+		return event.Type
+	}
+}
+
 func parseReportFindingCounts(path string) (int, int, int, bool, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -787,9 +884,13 @@ func parseTrailingInt(line, prefix string) int {
 
 func aggregateBenchmarkRuns(runs []benchmarkRunScorecard) benchmarkScenarioAggregate {
 	out := benchmarkScenarioAggregate{
-		Runs: len(runs),
+		Runs:                 len(runs),
+		FailureReasonCounts:  map[string]int{},
+		TerminalReasonCounts: map[string]int{},
 	}
 	if len(runs) == 0 {
+		out.FailureReasonCounts = nil
+		out.TerminalReasonCounts = nil
 		return out
 	}
 	taskRates := make([]float64, 0, len(runs))
@@ -809,6 +910,17 @@ func aggregateBenchmarkRuns(runs []benchmarkRunScorecard) benchmarkScenarioAggre
 		loopRates = append(loopRates, run.Metrics.LoopIncidentRate)
 		recoveryRates = append(recoveryRates, run.Metrics.RecoverySuccessRate)
 		durations = append(durations, run.DurationSec)
+		for reason, count := range run.Metrics.FailureReasonCounts {
+			if count <= 0 {
+				continue
+			}
+			out.FailureReasonCounts[reason] += count
+		}
+		terminal := strings.TrimSpace(run.Metrics.TerminalReason)
+		if terminal == "" {
+			terminal = "none"
+		}
+		out.TerminalReasonCounts[terminal]++
 		if run.Metrics.TimeToFirstVerifiedFindingAvailable {
 			timeToFirst = append(timeToFirst, run.Metrics.TimeToFirstVerifiedFindingSeconds)
 		}
@@ -819,6 +931,12 @@ func aggregateBenchmarkRuns(runs []benchmarkRunScorecard) benchmarkScenarioAggre
 	out.RecoverySuccessRate = distribution(recoveryRates)
 	out.TimeToFirstVerifiedFindingSec = distribution(timeToFirst)
 	out.DurationSec = distribution(durations)
+	if len(out.FailureReasonCounts) == 0 {
+		out.FailureReasonCounts = nil
+	}
+	if len(out.TerminalReasonCounts) == 0 {
+		out.TerminalReasonCounts = nil
+	}
 	return out
 }
 
@@ -1056,6 +1174,8 @@ func renderBenchmarkSummaryMarkdown(summary benchmarkSummary) string {
 	fmt.Fprintf(&b, "- Loop incident rate median/P90: %.3f / %.3f\n", summary.Aggregate.LoopIncidentRate.Median, summary.Aggregate.LoopIncidentRate.P90)
 	fmt.Fprintf(&b, "- Recovery success rate median/P90: %.3f / %.3f\n", summary.Aggregate.RecoverySuccessRate.Median, summary.Aggregate.RecoverySuccessRate.P90)
 	fmt.Fprintf(&b, "- Duration seconds median/P90: %.3f / %.3f\n", summary.Aggregate.DurationSec.Median, summary.Aggregate.DurationSec.P90)
+	fmt.Fprintf(&b, "- Dominant failure reasons: %s\n", formatTopCountMap(summary.Aggregate.FailureReasonCounts, 5))
+	fmt.Fprintf(&b, "- Terminalization reasons: %s\n", formatTopCountMap(summary.Aggregate.TerminalReasonCounts, 5))
 	for _, scenario := range summary.Scenarios {
 		fmt.Fprintf(&b, "\n## Scenario `%s`\n\n", scenario.Scenario.ID)
 		fmt.Fprintf(&b, "- Name: %s\n", scenario.Scenario.Name)
@@ -1063,8 +1183,44 @@ func renderBenchmarkSummaryMarkdown(summary benchmarkSummary) string {
 		fmt.Fprintf(&b, "- Task success rate median/P90: %.3f / %.3f\n", scenario.Aggregate.TaskSuccessRate.Median, scenario.Aggregate.TaskSuccessRate.P90)
 		fmt.Fprintf(&b, "- Verified finding precision median/P90: %.3f / %.3f\n", scenario.Aggregate.VerifiedFindingPrecision.Median, scenario.Aggregate.VerifiedFindingPrecision.P90)
 		fmt.Fprintf(&b, "- Loop incident rate median/P90: %.3f / %.3f\n", scenario.Aggregate.LoopIncidentRate.Median, scenario.Aggregate.LoopIncidentRate.P90)
+		fmt.Fprintf(&b, "- Dominant failure reasons: %s\n", formatTopCountMap(scenario.Aggregate.FailureReasonCounts, 5))
+		fmt.Fprintf(&b, "- Terminalization reasons: %s\n", formatTopCountMap(scenario.Aggregate.TerminalReasonCounts, 5))
 	}
 	return b.String()
+}
+
+func formatTopCountMap(counts map[string]int, limit int) string {
+	if len(counts) == 0 {
+		return "none"
+	}
+	type item struct {
+		key   string
+		count int
+	}
+	items := make([]item, 0, len(counts))
+	for key, count := range counts {
+		if strings.TrimSpace(key) == "" || count <= 0 {
+			continue
+		}
+		items = append(items, item{key: key, count: count})
+	}
+	if len(items) == 0 {
+		return "none"
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].count == items[j].count {
+			return items[i].key < items[j].key
+		}
+		return items[i].count > items[j].count
+	})
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+	parts := make([]string, 0, len(items))
+	for _, it := range items {
+		parts = append(parts, fmt.Sprintf("%s=%d", it.key, it.count))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func truncateForScorecard(text string, maxChars int) string {

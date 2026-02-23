@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -264,6 +265,7 @@ func BuildRunStatus(runID string, events []EventEnvelope) RunStatus {
 	hasRunStarted := false
 
 	for _, event := range events {
+		taskID := strings.TrimSpace(event.TaskID)
 		switch event.Type {
 		case EventTypeRunStarted:
 			hasRunStarted = true
@@ -276,11 +278,17 @@ func BuildRunStatus(runID string, events []EventEnvelope) RunStatus {
 		case EventTypeWorkerStopped:
 			workerState[event.WorkerID] = false
 		case EventTypeTaskLeased:
-			taskState[event.TaskID] = "queued"
-		case EventTypeTaskStarted, EventTypeTaskProgress, EventTypeTaskArtifact, EventTypeTaskFinding, EventTypeApprovalRequested, EventTypeApprovalGranted, EventTypeApprovalDenied, EventTypeApprovalExpired:
-			taskState[event.TaskID] = "running"
+			if taskID != "" {
+				taskState[taskID] = "queued"
+			}
+		case EventTypeTaskStarted, EventTypeTaskProgress, EventTypeTaskArtifact, EventTypeTaskFinding:
+			if taskID != "" {
+				taskState[taskID] = "running"
+			}
 		case EventTypeTaskCompleted, EventTypeTaskFailed:
-			taskState[event.TaskID] = "done"
+			if taskID != "" {
+				taskState[taskID] = "done"
+			}
 		}
 	}
 

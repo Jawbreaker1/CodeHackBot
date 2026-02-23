@@ -47,7 +47,7 @@ func compactStringFlags(values stringFlags) []string {
 
 func validateGoalSeedInputs(scope orchestrator.Scope, constraints []string) error {
 	if len(scope.Targets) == 0 && len(scope.Networks) == 0 {
-		return fmt.Errorf("at least one --scope-target or --scope-network is required with --goal")
+		return fmt.Errorf("at least one --scope-target, --scope-network, or --scope-local is required with --goal")
 	}
 	if len(constraints) == 0 {
 		return fmt.Errorf("at least one --constraint is required with --goal")

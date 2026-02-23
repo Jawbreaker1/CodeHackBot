@@ -176,6 +176,68 @@ func TestSynthesizeTaskGraphWithLLMAppliesBudgetFloors(t *testing.T) {
 	}
 }
 
+func TestSynthesizeTaskGraphWithLLMNormalizesDisallowedRiskLevels(t *testing.T) {
+	t.Parallel()
+
+	client := &fakePlannerClient{
+		content: `{
+			"tasks":[
+				{
+					"task_id":"task-risk-high",
+					"title":"High risk task from planner",
+					"goal":"map vulnerabilities",
+					"targets":["192.168.50.1"],
+					"priority":90,
+					"strategy":"vuln_mapping",
+					"risk_level":"exploit_controlled",
+					"done_when":["done"],
+					"fail_when":["failed"],
+					"expected_artifacts":["vuln.log"],
+					"action":{"type":"assist","prompt":"map vulnerabilities safely"},
+					"budget":{"max_steps":8,"max_tool_calls":12,"max_runtime_seconds":300}
+				},
+				{
+					"task_id":"task-risk-invalid",
+					"title":"Invalid risk",
+					"goal":"collect evidence",
+					"targets":["192.168.50.1"],
+					"priority":70,
+					"strategy":"recon",
+					"risk_level":"unknown_tier",
+					"done_when":["done"],
+					"fail_when":["failed"],
+					"expected_artifacts":["recon.log"],
+					"action":{"type":"assist","prompt":"collect evidence"},
+					"budget":{"max_steps":8,"max_tool_calls":12,"max_runtime_seconds":300}
+				}
+			]
+		}`,
+	}
+
+	tasks, _, err := SynthesizeTaskGraphWithLLM(
+		context.Background(),
+		client,
+		"model",
+		"assess router vulnerabilities",
+		Scope{Targets: []string{"192.168.50.1"}},
+		[]string{"internal_lab_only"},
+		nil,
+		1,
+	)
+	if err != nil {
+		t.Fatalf("SynthesizeTaskGraphWithLLM: %v", err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("expected 2 tasks, got %d", len(tasks))
+	}
+	if tasks[0].RiskLevel != string(RiskActiveProbe) {
+		t.Fatalf("expected disallowed risk to clamp to active_probe, got %q", tasks[0].RiskLevel)
+	}
+	if tasks[1].RiskLevel != string(RiskReconReadonly) {
+		t.Fatalf("expected invalid risk to default to recon_readonly, got %q", tasks[1].RiskLevel)
+	}
+}
+
 func TestParsePlannerMode(t *testing.T) {
 	t.Parallel()
 

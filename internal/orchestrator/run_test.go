@@ -76,6 +76,94 @@ func TestManagerStartStatusStopLifecycle(t *testing.T) {
 	}
 }
 
+func TestBuildRunStatusIgnoresApprovalEventsWithoutTaskID(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	events := []EventEnvelope{
+		{EventID: "e1", RunID: "run-approval-taskless", WorkerID: orchestratorWorkerID, Seq: 1, TS: now, Type: EventTypeRunStarted},
+		{EventID: "e2", RunID: "run-approval-taskless", WorkerID: "worker-1", TaskID: "task-1", Seq: 1, TS: now.Add(time.Second), Type: EventTypeTaskStarted},
+		{EventID: "e3", RunID: "run-approval-taskless", WorkerID: "worker-1", TaskID: "task-1", Seq: 2, TS: now.Add(2 * time.Second), Type: EventTypeTaskCompleted},
+		{EventID: "e4", RunID: "run-approval-taskless", WorkerID: "operator-approval-1", Seq: 1, TS: now.Add(3 * time.Second), Type: EventTypeApprovalGranted},
+		{EventID: "e5", RunID: "run-approval-taskless", WorkerID: orchestratorWorkerID, Seq: 2, TS: now.Add(4 * time.Second), Type: EventTypeRunStopped},
+	}
+
+	status := BuildRunStatus("run-approval-taskless", events)
+	if status.State != "stopped" {
+		t.Fatalf("expected stopped state, got %s", status.State)
+	}
+	if status.RunningTasks != 0 {
+		t.Fatalf("expected no running tasks, got %d", status.RunningTasks)
+	}
+	if status.QueuedTasks != 0 {
+		t.Fatalf("expected no queued tasks, got %d", status.QueuedTasks)
+	}
+}
+
+func TestManagerStatusIgnoresApprovalEventsWithoutTaskID(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-status-approval-taskless"
+	paths, err := EnsureRunLayout(base, runID)
+	if err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	eventPath := filepath.Join(paths.EventDir, "event.jsonl")
+	now := time.Now().UTC()
+
+	writeEvent(t, eventPath, EventEnvelope{EventID: "e1", RunID: runID, WorkerID: orchestratorWorkerID, Seq: 1, TS: now, Type: EventTypeRunStarted})
+	writeEvent(t, eventPath, EventEnvelope{EventID: "e2", RunID: runID, WorkerID: "worker-1", TaskID: "task-1", Seq: 1, TS: now.Add(time.Second), Type: EventTypeTaskStarted})
+	writeEvent(t, eventPath, EventEnvelope{EventID: "e3", RunID: runID, WorkerID: "worker-1", TaskID: "task-1", Seq: 2, TS: now.Add(2 * time.Second), Type: EventTypeTaskCompleted})
+	writeEvent(t, eventPath, EventEnvelope{EventID: "e4", RunID: runID, WorkerID: "operator-approval-1", Seq: 1, TS: now.Add(3 * time.Second), Type: EventTypeApprovalGranted})
+	writeEvent(t, eventPath, EventEnvelope{EventID: "e5", RunID: runID, WorkerID: orchestratorWorkerID, Seq: 2, TS: now.Add(4 * time.Second), Type: EventTypeRunStopped})
+
+	m := NewManager(base)
+	status, err := m.Status(runID)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if status.State != "stopped" {
+		t.Fatalf("expected stopped state, got %s", status.State)
+	}
+	if status.RunningTasks != 0 {
+		t.Fatalf("expected no running tasks, got %d", status.RunningTasks)
+	}
+	if status.QueuedTasks != 0 {
+		t.Fatalf("expected no queued tasks, got %d", status.QueuedTasks)
+	}
+}
+
+func TestManagerStatusApprovalEventsDoNotMarkTaskRunning(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-status-approval-state"
+	paths, err := EnsureRunLayout(base, runID)
+	if err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	eventPath := filepath.Join(paths.EventDir, "event.jsonl")
+	now := time.Now().UTC()
+
+	writeEvent(t, eventPath, EventEnvelope{EventID: "e1", RunID: runID, WorkerID: orchestratorWorkerID, Seq: 1, TS: now, Type: EventTypeRunStarted})
+	writeEvent(t, eventPath, EventEnvelope{EventID: "e2", RunID: runID, WorkerID: orchestratorWorkerID, TaskID: "task-approval", Seq: 2, TS: now.Add(time.Second), Type: EventTypeTaskLeased})
+	writeEvent(t, eventPath, EventEnvelope{EventID: "e3", RunID: runID, WorkerID: orchestratorWorkerID, TaskID: "task-approval", Seq: 3, TS: now.Add(2 * time.Second), Type: EventTypeApprovalRequested})
+	writeEvent(t, eventPath, EventEnvelope{EventID: "e4", RunID: runID, WorkerID: orchestratorWorkerID, TaskID: "task-approval", Seq: 4, TS: now.Add(3 * time.Second), Type: EventTypeApprovalExpired})
+
+	m := NewManager(base)
+	status, err := m.Status(runID)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if status.RunningTasks != 0 {
+		t.Fatalf("approval-only task should not be counted as running, got %d", status.RunningTasks)
+	}
+	if status.QueuedTasks != 1 {
+		t.Fatalf("expected queued task count 1, got %d", status.QueuedTasks)
+	}
+}
+
 func TestManagerWorkersAndEvents(t *testing.T) {
 	t.Parallel()
 

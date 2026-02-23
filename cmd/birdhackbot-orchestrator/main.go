@@ -130,6 +130,7 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 	var tick, startupTimeout, staleTimeout, softStallGrace, approvalTimeout, stopGrace time.Duration
 	var maxAttempts, maxParallelism, regenerateCount int
 	var disruptiveOptIn bool
+	var scopeLocal bool
 	var useTUI bool
 	var workerArgs, workerEnv, scopeTargets, scopeNetworks, scopeDenyTargets, constraints, successCriteria, stopCriteria stringFlags
 	fs.StringVar(&sessionsDir, "sessions-dir", "sessions", "sessions base directory")
@@ -141,6 +142,7 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 	fs.Var(&workerEnv, "worker-env", "worker environment variable KEY=VALUE (repeatable)")
 	fs.Var(&scopeTargets, "scope-target", "in-scope target hostname/ip (repeatable)")
 	fs.Var(&scopeNetworks, "scope-network", "in-scope network CIDR (repeatable)")
+	fs.BoolVar(&scopeLocal, "scope-local", false, "local-only scope alias for --scope-target 127.0.0.1 and --scope-target localhost")
 	fs.Var(&scopeDenyTargets, "scope-deny-target", "explicit deny target hostname/ip (repeatable)")
 	fs.Var(&constraints, "constraint", "run constraint (repeatable)")
 	fs.Var(&successCriteria, "success-criterion", "success criterion (repeatable)")
@@ -200,6 +202,9 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 		Networks:    compactStringFlags(scopeNetworks),
 		Targets:     compactStringFlags(scopeTargets),
 		DenyTargets: compactStringFlags(scopeDenyTargets),
+	}
+	if scopeLocal {
+		scope.Targets = compactStrings(append(scope.Targets, "127.0.0.1", "localhost"))
 	}
 	goalConstraints := compactStringFlags(constraints)
 

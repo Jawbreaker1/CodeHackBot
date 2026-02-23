@@ -199,8 +199,22 @@ func TestRunGoalModeRejectsMissingScopeOrConstraints(t *testing.T) {
 	if code := run(args, &out, &errOut); code == 0 {
 		t.Fatalf("expected goal run failure without scope")
 	}
-	if !strings.Contains(errOut.String(), "--scope-target or --scope-network") {
+	if !strings.Contains(errOut.String(), "--scope-target, --scope-network, or --scope-local") {
 		t.Fatalf("unexpected missing-scope error: %q", errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	args = []string{
+		"run",
+		"--sessions-dir", base,
+		"--goal", "check local file",
+		"--scope-local",
+		"--constraint", "local_only",
+		"--plan-review", "reject",
+	}
+	if code := run(args, &out, &errOut); code != 0 {
+		t.Fatalf("expected goal run to accept --scope-local: code=%d err=%s", code, errOut.String())
 	}
 
 	out.Reset()

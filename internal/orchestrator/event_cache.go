@@ -262,6 +262,7 @@ func appendJSONL(path string, v any) error {
 }
 
 func (c *runEventCache) applyEvent(event EventEnvelope) {
+	taskID := strings.TrimSpace(event.TaskID)
 	switch event.Type {
 	case EventTypeRunStarted:
 		c.hasRunStarted = true
@@ -274,11 +275,17 @@ func (c *runEventCache) applyEvent(event EventEnvelope) {
 	case EventTypeWorkerStopped:
 		c.workerActive[event.WorkerID] = false
 	case EventTypeTaskLeased:
-		c.taskState[event.TaskID] = "queued"
-	case EventTypeTaskStarted, EventTypeTaskProgress, EventTypeTaskArtifact, EventTypeTaskFinding, EventTypeApprovalRequested, EventTypeApprovalGranted, EventTypeApprovalDenied, EventTypeApprovalExpired:
-		c.taskState[event.TaskID] = "running"
+		if taskID != "" {
+			c.taskState[taskID] = "queued"
+		}
+	case EventTypeTaskStarted, EventTypeTaskProgress, EventTypeTaskArtifact, EventTypeTaskFinding:
+		if taskID != "" {
+			c.taskState[taskID] = "running"
+		}
 	case EventTypeTaskCompleted, EventTypeTaskFailed:
-		c.taskState[event.TaskID] = "done"
+		if taskID != "" {
+			c.taskState[taskID] = "done"
+		}
 	}
 
 	if strings.TrimSpace(event.WorkerID) == "" {

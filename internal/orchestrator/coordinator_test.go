@@ -87,6 +87,8 @@ func TestCoordinator_CompletionContractMissingArtifactsConvertsToFailure(t *test
 
 	plan := RunPlan{
 		RunID:           runID,
+		Scope:           Scope{Targets: []string{"127.0.0.1"}},
+		Constraints:     []string{"local_only"},
 		SuccessCriteria: []string{"done"},
 		StopCriteria:    []string{"stop"},
 		MaxParallelism:  1,
@@ -176,6 +178,8 @@ func TestCoordinator_CompletionContractValidRemainsCompleted(t *testing.T) {
 
 	plan := RunPlan{
 		RunID:           runID,
+		Scope:           Scope{Targets: []string{"127.0.0.1"}},
+		Constraints:     []string{"local_only"},
 		SuccessCriteria: []string{"done"},
 		StopCriteria:    []string{"stop"},
 		MaxParallelism:  1,
@@ -276,6 +280,8 @@ func TestCoordinator_RetryFailedTask(t *testing.T) {
 
 	plan := RunPlan{
 		RunID:           runID,
+		Scope:           Scope{Targets: []string{"127.0.0.1"}},
+		Constraints:     []string{"local_only"},
 		SuccessCriteria: []string{"done"},
 		StopCriteria:    []string{"stop"},
 		MaxParallelism:  1,
@@ -1475,6 +1481,102 @@ func TestCoordinator_ReplanTriggerExecutionFailure(t *testing.T) {
 	}
 }
 
+func TestCoordinator_AdaptiveReplanExecutionFailureDedupesRepeatedCommandFailed(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-coord-adaptive-exec-failure-dedupe"
+	manager := NewManager(base)
+	adaptiveA := task("task-rp-a", nil, 90)
+	adaptiveA.Strategy = "adaptive_replan_execution_failure"
+	adaptiveA.Action = assistAction("recover from command failure")
+	adaptiveB := task("task-rp-b", nil, 90)
+	adaptiveB.Strategy = "adaptive_replan_execution_failure"
+	adaptiveB.Action = assistAction("recover from command failure")
+	plan := RunPlan{
+		RunID:           runID,
+		Scope:           Scope{Targets: []string{"127.0.0.1"}},
+		Constraints:     []string{"local_only"},
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks: []TaskSpec{
+			task("t1", nil, 1),
+			adaptiveA,
+			adaptiveB,
+		},
+	}
+	if _, err := manager.StartFromPlan(plan, ""); err != nil {
+		t.Fatalf("StartFromPlan: %v", err)
+	}
+	scheduler, err := NewScheduler(plan, 1)
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	workers := NewWorkerManager(manager)
+	coord, err := NewCoordinator(runID, plan.Scope, manager, workers, scheduler, 2, 2*time.Second, 4*time.Second, 3*time.Second, func(task TaskSpec, attempt int, workerID string) WorkerSpec {
+		return helperWorkerSpec(t, workerID, "ok")
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	failPayload := map[string]any{
+		"reason":  WorkerFailureCommandFailed,
+		"command": "curl",
+		"args":    []string{"-fsS", "http://127.0.0.1:65535"},
+		"error":   "exit status 7",
+	}
+	if err := manager.EmitEvent(runID, "signal-worker-a", adaptiveA.TaskID, EventTypeTaskFailed, failPayload); err != nil {
+		t.Fatalf("EmitEvent adaptiveA failure: %v", err)
+	}
+	if err := manager.EmitEvent(runID, "signal-worker-b", adaptiveB.TaskID, EventTypeTaskFailed, failPayload); err != nil {
+		t.Fatalf("EmitEvent adaptiveB failure: %v", err)
+	}
+	if err := coord.handleEventDrivenReplanTriggers(); err != nil {
+		t.Fatalf("handleEventDrivenReplanTriggers: %v", err)
+	}
+
+	events, err := manager.Events(runID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	replanEvents := replanEventsByTrigger(events, "execution_failure")
+	if len(replanEvents) != 2 {
+		t.Fatalf("expected 2 execution_failure replan events, got %d", len(replanEvents))
+	}
+	taskAdded := 0
+	duplicateIgnored := 0
+	addedTaskIDs := map[string]struct{}{}
+	for _, replan := range replanEvents {
+		payload := map[string]any{}
+		if len(replan.Payload) > 0 {
+			_ = json.Unmarshal(replan.Payload, &payload)
+		}
+		switch toString(payload["mutation_status"]) {
+		case "task_added":
+			taskAdded++
+			if id := toString(payload["added_task_id"]); id != "" {
+				addedTaskIDs[id] = struct{}{}
+			}
+		case "duplicate_ignored":
+			duplicateIgnored++
+		}
+	}
+	if taskAdded != 1 {
+		t.Fatalf("expected exactly one task_added mutation, got %d", taskAdded)
+	}
+	if duplicateIgnored != 1 {
+		t.Fatalf("expected exactly one duplicate_ignored mutation, got %d", duplicateIgnored)
+	}
+	if len(addedTaskIDs) != 1 {
+		t.Fatalf("expected exactly one added adaptive task id, got %d", len(addedTaskIDs))
+	}
+	if coord.replanMutationCount != 1 {
+		t.Fatalf("expected one replan mutation count, got %d", coord.replanMutationCount)
+	}
+}
+
 func TestCoordinator_AdaptiveReplanAddsTaskAndLease(t *testing.T) {
 	t.Parallel()
 
@@ -1706,8 +1808,59 @@ func TestRetryableWorkerFailureReason(t *testing.T) {
 	if retryableWorkerFailureReason(WorkerFailureCommandInterrupted) {
 		t.Fatalf("expected command_interrupted to be non-retryable")
 	}
+	if !retryableWorkerFailureReason(WorkerFailureAssistLoopDetected) {
+		t.Fatalf("expected assist_loop_detected to be retryable for first occurrence")
+	}
 	if !retryableWorkerFailureReason(WorkerFailureCommandTimeout) {
 		t.Fatalf("expected command_timeout to be retryable")
+	}
+}
+
+func TestHasRepeatedTaskFailureReason(t *testing.T) {
+	t.Parallel()
+
+	runID := "run-repeat-reason"
+	taskID := "task-1"
+	now := time.Now().UTC()
+
+	makeFailed := func(id string, offset time.Duration, reason string) EventEnvelope {
+		return EventEnvelope{
+			EventID:  id,
+			RunID:    runID,
+			WorkerID: "signal-worker-task-1-a1",
+			TaskID:   taskID,
+			Seq:      1,
+			TS:       now.Add(offset),
+			Type:     EventTypeTaskFailed,
+			Payload:  mustJSONRaw(map[string]any{"reason": reason}),
+		}
+	}
+
+	events := []EventEnvelope{
+		makeFailed("e1", time.Second, WorkerFailureAssistNoAction),
+		makeFailed("e2", 2*time.Second, WorkerFailureAssistLoopDetected),
+	}
+	if hasRepeatedTaskFailureReason(events, taskID, WorkerFailureAssistLoopDetected) {
+		t.Fatalf("expected first assist_loop_detected occurrence to not be repeated")
+	}
+
+	events = append(events, makeFailed("e3", 3*time.Second, WorkerFailureAssistLoopDetected))
+	if !hasRepeatedTaskFailureReason(events, taskID, WorkerFailureAssistLoopDetected) {
+		t.Fatalf("expected repeated assist_loop_detected reason to be detected")
+	}
+}
+
+func TestAllowAssistLoopRetry(t *testing.T) {
+	t.Parallel()
+
+	if !allowAssistLoopRetry(TaskSpec{Strategy: "recon_seed"}) {
+		t.Fatalf("expected recon_seed strategy to allow assist loop retry")
+	}
+	if allowAssistLoopRetry(TaskSpec{Strategy: "hypothesis_validate"}) {
+		t.Fatalf("did not expect hypothesis_validate strategy to allow assist loop retry")
+	}
+	if allowAssistLoopRetry(TaskSpec{Strategy: "adaptive_replan_execution_failure"}) {
+		t.Fatalf("did not expect adaptive replan strategy to allow assist loop retry")
 	}
 }
 
@@ -1772,6 +1925,72 @@ func TestCoordinator_BudgetGuardExhaustsStepBudget(t *testing.T) {
 	}
 	if count := replanEventCount(events, "budget_exhausted"); count < 1 {
 		t.Fatalf("expected budget_exhausted replan event")
+	}
+}
+
+func TestCoordinator_TerminalizesAfterStaleRunningTaskWithDeadDependency(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-coord-stale-terminalization"
+	manager := NewManager(base)
+	now := time.Now().UTC()
+	manager.Now = func() time.Time { return now }
+
+	plan := RunPlan{
+		RunID:           runID,
+		Scope:           Scope{Targets: []string{"127.0.0.1"}},
+		Constraints:     []string{"local_only"},
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks: []TaskSpec{
+			task("t1", nil, 2),
+			task("t2", []string{"t1"}, 1),
+		},
+	}
+	if _, err := manager.StartFromPlan(plan, ""); err != nil {
+		t.Fatalf("StartFromPlan: %v", err)
+	}
+	scheduler, err := NewScheduler(plan, 1)
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	if err := scheduler.MarkLeased("t1"); err != nil {
+		t.Fatalf("MarkLeased t1: %v", err)
+	}
+	if err := scheduler.MarkRunning("t1"); err != nil {
+		t.Fatalf("MarkRunning t1: %v", err)
+	}
+	workers := NewWorkerManager(manager)
+	coord, err := NewCoordinator(runID, Scope{}, manager, workers, scheduler, 1, time.Second, time.Second, time.Second, func(task TaskSpec, attempt int, workerID string) WorkerSpec {
+		return helperWorkerSpec(t, workerID, "ok")
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	lease := TaskLease{
+		TaskID:    "t1",
+		LeaseID:   "lease-t1-a1",
+		WorkerID:  "worker-t1-a1",
+		Status:    LeaseStatusRunning,
+		Attempt:   1,
+		StartedAt: now.Add(-2 * time.Second),
+		Deadline:  now.Add(2 * time.Second),
+	}
+	if err := manager.WriteLease(runID, lease); err != nil {
+		t.Fatalf("WriteLease t1: %v", err)
+	}
+
+	if err := coord.handleStaleReclaims(); err != nil {
+		t.Fatalf("handleStaleReclaims: %v", err)
+	}
+	stateT1, _ := scheduler.State("t1")
+	if stateT1 != TaskStateFailed {
+		t.Fatalf("expected t1 failed after stale reclaim, got %s", stateT1)
+	}
+	if !coord.Done() {
+		t.Fatalf("expected coordinator done when only remaining queued task depends on failed task")
 	}
 }
 

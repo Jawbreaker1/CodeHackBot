@@ -20,6 +20,7 @@ const llmPlannerSystemPrompt = "You are the BirdHackBot Orchestrator planner. Re
 	"for broad CIDR targets, prefer discovery-first fan-out (discovery -> host subsets -> validation/summarize) instead of one monolithic scan; " +
 	"only keep work serialized when there is a clear dependency/safety reason, and state that reason in rationale; " +
 	"ground tasks in the operator goal: preserve goal-specific entities (for example router/gateway/firewall/webapp) and include at least one explicit task focused on that entity; " +
+	"never emit placeholder/demo/example-only commands that just print canned findings; command actions must run real tooling against in-scope targets or prior task artifacts; " +
 	"when input.playbooks is provided, use it as bounded procedural guidance and adapt tasks to those playbooks without copying blindly; " +
 	"if the goal asks for vulnerabilities, include a dedicated vulnerability-mapping step tied to discovered versions/configuration."
 
@@ -179,9 +180,7 @@ func toTaskSpec(task llmPlannerTask, index int, scope Scope) (TaskSpec, error) {
 		actionType = "command"
 	}
 	riskLevel := strings.TrimSpace(task.RiskLevel)
-	if riskLevel == "" {
-		riskLevel = string(RiskReconReadonly)
-	}
+	riskLevel = normalizeLLMTaskRiskLevel(riskLevel)
 	budget := TaskBudget{
 		MaxSteps:     task.Budget.MaxSteps,
 		MaxToolCalls: task.Budget.MaxToolCalls,
@@ -272,6 +271,21 @@ func normalizeLLMTaskBudget(budget TaskBudget, riskLevel string) TaskBudget {
 		budget.MaxRuntime = minRuntime
 	}
 	return budget
+}
+
+func normalizeLLMTaskRiskLevel(raw string) string {
+	tier, err := ParseRiskTier(raw)
+	if err != nil {
+		return string(RiskReconReadonly)
+	}
+	switch tier {
+	case RiskReconReadonly, RiskActiveProbe:
+		return string(tier)
+	default:
+		// Synthesized plans are bounded to recon/active probe. Clamp higher-risk
+		// planner output into active probing instead of hard-failing the run.
+		return string(RiskActiveProbe)
+	}
 }
 
 func compactStringSlice(values []string) []string {

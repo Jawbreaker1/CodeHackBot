@@ -222,15 +222,35 @@ func (s *Scheduler) AddTask(task TaskSpec) error {
 }
 
 func (s *Scheduler) IsDone() bool {
-	for _, st := range s.state {
+	for taskID, st := range s.state {
 		switch st {
 		case TaskStateCompleted, TaskStateBlocked, TaskStateCanceled, TaskStateFailed:
 			continue
+		case TaskStateQueued:
+			task, ok := s.tasks[taskID]
+			if !ok {
+				return false
+			}
+			// A queued task is terminal only when at least one dependency is in
+			// a terminal non-success state, making the task unrunnable forever.
+			if s.dependenciesMet(task) || !s.hasTerminalDependencyFailure(task) {
+				return false
+			}
 		default:
 			return false
 		}
 	}
 	return true
+}
+
+func (s *Scheduler) hasTerminalDependencyFailure(task TaskSpec) bool {
+	for _, dep := range task.DependsOn {
+		switch s.state[dep] {
+		case TaskStateFailed, TaskStateBlocked, TaskStateCanceled:
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Scheduler) Summary() map[TaskState]int {

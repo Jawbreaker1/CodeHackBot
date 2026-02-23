@@ -43,6 +43,10 @@ func isBuiltinBrowse(command string) bool {
 	return strings.EqualFold(strings.TrimSpace(command), "browse")
 }
 
+func isWorkerLocalBuiltin(command string) bool {
+	return isBuiltinListDir(command) || isBuiltinReadFile(command) || isBuiltinWriteFile(command)
+}
+
 func builtinListDir(args []string, workDir string) ([]byte, error) {
 	target := "."
 	for _, arg := range args {

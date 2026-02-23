@@ -207,6 +207,65 @@ func TestScheduler_AddTaskDynamicGraphMutation(t *testing.T) {
 	}
 }
 
+func TestScheduler_IsDoneWhenQueuedTaskHasTerminalDependency(t *testing.T) {
+	t.Parallel()
+
+	plan := RunPlan{
+		RunID:           "run-terminal-deps",
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks: []TaskSpec{
+			task("t1", nil, 1),
+			task("t2", []string{"t1"}, 1),
+		},
+	}
+	s, err := NewScheduler(plan, 1)
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	if err := s.MarkLeased("t1"); err != nil {
+		t.Fatalf("MarkLeased t1: %v", err)
+	}
+	if err := s.MarkRunning("t1"); err != nil {
+		t.Fatalf("MarkRunning t1: %v", err)
+	}
+	if err := s.MarkFailed("t1", "command_failed", false, 1); err != nil {
+		t.Fatalf("MarkFailed t1: %v", err)
+	}
+	if !s.IsDone() {
+		t.Fatalf("expected scheduler done when remaining queued task depends on terminal failure")
+	}
+}
+
+func TestScheduler_IsNotDoneWhenQueuedTaskCanStillRun(t *testing.T) {
+	t.Parallel()
+
+	plan := RunPlan{
+		RunID:           "run-pending-deps",
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks: []TaskSpec{
+			task("t1", nil, 1),
+			task("t2", []string{"t1"}, 1),
+		},
+	}
+	s, err := NewScheduler(plan, 1)
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	if err := s.MarkLeased("t1"); err != nil {
+		t.Fatalf("MarkLeased t1: %v", err)
+	}
+	if err := s.MarkRunning("t1"); err != nil {
+		t.Fatalf("MarkRunning t1: %v", err)
+	}
+	if s.IsDone() {
+		t.Fatalf("expected scheduler not done while dependency is still running")
+	}
+}
+
 func task(id string, deps []string, priority int) TaskSpec {
 	return TaskSpec{
 		TaskID:            id,

@@ -61,3 +61,15 @@ func TestValidateCommandWrapperDeniedTarget(t *testing.T) {
 		t.Fatalf("expected wrapped denied target violation, got %v", err)
 	}
 }
+
+func TestValidateCommandIgnoresLocalScriptFileAsHostTarget(t *testing.T) {
+	t.Parallel()
+
+	policy := New([]string{"127.0.0.0/8"}, nil)
+	if err := policy.ValidateCommand("bash", []string{"scan.sh"}, ValidateOptions{
+		FailClosedNetwork:  true,
+		FailClosedWrappers: true,
+	}); err != nil {
+		t.Fatalf("expected local script argument not treated as out-of-scope host, got %v", err)
+	}
+}

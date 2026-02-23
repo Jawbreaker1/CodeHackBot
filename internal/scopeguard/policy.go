@@ -24,6 +24,10 @@ var (
 	hostPattern     = regexp.MustCompile(`(?i)\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\b`)
 )
 
+var fileLikeHostExtensions = map[string]struct{}{
+	".cfg": {}, ".conf": {}, ".csv": {}, ".gnmap": {}, ".ini": {}, ".json": {}, ".log": {}, ".md": {}, ".nmap": {}, ".out": {}, ".py": {}, ".rb": {}, ".sh": {}, ".txt": {}, ".xml": {}, ".yaml": {}, ".yml": {}, ".zip": {},
+}
+
 var networkCommandSet = map[string]struct{}{
 	"browse": {}, "crawl": {},
 	"curl": {}, "wget": {},
@@ -186,6 +190,7 @@ func (p *Policy) extractTargetsAndSignals(command string, args []string) ([]stri
 		seen[v] = struct{}{}
 	}
 	processToken := func(token string) {
+		isFileLike := looksLikeFileToken(token)
 		if host := hostFromURL(token); host != "" {
 			add(host)
 		}
@@ -199,8 +204,10 @@ func (p *Policy) extractTargetsAndSignals(command string, args []string) ([]stri
 		for _, match := range ipv4Pattern.FindAllString(token, -1) {
 			add(match)
 		}
-		for _, match := range hostPattern.FindAllString(token, -1) {
-			add(match)
+		if !isFileLike {
+			for _, match := range hostPattern.FindAllString(token, -1) {
+				add(match)
+			}
 		}
 		for _, literal := range p.allowLiterals {
 			if literal != "" && strings.Contains(lower, literal) {
@@ -454,4 +461,20 @@ func hasToken(text, token string) bool {
 		}
 	}
 	return false
+}
+
+func looksLikeFileToken(token string) bool {
+	trimmed := strings.TrimSpace(token)
+	if trimmed == "" {
+		return false
+	}
+	if strings.Contains(trimmed, "/") || strings.HasPrefix(trimmed, "./") || strings.HasPrefix(trimmed, "../") || strings.HasPrefix(trimmed, "~") {
+		return true
+	}
+	ext := strings.ToLower(filepath.Ext(trimmed))
+	if ext == "" {
+		return false
+	}
+	_, ok := fileLikeHostExtensions[ext]
+	return ok
 }
