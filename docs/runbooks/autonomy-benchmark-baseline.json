@@ -1,0 +1,333 @@
+{
+  "version": "benchmark_baseline_v1",
+  "generated_at": "2026-02-23T11:01:38.751847473Z",
+  "benchmark_id": "benchmark-20260223-092006",
+  "pack_version": "autonomy_benchmark_pack_v1",
+  "seed": 42,
+  "repeat": 5,
+  "scenarios": [
+    {
+      "scenario_id": "host_discovery_inventory",
+      "name": "Host discovery and service inventory",
+      "aggregate": {
+        "runs": 5,
+        "succeeded_runs": 4,
+        "failed_runs": 1,
+        "task_success_rate": {
+          "count": 5,
+          "median": 1,
+          "p90": 1
+        },
+        "verified_finding_precision": {
+          "count": 5,
+          "median": 1,
+          "p90": 1
+        },
+        "loop_incident_rate": {
+          "count": 5,
+          "median": 0,
+          "p90": 0
+        },
+        "recovery_success_rate": {
+          "count": 5,
+          "median": 1,
+          "p90": 1
+        },
+        "time_to_first_verified_finding_seconds": {
+          "count": 5,
+          "median": 2.386626788,
+          "p90": 5.025111836
+        },
+        "duration_seconds": {
+          "count": 5,
+          "median": 55.519389881,
+          "p90": 339.515443988
+        },
+        "failure_reason_counts": {
+          "command_failed": 3
+        },
+        "terminal_reason_counts": {
+          "completed": 4,
+          "stopped:run_terminal_failure": 1
+        }
+      }
+    },
+    {
+      "scenario_id": "service_misconfig_validation",
+      "name": "Service misconfiguration validation",
+      "aggregate": {
+        "runs": 5,
+        "succeeded_runs": 3,
+        "failed_runs": 2,
+        "task_success_rate": {
+          "count": 5,
+          "median": 1,
+          "p90": 1
+        },
+        "verified_finding_precision": {
+          "count": 5,
+          "median": 1,
+          "p90": 1
+        },
+        "loop_incident_rate": {
+          "count": 5,
+          "median": 0,
+          "p90": 0.25
+        },
+        "recovery_success_rate": {
+          "count": 5,
+          "median": 1,
+          "p90": 1
+        },
+        "time_to_first_verified_finding_seconds": {
+          "count": 5,
+          "median": 21.173988321,
+          "p90": 64.915366971
+        },
+        "duration_seconds": {
+          "count": 5,
+          "median": 248.516232894,
+          "p90": 300.01527114
+        },
+        "failure_reason_counts": {
+          "assist_loop_detected": 2
+        },
+        "terminal_reason_counts": {
+          "completed": 3,
+          "stopped:run_terminal_failure": 2
+        }
+      }
+    },
+    {
+      "scenario_id": "known_vuln_controlled_validation",
+      "name": "Known-vulnerability controlled validation",
+      "aggregate": {
+        "runs": 5,
+        "succeeded_runs": 5,
+        "failed_runs": 0,
+        "task_success_rate": {
+          "count": 5,
+          "median": 1,
+          "p90": 1
+        },
+        "verified_finding_precision": {
+          "count": 5,
+          "median": 1,
+          "p90": 1
+        },
+        "loop_incident_rate": {
+          "count": 5,
+          "median": 0,
+          "p90": 0.25
+        },
+        "recovery_success_rate": {
+          "count": 5,
+          "median": 1,
+          "p90": 1
+        },
+        "time_to_first_verified_finding_seconds": {
+          "count": 5,
+          "median": 42.232258704,
+          "p90": 75.672951454
+        },
+        "duration_seconds": {
+          "count": 5,
+          "median": 304.765805057,
+          "p90": 430.270769462
+        },
+        "failure_reason_counts": {
+          "assist_budget_exhausted": 1,
+          "assist_loop_detected": 1
+        },
+        "terminal_reason_counts": {
+          "completed": 5
+        }
+      }
+    },
+    {
+      "scenario_id": "recovery_stress_repeat_pressure",
+      "name": "Recovery stress under repeat pressure",
+      "aggregate": {
+        "runs": 5,
+        "succeeded_runs": 3,
+        "failed_runs": 2,
+        "task_success_rate": {
+          "count": 5,
+          "median": 1,
+          "p90": 1
+        },
+        "verified_finding_precision": {
+          "count": 5,
+          "median": 1,
+          "p90": 1
+        },
+        "loop_incident_rate": {
+          "count": 5,
+          "median": 0,
+          "p90": 0.3333333333333333
+        },
+        "recovery_success_rate": {
+          "count": 5,
+          "median": 1,
+          "p90": 1
+        },
+        "time_to_first_verified_finding_seconds": {
+          "count": 5,
+          "median": 2.048223014,
+          "p90": 4.533584884
+        },
+        "duration_seconds": {
+          "count": 5,
+          "median": 175.758602445,
+          "p90": 205.765921991
+        },
+        "failure_reason_counts": {
+          "assist_budget_exhausted": 2,
+          "assist_loop_detected": 1
+        },
+        "terminal_reason_counts": {
+          "completed": 3,
+          "stopped:run_terminal_failure": 2
+        }
+      }
+    },
+    {
+      "scenario_id": "evidence_first_reporting_quality",
+      "name": "Evidence-first reporting quality",
+      "aggregate": {
+        "runs": 5,
+        "succeeded_runs": 3,
+        "failed_runs": 2,
+        "task_success_rate": {
+          "count": 5,
+          "median": 1,
+          "p90": 1
+        },
+        "verified_finding_precision": {
+          "count": 5,
+          "median": 1,
+          "p90": 1
+        },
+        "loop_incident_rate": {
+          "count": 5,
+          "median": 0,
+          "p90": 0.25
+        },
+        "recovery_success_rate": {
+          "count": 5,
+          "median": 1,
+          "p90": 1
+        },
+        "time_to_first_verified_finding_seconds": {
+          "count": 5,
+          "median": 7.578700275,
+          "p90": 33.736922752
+        },
+        "duration_seconds": {
+          "count": 5,
+          "median": 265.765588402,
+          "p90": 321.265736827
+        },
+        "failure_reason_counts": {
+          "assist_loop_detected": 2,
+          "command_failed": 1
+        },
+        "terminal_reason_counts": {
+          "completed": 3,
+          "stopped:run_terminal_failure": 2
+        }
+      }
+    },
+    {
+      "scenario_id": "cross_agent_validation_false_claim",
+      "name": "Cross-agent false-claim rejection",
+      "aggregate": {
+        "runs": 5,
+        "succeeded_runs": 2,
+        "failed_runs": 3,
+        "task_success_rate": {
+          "count": 5,
+          "median": 0.6666666666666666,
+          "p90": 1
+        },
+        "verified_finding_precision": {
+          "count": 5,
+          "median": 1,
+          "p90": 1
+        },
+        "loop_incident_rate": {
+          "count": 5,
+          "median": 0.3333333333333333,
+          "p90": 0.3333333333333333
+        },
+        "recovery_success_rate": {
+          "count": 5,
+          "median": 0,
+          "p90": 1
+        },
+        "time_to_first_verified_finding_seconds": {
+          "count": 5,
+          "median": 4.32369618,
+          "p90": 13.91952139
+        },
+        "duration_seconds": {
+          "count": 5,
+          "median": 98.511436419,
+          "p90": 196.010052861
+        },
+        "failure_reason_counts": {
+          "assist_budget_exhausted": 1,
+          "assist_loop_detected": 3
+        },
+        "terminal_reason_counts": {
+          "completed": 2,
+          "stopped:run_terminal_failure": 3
+        }
+      }
+    }
+  ],
+  "aggregate": {
+    "runs": 30,
+    "succeeded_runs": 20,
+    "failed_runs": 10,
+    "task_success_rate": {
+      "count": 30,
+      "median": 1,
+      "p90": 1
+    },
+    "verified_finding_precision": {
+      "count": 30,
+      "median": 1,
+      "p90": 1
+    },
+    "loop_incident_rate": {
+      "count": 30,
+      "median": 0,
+      "p90": 0.3333333333333333
+    },
+    "recovery_success_rate": {
+      "count": 30,
+      "median": 1,
+      "p90": 1
+    },
+    "time_to_first_verified_finding_seconds": {
+      "count": 30,
+      "median": 7.474302247500001,
+      "p90": 42.232258704
+    },
+    "duration_seconds": {
+      "count": 30,
+      "median": 200.887987426,
+      "p90": 306.269756869
+    },
+    "failure_reason_counts": {
+      "assist_budget_exhausted": 4,
+      "assist_loop_detected": 9,
+      "command_failed": 4
+    },
+    "terminal_reason_counts": {
+      "completed": 20,
+      "stopped:run_terminal_failure": 10
+    }
+  }
+}
