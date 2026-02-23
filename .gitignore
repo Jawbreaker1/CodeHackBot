@@ -15,6 +15,38 @@
 *.tmp
 *.out
 *.test
+*.swp
+
+# Local lab run scratch artifacts (repo root)
+/active_hosts.txt
+/candidate_passwords.txt
+/extracted_files.txt
+/extracted_preview.txt
+/extraction_status.txt
+/fcrackzip_*.txt
+/host_scan.gnmap
+/john_*.pot
+/john_*.txt
+/live_hosts.txt
+/net_scan.md
+/nmap_scan.gnmap
+/now.txt
+/port_scan.gnmap
+/port_scan.nmap
+/port_scan.xml
+/prep_summary.txt
+/recovered_password.txt
+/secret.zip
+/secret.zip.hash
+/syve.md
+/zip_crack_report.md
+/zipinfo_verbose.txt
+
+# Local lab run scratch directories
+/extracted_content/
+/extracted_secret/
+/nmap_results/
+/systemverification/
 
 # OS files
 .DS_Store
