@@ -238,6 +238,38 @@ func TestScheduler_IsDoneWhenQueuedTaskHasTerminalDependency(t *testing.T) {
 	}
 }
 
+func TestScheduler_IsDoneWhenQueuedTaskHasTransitiveTerminalDependency(t *testing.T) {
+	t.Parallel()
+
+	plan := RunPlan{
+		RunID:           "run-terminal-deps-transitive",
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks: []TaskSpec{
+			task("t1", nil, 1),
+			task("t2", []string{"t1"}, 1),
+			task("t3", []string{"t2"}, 1),
+		},
+	}
+	s, err := NewScheduler(plan, 1)
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	if err := s.MarkLeased("t1"); err != nil {
+		t.Fatalf("MarkLeased t1: %v", err)
+	}
+	if err := s.MarkRunning("t1"); err != nil {
+		t.Fatalf("MarkRunning t1: %v", err)
+	}
+	if err := s.MarkFailed("t1", "command_failed", false, 1); err != nil {
+		t.Fatalf("MarkFailed t1: %v", err)
+	}
+	if !s.IsDone() {
+		t.Fatalf("expected scheduler done when queued tasks only have transitive terminal dependency failures")
+	}
+}
+
 func TestScheduler_IsNotDoneWhenQueuedTaskCanStillRun(t *testing.T) {
 	t.Parallel()
 

@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -111,6 +112,210 @@ func TestRunWorkerTaskCommandAction(t *testing.T) {
 	}
 	if status, _ := contract["verification_status"].(string); status != "reported_by_worker" {
 		t.Fatalf("expected verification_status reported_by_worker, got %q", status)
+	}
+}
+
+func TestRunWorkerTaskCommandActionExecutesBrowseAndCrawlBuiltins(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		command string
+	}{
+		{name: "browse", command: "browse"},
+		{name: "crawl", command: "crawl"},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/html")
+				_, _ = w.Write([]byte("<html><head><title>builtin check</title></head><body>ok</body></html>"))
+			})
+			server := httptest.NewServer(handler)
+			defer server.Close()
+
+			base := t.TempDir()
+			runID := "run-worker-task-" + tc.name + "-builtin"
+			taskID := "t1"
+			workerID := "worker-" + tc.name + "-a1"
+			if _, err := EnsureRunLayout(base, runID); err != nil {
+				t.Fatalf("EnsureRunLayout: %v", err)
+			}
+			writeWorkerPlan(t, base, runID, Scope{Targets: []string{"127.0.0.1"}})
+
+			task := TaskSpec{
+				TaskID:            taskID,
+				Goal:              "fetch target web page summary",
+				Targets:           []string{"127.0.0.1"},
+				DoneWhen:          []string{"page summary captured"},
+				FailWhen:          []string{"page summary failed"},
+				ExpectedArtifacts: []string{"command log"},
+				RiskLevel:         string(RiskReconReadonly),
+				Action: TaskAction{
+					Type:    "command",
+					Command: tc.command,
+					Args:    []string{server.URL},
+				},
+				Budget: TaskBudget{
+					MaxSteps:     2,
+					MaxToolCalls: 2,
+					MaxRuntime:   10 * time.Second,
+				},
+			}
+			taskPath := filepath.Join(BuildRunPaths(base, runID).TaskDir, taskID+".json")
+			if err := WriteJSONAtomic(taskPath, task); err != nil {
+				t.Fatalf("WriteJSONAtomic task: %v", err)
+			}
+
+			if err := RunWorkerTask(WorkerRunConfig{
+				SessionsDir: base,
+				RunID:       runID,
+				TaskID:      taskID,
+				WorkerID:    workerID,
+				Attempt:     1,
+			}); err != nil {
+				t.Fatalf("RunWorkerTask: %v", err)
+			}
+
+			manager := NewManager(base)
+			events, err := manager.Events(runID, 0)
+			if err != nil {
+				t.Fatalf("Events: %v", err)
+			}
+			if hasEventType(events, EventTypeTaskFailed) {
+				t.Fatalf("did not expect task_failed event for builtin command %s", tc.command)
+			}
+			artifactEvent, ok := firstEventByType(events, EventTypeTaskArtifact)
+			if !ok {
+				t.Fatalf("expected task_artifact event")
+			}
+
+			payload := map[string]any{}
+			if len(artifactEvent.Payload) > 0 {
+				_ = json.Unmarshal(artifactEvent.Payload, &payload)
+			}
+			if got := strings.TrimSpace(toString(payload["command"])); got != tc.command {
+				t.Fatalf("expected command %q in artifact payload, got %q", tc.command, got)
+			}
+			logPath := strings.TrimSpace(toString(payload["path"]))
+			if logPath == "" {
+				t.Fatalf("task_artifact payload missing path")
+			}
+			data, err := os.ReadFile(logPath)
+			if err != nil {
+				t.Fatalf("read artifact log: %v", err)
+			}
+			content := string(data)
+			if !strings.Contains(content, "Status: 200") || !strings.Contains(content, "Title: builtin check") {
+				t.Fatalf("expected browse/crawl summary output, got: %q", content)
+			}
+		})
+	}
+}
+
+func TestRunWorkerTaskCommandActionReportLiteralRewritesToSynthesis(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-worker-task-report-literal"
+	taskID := "t-report"
+	workerID := "worker-report-a1"
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	writeWorkerPlan(t, base, runID, Scope{Targets: []string{"127.0.0.1"}})
+
+	depTaskID := "t-scan"
+	depDir := filepath.Join(BuildRunPaths(base, runID).ArtifactDir, depTaskID)
+	if err := os.MkdirAll(depDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll depDir: %v", err)
+	}
+	depArtifact := filepath.Join(depDir, "service_scan.txt")
+	depOutput := "" +
+		"Nmap scan report for 127.0.0.1\n" +
+		"PORT   STATE SERVICE VERSION\n" +
+		"80/tcp open  http    Apache httpd 2.2.14\n" +
+		"|_http-vuln-cve2010-0738: VULNERABLE\n"
+	if err := os.WriteFile(depArtifact, []byte(depOutput), 0o644); err != nil {
+		t.Fatalf("WriteFile depArtifact: %v", err)
+	}
+
+	task := TaskSpec{
+		TaskID:            taskID,
+		Title:             "Compile OWASP report",
+		Goal:              "Generate final OWASP report from prior scan artifacts",
+		Targets:           []string{"127.0.0.1"},
+		DependsOn:         []string{depTaskID},
+		DoneWhen:          []string{"OWASP report generated"},
+		FailWhen:          []string{"report generation failed"},
+		ExpectedArtifacts: []string{"owasp_report.md"},
+		RiskLevel:         string(RiskReconReadonly),
+		Action: TaskAction{
+			Type:    "command",
+			Command: "report",
+		},
+		Budget: TaskBudget{
+			MaxSteps:     2,
+			MaxToolCalls: 2,
+			MaxRuntime:   10 * time.Second,
+		},
+	}
+	taskPath := filepath.Join(BuildRunPaths(base, runID).TaskDir, taskID+".json")
+	if err := WriteJSONAtomic(taskPath, task); err != nil {
+		t.Fatalf("WriteJSONAtomic task: %v", err)
+	}
+
+	if err := RunWorkerTask(WorkerRunConfig{
+		SessionsDir: base,
+		RunID:       runID,
+		TaskID:      taskID,
+		WorkerID:    workerID,
+		Attempt:     1,
+	}); err != nil {
+		t.Fatalf("RunWorkerTask: %v", err)
+	}
+
+	manager := NewManager(base)
+	events, err := manager.Events(runID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if !hasEventType(events, EventTypeTaskCompleted) {
+		t.Fatalf("expected task_completed event")
+	}
+	if hasEventType(events, EventTypeTaskFailed) {
+		t.Fatalf("did not expect task_failed event")
+	}
+
+	rewrote := false
+	for _, event := range events {
+		if event.Type != EventTypeTaskProgress {
+			continue
+		}
+		payload := map[string]any{}
+		if len(event.Payload) > 0 {
+			_ = json.Unmarshal(event.Payload, &payload)
+		}
+		msg := strings.ToLower(strings.TrimSpace(toString(payload["message"])))
+		if strings.Contains(msg, "rewrote weak report command (report)") {
+			rewrote = true
+			break
+		}
+	}
+	if !rewrote {
+		t.Fatalf("expected progress note for report command rewrite")
+	}
+
+	materializedReport := filepath.Join(BuildRunPaths(base, runID).ArtifactDir, taskID, "owasp_report.md")
+	data, err := os.ReadFile(materializedReport)
+	if err != nil {
+		t.Fatalf("read materialized report: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "# OWASP-Style Security Assessment Report") {
+		t.Fatalf("expected synthesized report header, got: %q", content)
 	}
 }
 
@@ -503,7 +708,7 @@ func TestRepairMissingCommandInputPathsForShellWrapperSkipsEmbeddedRelativeSegme
 		"/tmp/run/artifact/T-03/john_show.txt",
 	}
 
-	nextArgs, notes, repaired := repairMissingCommandInputPathsForShellWrapper(command, args, candidates)
+	nextArgs, notes, repaired := repairMissingCommandInputPathsForShellWrapper(command, args, candidates, map[string]string{})
 	if repaired {
 		t.Fatalf("expected no shell-wrapper repair, got args=%q notes=%q", nextArgs, notes)
 	}
@@ -546,6 +751,394 @@ func TestBestArtifactCandidateForMissingPathFallsBackToExactBaseMatch(t *testing
 	if got != want {
 		t.Fatalf("expected exact basename match %q, got %q", want, got)
 	}
+}
+
+func TestRepairMissingCommandInputPathsRepairsFromLocalWorkspaceForLocalFileWorkflow(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	sessionsDir := filepath.Join(repoRoot, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll sessions: %v", err)
+	}
+	localArchive := filepath.Join(repoRoot, "secret.zip")
+	if err := os.WriteFile(localArchive, []byte("zip"), 0o644); err != nil {
+		t.Fatalf("WriteFile secret.zip: %v", err)
+	}
+
+	cfg := WorkerRunConfig{SessionsDir: sessionsDir}
+	task := TaskSpec{
+		TaskID:            "T-001",
+		Title:             "Verify archive exists",
+		Goal:              "Confirm archive path and scope",
+		Targets:           []string{"127.0.0.1"},
+		ExpectedArtifacts: []string{"archive_check.log"},
+	}
+	args := []string{"-l", "/tmp/secret.zip"}
+
+	nextArgs, notes, repaired, err := repairMissingCommandInputPaths(cfg, task, "list_dir", args)
+	if err != nil {
+		t.Fatalf("repairMissingCommandInputPaths: %v", err)
+	}
+	if !repaired {
+		t.Fatalf("expected local workspace repair")
+	}
+	if len(nextArgs) != 2 || nextArgs[1] != localArchive {
+		t.Fatalf("expected repaired archive path %q, got %#v", localArchive, nextArgs)
+	}
+	if len(notes) == 0 || !strings.Contains(strings.ToLower(notes[0]), "local workspace") {
+		t.Fatalf("expected local workspace note, got %v", notes)
+	}
+}
+
+func TestRepairMissingCommandInputPathsSkipsWorkspaceRepairForNonLocalTargets(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	sessionsDir := filepath.Join(repoRoot, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll sessions: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "secret.zip"), []byte("zip"), 0o644); err != nil {
+		t.Fatalf("WriteFile secret.zip: %v", err)
+	}
+
+	cfg := WorkerRunConfig{SessionsDir: sessionsDir}
+	task := TaskSpec{
+		TaskID:            "T-001",
+		Title:             "Verify archive exists",
+		Goal:              "Confirm archive path and scope",
+		Targets:           []string{"192.168.50.1"},
+		ExpectedArtifacts: []string{"archive_check.log"},
+	}
+	args := []string{"-l", "/tmp/secret.zip"}
+
+	nextArgs, notes, repaired, err := repairMissingCommandInputPaths(cfg, task, "list_dir", args)
+	if err != nil {
+		t.Fatalf("repairMissingCommandInputPaths: %v", err)
+	}
+	if repaired {
+		t.Fatalf("expected no workspace repair for non-local targets, got args=%#v notes=%v", nextArgs, notes)
+	}
+}
+
+func TestRepairMissingCommandInputPathsUsesReferencedDependencyPath(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	sessionsDir := filepath.Join(repoRoot, "sessions")
+	runID := "run-repair-dependency-reference"
+	paths, err := EnsureRunLayout(sessionsDir, runID)
+	if err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	depDir := filepath.Join(paths.ArtifactDir, "T-001")
+	if err := os.MkdirAll(depDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll depDir: %v", err)
+	}
+	realArchive := filepath.Join(repoRoot, "secret.zip")
+	if err := os.WriteFile(realArchive, []byte("PK\x03\x04test-zip-bytes"), 0o644); err != nil {
+		t.Fatalf("WriteFile secret.zip: %v", err)
+	}
+	summaryPath := filepath.Join(depDir, "secret.zip")
+	summary := "Path: " + realArchive + "\nType: file\nName: secret.zip\nBytes: 18\n"
+	if err := os.WriteFile(summaryPath, []byte(summary), 0o644); err != nil {
+		t.Fatalf("WriteFile summary artifact: %v", err)
+	}
+
+	cfg := WorkerRunConfig{SessionsDir: sessionsDir, RunID: runID}
+	task := TaskSpec{
+		TaskID:     "T-002",
+		Title:      "Extract Archive Metadata",
+		Goal:       "Determine encryption/hash type before selecting cracking method",
+		Strategy:   "metadata_discovery",
+		Targets:    []string{"127.0.0.1"},
+		DependsOn:  []string{"T-001"},
+		RiskLevel:  string(RiskReconReadonly),
+		DoneWhen:   []string{"metadata extracted"},
+		FailWhen:   []string{"metadata extraction failed"},
+		Budget:     TaskBudget{MaxSteps: 4, MaxToolCalls: 2, MaxRuntime: 20 * time.Second},
+	}
+	args := []string{"-v", "/tmp/secret.zip"}
+
+	nextArgs, notes, repaired, err := repairMissingCommandInputPaths(cfg, task, "zipinfo", args)
+	if err != nil {
+		t.Fatalf("repairMissingCommandInputPaths: %v", err)
+	}
+	if !repaired {
+		t.Fatalf("expected dependency path repair")
+	}
+	if len(nextArgs) != 2 || nextArgs[1] != realArchive {
+		t.Fatalf("expected repaired archive path %q, got %#v", realArchive, nextArgs)
+	}
+	if len(notes) == 0 {
+		t.Fatalf("expected repair note, got none")
+	}
+}
+
+func TestRepairMissingCommandInputPathsForShellWrapperUsesReferencedDependencyPath(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	sessionsDir := filepath.Join(repoRoot, "sessions")
+	runID := "run-shell-repair-dependency-reference"
+	paths, err := EnsureRunLayout(sessionsDir, runID)
+	if err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	depDir := filepath.Join(paths.ArtifactDir, "T-001")
+	if err := os.MkdirAll(depDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll depDir: %v", err)
+	}
+	realArchive := filepath.Join(repoRoot, "secret.zip")
+	if err := os.WriteFile(realArchive, []byte("PK\x03\x04test-zip-bytes"), 0o644); err != nil {
+		t.Fatalf("WriteFile secret.zip: %v", err)
+	}
+	summaryPath := filepath.Join(depDir, "secret.zip")
+	summary := "Path: " + realArchive + "\nType: file\nName: secret.zip\nBytes: 18\n"
+	if err := os.WriteFile(summaryPath, []byte(summary), 0o644); err != nil {
+		t.Fatalf("WriteFile summary artifact: %v", err)
+	}
+
+	cfg := WorkerRunConfig{SessionsDir: sessionsDir, RunID: runID}
+	task := TaskSpec{
+		TaskID:    "T-003",
+		Title:     "Extract Hash Material",
+		Goal:      "Extract crackable hash material",
+		Strategy:  "hash_extraction",
+		Targets:   []string{"127.0.0.1"},
+		DependsOn: []string{"T-001"},
+	}
+	args := []string{"-lc", "zip2john /tmp/secret.zip > /tmp/zip.hash"}
+
+	nextArgs, _, repaired, err := repairMissingCommandInputPaths(cfg, task, "bash", args)
+	if err != nil {
+		t.Fatalf("repairMissingCommandInputPaths: %v", err)
+	}
+	if !repaired {
+		t.Fatalf("expected shell-wrapper dependency path repair")
+	}
+	if len(nextArgs) < 2 || strings.Contains(nextArgs[1], "/tmp/secret.zip") || !strings.Contains(nextArgs[1], realArchive) {
+		t.Fatalf("expected repaired shell body to reference %q, got %q", realArchive, nextArgs)
+	}
+}
+
+func TestRepairMissingCommandInputPathsForShellWrapperUsesWorkspaceCandidate(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	sessionsDir := filepath.Join(repoRoot, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll sessions: %v", err)
+	}
+	realArchive := filepath.Join(repoRoot, "secret.zip")
+	if err := os.WriteFile(realArchive, []byte("PK\x03\x04test-zip-bytes"), 0o644); err != nil {
+		t.Fatalf("WriteFile secret.zip: %v", err)
+	}
+
+	cfg := WorkerRunConfig{SessionsDir: sessionsDir}
+	task := TaskSpec{
+		TaskID:   "T-004",
+		Title:    "Extract hash material",
+		Goal:     "Extract crackable hash material",
+		Strategy: "hash_extraction",
+		Targets:  []string{"127.0.0.1"},
+	}
+	args := []string{"-lc", "zip2john /tmp/secret.zip > /tmp/zip.hash"}
+
+	nextArgs, _, repaired, err := repairMissingCommandInputPaths(cfg, task, "bash", args)
+	if err != nil {
+		t.Fatalf("repairMissingCommandInputPaths: %v", err)
+	}
+	if !repaired {
+		t.Fatalf("expected shell-wrapper workspace repair")
+	}
+	if len(nextArgs) < 2 || strings.Contains(nextArgs[1], "/tmp/secret.zip") || !strings.Contains(nextArgs[1], realArchive) {
+		t.Fatalf("expected repaired shell body to reference %q, got %q", realArchive, nextArgs)
+	}
+}
+
+func TestRepairMissingCommandInputPathsPrefersWorkspaceOverMisleadingDependencyArtifact(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	sessionsDir := filepath.Join(repoRoot, "sessions")
+	runID := "run-repair-workspace-preferred"
+	paths, err := EnsureRunLayout(sessionsDir, runID)
+	if err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	depDir := filepath.Join(paths.ArtifactDir, "T-003")
+	if err := os.MkdirAll(depDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll depDir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(depDir, "zip.hash"), []byte("fake hash"), 0o644); err != nil {
+		t.Fatalf("WriteFile zip.hash: %v", err)
+	}
+	realArchive := filepath.Join(repoRoot, "secret.zip")
+	if err := os.WriteFile(realArchive, []byte("PK\x03\x04test-zip-bytes"), 0o644); err != nil {
+		t.Fatalf("WriteFile secret.zip: %v", err)
+	}
+
+	cfg := WorkerRunConfig{SessionsDir: sessionsDir, RunID: runID}
+	task := TaskSpec{
+		TaskID:    "T-006",
+		Title:     "Run fallback crack",
+		Goal:      "Run fallback tooling if available",
+		Strategy:  "local_only",
+		Targets:   []string{"127.0.0.1"},
+		DependsOn: []string{"T-003"},
+	}
+	args := []string{"-u", "-D", "-p", "/usr/share/wordlists/rockyou.txt", "/tmp/secret.zip"}
+
+	nextArgs, notes, repaired, err := repairMissingCommandInputPaths(cfg, task, "fcrackzip", args)
+	if err != nil {
+		t.Fatalf("repairMissingCommandInputPaths: %v", err)
+	}
+	if !repaired {
+		t.Fatalf("expected input repair")
+	}
+	if got := nextArgs[len(nextArgs)-1]; got != realArchive {
+		t.Fatalf("expected archive path %q, got %q", realArchive, got)
+	}
+	hasLocalWorkspaceNote := false
+	for _, note := range notes {
+		if strings.Contains(strings.ToLower(note), "local workspace") {
+			hasLocalWorkspaceNote = true
+			break
+		}
+	}
+	if !hasLocalWorkspaceNote {
+		t.Fatalf("expected local workspace repair note, got %v", notes)
+	}
+}
+
+func TestRepairMissingCommandInputPathsBootstrapsCompressedWordlist(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	sessionsDir := filepath.Join(repoRoot, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll sessions: %v", err)
+	}
+	wordlistDir := filepath.Join(repoRoot, "wordlists")
+	if err := os.MkdirAll(wordlistDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll wordlists: %v", err)
+	}
+	requestedWordlist := filepath.Join(wordlistDir, "mini.txt")
+	if err := writeGzipFile(filepath.Join(wordlistDir, "mini.txt.gz"), []byte("secret\npassword\n")); err != nil {
+		t.Fatalf("writeGzipFile: %v", err)
+	}
+	archivePath := filepath.Join(repoRoot, "secret.zip")
+	if err := os.WriteFile(archivePath, []byte("PK\x03\x04test-zip-bytes"), 0o644); err != nil {
+		t.Fatalf("WriteFile secret.zip: %v", err)
+	}
+
+	cfg := WorkerRunConfig{
+		SessionsDir: sessionsDir,
+		RunID:       "run-wordlist-bootstrap",
+		WorkerID:    "worker-T-007-a1",
+	}
+	task := TaskSpec{
+		TaskID:   "T-007",
+		Title:    "Fallback crack",
+		Goal:     "Run fallback tooling",
+		Targets:  []string{"127.0.0.1"},
+		Strategy: "fallback_crack",
+	}
+	args := []string{"-u", "-D", "-p", requestedWordlist, archivePath}
+
+	nextArgs, notes, repaired, err := repairMissingCommandInputPaths(cfg, task, "fcrackzip", args)
+	if err != nil {
+		t.Fatalf("repairMissingCommandInputPaths: %v", err)
+	}
+	if !repaired {
+		t.Fatalf("expected wordlist repair")
+	}
+	if got := nextArgs[3]; got == requestedWordlist {
+		t.Fatalf("expected replaced wordlist path, got %q", got)
+	}
+	if _, statErr := os.Stat(nextArgs[3]); statErr != nil {
+		t.Fatalf("expected bootstrapped wordlist file at %q: %v", nextArgs[3], statErr)
+	}
+	if len(notes) == 0 || !strings.Contains(strings.ToLower(strings.Join(notes, " ")), "wordlist") {
+		t.Fatalf("expected wordlist repair note, got %v", notes)
+	}
+	content, readErr := os.ReadFile(nextArgs[3])
+	if readErr != nil {
+		t.Fatalf("ReadFile bootstrapped wordlist: %v", readErr)
+	}
+	if !strings.Contains(string(content), "secret") {
+		t.Fatalf("expected decompressed wordlist content, got %q", string(content))
+	}
+}
+
+func TestRepairMissingCommandInputPathsForShellWrapperBootstrapsCompressedWordlist(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	sessionsDir := filepath.Join(repoRoot, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll sessions: %v", err)
+	}
+	wordlistDir := filepath.Join(repoRoot, "wordlists")
+	if err := os.MkdirAll(wordlistDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll wordlists: %v", err)
+	}
+	requestedWordlist := filepath.Join(wordlistDir, "mini.txt")
+	if err := writeGzipFile(filepath.Join(wordlistDir, "mini.txt.gz"), []byte("secret\npassword\n")); err != nil {
+		t.Fatalf("writeGzipFile: %v", err)
+	}
+	archivePath := filepath.Join(repoRoot, "secret.zip")
+	if err := os.WriteFile(archivePath, []byte("PK\x03\x04test-zip-bytes"), 0o644); err != nil {
+		t.Fatalf("WriteFile secret.zip: %v", err)
+	}
+
+	cfg := WorkerRunConfig{
+		SessionsDir: sessionsDir,
+		RunID:       "run-shell-wordlist-bootstrap",
+		WorkerID:    "worker-T-007-a1",
+	}
+	task := TaskSpec{
+		TaskID:   "T-007",
+		Title:    "Fallback crack",
+		Goal:     "Run fallback tooling",
+		Targets:  []string{"127.0.0.1"},
+		Strategy: "fallback_crack",
+	}
+	args := []string{"-lc", "fcrackzip -u -D -p " + requestedWordlist + " " + archivePath}
+
+	nextArgs, notes, repaired, err := repairMissingCommandInputPaths(cfg, task, "bash", args)
+	if err != nil {
+		t.Fatalf("repairMissingCommandInputPaths: %v", err)
+	}
+	if !repaired {
+		t.Fatalf("expected shell-wrapper wordlist repair")
+	}
+	if strings.Contains(nextArgs[1], requestedWordlist) {
+		t.Fatalf("expected shell body replacement, got %q", nextArgs[1])
+	}
+	if len(notes) == 0 || !strings.Contains(strings.ToLower(strings.Join(notes, " ")), "wordlist") {
+		t.Fatalf("expected shell wordlist repair note, got %v", notes)
+	}
+}
+
+func writeGzipFile(path string, data []byte) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	zw := gzip.NewWriter(f)
+	if _, err := zw.Write(data); err != nil {
+		_ = zw.Close()
+		_ = f.Close()
+		return err
+	}
+	if err := zw.Close(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 func TestRunWorkerTaskRetriesNmapOnceOnHostTimeout(t *testing.T) {
@@ -955,6 +1548,121 @@ func TestEnsureVulnerabilityEvidenceActionReplacesSafeScriptWithoutDuplicates(t 
 	}
 }
 
+func TestEnsureVulnerabilityEvidenceActionWithGoalTriggersForServiceScanContext(t *testing.T) {
+	t.Parallel()
+
+	task := TaskSpec{
+		TaskID:            "t-service",
+		Goal:              "Collect bounded service evidence for the target",
+		Strategy:          "service_enum",
+		DoneWhen:          []string{"service scan captured"},
+		FailWhen:          []string{"scan failed"},
+		ExpectedArtifacts: []string{"service_scan.txt"},
+		RiskLevel:         string(RiskActiveProbe),
+	}
+	args, note, rewritten := ensureVulnerabilityEvidenceActionWithGoal(
+		task,
+		"Perform an OWASP security assessment and produce a report",
+		"nmap",
+		[]string{"-sV", "--top-ports", "20", "scanme.nmap.org"},
+	)
+	if !rewritten {
+		t.Fatalf("expected goal-context vulnerability evidence rewrite")
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--script vuln and safe") {
+		t.Fatalf("expected vuln script in args, got %#v", args)
+	}
+	if !strings.Contains(joined, "--script-timeout 20s") {
+		t.Fatalf("expected script timeout in args, got %#v", args)
+	}
+	if !strings.Contains(strings.ToLower(note), "goal-context trigger") {
+		t.Fatalf("expected goal-context trigger note, got %q", note)
+	}
+}
+
+func TestEnsureVulnerabilityEvidenceActionWithGoalSkipsDiscoveryScan(t *testing.T) {
+	t.Parallel()
+
+	task := TaskSpec{
+		TaskID:            "t-discovery",
+		Goal:              "Host discovery pass",
+		Strategy:          "recon_seed",
+		DoneWhen:          []string{"hosts discovered"},
+		ExpectedArtifacts: []string{"hosts.txt"},
+		RiskLevel:         string(RiskReconReadonly),
+	}
+	args, note, rewritten := ensureVulnerabilityEvidenceActionWithGoal(
+		task,
+		"Perform an OWASP security assessment and produce a report",
+		"nmap",
+		[]string{"-sn", "192.168.50.0/24"},
+	)
+	if rewritten {
+		t.Fatalf("did not expect rewrite for discovery scan: args=%#v note=%q", args, note)
+	}
+	if len(args) != 2 {
+		t.Fatalf("unexpected arg mutation for discovery scan: %#v", args)
+	}
+}
+
+func TestEnsureVulnerabilityEvidenceActionWithGoalRewritesShellWrappedNmap(t *testing.T) {
+	t.Parallel()
+
+	task := TaskSpec{
+		TaskID:            "t-service-shell",
+		Goal:              "Collect bounded service evidence for the target",
+		Strategy:          "service_enum",
+		DoneWhen:          []string{"service scan captured"},
+		FailWhen:          []string{"scan failed"},
+		ExpectedArtifacts: []string{"service_scan.txt"},
+		RiskLevel:         string(RiskActiveProbe),
+	}
+	args, note, rewritten := ensureVulnerabilityEvidenceActionWithGoal(
+		task,
+		"Perform an OWASP security assessment and produce a report",
+		"bash",
+		[]string{"-lc", "set -euo pipefail; nmap -n -sV --top-ports 20 scanme.nmap.org | tee service_scan.txt"},
+	)
+	if !rewritten {
+		t.Fatalf("expected shell-wrapped nmap vulnerability evidence rewrite")
+	}
+	if len(args) < 2 || !strings.Contains(args[1], `--script "vuln and safe"`) {
+		t.Fatalf("expected vuln script insertion in shell body, got %#v", args)
+	}
+	if !strings.Contains(args[1], "--script-timeout 20s") {
+		t.Fatalf("expected script-timeout insertion in shell body, got %#v", args)
+	}
+	if !strings.Contains(strings.ToLower(note), "goal-context trigger") {
+		t.Fatalf("expected goal-context trigger note, got %q", note)
+	}
+}
+
+func TestEnsureVulnerabilityEvidenceActionWithGoalDoesNotRewriteHostnameContainingNmap(t *testing.T) {
+	t.Parallel()
+
+	task := TaskSpec{
+		TaskID:            "t-dns",
+		Goal:              "Collect DNS baseline evidence",
+		Strategy:          "recon_readonly",
+		DoneWhen:          []string{"dns captured"},
+		ExpectedArtifacts: []string{"dns_records.txt"},
+		RiskLevel:         string(RiskReconReadonly),
+	}
+	args, note, rewritten := ensureVulnerabilityEvidenceActionWithGoal(
+		task,
+		"Perform an OWASP security assessment and produce a report",
+		"bash",
+		[]string{"-lc", "set -euo pipefail; dig scanme.nmap.org A +short | tee dns_records.txt"},
+	)
+	if rewritten {
+		t.Fatalf("did not expect rewrite when script contains only hostname token: args=%#v note=%q", args, note)
+	}
+	if len(args) < 2 || !strings.Contains(args[1], "scanme.nmap.org") {
+		t.Fatalf("unexpected script mutation: %#v", args)
+	}
+}
+
 func TestEnsureVulnerabilityEvidenceActionSkipsReportTasks(t *testing.T) {
 	t.Parallel()
 
@@ -1049,7 +1757,7 @@ func TestAdaptWeakReportActionRewritesCatToLocalSynthesis(t *testing.T) {
 	if cmd != "python3" {
 		t.Fatalf("expected python3 rewrite command, got %q", cmd)
 	}
-	if len(args) < 10 || args[0] != "-c" {
+	if len(args) < 11 || args[0] != "-c" {
 		t.Fatalf("unexpected rewrite args: %#v", args)
 	}
 	if !strings.Contains(args[1], "OWASP-Style Security Assessment Report") {
@@ -1058,11 +1766,14 @@ func TestAdaptWeakReportActionRewritesCatToLocalSynthesis(t *testing.T) {
 	if args[2] != runID || args[3] != task.TaskID {
 		t.Fatalf("expected run/task identifiers in args, got %#v", args[2:4])
 	}
-	if gotRoot := args[7]; gotRoot != BuildRunPaths(base, runID).ArtifactDir {
+	if strings.TrimSpace(args[4]) != task.Goal {
+		t.Fatalf("expected task goal in args[4], got %q", args[4])
+	}
+	if gotRoot := args[8]; gotRoot != BuildRunPaths(base, runID).ArtifactDir {
 		t.Fatalf("expected artifact root %q, got %q", BuildRunPaths(base, runID).ArtifactDir, gotRoot)
 	}
-	if args[8] != "T-02" || args[9] != "T-03" {
-		t.Fatalf("expected dependency task ids in args, got %#v", args[8:])
+	if args[9] != "T-02" || args[10] != "T-03" {
+		t.Fatalf("expected dependency task ids in args, got %#v", args[9:])
 	}
 	if !strings.Contains(strings.ToLower(note), "rewrote weak report command") {
 		t.Fatalf("expected rewrite note, got %q", note)
@@ -1350,8 +2061,311 @@ func TestRunWorkerTaskReportSynthesisNoFindingsIncludesClearSummary(t *testing.T
 	if !strings.Contains(content, "## Test Execution Summary") {
 		t.Fatalf("expected test execution summary section, got: %q", content)
 	}
+	if !strings.Contains(content, "## Task Execution Trace") {
+		t.Fatalf("expected task execution trace section, got: %q", content)
+	}
+	if !strings.Contains(content, "### Task T-02") || !strings.Contains(content, "### Task T-03") {
+		t.Fatalf("expected task-level trace entries for dependencies, got: %q", content)
+	}
 	if !strings.Contains(content, "No finding-specific remediation generated because no evidence-backed vulnerabilities were identified.") {
 		t.Fatalf("expected no-findings remediation guidance, got: %q", content)
+	}
+}
+
+func TestRunWorkerTaskReportSynthesisPrioritizesHighConfidenceCVEEvidence(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-worker-task-report-cve-priority"
+	taskID := "T-04"
+	workerID := "worker-t4-a1"
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	writeWorkerPlan(t, base, runID, Scope{Targets: []string{"192.168.50.1"}})
+
+	artifactRoot := BuildRunPaths(base, runID).ArtifactDir
+	serviceArtifact := filepath.Join(artifactRoot, "T-02", "service_scan.log")
+	if err := os.MkdirAll(filepath.Dir(serviceArtifact), 0o755); err != nil {
+		t.Fatalf("MkdirAll service artifact dir: %v", err)
+	}
+	if err := os.WriteFile(serviceArtifact, []byte("Nmap scan report for 192.168.50.1\nPORT STATE SERVICE\n80/tcp open http\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile service artifact: %v", err)
+	}
+	vulnArtifact := filepath.Join(artifactRoot, "T-03", "vuln_scan.log")
+	if err := os.MkdirAll(filepath.Dir(vulnArtifact), 0o755); err != nil {
+		t.Fatalf("MkdirAll vuln artifact dir: %v", err)
+	}
+	vulnText := "" +
+		"NSE: host appears vulnerable to CVE-2010-0738 on 192.168.50.1\n" +
+		"Reference feed list: CVE-2010-0738 CVE-2010-0738 CVE-2010-0738 https://nvd.nist.gov/vuln/detail/CVE-2010-0738\n" +
+		"Vendor advisory references CVE-2010-0738 for legacy versions\n"
+	if err := os.WriteFile(vulnArtifact, []byte(vulnText), 0o644); err != nil {
+		t.Fatalf("WriteFile vuln artifact: %v", err)
+	}
+
+	task := TaskSpec{
+		TaskID:            taskID,
+		Goal:              "Produce a final OWASP report from prior artifacts and include remediation guidance",
+		Targets:           []string{"192.168.50.1"},
+		DependsOn:         []string{"T-02", "T-03"},
+		DoneWhen:          []string{"OWASP report generated"},
+		FailWhen:          []string{"report generation failed"},
+		ExpectedArtifacts: []string{"owasp_report.md"},
+		RiskLevel:         string(RiskReconReadonly),
+		Action: TaskAction{
+			Type:    "command",
+			Command: "cat",
+			Args:    []string{"/tmp/service_scan_output.txt", "/tmp/vuln_scan_output.txt"},
+		},
+		Budget: TaskBudget{
+			MaxSteps:     3,
+			MaxToolCalls: 3,
+			MaxRuntime:   30 * time.Second,
+		},
+	}
+	taskPath := filepath.Join(BuildRunPaths(base, runID).TaskDir, taskID+".json")
+	if err := WriteJSONAtomic(taskPath, task); err != nil {
+		t.Fatalf("WriteJSONAtomic task: %v", err)
+	}
+
+	if err := RunWorkerTask(WorkerRunConfig{
+		SessionsDir: base,
+		RunID:       runID,
+		TaskID:      taskID,
+		WorkerID:    workerID,
+		Attempt:     1,
+	}); err != nil {
+		t.Fatalf("RunWorkerTask: %v", err)
+	}
+
+	events, err := NewManager(base).Events(runID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	completedEvent, ok := firstEventByType(events, EventTypeTaskCompleted)
+	if !ok {
+		t.Fatalf("expected task_completed event")
+	}
+	completedPayload := map[string]any{}
+	if len(completedEvent.Payload) > 0 {
+		_ = json.Unmarshal(completedEvent.Payload, &completedPayload)
+	}
+	logPath := strings.TrimSpace(toString(completedPayload["log_path"]))
+	if logPath == "" {
+		t.Fatalf("expected completed payload log_path")
+	}
+	reportOutput, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile command log: %v", err)
+	}
+	content := string(reportOutput)
+	if !strings.Contains(content, "### CVE-2010-0738") {
+		t.Fatalf("expected CVE heading in report output, got: %q", content)
+	}
+	if !strings.Contains(content, "Evidence confidence: high") {
+		t.Fatalf("expected high-confidence CVE evidence, got: %q", content)
+	}
+	if !strings.Contains(content, "host appears vulnerable to CVE-2010-0738") {
+		t.Fatalf("expected target-relevant vulnerability excerpt, got: %q", content)
+	}
+	if strings.Contains(content, "Reference feed list:") {
+		t.Fatalf("did not expect low-quality reference-feed excerpt in prioritized findings, got: %q", content)
+	}
+}
+
+func TestRunWorkerTaskReportSynthesisIncludesAuthAttemptTrace(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-worker-task-report-auth-trace"
+	taskID := "T-04"
+	workerID := "worker-t4-a1"
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	writeWorkerPlan(t, base, runID, Scope{Targets: []string{"192.168.50.1"}})
+
+	artifactRoot := BuildRunPaths(base, runID).ArtifactDir
+	fingerprintArtifact := filepath.Join(artifactRoot, "T-01", "router_fingerprint.json")
+	if err := os.MkdirAll(filepath.Dir(fingerprintArtifact), 0o755); err != nil {
+		t.Fatalf("MkdirAll fingerprint artifact dir: %v", err)
+	}
+	if err := os.WriteFile(fingerprintArtifact, []byte(`{
+  "title": "ASUS Wireless Router GT-BE98",
+  "form_actions": ["login_v2.cgi"],
+  "candidate_auth_endpoints": ["/login.cgi", "/login_v2.cgi"]
+}`), 0o644); err != nil {
+		t.Fatalf("WriteFile fingerprint artifact: %v", err)
+	}
+	attemptArtifact := filepath.Join(artifactRoot, "T-03", "admin_attempt_result.json")
+	if err := os.MkdirAll(filepath.Dir(attemptArtifact), 0o755); err != nil {
+		t.Fatalf("MkdirAll attempt artifact dir: %v", err)
+	}
+	if err := os.WriteFile(attemptArtifact, []byte(`{
+  "method": "nonce_hash_login_v2",
+  "success": false,
+  "stop_reason": "bounded_attempts_exhausted",
+  "attempts": [
+    {"user": "admin", "suspected_success": false},
+    {"user": "admin", "suspected_success": false}
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("WriteFile attempt artifact: %v", err)
+	}
+	proofArtifact := filepath.Join(artifactRoot, "T-03", "admin_access_proof.txt")
+	if err := os.WriteFile(proofArtifact, []byte("NO_SUCCESS\nbounded_attempts_exhausted\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile proof artifact: %v", err)
+	}
+
+	task := TaskSpec{
+		TaskID:            taskID,
+		Goal:              "Generate final OWASP report with execution detail",
+		Targets:           []string{"192.168.50.1"},
+		DependsOn:         []string{"T-01", "T-03"},
+		DoneWhen:          []string{"OWASP report generated"},
+		FailWhen:          []string{"report generation failed"},
+		ExpectedArtifacts: []string{"owasp_report.md"},
+		RiskLevel:         string(RiskReconReadonly),
+		Action: TaskAction{
+			Type:    "command",
+			Command: "cat",
+			Args:    []string{"/tmp/router_fingerprint.json", "/tmp/admin_attempt_result.json"},
+		},
+		Budget: TaskBudget{
+			MaxSteps:     3,
+			MaxToolCalls: 3,
+			MaxRuntime:   30 * time.Second,
+		},
+	}
+	taskPath := filepath.Join(BuildRunPaths(base, runID).TaskDir, taskID+".json")
+	if err := WriteJSONAtomic(taskPath, task); err != nil {
+		t.Fatalf("WriteJSONAtomic task: %v", err)
+	}
+
+	if err := RunWorkerTask(WorkerRunConfig{
+		SessionsDir: base,
+		RunID:       runID,
+		TaskID:      taskID,
+		WorkerID:    workerID,
+		Attempt:     1,
+	}); err != nil {
+		t.Fatalf("RunWorkerTask: %v", err)
+	}
+
+	events, err := NewManager(base).Events(runID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	completedEvent, ok := firstEventByType(events, EventTypeTaskCompleted)
+	if !ok {
+		t.Fatalf("expected task_completed event")
+	}
+	completedPayload := map[string]any{}
+	if len(completedEvent.Payload) > 0 {
+		_ = json.Unmarshal(completedEvent.Payload, &completedPayload)
+	}
+	logPath := strings.TrimSpace(toString(completedPayload["log_path"]))
+	if logPath == "" {
+		t.Fatalf("expected completed payload log_path")
+	}
+	reportOutput, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile command log: %v", err)
+	}
+	content := string(reportOutput)
+	if !strings.Contains(content, "## Task Execution Trace") {
+		t.Fatalf("expected task execution trace section, got: %q", content)
+	}
+	if !strings.Contains(content, "- Report objective: Generate final OWASP report with execution detail") {
+		t.Fatalf("expected report objective in scope section, got: %q", content)
+	}
+	if !strings.Contains(content, "attempt workflow: method=nonce_hash_login_v2") {
+		t.Fatalf("expected attempt workflow details in trace, got: %q", content)
+	}
+	if !strings.Contains(content, "admin access proof status: NO_SUCCESS") {
+		t.Fatalf("expected admin access proof status in trace, got: %q", content)
+	}
+}
+
+func TestRunWorkerTaskReportSynthesisDoesNotReuseStaleReportFile(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-worker-task-report-stale-file-guard"
+	taskID := "T-04"
+	workerID := "worker-t4-a1"
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	writeWorkerPlan(t, base, runID, Scope{Targets: []string{"192.168.50.1"}})
+
+	artifactRoot := BuildRunPaths(base, runID).ArtifactDir
+	serviceArtifact := filepath.Join(artifactRoot, "T-02", "service_scan.log")
+	if err := os.MkdirAll(filepath.Dir(serviceArtifact), 0o755); err != nil {
+		t.Fatalf("MkdirAll service artifact dir: %v", err)
+	}
+	if err := os.WriteFile(serviceArtifact, []byte("Nmap scan report for 192.168.50.1\nPORT STATE SERVICE\n80/tcp open http\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile service artifact: %v", err)
+	}
+	vulnArtifact := filepath.Join(artifactRoot, "T-03", "vuln_scan.log")
+	if err := os.MkdirAll(filepath.Dir(vulnArtifact), 0o755); err != nil {
+		t.Fatalf("MkdirAll vuln artifact dir: %v", err)
+	}
+	if err := os.WriteFile(vulnArtifact, []byte("NSE: vulnerable to CVE-2010-0738\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile vuln artifact: %v", err)
+	}
+
+	workspace := filepath.Join(base, "report-workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll workspace: %v", err)
+	}
+	staleReportPath := filepath.Join(workspace, "owasp_report.md")
+	if err := os.WriteFile(staleReportPath, []byte("STALE_REPORT\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile stale report: %v", err)
+	}
+
+	task := TaskSpec{
+		TaskID:            taskID,
+		Goal:              "Produce a final OWASP report from prior artifacts and include remediation guidance",
+		Targets:           []string{"192.168.50.1"},
+		DependsOn:         []string{"T-02", "T-03"},
+		DoneWhen:          []string{"OWASP report generated"},
+		FailWhen:          []string{"report generation failed"},
+		ExpectedArtifacts: []string{"owasp_report.md"},
+		RiskLevel:         string(RiskReconReadonly),
+		Action: TaskAction{
+			Type:       "command",
+			Command:    "cat",
+			Args:       []string{"/tmp/service_scan_output.txt", "/tmp/vuln_scan_output.txt"},
+			WorkingDir: workspace,
+		},
+		Budget: TaskBudget{
+			MaxSteps:     3,
+			MaxToolCalls: 3,
+			MaxRuntime:   30 * time.Second,
+		},
+	}
+	taskPath := filepath.Join(BuildRunPaths(base, runID).TaskDir, taskID+".json")
+	if err := WriteJSONAtomic(taskPath, task); err != nil {
+		t.Fatalf("WriteJSONAtomic task: %v", err)
+	}
+
+	if err := RunWorkerTask(WorkerRunConfig{
+		SessionsDir: base,
+		RunID:       runID,
+		TaskID:      taskID,
+		WorkerID:    workerID,
+		Attempt:     1,
+	}); err != nil {
+		t.Fatalf("RunWorkerTask: %v", err)
+	}
+
+	materializedReport := filepath.Join(BuildRunPaths(base, runID).ArtifactDir, taskID, "owasp_report.md")
+	data, err := os.ReadFile(materializedReport)
+	if err != nil {
+		t.Fatalf("read materialized report: %v", err)
+	}
+	content := string(data)
+	if strings.Contains(content, "STALE_REPORT") {
+		t.Fatalf("expected synthesized report output, but stale report content was reused: %q", content)
+	}
+	if !strings.Contains(content, "# OWASP-Style Security Assessment Report") {
+		t.Fatalf("expected synthesized report header, got: %q", content)
 	}
 }
 

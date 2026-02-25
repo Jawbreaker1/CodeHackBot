@@ -244,12 +244,59 @@ func (s *Scheduler) IsDone() bool {
 }
 
 func (s *Scheduler) hasTerminalDependencyFailure(task TaskSpec) bool {
+	memo := map[string]bool{}
+	visiting := map[string]struct{}{}
 	for _, dep := range task.DependsOn {
-		switch s.state[dep] {
-		case TaskStateFailed, TaskStateBlocked, TaskStateCanceled:
+		if s.taskHasTerminalFailurePath(dep, memo, visiting) {
 			return true
 		}
 	}
+	return false
+}
+
+func (s *Scheduler) taskHasTerminalFailurePath(taskID string, memo map[string]bool, visiting map[string]struct{}) bool {
+	if cached, ok := memo[taskID]; ok {
+		return cached
+	}
+	state, ok := s.state[taskID]
+	if !ok {
+		memo[taskID] = true
+		return true
+	}
+	switch state {
+	case TaskStateFailed, TaskStateBlocked, TaskStateCanceled:
+		memo[taskID] = true
+		return true
+	case TaskStateCompleted:
+		memo[taskID] = false
+		return false
+	case TaskStateLeased, TaskStateRunning, TaskStateAwaitingApproval:
+		memo[taskID] = false
+		return false
+	}
+	task, ok := s.tasks[taskID]
+	if !ok {
+		memo[taskID] = true
+		return true
+	}
+	if s.dependenciesMet(task) {
+		memo[taskID] = false
+		return false
+	}
+	if _, seen := visiting[taskID]; seen {
+		memo[taskID] = false
+		return false
+	}
+	visiting[taskID] = struct{}{}
+	for _, dep := range task.DependsOn {
+		if s.taskHasTerminalFailurePath(dep, memo, visiting) {
+			delete(visiting, taskID)
+			memo[taskID] = true
+			return true
+		}
+	}
+	delete(visiting, taskID)
+	memo[taskID] = false
 	return false
 }
 

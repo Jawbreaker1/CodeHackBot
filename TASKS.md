@@ -1,6 +1,8 @@
 # Sprint Plan
 
 This plan is a living document. Keep tasks small, testable, and tied to artifacts under `sessions/`.
+Sprint flow rule: do not start a new sprint while the previous sprint has open tasks. Move unfinished items forward explicitly so each closed sprint has zero open tasks.
+Sprint header convention (all new planned sprints): first checklist item must be `Prerequisite: previous sprint completed or unfinished tasks explicitly moved`.
 
 ## Sprint 0 — Foundations (done)
 - [x] Repo scaffolding: `AGENTS.md`, `PROJECT.md`, `README.md`
@@ -451,7 +453,7 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
   - [x] summaries/recovery conservative (`~0.1`)
 - [x] Add tests ensuring configured values are actually used by call sites.
 
-## Sprint 35 — Autonomy Benchmark Harness + Baseline (in progress)
+## Sprint 35 — Autonomy Benchmark Harness + Baseline (closed, carryover moved)
 - [x] Create a fixed benchmark scenario pack under `docs/runbooks/autonomy-benchmark-program.md`.
 - [x] Add one-command benchmark runner for orchestrator runs (repeatable seeds, fixed scopes).
 - [x] Persist per-run scorecard artifacts with machine-readable metrics JSON.
@@ -470,12 +472,17 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
   - [x] prevent repeated `assist_loop_detected` failure on `task-h02` across retries.
   - [x] reduce/route `scope_denied` outcomes so baseline failures reflect capability gaps rather than scope-policy collisions.
   - [x] treat local script filenames (for example `scan.sh`) as file-like tokens in scope extraction to avoid false `scope_denied` host matches.
+  - [x] normalize wrapped URL token parsing for scope extraction so shell punctuation around URLs (`(...)`, trailing `|`/`.`/`,` etc.) does not create false out-of-scope literals (for example `scanme.nmap.org)`).
   - [x] sanitize unsupported nmap `--script` entries and auto-resolve bare shell script names to `tools/<name>.sh` when present.
   - [x] reduce `assist_no_action` failures from recover-mode `plan`/`question` churn (recover non-action loops now classified/handled as `assist_loop_detected`; latest smoke did not emit `assist_no_action`).
   - [x] add bounded no-new-evidence completion fallback for repeated recover churn (identical results, extended recover tool churn, and recover tool-call cap).
   - [x] reduce remaining `assist_loop_detected` churn on `task-h01`/`task-h02` under approved active-probe runs (`host_discovery_inventory` targeted `repeat=2` now 2/2 with loop incident rate 0 and no `assist_loop_detected` on `task-h01`/`task-h02`).
-  - [ ] reduce `assist_no_new_evidence` dependence for `task-h01`/`task-h02` auth/recon loops when the model alternates helper scripts instead of issuing explicit completion (latest spot checks still show mixed `assist_complete` vs `assist_no_new_evidence` behavior across seeds).
-  - [ ] tighten bounded fallback trigger so long-lived recover churn terminates earlier without masking genuine progress (improved from `task-h01` fallback at step/tool-call 14 to step/tool-call 8 in `benchmark-20260223-124754` and `benchmark-20260223-125200`; keep open for variance in scenario runtime).
+  - [x] [Moved to Sprint 37] reduce `assist_no_new_evidence` dependence for `task-h01`/`task-h02` auth/recon loops when the model alternates helper scripts instead of issuing explicit completion (latest spot checks still show mixed `assist_complete` vs `assist_no_new_evidence` behavior across seeds).
+  - [x] [Moved to Sprint 37] tighten bounded fallback trigger so long-lived recover churn terminates earlier without masking genuine progress (improved from `task-h01` fallback at step/tool-call 14 to step/tool-call 8 in `benchmark-20260223-124754` and `benchmark-20260223-125200`; keep open for variance in scenario runtime).
+  - [x] harden goal-seeded command compatibility for internal assist builtins (`report`/`browse`/`crawl`) so planner-generated command actions cannot execute unresolved internal command literals as shell binaries (observed `exec: \"report\": executable file not found` loop in `run-scanme-goal-20260223-195012`).
+    - command tasks now execute `browse`/`crawl` via internal runtime builtins instead of shell binary lookup; assist tool suggestions reuse the same builtin path with scope validation.
+    - report-literal commands are now classified as weak report synthesis inputs for OWASP/report tasks and rewritten to deterministic local report synthesis.
+    - regression coverage added for command-action `browse`/`crawl` builtin execution and `report` literal rewrite.
   - [x] fix `goal_llm_v1` completion-contract artifact mismatch that can fail successful scans (`missing_required_artifacts` for planner-named files like `service_version_output.txt`) and block downstream CVE/report tasks (observed in `run-20260223-130819-7e29`; fixed via expected-artifact materialization + dependency-input path repair, validated in `run-20260223-132458-094a`).
   - [x] add regression coverage for goal-seeded router-style runs so downstream vulnerability-mapping/report tasks continue when planner artifact names are not emitted verbatim (`TestRunWorkerTaskRepairsMissingDependencyInputPaths` + existing expected-artifact materialization coverage).
   - [x] normalize LLM planner risk tiers for synthesized safety bounds (clamp `exploit_controlled`/higher to `active_probe`, invalid to `recon_readonly`) to avoid run-start failure from out-of-policy planner output (seen before `run-20260223-132458-094a`).
@@ -492,6 +499,10 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
     - weak OWASP/report commands (`cat`/`echo`/placeholder shell-python/network rescans) now auto-rewrite to a local deterministic synthesis action over dependency artifacts.
     - vulnerability-command rewrite now skips report-synthesis tasks to prevent report steps from being hijacked into new scans.
     - added runtime/unit coverage for rewrite behavior and synthesized CVE evidence rendering in report-task logs.
+  - [x] improve orchestrator run-report readability for human operators (especially local multi-step workflows like encrypted-archive recovery):
+    - added explicit `Plan Overview` and `Execution Narrative` sections with per-task intent, dependencies, execution method, outcome, duration, and key outputs.
+    - retained evidence/artifact links while capping per-finding link dumps with overflow markers so reports stay readable.
+    - added regression coverage for narrative sections and mixed task outcomes (`TestAssembleRunReportIncludesExecutionNarrative`).
   - [x] harden vulnerability-mapping execution reliability for goal-seeded runs where planner emits tool-wrapper commands (`python3 -c subprocess ... cve-search`):
     - classify shell/python wrappers as weak for vulnerability-mapping tasks and rewrite to bounded concrete `nmap --script "vuln and safe"` action against in-scope targets.
     - keeps CVE-capable evidence generation deterministic when optional tools are unavailable in the worker runtime.
@@ -523,6 +534,17 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
     - tightened report-rewrite predicate to explicit OWASP/security-report intent (OWASP markers, security-report artifact naming, or report+security context), while excluding generic local report tasks.
     - added regression tests for local archive-report classification and rewrite skip behavior.
     - validated in `run-20260223-172947-zipsecret8`: `t5` executed native bash report command, produced `zip_crack_report.md`, and emitted zero `rewrote weak report command` events.
+  - [x] prevent stale report file reuse during OWASP synthesis tasks when expected artifact names already exist in the working directory:
+    - prefer current command stdout for security-report artifacts (`owasp_report.md`/`security_report`/`vulnerability_report`) in report-synthesis tasks instead of copying pre-existing files.
+    - added regression coverage (`TestRunWorkerTaskReportSynthesisDoesNotReuseStaleReportFile`) to ensure stale local report files are not re-materialized into orchestrator artifacts.
+  - [x] enforce goal-context CVE evidence collection for nmap service-scan steps in OWASP/security goals, including shell-wrapped commands:
+    - when goal context requires vulnerability evidence and a task is service/recon nmap (non-`-sn`), auto-inject `--script "vuln and safe"` + `--script-timeout 20s` even for `bash -lc "nmap ..."` actions.
+    - guarded command-token matching to avoid false rewrites when hostnames contain `nmap` (for example `scanme.nmap.org` in `dig` commands).
+    - validated with `run-scanme-owasp-20260223-193859`: report task now synthesized evidence-backed CVE findings (`117` CVE IDs) from `t2/service_scan.txt`.
+  - [x] tighten OWASP synthesis CVE evidence quality to reduce duplicate excerpts and prioritize high-confidence, target-relevant CVE findings (current report may include repeated lines and broad version-feed noise from vuln scripts).
+    - report synthesis now scores per-line CVE evidence confidence (`high`/`medium`/`low`) using vulnerability markers + target relevance, then prioritizes stronger evidence over noisy reference/feed lines.
+    - duplicate CVE evidence snippets are de-duplicated per file/line and capped to top-ranked entries to reduce repeated excerpts in the findings section.
+    - added regression coverage (`TestRunWorkerTaskReportSynthesisPrioritizesHighConfidenceCVEEvidence`) to ensure high-confidence target-relevant excerpts are retained while low-quality feed/reference lines are excluded.
   - [x] fix expected-artifact materialization for command tasks:
     - prefer copying produced files from task working directory into orchestrator artifact store when present; use stdout fallback only when no produced file exists.
     - validated in local encrypted-archive workflow rerun (`run-20260223-172436-zipsecret5`): `t2/john_show.txt`, `t4/recovered_password.txt`, `t4/extraction_status.txt`, and `t4/extracted_preview.txt` now preserve real produced content instead of placeholder fallback text.
@@ -536,19 +558,47 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
     - `normalizeWorkerAssistCommand` now rewrites shell invocations like `bash ["nmap -sV -p- 127.0.0.1"]` to `bash ["-lc", "nmap -sV -p- 127.0.0.1"]` while preserving real script execution args.
     - added regression coverage: `TestNormalizeWorkerAssistCommandRewritesSingleArgShellCommand` and `TestNormalizeWorkerAssistCommandKeepsSingleArgShellScript`.
     - revalidated with targeted scenario rerun `benchmark-20260223-170955` (`evidence_first_reporting_quality`, `repeat=2`): both runs completed (`2/2`) with zero loop incidents and zero failures.
+  - [x] make static planning fallback explicit-only for goal runs:
+    - `--planner auto`/`--planner llm` now require LLM availability and no longer silently fall back to static; failures return an explicit hint to rerun with `--planner static`.
+    - added bounded LLM planner retry (`2` attempts) before failing, with provenance note when retry succeeds.
+    - CLI defaults for `run`/`benchmark` planner mode now `auto`; static mode remains available only when explicitly selected.
+    - added regression coverage for auto-mode no-fallback behavior and retry-success behavior (`TestBuildGoalPlanFromModeAutoRequiresLLMWhenStaticNotExplicit`, `TestBuildGoalPlanFromModeAutoRetriesLLMPlannerThenSucceeds`).
+- [x] prevent terminal-stop collapse after repeated `assist_loop_detected` on seed tasks by promoting to adaptive replan mutation instead of run terminalization.
+    - map repeated `assist_loop_detected` (post-retry exhaustion) into event-driven graph mutation path so a recovery task is added, not just a `run_replan_requested` audit event.
+    - ensure downstream tasks blocked on failed seed dependencies are rewired/superseded so queue remains runnable after recovery insertion.
+    - added regression test `TestCoordinator_RepeatedSeedAssistLoopPromotesAdaptiveReplanAndRewiresDependencies` proving second seed-loop failure triggers adaptive replan and does not immediately terminalize the coordinator.
 - [x] Re-run 5x baseline on current commit and refresh locked baseline after smoke is healthy (`benchmark-20260223-092006` locked to `docs/runbooks/autonomy-benchmark-baseline.json`).
 - [x] Exit criteria deferred to Sprint 36 (full-suite rerun postponed by operator request).
 
 ## Sprint 36 — Evidence-Backed Exploration State (planned)
 - [ ] [Deferred from Sprint 35] Full benchmark-suite confirmation:
+  - [ ] prerequisite: restore stable LLM endpoint availability for unattended reruns.
   - [ ] rerun full benchmark suite (`repeat=5`) on current hardening commit.
   - [ ] confirm baseline is reproducible on the same commit.
   - [ ] confirm scorecard artifacts are complete for every scenario run.
+- [x] Harden LLM planner reliability contract for goal runs:
+  - [x] enforce schema-constrained planner output (`response_format=json_schema`) before parse/validate.
+  - [x] replace fixed retry with bounded adaptive retries (attempt cap + wall-clock cap + backoff + context narrowing).
+  - [x] capture LLM `finish_reason` and classify length-cutoff planner responses as truncation failures for explicit diagnostics.
+  - [x] clamp LLM planner task budgets to synthesized safety caps (`max_steps`, `max_tool_calls`, `max_runtime`) before plan validation to reduce avoidable retry churn.
+  - [x] add planner action-shape validation for shell wrapper commands (`bash|sh|zsh -c/-lc`) to reject malformed/truncated command bodies before execution.
+  - [x] persist planner-attempt diagnostics (stage/cause/fingerprint + raw/extracted payload artifacts) under sessions for postmortem.
+  - [x] keep failure explicit when LLM planning cannot recover, with static-planner rerun hint.
+  - [x] validation: `go test ./cmd/birdhackbot-orchestrator ./internal/orchestrator` and `go build -buildvcs=false ./cmd/birdhackbot ./cmd/birdhackbot-orchestrator`.
+- [x] Harden local archive runtime resilience for goal-seeded zip workflows:
+  - [x] fix scheduler terminalization for queued tasks with transitive failed dependencies (avoid `state=running` with no runnable work).
+  - [x] improve runtime missing-path repair to prefer valid local workspace/dependency paths for command and shell-wrapper actions.
+  - [x] auto-bootstrap missing wordlists from compressed archives (for example `rockyou.txt.gz`) into short local cache path (`/tmp/birdhackbot-wordlists/`).
+  - [x] validation: `run-zip-wordlistfix2-20260225-200114` and `run-zip-validate-20260225-201152` both completed with `8/8` tasks.
+- [ ] Resolve residual local-file scope false positives for relative artifact arguments (for example `zip.hash` misclassified as out-of-scope target in `run-zip-reg3-20260225-201808-2` `T-004`/`T-005`) and revalidate zip regression to `3/3` pass.
 - [ ] Add explicit hypothesis/evidence state tracking for assist worker decisions.
 - [ ] Require exploratory pivots to cite either new evidence or a concrete unknown/hypothesis gap.
-- [ ] Add finding lifecycle states in runtime flow: `hypothesis -> candidate -> verified|rejected`.
+- [x] Add finding lifecycle states in runtime flow: `hypothesis -> candidate -> verified|rejected`.
+- [x] Ensure planner/recovery context only treats `verified` findings as assumptions.
+  - finding ingestion now normalizes/persists `finding_state` (`hypothesis`/`candidate_finding`/`verified_finding`/`rejected_finding`) with deterministic merge behavior.
+  - memory bank known facts now include only `verified_finding` items; unverified findings are excluded from assumption context and replaced with explicit `No verified findings yet.` when applicable.
+  - runtime-emitted execution-result findings are tagged `verified_finding`; tests added for lifecycle state merge and memory filtering.
 - [ ] Enforce discovery-time verification (`verify-now`) immediately after any vulnerability claim before downstream planning continues.
-- [ ] Ensure planner/recovery context only treats `verified` findings as assumptions.
 - [ ] Add tests for evidence-linked pivots vs blind repeat pivots.
 - [ ] Add tests that hallucinated findings are marked `rejected` and do not influence subsequent steps.
 - [ ] Exit criteria:
@@ -560,6 +610,8 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
 - [ ] Add recovery policy that enforces strategy-class changes after repeated failures.
 - [ ] Prevent near-duplicate retry loops (semantic intent class, not just exact command string).
 - [ ] Add bounded guard for repeated non-tool churn (`command`/`plan`) similar to tool-loop guard.
+- [ ] Reduce dependence on `assist_no_new_evidence` terminal fallback for auth/recon helper-script alternation in `host_discovery_inventory`.
+- [ ] Tighten no-new-evidence fallback trigger thresholds so recover churn terminates earlier without suppressing real progress.
 - [ ] Add benchmark regression test where assistant alternates near-duplicate command intents and verify fail-fast classification.
 - [ ] Add tests for forced alternative strategy paths after repeated blocks.
 - [ ] Add independent finding validation lane in orchestrator:
@@ -572,7 +624,8 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
   - [ ] recovery success rate improved vs baseline
   - [ ] reduced false-positive carry-forward from initial discovery steps
 
-## Sprint 38 — Novelty Scoring + Anti-Redundancy (planned)
+## Sprint 38 — Novelty Scoring + Anti-Redundancy (planned, conditional)
+- [ ] Prerequisite: execute only if Sprint 37 loop/fallback metrics are still below exit criteria.
 - [ ] Add novelty scoring for actions/evidence and feed score into recovery/planning prompts.
 - [ ] Penalize repeated low-value actions when no new evidence is produced.
 - [ ] Add tests for novelty gain and anti-redundancy behavior.
@@ -591,10 +644,55 @@ This plan is a living document. Keep tasks small, testable, and tied to artifact
   - [ ] no candidate finding is reported as verified without validator evidence
 
 ## Sprint 40 — Regression Gates + Revert Discipline (planned)
-- [ ] Add benchmark regression gate to CI for key scorecard metrics.
+- [ ] Add targeted benchmark regression gate to CI for key scorecard metrics (`smoke` + highest-risk scenarios); keep full-suite gate as periodic/manual until runtime budget is acceptable.
 - [ ] Add explicit revert policy and threshold checks (auto-fail gate on severe regressions).
 - [ ] Keep report-time backstop gate strict: only `verified` findings in confirmed findings section; all other claims excluded or labeled `UNVERIFIED`.
 - [ ] Document operator workflow for rollback when metrics degrade.
 - [ ] Exit criteria:
   - [ ] merge blocked on benchmark regression
   - [ ] revert decision path documented and tested
+
+## Sprint 41 — Wireless Access Security (planned, lab-only)
+- [ ] Define wireless scope contract (SSID/BSSID/channel/interface allowlists + deny lists) for authorized internal lab environments.
+- [ ] Add wireless command policy/guardrails in runtime:
+  - [ ] classify wireless tooling risk tiers (passive recon, auth probing, handshake capture, rogue-AP simulation).
+  - [ ] require explicit session opt-in + per-action approval for disruptive wireless actions (for example deauth/evil-twin simulation).
+  - [ ] keep fail-closed scope validation for wireless identifiers (SSID/BSSID/channel/interface) to prevent out-of-scope capture/transmit.
+- [ ] Add orchestrator/worker adapters for core Kali wireless tooling with bounded defaults (timeouts, channel pinning, capture limits, output normalization).
+- [ ] Add goal/planner playbook for wireless assessments:
+  - [ ] exposed/weak Wi-Fi posture discovery (open/WEP/WPA/WPA2/WPA3, PMF, WPS, management exposure).
+  - [ ] controlled access validation workflow for owner-authorized lab APs.
+  - [ ] controlled spoofed-AP client-behavior simulation in isolated lab segment (no third-party/client impact).
+- [ ] Add evidence schema and artifacts for wireless runs:
+  - [ ] AP inventory, client association map, auth posture matrix, capture metadata, and test-attempt ledger.
+  - [ ] explicit chain-of-custody metadata for capture files (timestamp, interface, channel, BSSID scope match).
+- [ ] Add OWASP-style wireless reporting extensions:
+  - [ ] human-readable execution narrative (steps/method/results) plus evidence links.
+  - [ ] findings taxonomy for wireless misconfigurations and spoofing exposure with clear remediation guidance.
+- [ ] Add regression tests for wireless guardrails and parsing:
+  - [ ] out-of-scope BSSID/SSID rejection.
+  - [ ] approval-gated rogue-AP/deauth execution.
+  - [ ] deterministic artifact materialization and report synthesis from wireless evidence.
+- [ ] Add lab-only benchmark scenarios for wireless workflows and include them in controlled Kali pilot once stable.
+- [ ] Exit criteria:
+  - [ ] no out-of-scope wireless capture/transmit in tests.
+  - [ ] operator-visible approvals explain exactly what wireless action is requested and why.
+  - [ ] generated wireless reports include concise human-readable method/results plus reproducible evidence links.
+
+## Sprint 42 — Bluetooth Security (planned, blocked until Sprint 41 is complete)
+- [ ] Prerequisite: Sprint 41 must be completed (or unfinished tasks explicitly moved) before Sprint 42 starts.
+- [ ] Keep Bluetooth work explicitly lower priority than Sprint 41 Wi-Fi scope.
+- [ ] Define Bluetooth lab scope contract (adapter/controller allowlist, target device allowlist, prohibited actions).
+- [ ] Add runtime guardrails for Bluetooth tooling:
+  - [ ] fail-closed scope validation for device identifiers and adapter selection.
+  - [ ] explicit approval gating for risky actions (pairing attempts, active exploitation, long-running captures).
+- [ ] Add orchestrator/worker adapters for core Kali Bluetooth tooling with bounded defaults (timeouts, retry limits, output normalization).
+- [ ] Add planner playbook for Bluetooth assessments:
+  - [ ] discovery and service enumeration of authorized lab targets.
+  - [ ] controlled auth/pairing posture validation and known-vulnerability checks.
+- [ ] Add evidence/reporting support:
+  - [ ] concise execution narrative (method/results) plus reproducible evidence links.
+  - [ ] findings taxonomy for exposure, weak configuration, and vulnerability remediation.
+- [ ] Exit criteria:
+  - [ ] no out-of-scope Bluetooth interaction in tests.
+  - [ ] approvals clearly explain requested action and reason.
