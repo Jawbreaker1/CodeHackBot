@@ -13,29 +13,46 @@ import (
 	"github.com/Jawbreaker1/CodeHackBot/internal/msf"
 )
 
-func executeWorkerAssistCommand(ctx context.Context, command string, args []string, workDir string) workerToolResult {
+func executeWorkerAssistCommand(ctx context.Context, cfg WorkerRunConfig, task TaskSpec, command string, args []string, workDir string) workerToolResult {
 	command = strings.TrimSpace(command)
 	args = normalizeArgs(args)
+	runtimeNotes := []string{}
+	if repairedArgs, repairNotes, repaired, repairErr := repairMissingCommandInputPaths(cfg, task, command, args); repairErr != nil {
+		runtimeNotes = append(runtimeNotes, fmt.Sprintf("runtime input repair skipped: %v", repairErr))
+	} else if repaired {
+		args = repairedArgs
+		runtimeNotes = append(runtimeNotes, repairNotes...)
+	}
 
 	if isBuiltinListDir(command) {
 		output, err := builtinListDir(args, workDir)
+		output = prependWorkerOutputNotes(output, runtimeNotes)
 		return workerToolResult{command: "list_dir", args: args, output: output, runErr: err}
 	}
 	if isBuiltinReadFile(command) {
 		output, err := builtinReadFile(args, workDir)
+		output = prependWorkerOutputNotes(output, runtimeNotes)
 		return workerToolResult{command: "read_file", args: args, output: output, runErr: err}
 	}
 	if isBuiltinWriteFile(command) {
 		output, err := builtinWriteFile(args, workDir)
+		output = prependWorkerOutputNotes(output, runtimeNotes)
 		return workerToolResult{command: "write_file", args: args, output: output, runErr: err}
 	}
 	if isBuiltinBrowse(command) {
 		output, err := builtinBrowse(ctx, args)
+		output = prependWorkerOutputNotes(output, runtimeNotes)
 		return workerToolResult{command: "browse", args: args, output: output, runErr: err}
 	}
-	adaptedCmd, adaptedArgs, notes, adaptErr := msf.AdaptRuntimeCommand(command, args, workDir)
+	if isBuiltinCrawl(command) {
+		output, err := builtinCrawl(ctx, args)
+		output = prependWorkerOutputNotes(output, runtimeNotes)
+		return workerToolResult{command: "crawl", args: args, output: output, runErr: err}
+	}
+	adaptedCmd, adaptedArgs, msfNotes, adaptErr := msf.AdaptRuntimeCommand(command, args, workDir)
 	if adaptErr != nil {
-		return workerToolResult{command: command, args: args, output: []byte(adaptErr.Error() + "\n"), runErr: adaptErr}
+		output := prependWorkerOutputNotes([]byte(adaptErr.Error()+"\n"), runtimeNotes)
+		return workerToolResult{command: command, args: args, output: output, runErr: adaptErr}
 	}
 	command = adaptedCmd
 	args = adaptedArgs
@@ -48,15 +65,10 @@ func executeWorkerAssistCommand(ctx context.Context, command string, args []stri
 	}
 	cmd.Env = env
 	output, err := runWorkerCommand(ctx, cmd, workerCommandStopGrace)
-	noteLines := append([]string{}, guardrailNotes...)
-	noteLines = append(noteLines, notes...)
-	if len(noteLines) > 0 {
-		prefix := strings.Join(noteLines, "\n")
-		if prefix != "" {
-			prefix += "\n"
-		}
-		output = append([]byte(prefix), output...)
-	}
+	noteLines := append([]string{}, runtimeNotes...)
+	noteLines = append(noteLines, guardrailNotes...)
+	noteLines = append(noteLines, msfNotes...)
+	output = prependWorkerOutputNotes(output, noteLines)
 	return workerToolResult{command: command, args: args, output: output, runErr: err}
 }
 
@@ -108,8 +120,17 @@ func executeWorkerAssistTool(ctx context.Context, cfg WorkerRunConfig, task Task
 
 	args := normalizeArgs(spec.Run.Args)
 	runCommand, args = normalizeWorkerAssistCommand(runCommand, args)
-	if isWorkerLocalBuiltin(runCommand) {
-		result := executeWorkerAssistCommand(ctx, runCommand, args, workDir)
+	if isWorkerBuiltinCommand(runCommand) {
+		args, injected, target := applyCommandTargetFallback(scopePolicy, task, runCommand, args)
+		if injected {
+			_, _ = fmt.Fprintf(&builder, "Runtime adaptation: auto-injected target %s for command %s\n", target, runCommand)
+		}
+		if requiresCommandScopeValidation(runCommand, args) {
+			if err := scopePolicy.ValidateCommandTargets(runCommand, args); err != nil {
+				return workerToolResult{}, fmt.Errorf("%s: %w", WorkerFailureScopeDenied, err)
+			}
+		}
+		result := executeWorkerAssistCommand(ctx, cfg, task, runCommand, args, workDir)
 		builder.Write(result.output)
 		return workerToolResult{
 			command: result.command,
@@ -162,6 +183,25 @@ func executeWorkerAssistTool(ctx context.Context, cfg WorkerRunConfig, task Task
 		output:  capBytes([]byte(builder.String()), workerAssistOutputLimit),
 		runErr:  runErr,
 	}, nil
+}
+
+func prependWorkerOutputNotes(output []byte, notes []string) []byte {
+	lines := make([]string, 0, len(notes))
+	for _, note := range notes {
+		trimmed := strings.TrimSpace(note)
+		if trimmed == "" {
+			continue
+		}
+		lines = append(lines, trimmed)
+	}
+	if len(lines) == 0 {
+		return output
+	}
+	prefix := strings.Join(lines, "\n")
+	if prefix != "" {
+		prefix += "\n"
+	}
+	return append([]byte(prefix), output...)
 }
 
 func normalizeWorkerAssistCommand(command string, args []string) (string, []string) {

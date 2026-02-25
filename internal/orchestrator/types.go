@@ -29,6 +29,11 @@ const (
 	EventTypeApprovalExpired     = "approval_expired"
 	EventTypeWorkerStopRequested = "worker_stop_requested"
 	EventTypeOperatorInstruction = "operator_instruction"
+
+	FindingStateHypothesis = "hypothesis"
+	FindingStateCandidate  = "candidate_finding"
+	FindingStateVerified   = "verified_finding"
+	FindingStateRejected   = "rejected_finding"
 )
 
 type RunPlan struct {
@@ -132,6 +137,7 @@ type Finding struct {
 	Target      string            `json:"target"`
 	FindingType string            `json:"finding_type"`
 	Title       string            `json:"title"`
+	State       string            `json:"state,omitempty"`
 	Severity    string            `json:"severity"`
 	Confidence  string            `json:"confidence"`
 	Evidence    []string          `json:"evidence,omitempty"`

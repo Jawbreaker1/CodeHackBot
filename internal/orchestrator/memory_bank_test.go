@@ -73,6 +73,7 @@ func TestRefreshMemoryBankFoldsFindings(t *testing.T) {
 		"target":       "127.0.0.1",
 		"finding_type": "service",
 		"title":        "SSH open",
+		"state":        FindingStateVerified,
 		"severity":     "low",
 		"confidence":   "high",
 	}); err != nil {
@@ -104,6 +105,59 @@ func TestRefreshMemoryBankFoldsFindings(t *testing.T) {
 	}
 }
 
+func TestRefreshMemoryBankExcludesUnverifiedFindingsFromKnownFacts(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-memory-unverified-filter"
+	manager := NewManager(base)
+	plan := RunPlan{
+		RunID:           runID,
+		Scope:           Scope{Targets: []string{"127.0.0.1"}},
+		Constraints:     []string{"local_only"},
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks: []TaskSpec{
+			task("t1", nil, 1),
+		},
+		Metadata: PlanMetadata{
+			Goal:           "inspect localhost",
+			NormalizedGoal: "inspect localhost",
+		},
+	}
+	if _, err := manager.StartFromPlan(plan, ""); err != nil {
+		t.Fatalf("StartFromPlan: %v", err)
+	}
+	if err := manager.EmitEvent(runID, "signal-worker-t1-a1", "t1", EventTypeTaskFinding, map[string]any{
+		"target":       "127.0.0.1",
+		"finding_type": "service",
+		"title":        "Unverified service guess",
+		"state":        FindingStateCandidate,
+		"severity":     "low",
+		"confidence":   "medium",
+	}); err != nil {
+		t.Fatalf("EmitEvent finding: %v", err)
+	}
+	if _, err := manager.IngestEvidence(runID); err != nil {
+		t.Fatalf("IngestEvidence: %v", err)
+	}
+	if err := manager.RefreshMemoryBank(runID); err != nil {
+		t.Fatalf("RefreshMemoryBank: %v", err)
+	}
+	memoryDir := BuildRunPaths(base, runID).MemoryDir
+	knownFactsData, err := os.ReadFile(filepath.Join(memoryDir, "known_facts.md"))
+	if err != nil {
+		t.Fatalf("read known_facts.md: %v", err)
+	}
+	if strings.Contains(string(knownFactsData), "Unverified service guess") {
+		t.Fatalf("did not expect unverified finding in known_facts.md:\n%s", string(knownFactsData))
+	}
+	if !strings.Contains(string(knownFactsData), "No verified findings yet.") {
+		t.Fatalf("expected explicit no-verified-findings marker:\n%s", string(knownFactsData))
+	}
+}
+
 func TestRefreshMemoryBankCompactsLargeFindingSet(t *testing.T) {
 	t.Parallel()
 
@@ -130,6 +184,7 @@ func TestRefreshMemoryBankCompactsLargeFindingSet(t *testing.T) {
 			"target":       "127.0.0.1",
 			"finding_type": "service",
 			"title":        "Finding #" + strings.TrimSpace(time.Unix(now.Unix()+int64(i), 0).Format(time.RFC3339Nano)),
+			"state":        FindingStateVerified,
 			"severity":     "low",
 			"confidence":   "high",
 		}); err != nil {

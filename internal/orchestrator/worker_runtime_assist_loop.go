@@ -137,6 +137,7 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			"target":       primaryTaskTarget(task),
 			"finding_type": "task_execution_result",
 			"title":        "task action completed",
+			"state":        FindingStateVerified,
 			"severity":     "info",
 			"confidence":   "medium",
 			"source":       "worker_runtime_assist",
@@ -935,7 +936,7 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			toolCalls++
 			loopBlocks = 0
 			questionLoops = 0
-			result := executeWorkerAssistCommand(ctx, command, args, workDir)
+			result := executeWorkerAssistCommand(ctx, cfg, task, command, args, workDir)
 			logPath, logErr := writeWorkerActionLog(cfg, fmt.Sprintf("%s-a%d-s%d-t%d.log", sanitizePathComponent(cfg.WorkerID), cfg.Attempt, actionSteps, toolCalls), result.output)
 			if logErr != nil {
 				_ = emitWorkerFailure(manager, cfg, task, logErr, WorkerFailureArtifactWrite, nil)
@@ -1090,6 +1091,10 @@ func isNoNewEvidenceCandidate(command string, args []string) bool {
 		return true
 	}
 	base := strings.ToLower(filepath.Base(command))
+	switch base {
+	case "list_dir", "ls", "dir", "read_file", "read":
+		return true
+	}
 	if base != "bash" && base != "sh" && base != "zsh" {
 		return false
 	}

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -367,7 +368,7 @@ func RunWorkerTask(cfg WorkerRunConfig) error {
 	var output []byte
 	var runErr error
 	if isWorkerBuiltinCommand(execCommand) {
-		result := executeWorkerAssistCommand(ctx, execCommand, execArgs, workDir)
+		result := executeWorkerAssistCommand(ctx, cfg, task, execCommand, execArgs, workDir)
 		execCommand = strings.TrimSpace(result.command)
 		execArgs = append([]string{}, result.args...)
 		output = result.output
@@ -825,7 +826,7 @@ func repairMissingCommandInputPaths(cfg WorkerRunConfig, task TaskSpec, command 
 	used := map[string]struct{}{}
 
 	for i, arg := range args {
-		if !looksLikePathArg(arg) {
+		if !looksLikeFileInputArg(arg) {
 			continue
 		}
 		candidate := strings.TrimSpace(arg)
@@ -972,7 +973,7 @@ func collectWorkspaceCandidatesFromArgs(cfg WorkerRunConfig, args []string) []st
 	candidates := []string{}
 	for _, arg := range args {
 		trimmed := strings.TrimSpace(arg)
-		if !looksLikePathArg(trimmed) {
+		if !looksLikeFileInputArg(trimmed) {
 			continue
 		}
 		if candidate := bestWorkspaceCandidateForMissingPath(cfg, trimmed); candidate != "" {
@@ -986,6 +987,16 @@ func collectWorkspaceCandidatesFromArgs(cfg WorkerRunConfig, args []string) []st
 			}
 			if candidate := bestWorkspaceCandidateForMissingPath(cfg, match); candidate != "" {
 				candidates = append(candidates, candidate)
+			}
+		}
+		for _, token := range strings.Fields(body) {
+			for _, candidatePath := range shellTokenFileCandidates(token) {
+				if !looksLikeFileInputArg(candidatePath) {
+					continue
+				}
+				if candidate := bestWorkspaceCandidateForMissingPath(cfg, candidatePath); candidate != "" {
+					candidates = append(candidates, candidate)
+				}
 			}
 		}
 	}
@@ -1030,8 +1041,7 @@ func collectWordlistCandidates(args []string) ([]string, map[string]string) {
 func missingWordlistPathsFromArgs(args []string) []string {
 	paths := []string{}
 	for _, arg := range args {
-		candidate := strings.TrimSpace(arg)
-		if looksLikePathArg(candidate) && looksLikeWordlistPath(candidate) {
+		for _, candidate := range wordlistPathCandidatesFromArg(arg) {
 			if _, statErr := os.Stat(candidate); statErr != nil {
 				paths = append(paths, candidate)
 			}
@@ -1049,6 +1059,21 @@ func missingWordlistPathsFromArgs(args []string) []string {
 		}
 	}
 	return appendUnique(nil, paths...)
+}
+
+func wordlistPathCandidatesFromArg(arg string) []string {
+	candidates := []string{}
+	candidate := strings.TrimSpace(arg)
+	if looksLikeWordlistPath(candidate) && looksLikeFileInputArg(candidate) {
+		candidates = append(candidates, candidate)
+	}
+	if strings.HasPrefix(candidate, "--wordlist=") {
+		value := strings.TrimSpace(strings.TrimPrefix(candidate, "--wordlist="))
+		if looksLikeWordlistPath(value) && looksLikeFileInputArg(value) {
+			candidates = append(candidates, value)
+		}
+	}
+	return appendUnique(nil, candidates...)
 }
 
 func looksLikeWordlistPath(path string) bool {
@@ -1220,7 +1245,11 @@ func repairMissingCommandInputPathsForShellWrapper(command string, args []string
 			if !tokenContainsQuotedPath(token, candidate) {
 				replacementToken = shellQuotePath(replacement)
 			}
-			changedBody = strings.Replace(changedBody, candidate, replacementToken, 1)
+			nextBody := strings.Replace(changedBody, candidate, replacementToken, 1)
+			if nextBody == changedBody {
+				continue
+			}
+			changedBody = nextBody
 			used[replacement] = struct{}{}
 			changed = true
 			source := "dependency artifact"
@@ -1228,6 +1257,35 @@ func repairMissingCommandInputPathsForShellWrapper(command string, args []string
 				source = customSource
 			}
 			notes = append(notes, fmt.Sprintf("runtime input repair: replaced missing path %s with %s %s", candidate, source, replacement))
+		}
+
+		for _, bareCandidate := range shellTokenFileCandidates(token) {
+			if !looksLikeFileInputArg(bareCandidate) {
+				continue
+			}
+			if _, statErr := os.Stat(bareCandidate); statErr == nil {
+				continue
+			}
+			replacement := bestArtifactCandidateForMissingPath(bareCandidate, candidates, used)
+			if replacement == "" {
+				continue
+			}
+			replacementToken := replacement
+			if !tokenContainsQuotedPath(token, bareCandidate) {
+				replacementToken = shellQuotePath(replacement)
+			}
+			nextBody := strings.Replace(changedBody, bareCandidate, replacementToken, 1)
+			if nextBody == changedBody {
+				continue
+			}
+			changedBody = nextBody
+			used[replacement] = struct{}{}
+			changed = true
+			source := "dependency artifact"
+			if customSource, ok := candidateSources[replacement]; ok && strings.TrimSpace(customSource) != "" {
+				source = customSource
+			}
+			notes = append(notes, fmt.Sprintf("runtime input repair: replaced missing path %s with %s %s", bareCandidate, source, replacement))
 		}
 	}
 
@@ -1237,6 +1295,33 @@ func repairMissingCommandInputPathsForShellWrapper(command string, args []string
 	nextArgs := append([]string{}, args...)
 	nextArgs[1] = changedBody
 	return nextArgs, notes, true
+}
+
+func shellTokenFileCandidates(token string) []string {
+	trimmed := strings.TrimSpace(token)
+	if trimmed == "" {
+		return nil
+	}
+	filter := func(raw string) string {
+		candidate := strings.Trim(raw, `"'`)
+		if candidate == "" {
+			return ""
+		}
+		// Skip embedded relative segments (for example extracted_secret/secret_text.txt)
+		// because they are often script-local literals, not missing dependency inputs.
+		if strings.Contains(candidate, "/") && !looksLikePathArg(candidate) {
+			return ""
+		}
+		return candidate
+	}
+	candidates := []string{filter(trimmed)}
+	if strings.HasPrefix(trimmed, "--") && strings.Contains(trimmed, "=") {
+		parts := strings.SplitN(trimmed, "=", 2)
+		if len(parts) == 2 {
+			candidates = append(candidates, filter(parts[1]))
+		}
+	}
+	return appendUnique(nil, compactStringSlice(candidates)...)
 }
 
 func shellScriptLikelyReadsLocalFiles(body string) bool {
@@ -1295,7 +1380,7 @@ func isShellPathMatchBoundary(token string, start int) bool {
 func commandLikelyReadsLocalFiles(command string) bool {
 	base := strings.ToLower(strings.TrimSpace(filepath.Base(command)))
 	switch base {
-	case "7z", "awk", "cat", "cut", "egrep", "fcrackzip", "fgrep", "file", "grep", "head", "john", "jq", "less", "list_dir", "ls", "more", "sed", "sort", "stat", "tail", "uniq", "unzip", "wc", "zip2john", "zipinfo":
+	case "7z", "awk", "cat", "cut", "egrep", "fcrackzip", "fgrep", "file", "grep", "head", "john", "jq", "less", "list_dir", "ls", "more", "read_file", "sed", "sort", "stat", "tail", "uniq", "unzip", "wc", "zip2john", "zipinfo":
 		return true
 	default:
 		return false
@@ -1308,6 +1393,44 @@ func looksLikePathArg(arg string) bool {
 		return false
 	}
 	return strings.HasPrefix(trimmed, "/") || strings.HasPrefix(trimmed, "./") || strings.HasPrefix(trimmed, "../")
+}
+
+func looksLikeFileInputArg(arg string) bool {
+	trimmed := strings.TrimSpace(arg)
+	if trimmed == "" {
+		return false
+	}
+	if strings.HasPrefix(trimmed, "-") {
+		return false
+	}
+	if strings.Contains(trimmed, "://") {
+		return false
+	}
+	if strings.ContainsAny(trimmed, "|&;<>`$") {
+		return false
+	}
+	if strings.EqualFold(trimmed, "localhost") {
+		return false
+	}
+	if ip := net.ParseIP(trimmed); ip != nil {
+		return false
+	}
+	if looksLikePathArg(trimmed) {
+		return true
+	}
+	if strings.Contains(trimmed, "/") {
+		return true
+	}
+	ext := strings.ToLower(strings.TrimSpace(filepath.Ext(trimmed)))
+	if ext == "" {
+		return false
+	}
+	switch ext {
+	case ".com", ".net", ".org", ".io", ".local", ".lan":
+		return false
+	default:
+		return true
+	}
 }
 
 func collectDependencyArtifactCandidates(cfg WorkerRunConfig, dependencies []string) ([]string, error) {

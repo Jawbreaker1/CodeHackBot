@@ -121,8 +121,10 @@ func runApprovals(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("approvals", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var sessionsDir, runID string
+	var jsonOutput bool
 	fs.StringVar(&sessionsDir, "sessions-dir", "sessions", "sessions base directory")
 	fs.StringVar(&runID, "run", "", "run id")
+	fs.BoolVar(&jsonOutput, "json", false, "print JSON lines instead of human-readable output")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -140,6 +142,34 @@ func runApprovals(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "no pending approvals")
 		return 0
 	}
+	if !jsonOutput {
+		fmt.Fprintf(stdout, "pending approvals: %d\n\n", len(pending))
+		for _, req := range pending {
+			fmt.Fprintf(stdout, "approval: %s\n", req.ApprovalID)
+			fmt.Fprintf(stdout, "task: %s", req.TaskID)
+			if strings.TrimSpace(req.TaskTitle) != "" {
+				fmt.Fprintf(stdout, " (%s)", strings.TrimSpace(req.TaskTitle))
+			}
+			fmt.Fprintln(stdout)
+			if strings.TrimSpace(req.TaskGoal) != "" {
+				fmt.Fprintf(stdout, "goal: %s\n", strings.TrimSpace(req.TaskGoal))
+			}
+			if strings.TrimSpace(req.TaskStrategy) != "" {
+				fmt.Fprintf(stdout, "strategy: %s\n", strings.TrimSpace(req.TaskStrategy))
+			}
+			if len(req.TaskTargets) > 0 {
+				fmt.Fprintf(stdout, "targets: %s\n", strings.Join(req.TaskTargets, ", "))
+			}
+			fmt.Fprintf(stdout, "risk_tier: %s\n", strings.TrimSpace(req.RiskTier))
+			fmt.Fprintf(stdout, "why: %s\n", approvalWhyText(req))
+			fmt.Fprintf(stdout, "requested: %s\n", req.Requested.UTC().Format(time.RFC3339))
+			fmt.Fprintf(stdout, "expires: %s\n", req.ExpiresAt.UTC().Format(time.RFC3339))
+			fmt.Fprintf(stdout, "approve: birdhackbot-orchestrator approve --sessions-dir %s --run %s --approval %s --scope task --reason \"authorized\"\n", sessionsDir, runID, req.ApprovalID)
+			fmt.Fprintln(stdout)
+		}
+		fmt.Fprintf(stdout, "approve all: birdhackbot-orchestrator approve-all --sessions-dir %s --run %s --scope task --reason \"authorized\"\n", sessionsDir, runID)
+		return 0
+	}
 	enc := json.NewEncoder(stdout)
 	for _, req := range pending {
 		if err := enc.Encode(req); err != nil {
@@ -148,6 +178,78 @@ func runApprovals(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	return 0
+}
+
+func runApproveAll(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("approve-all", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var sessionsDir, runID, scope, actor, reason string
+	var expiresIn time.Duration
+	fs.StringVar(&sessionsDir, "sessions-dir", "sessions", "sessions base directory")
+	fs.StringVar(&runID, "run", "", "run id")
+	fs.StringVar(&scope, "scope", string(orchestrator.ApprovalScopeTask), "approval scope: once|task|session")
+	fs.StringVar(&actor, "actor", "operator", "approval actor")
+	fs.StringVar(&reason, "reason", "", "approval reason")
+	fs.DurationVar(&expiresIn, "expires-in", 0, "optional grant expiry duration")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if strings.TrimSpace(runID) == "" {
+		fmt.Fprintln(stderr, "approve-all requires --run")
+		return 2
+	}
+	manager := orchestrator.NewManager(sessionsDir)
+	pending, err := manager.PendingApprovals(runID)
+	if err != nil {
+		fmt.Fprintf(stderr, "approve-all failed listing approvals: %v\n", err)
+		return 1
+	}
+	if len(pending) == 0 {
+		fmt.Fprintln(stdout, "no pending approvals")
+		return 0
+	}
+	approved := 0
+	for _, req := range pending {
+		if err := manager.SubmitApprovalDecision(runID, req.ApprovalID, true, scope, actor, reason, expiresIn); err != nil {
+			fmt.Fprintf(stderr, "approve-all failed for %s: %v\n", req.ApprovalID, err)
+			return 1
+		}
+		approved++
+		fmt.Fprintf(stdout, "approved: %s (%s)\n", req.ApprovalID, req.TaskID)
+	}
+	fmt.Fprintf(stdout, "approved_total: %d\n", approved)
+	return 0
+}
+
+func approvalWhyText(req orchestrator.PendingApprovalView) string {
+	reason := strings.TrimSpace(req.Reason)
+	switch strings.TrimSpace(strings.ToLower(req.RiskTier)) {
+	case string(orchestrator.RiskActiveProbe):
+		if reason == "" {
+			return "active probing can interact with targets and therefore requires operator approval in default permission mode"
+		}
+		return fmt.Sprintf("%s (active probing requires operator approval in default permission mode)", reason)
+	case string(orchestrator.RiskExploitControlled):
+		if reason == "" {
+			return "controlled exploitation attempts require explicit operator approval"
+		}
+		return fmt.Sprintf("%s (controlled exploitation requires explicit approval)", reason)
+	case string(orchestrator.RiskPrivEsc):
+		if reason == "" {
+			return "privilege-escalation attempts require explicit operator approval"
+		}
+		return fmt.Sprintf("%s (privilege escalation requires explicit approval)", reason)
+	case string(orchestrator.RiskDisruptive):
+		if reason == "" {
+			return "disruptive actions require explicit opt-in and approval"
+		}
+		return fmt.Sprintf("%s (disruptive actions require explicit opt-in and approval)", reason)
+	default:
+		if reason == "" {
+			return "policy requires approval for this task risk tier"
+		}
+		return reason
+	}
 }
 
 func runApprove(args []string, stdout, stderr io.Writer) int {
@@ -276,5 +378,5 @@ func runStop(args []string, stdout, stderr io.Writer) int {
 
 func printUsage(stderr io.Writer) {
 	fmt.Fprintln(stderr, "usage: birdhackbot-orchestrator <command> [flags]")
-	fmt.Fprintln(stderr, "commands: start, run, benchmark, status, workers, events, approvals, approve, deny, worker-stop, report, stop, tui")
+	fmt.Fprintln(stderr, "commands: start, run, benchmark, status, workers, events, approvals, approve, approve-all, deny, worker-stop, report, stop, tui")
 }

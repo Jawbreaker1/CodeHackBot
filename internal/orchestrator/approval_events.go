@@ -7,18 +7,28 @@ import (
 )
 
 type PendingApprovalView struct {
-	ApprovalID string    `json:"approval_id"`
-	TaskID     string    `json:"task_id"`
-	RiskTier   string    `json:"risk_tier"`
-	Reason     string    `json:"reason"`
-	Requested  time.Time `json:"requested"`
-	ExpiresAt  time.Time `json:"expires_at"`
+	ApprovalID   string    `json:"approval_id"`
+	TaskID       string    `json:"task_id"`
+	TaskTitle    string    `json:"task_title,omitempty"`
+	TaskGoal     string    `json:"task_goal,omitempty"`
+	TaskStrategy string    `json:"task_strategy,omitempty"`
+	TaskTargets  []string  `json:"task_targets,omitempty"`
+	RiskTier     string    `json:"risk_tier"`
+	Reason       string    `json:"reason"`
+	Requested    time.Time `json:"requested"`
+	ExpiresAt    time.Time `json:"expires_at"`
 }
 
 func (m *Manager) PendingApprovals(runID string) ([]PendingApprovalView, error) {
 	events, err := m.Events(runID, 0)
 	if err != nil {
 		return nil, err
+	}
+	taskByID := map[string]TaskSpec{}
+	if plan, planErr := m.LoadRunPlan(runID); planErr == nil {
+		for _, task := range plan.Tasks {
+			taskByID[task.TaskID] = task
+		}
 	}
 	pending := map[string]PendingApprovalView{}
 	for _, event := range events {
@@ -41,7 +51,7 @@ func (m *Manager) PendingApprovals(runID string) ([]PendingApprovalView, error) 
 			if raw, ok := payload["expires_at"].(time.Time); ok {
 				expires = raw
 			}
-			pending[id] = PendingApprovalView{
+			view := PendingApprovalView{
 				ApprovalID: id,
 				TaskID:     event.TaskID,
 				RiskTier:   toString(payload["tier"]),
@@ -49,6 +59,13 @@ func (m *Manager) PendingApprovals(runID string) ([]PendingApprovalView, error) 
 				Requested:  event.TS,
 				ExpiresAt:  expires,
 			}
+			if task, ok := taskByID[event.TaskID]; ok {
+				view.TaskTitle = task.Title
+				view.TaskGoal = task.Goal
+				view.TaskStrategy = task.Strategy
+				view.TaskTargets = append([]string{}, task.Targets...)
+			}
+			pending[id] = view
 		case EventTypeApprovalGranted, EventTypeApprovalDenied, EventTypeApprovalExpired:
 			payload := map[string]any{}
 			if len(event.Payload) > 0 {

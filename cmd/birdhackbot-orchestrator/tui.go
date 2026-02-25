@@ -104,6 +104,7 @@ func runTUI(args []string, stdout, stderr io.Writer) int {
 
 	input := ""
 	messages := []string{"TUI ready. Type 'help' for commands."}
+	attention := newTUIAttentionTracker(runID, sessionsDir)
 	commandLogScroll := 0
 	eventScroll := 0
 	escSeq := []byte{}
@@ -112,6 +113,11 @@ func runTUI(args []string, stdout, stderr io.Writer) int {
 		snapshot, snapErr := collectTUISnapshot(manager, runID, eventLimit)
 		if snapErr != nil {
 			messages = appendLogLines(messages, "snapshot error: "+snapErr.Error())
+		} else if nextMessages, added := attention.appendActionMessages(messages, snapshot); added {
+			messages = nextMessages
+			commandLogScroll = 0
+		} else {
+			messages = nextMessages
 		}
 		if exitOnDone && (snapshot.status.State == "completed" || snapshot.status.State == "stopped") {
 			messages = appendLogLines(messages, fmt.Sprintf("run %s %s; exiting tui", runID, snapshot.status.State))

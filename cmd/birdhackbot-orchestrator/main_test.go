@@ -211,6 +211,7 @@ func TestRunGoalModeRejectsMissingScopeOrConstraints(t *testing.T) {
 		"--goal", "check local file",
 		"--scope-local",
 		"--constraint", "local_only",
+		"--planner", "static",
 		"--plan-review", "reject",
 	}
 	if code := run(args, &out, &errOut); code != 0 {
@@ -248,6 +249,7 @@ func TestRunGoalModeSeedsPlanAndPersistsMetadata(t *testing.T) {
 		"--goal", "  investigate    host   exposure  ",
 		"--scope-target", "127.0.0.1",
 		"--constraint", "local_only",
+		"--planner", "static",
 		"--permissions", "all",
 		"--success-criterion", "goal_processed",
 		"--stop-criterion", "manual_stop",
@@ -538,13 +540,14 @@ func TestPlannerPlaybookHintsDisabledWhenMaxIsZero(t *testing.T) {
 	}
 }
 
-func TestBuildGoalPlanFromModeAutoFallsBackToStaticWhenLLMUnavailable(t *testing.T) {
+func TestBuildGoalPlanFromModeAutoRequiresLLMWhenStaticNotExplicit(t *testing.T) {
 	t.Parallel()
 
 	plan, note, err := buildGoalPlanFromMode(
 		context.Background(),
 		"auto",
 		"",
+		t.TempDir(),
 		"run-auto-fallback",
 		"map services",
 		orchestrator.Scope{Networks: []string{"192.168.50.0/24"}},
@@ -555,14 +558,152 @@ func TestBuildGoalPlanFromModeAutoFallsBackToStaticWhenLLMUnavailable(t *testing
 		5,
 		time.Now().UTC(),
 	)
+	if err == nil {
+		t.Fatalf("expected llm availability failure, got plan=%+v note=%q", plan, note)
+	}
+	if !strings.Contains(err.Error(), "--planner static") {
+		t.Fatalf("expected explicit static-planner hint, got %v", err)
+	}
+}
+
+func TestBuildGoalPlanFromModeAutoRetriesLLMPlannerThenSucceeds(t *testing.T) {
+	t.Setenv("BIRDHACKBOT_CONFIG_PATH", filepath.Join(testRepoRoot(t), "config", "default.json"))
+	callCount := 0
+	server := newHTTPTestServerOrSkip(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+		callCount++
+		w.Header().Set("Content-Type", "application/json")
+		if callCount == 1 {
+			// First attempt returns malformed task JSON and should trigger retry.
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"rationale\":\"bad first response\",\"tasks\":["}}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"rationale\":\"retry succeeded\",\"tasks\":[{\"task_id\":\"task-llm-recon\",\"title\":\"LLM Recon\",\"goal\":\"Collect passive recon evidence\",\"targets\":[\"127.0.0.1\"],\"depends_on\":[],\"priority\":90,\"strategy\":\"recon_seed\",\"risk_level\":\"recon_readonly\",\"done_when\":[\"recon_done\"],\"fail_when\":[\"recon_failed\"],\"expected_artifacts\":[\"recon.log\"],\"action\":{\"type\":\"assist\",\"prompt\":\"run passive recon\"},\"budget\":{\"max_steps\":8,\"max_tool_calls\":12,\"max_runtime_seconds\":240}}]}"}}]}`))
+	}))
+	defer server.Close()
+	t.Setenv(plannerLLMBaseURLEnv, server.URL)
+	t.Setenv(plannerLLMModelEnv, "mock-planner-model")
+	t.Setenv(plannerLLMAPIKeyEnv, "")
+
+	plan, note, err := buildGoalPlanFromMode(
+		context.Background(),
+		"auto",
+		"",
+		t.TempDir(),
+		"run-auto-retry",
+		"map services",
+		orchestrator.Scope{Targets: []string{"127.0.0.1"}},
+		[]string{"local_only"},
+		nil,
+		nil,
+		1,
+		5,
+		time.Now().UTC(),
+	)
 	if err != nil {
 		t.Fatalf("buildGoalPlanFromMode(auto): %v", err)
 	}
-	if plan.Metadata.PlannerMode != plannerModeStaticV1 {
-		t.Fatalf("expected static fallback mode, got %q", plan.Metadata.PlannerMode)
+	if plan.Metadata.PlannerMode != plannerModeLLMV1 {
+		t.Fatalf("expected llm planner mode, got %q", plan.Metadata.PlannerMode)
 	}
-	if !strings.Contains(note, "fallback") {
-		t.Fatalf("expected fallback note, got %q", note)
+	if callCount < 2 {
+		t.Fatalf("expected retry behavior (>=2 calls), got %d", callCount)
+	}
+	if !strings.Contains(note, "retry") {
+		t.Fatalf("expected retry note, got %q", note)
+	}
+}
+
+func TestBuildGoalPlanFromModeAutoPersistsPlannerAttemptDiagnostics(t *testing.T) {
+	t.Setenv("BIRDHACKBOT_CONFIG_PATH", filepath.Join(testRepoRoot(t), "config", "default.json"))
+	callCount := 0
+	server := newHTTPTestServerOrSkip(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+		callCount++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"rationale\":\"bad response\",\"tasks\":["}}]}`))
+	}))
+	defer server.Close()
+	t.Setenv(plannerLLMBaseURLEnv, server.URL)
+	t.Setenv(plannerLLMModelEnv, "mock-planner-model")
+	t.Setenv(plannerLLMAPIKeyEnv, "")
+
+	sessionsDir := t.TempDir()
+	_, _, err := buildGoalPlanFromMode(
+		context.Background(),
+		"auto",
+		"",
+		sessionsDir,
+		"run-auto-diag",
+		"map services",
+		orchestrator.Scope{Targets: []string{"127.0.0.1"}},
+		[]string{"local_only"},
+		nil,
+		nil,
+		1,
+		5,
+		time.Now().UTC(),
+	)
+	if err == nil {
+		t.Fatalf("expected llm planner failure")
+	}
+	if !strings.Contains(err.Error(), "planner_attempts=") {
+		t.Fatalf("expected planner attempts path in error, got %v", err)
+	}
+	if callCount < 2 {
+		t.Fatalf("expected at least two planner attempts, got %d", callCount)
+	}
+
+	errText := err.Error()
+	idx := strings.Index(errText, "planner_attempts=")
+	if idx < 0 {
+		t.Fatalf("missing planner_attempts marker in error: %v", err)
+	}
+	diagPath := strings.TrimSpace(errText[idx+len("planner_attempts="):])
+	diagPath = strings.TrimSuffix(diagPath, ")")
+	if diagPath == "" {
+		t.Fatalf("empty planner attempts path in error: %v", err)
+	}
+	if _, statErr := os.Stat(diagPath); statErr != nil {
+		t.Fatalf("planner attempts manifest missing at %s: %v", diagPath, statErr)
+	}
+
+	data, readErr := os.ReadFile(diagPath)
+	if readErr != nil {
+		t.Fatalf("read planner attempts manifest: %v", readErr)
+	}
+	manifest := struct {
+		Attempts []plannerAttemptDiagnostic `json:"attempts"`
+	}{}
+	if unmarshalErr := json.Unmarshal(data, &manifest); unmarshalErr != nil {
+		t.Fatalf("unmarshal planner attempts manifest: %v\n%s", unmarshalErr, string(data))
+	}
+	if len(manifest.Attempts) < 2 {
+		t.Fatalf("expected at least two attempts in manifest: %s", string(data))
+	}
+	if manifest.Attempts[0].MaxTokens <= 0 {
+		t.Fatalf("expected max_tokens to be captured in diagnostics: %+v", manifest.Attempts[0])
+	}
+}
+
+func TestAdaptivePlannerMaxTokensIncreasesOnLaterAttempts(t *testing.T) {
+	t.Parallel()
+
+	plannerMaxTokens := 1800
+	cfg := config.Config{}
+	cfg.LLM.Roles = map[string]config.LLMRoleCfg{
+		"planner": {MaxTokens: &plannerMaxTokens},
+	}
+	first := adaptivePlannerMaxTokens(cfg, 1)
+	later := adaptivePlannerMaxTokens(cfg, 6)
+	if later <= first {
+		t.Fatalf("expected later attempt tokens > first attempt tokens, got %d <= %d", later, first)
 	}
 }
 
@@ -580,6 +721,7 @@ func TestRunGoalModePlanReviewRejectWritesReviewArtifact(t *testing.T) {
 		"--goal", "investigate host exposure",
 		"--scope-target", "127.0.0.1",
 		"--constraint", "local_only",
+		"--planner", "static",
 		"--plan-review", "reject",
 		"--plan-review-rationale", "operator rejected generated plan",
 	}
@@ -618,6 +760,7 @@ func TestRunGoalModePlanReviewEditWritesDraft(t *testing.T) {
 		"--goal", "investigate host exposure",
 		"--scope-target", "127.0.0.1",
 		"--constraint", "local_only",
+		"--planner", "static",
 		"--plan-review", "edit",
 	}
 	if code := run(args, &out, &errOut); code != 0 {
@@ -1019,7 +1162,7 @@ func TestApprovalCommands(t *testing.T) {
 
 	out.Reset()
 	errOut.Reset()
-	if code := run([]string{"approvals", "--sessions-dir", base, "--run", "run-cli-approval"}, &out, &errOut); code != 0 {
+	if code := run([]string{"approvals", "--sessions-dir", base, "--run", "run-cli-approval", "--json"}, &out, &errOut); code != 0 {
 		t.Fatalf("approvals failed: code=%d err=%s", code, errOut.String())
 	}
 	if !strings.Contains(out.String(), `"approval_id":"apr-1"`) {
@@ -1033,6 +1176,114 @@ func TestApprovalCommands(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "approved: apr-1") {
 		t.Fatalf("unexpected approve output: %q", out.String())
+	}
+}
+
+func TestApprovalsHumanOutputAndApproveAll(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	planPath := filepath.Join(base, "plan-approval-human.json")
+	plan := orchestrator.RunPlan{
+		RunID:           "run-cli-approval-human",
+		Scope:           orchestrator.Scope{Targets: []string{"127.0.0.1"}},
+		Constraints:     []string{"internal_only"},
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks: []orchestrator.TaskSpec{
+			{
+				TaskID:            "t1",
+				Title:             "Validate H-02",
+				Goal:              "Network services may expose unnecessary ports",
+				Strategy:          "hypothesis_validate",
+				Targets:           []string{"127.0.0.1"},
+				DoneWhen:          []string{"artifact"},
+				FailWhen:          []string{"timeout"},
+				ExpectedArtifacts: []string{"out1.txt"},
+				RiskLevel:         string(orchestrator.RiskActiveProbe),
+				Budget: orchestrator.TaskBudget{
+					MaxSteps:     1,
+					MaxToolCalls: 1,
+					MaxRuntime:   time.Second,
+				},
+			},
+			{
+				TaskID:            "t2",
+				Title:             "Validate H-03",
+				Goal:              "Authentication controls may be weak",
+				Strategy:          "hypothesis_validate",
+				Targets:           []string{"127.0.0.1"},
+				DoneWhen:          []string{"artifact"},
+				FailWhen:          []string{"timeout"},
+				ExpectedArtifacts: []string{"out2.txt"},
+				RiskLevel:         string(orchestrator.RiskActiveProbe),
+				Budget: orchestrator.TaskBudget{
+					MaxSteps:     1,
+					MaxToolCalls: 1,
+					MaxRuntime:   time.Second,
+				},
+			},
+		},
+	}
+	writePlanFile(t, planPath, plan)
+
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	if code := run([]string{"start", "--sessions-dir", base, "--plan", planPath}, &out, &errOut); code != 0 {
+		t.Fatalf("start failed: code=%d err=%s", code, errOut.String())
+	}
+
+	manager := orchestrator.NewManager(base)
+	if err := manager.EmitEvent("run-cli-approval-human", "orchestrator", "t1", orchestrator.EventTypeApprovalRequested, map[string]any{
+		"approval_id": "apr-h-1",
+		"tier":        string(orchestrator.RiskActiveProbe),
+		"reason":      "requires approval",
+		"expires_at":  time.Now().Add(time.Minute).UTC().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("EmitEvent approval requested t1: %v", err)
+	}
+	if err := manager.EmitEvent("run-cli-approval-human", "orchestrator", "t2", orchestrator.EventTypeApprovalRequested, map[string]any{
+		"approval_id": "apr-h-2",
+		"tier":        string(orchestrator.RiskActiveProbe),
+		"reason":      "requires approval",
+		"expires_at":  time.Now().Add(time.Minute).UTC().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("EmitEvent approval requested t2: %v", err)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"approvals", "--sessions-dir", base, "--run", "run-cli-approval-human"}, &out, &errOut); code != 0 {
+		t.Fatalf("approvals failed: code=%d err=%s", code, errOut.String())
+	}
+	text := out.String()
+	if !strings.Contains(text, "pending approvals: 2") {
+		t.Fatalf("expected pending count in human approvals output, got: %q", text)
+	}
+	if !strings.Contains(text, "task: t1 (Validate H-02)") || !strings.Contains(text, "goal: Network services may expose unnecessary ports") {
+		t.Fatalf("expected task context in approvals output, got: %q", text)
+	}
+	if !strings.Contains(text, "approve all: birdhackbot-orchestrator approve-all") {
+		t.Fatalf("expected approve-all hint in approvals output, got: %q", text)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"approve-all", "--sessions-dir", base, "--run", "run-cli-approval-human", "--scope", "task", "--reason", "authorized"}, &out, &errOut); code != 0 {
+		t.Fatalf("approve-all failed: code=%d err=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "approved_total: 2") {
+		t.Fatalf("unexpected approve-all output: %q", out.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"approvals", "--sessions-dir", base, "--run", "run-cli-approval-human", "--json"}, &out, &errOut); code != 0 {
+		t.Fatalf("approvals --json failed: code=%d err=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "no pending approvals") {
+		t.Fatalf("expected no pending approvals after approve-all, got %q", out.String())
 	}
 }
 
@@ -1425,6 +1676,7 @@ func TestRunGoalToGeneratedPlanApprovalFanoutAndReport(t *testing.T) {
 		"--goal", "scan network services and assess web auth surface",
 		"--scope-target", "127.0.0.1",
 		"--constraint", "local_only",
+		"--planner", "static",
 		"--permissions", "default",
 		"--worker-cmd", os.Args[0],
 		"--worker-arg", "-test.run=TestHelperProcessOrchestratorWorker",

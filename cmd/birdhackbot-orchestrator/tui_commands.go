@@ -95,6 +95,21 @@ func parseTUICommand(raw string) (tuiCommand, error) {
 			reason = strings.Join(parts[reasonStart:], " ")
 		}
 		return tuiCommand{name: "approve", approval: parts[1], scope: scope, reason: reason}, nil
+	case "approve-all", "approveall":
+		scope := "task"
+		reasonStart := 1
+		if len(parts) > 1 {
+			switch strings.ToLower(parts[1]) {
+			case "once", "task", "session":
+				scope = strings.ToLower(parts[1])
+				reasonStart = 2
+			}
+		}
+		reason := "approved via tui"
+		if len(parts) >= reasonStart+1 {
+			reason = strings.Join(parts[reasonStart:], " ")
+		}
+		return tuiCommand{name: "approve_all", scope: scope, reason: reason}, nil
 	case "deny":
 		if len(parts) < 2 {
 			return tuiCommand{}, fmt.Errorf("usage: deny <approval-id> [reason]")
@@ -194,7 +209,7 @@ func executeTUICommandWithScroll(manager *orchestrator.Manager, runID string, ev
 	case "quit":
 		return true, "exiting tui"
 	case "help":
-		return false, "commands: help, plan, tasks, ask <question>, instruct <text>, execute, regenerate, discard, task add/remove/set/move, refresh, events <count|up|down|top|bottom> [n], log <up|down|top|bottom> [n], approve <id> [scope] [reason], deny <id> [reason], stop, quit"
+		return false, "commands: help, plan, tasks, ask <question>, instruct <text>, execute, regenerate, discard, task add/remove/set/move, refresh, events <count|up|down|top|bottom> [n], log <up|down|top|bottom> [n], approve <id> [scope] [reason], approve-all [scope] [reason], deny <id> [reason], stop, quit"
 	case "plan":
 		plan, err := manager.LoadRunPlan(runID)
 		if err != nil {
@@ -294,10 +309,60 @@ func executeTUICommandWithScroll(manager *orchestrator.Manager, runID string, ev
 			return false, "usage: log <up|down|top|bottom> [count]"
 		}
 	case "approve":
+		var matched *orchestrator.PendingApprovalView
+		if pending, err := manager.PendingApprovals(runID); err == nil {
+			for i := range pending {
+				if strings.TrimSpace(pending[i].ApprovalID) == strings.TrimSpace(cmd.approval) {
+					matched = &pending[i]
+					break
+				}
+			}
+		}
 		if err := manager.SubmitApprovalDecision(runID, cmd.approval, true, cmd.scope, "tui", cmd.reason, 0); err != nil {
 			return false, "approve failed: " + err.Error()
 		}
+		if matched != nil {
+			taskLabel := strings.TrimSpace(matched.TaskID)
+			if title := strings.TrimSpace(matched.TaskTitle); title != "" {
+				taskLabel = fmt.Sprintf("%s (%s)", taskLabel, title)
+			}
+			return false, fmt.Sprintf(
+				"approved: id=%s task=%s risk=%s goal=%q",
+				matched.ApprovalID,
+				taskLabel,
+				strings.TrimSpace(matched.RiskTier),
+				truncateApprovalText(strings.TrimSpace(matched.TaskGoal), 120),
+			)
+		}
 		return false, fmt.Sprintf("approved %s (%s)", cmd.approval, cmd.scope)
+	case "approve_all":
+		pending, err := manager.PendingApprovals(runID)
+		if err != nil {
+			return false, "approve-all failed listing approvals: " + err.Error()
+		}
+		if len(pending) == 0 {
+			return false, "approve-all: no pending approvals"
+		}
+		approved := 0
+		for _, req := range pending {
+			if err := manager.SubmitApprovalDecision(runID, req.ApprovalID, true, cmd.scope, "tui", cmd.reason, 0); err != nil {
+				return false, fmt.Sprintf("approve-all failed for %s: %v", req.ApprovalID, err)
+			}
+			approved++
+		}
+		preview := make([]string, 0, len(pending))
+		for i, req := range pending {
+			if i >= 3 {
+				preview = append(preview, fmt.Sprintf("+%d more", len(pending)-i))
+				break
+			}
+			taskLabel := strings.TrimSpace(req.TaskID)
+			if title := strings.TrimSpace(req.TaskTitle); title != "" {
+				taskLabel = fmt.Sprintf("%s (%s)", taskLabel, title)
+			}
+			preview = append(preview, fmt.Sprintf("%s:%s", req.ApprovalID, taskLabel))
+		}
+		return false, fmt.Sprintf("approved %d pending approval(s) (%s): %s", approved, cmd.scope, strings.Join(preview, ", "))
 	case "deny":
 		if err := manager.SubmitApprovalDecision(runID, cmd.approval, false, "", "tui", cmd.reason, 0); err != nil {
 			return false, "deny failed: " + err.Error()

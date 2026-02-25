@@ -164,6 +164,14 @@ func findingFromEvent(event EventEnvelope) (Finding, error) {
 			metadata["location"] = location
 		}
 	}
+	state := normalizeFindingState(stringFromPayload(payload, "state", ""))
+	if state == "" {
+		state = normalizeFindingState(metadata["finding_state"])
+	}
+	if state == "" {
+		state = FindingStateCandidate
+	}
+	metadata["finding_state"] = state
 	source := stringFromPayload(payload, "source", "")
 	if source == "" {
 		source = event.WorkerID
@@ -176,6 +184,7 @@ func findingFromEvent(event EventEnvelope) (Finding, error) {
 		Target:      stringFromPayload(payload, "target", ""),
 		FindingType: stringFromPayload(payload, "finding_type", "generic"),
 		Title:       stringFromPayload(payload, "title", event.EventID),
+		State:       state,
 		Severity:    severity,
 		Confidence:  confidence,
 		Evidence:    evidenceFromPayload(payload["evidence"]),
@@ -210,6 +219,9 @@ func mergeFindings(existing, incoming Finding) Finding {
 	}
 	if merged.Title == "" {
 		merged.Title = incoming.Title
+	}
+	if merged.State == "" {
+		merged.State = incoming.State
 	}
 	merged.Sources = mergeSources(merged.Sources, incoming.Sources)
 	merged.Evidence = appendUnique(merged.Evidence, incoming.Evidence...)
@@ -266,9 +278,35 @@ func mergeFindings(existing, incoming Finding) Finding {
 			Resolution:     resolution,
 		})
 	}
+	if normalizedIncomingState := normalizeFindingState(incoming.State); normalizedIncomingState != "" {
+		normalizedExistingState := normalizeFindingState(merged.State)
+		if normalizedExistingState == "" {
+			normalizedExistingState = FindingStateCandidate
+		}
+		merged.State = normalizedExistingState
+		if normalizedExistingState != normalizedIncomingState {
+			resolution := normalizedExistingState
+			if findingStateRank(normalizedIncomingState) >= findingStateRank(normalizedExistingState) {
+				resolution = normalizedIncomingState
+				merged.State = normalizedIncomingState
+			}
+			merged.Conflicts = appendConflict(merged.Conflicts, FindingConflict{
+				Field:          "state",
+				ExistingValue:  normalizedExistingState,
+				IncomingValue:  normalizedIncomingState,
+				IncomingEvent:  firstIncomingEvent(incoming.Sources),
+				IncomingSource: firstIncomingSource(incoming.Sources),
+				Resolution:     resolution,
+			})
+		}
+	}
 
 	for k, v := range incoming.Metadata {
 		if strings.TrimSpace(v) == "" {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(k), "finding_state") {
+			merged.Metadata["finding_state"] = normalizeFindingState(merged.State)
 			continue
 		}
 		current, exists := merged.Metadata[k]
@@ -293,6 +331,11 @@ func mergeFindings(existing, incoming Finding) Finding {
 			Resolution:     resolution,
 		})
 	}
+	merged.State = normalizeFindingState(merged.State)
+	if merged.State == "" {
+		merged.State = FindingStateCandidate
+	}
+	merged.Metadata["finding_state"] = merged.State
 	return merged
 }
 
@@ -311,7 +354,49 @@ func readFinding(path string) (Finding, bool, error) {
 	if finding.Metadata == nil {
 		finding.Metadata = map[string]string{}
 	}
+	finding.State = normalizeFindingState(finding.State)
+	if finding.State == "" {
+		finding.State = normalizeFindingState(finding.Metadata["finding_state"])
+	}
+	if finding.State == "" {
+		finding.State = FindingStateCandidate
+	}
+	finding.Metadata["finding_state"] = finding.State
 	return finding, true, nil
+}
+
+func normalizeFindingState(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case FindingStateHypothesis, "suspected":
+		return FindingStateHypothesis
+	case FindingStateCandidate, "candidate", "candidate-finding":
+		return FindingStateCandidate
+	case FindingStateVerified, "verified", "confirmed", "verified-finding":
+		return FindingStateVerified
+	case FindingStateRejected, "rejected", "false_positive", "false-positive", "rejected-finding":
+		return FindingStateRejected
+	default:
+		return ""
+	}
+}
+
+func findingStateRank(state string) int {
+	switch normalizeFindingState(state) {
+	case FindingStateRejected:
+		return 4
+	case FindingStateVerified:
+		return 3
+	case FindingStateCandidate:
+		return 2
+	case FindingStateHypothesis:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func findingIsVerified(f Finding) bool {
+	return normalizeFindingState(f.State) == FindingStateVerified
 }
 
 func stringFromPayload(payload map[string]any, key, fallback string) string {

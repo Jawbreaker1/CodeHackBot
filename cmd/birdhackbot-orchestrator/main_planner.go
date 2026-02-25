@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -20,9 +21,27 @@ import (
 )
 
 const (
-	defaultPlannerPlaybookMax   = 2
-	defaultPlannerPlaybookLines = 60
+	defaultPlannerPlaybookMax    = 2
+	defaultPlannerPlaybookLines  = 60
+	defaultPlannerLLMMaxAttempts = 6
+	defaultPlannerLLMMaxDuration = 90 * time.Second
 )
+
+type plannerAttemptDiagnostic struct {
+	Attempt           int       `json:"attempt"`
+	WhenUTC           time.Time `json:"when_utc"`
+	Outcome           string    `json:"outcome"`
+	Error             string    `json:"error,omitempty"`
+	FailureStage      string    `json:"failure_stage,omitempty"`
+	FinishReason      string    `json:"finish_reason,omitempty"`
+	Fingerprint       string    `json:"fingerprint,omitempty"`
+	HypothesisLimit   int       `json:"hypothesis_limit"`
+	PlaybooksIncluded bool      `json:"playbooks_included"`
+	JSONSchemaEnabled bool      `json:"json_schema_enabled"`
+	MaxTokens         int       `json:"max_tokens"`
+	RawResponse       string    `json:"-"`
+	ExtractedJSON     string    `json:"-"`
+}
 
 func normalizeGoal(raw string) string {
 	return strings.Join(strings.Fields(strings.TrimSpace(raw)), " ")
@@ -76,6 +95,7 @@ func buildGoalPlanFromMode(
 	ctx context.Context,
 	plannerMode string,
 	workerConfigPath string,
+	sessionsDir string,
 	runID, goal string,
 	scope orchestrator.Scope,
 	constraints, successCriteria, stopCriteria []string,
@@ -84,34 +104,114 @@ func buildGoalPlanFromMode(
 ) (orchestrator.RunPlan, string, error) {
 	if plannerMode == "llm" || plannerMode == "auto" {
 		cfg, client, model, llmCfgErr := resolvePlannerLLMClient(workerConfigPath)
-		if llmCfgErr == nil && client != nil && strings.TrimSpace(model) != "" {
-			playbookHints, playbookNames := plannerPlaybookHints(goal, constraints, cfg)
-			plan, llmRationale, err := buildGoalLLMPlan(ctx, cfg, client, model, runID, goal, scope, constraints, successCriteria, stopCriteria, maxParallelism, hypothesisLimit, playbookHints, playbookNames, now)
+		if llmCfgErr != nil || client == nil || strings.TrimSpace(model) == "" {
+			if llmCfgErr == nil {
+				llmCfgErr = fmt.Errorf("llm client/model unavailable")
+			}
+			return orchestrator.RunPlan{}, "", fmt.Errorf("planner mode %q requires LLM availability; rerun with --planner static for explicit static planning: %w", plannerMode, llmCfgErr)
+		}
+		playbookHints, playbookNames := plannerPlaybookHints(goal, constraints, cfg)
+		attempts := defaultPlannerLLMMaxAttempts
+		if attempts < 1 {
+			attempts = 1
+		}
+		maxDuration := defaultPlannerLLMMaxDuration
+		if maxDuration <= 0 {
+			maxDuration = 30 * time.Second
+		}
+		started := time.Now().UTC()
+		fingerprintHits := map[string]int{}
+		diagnostics := make([]plannerAttemptDiagnostic, 0, attempts)
+		var lastErr error
+		for attempt := 1; attempt <= attempts; attempt++ {
+			if time.Since(started) > maxDuration {
+				lastErr = fmt.Errorf("planner retry budget exceeded after %s", maxDuration)
+				break
+			}
+
+			attemptHypothesisLimit := adaptivePlannerHypothesisLimit(hypothesisLimit, attempt)
+			attemptPlaybookHints := playbookHints
+			attemptPlaybookNames := playbookNames
+			playbooksIncluded := strings.TrimSpace(attemptPlaybookHints) != ""
+			if attempt >= 4 {
+				attemptPlaybookHints = ""
+				attemptPlaybookNames = nil
+				playbooksIncluded = false
+			}
+
+			useJSONSchema := true
+			attemptMaxTokens := adaptivePlannerMaxTokens(cfg, attempt)
+			plan, llmRationale, err := buildGoalLLMPlanWithStructuredOutput(
+				ctx,
+				cfg,
+				client,
+				model,
+				runID,
+				goal,
+				scope,
+				constraints,
+				successCriteria,
+				stopCriteria,
+				maxParallelism,
+				attemptHypothesisLimit,
+				attemptPlaybookHints,
+				attemptPlaybookNames,
+				now,
+				useJSONSchema,
+				attemptMaxTokens,
+			)
 			if err == nil {
-				return plan, llmRationale, nil
+				if attempt > 1 {
+					_, _ = persistPlannerAttemptDiagnostics(sessionsDir, runID, diagnostics)
+				}
+				if attempt <= 1 {
+					return plan, llmRationale, nil
+				}
+				retryNote := fmt.Sprintf("llm planner succeeded after retry %d/%d", attempt, attempts)
+				if strings.TrimSpace(llmRationale) == "" {
+					return plan, retryNote, nil
+				}
+				return plan, llmRationale + " | " + retryNote, nil
 			}
-			if plannerMode == "llm" {
-				return orchestrator.RunPlan{}, "", err
+			lastErr = err
+
+			diag := plannerAttemptDiagnostic{
+				Attempt:           attempt,
+				WhenUTC:           time.Now().UTC(),
+				Outcome:           "failed",
+				Error:             err.Error(),
+				HypothesisLimit:   attemptHypothesisLimit,
+				PlaybooksIncluded: playbooksIncluded,
+				JSONSchemaEnabled: useJSONSchema,
+				MaxTokens:         attemptMaxTokens,
 			}
-			fallback, fallbackErr := buildGoalSeedPlan(runID, goal, scope, constraints, successCriteria, stopCriteria, maxParallelism, hypothesisLimit, now)
-			if fallbackErr != nil {
-				return orchestrator.RunPlan{}, "", fmt.Errorf("llm planner failed (%v); static fallback failed: %w", err, fallbackErr)
+			var plannerFailure *orchestrator.LLMPlannerFailure
+			if errors.As(err, &plannerFailure) {
+				diag.FailureStage = strings.TrimSpace(plannerFailure.Stage)
+				diag.FinishReason = strings.TrimSpace(plannerFailure.FinishReason)
+				diag.Fingerprint = strings.TrimSpace(plannerFailure.Fingerprint)
+				diag.RawResponse = strings.TrimSpace(plannerFailure.RawResponse)
+				diag.ExtractedJSON = strings.TrimSpace(plannerFailure.Extracted)
+				if diag.Fingerprint != "" {
+					fingerprintHits[diag.Fingerprint]++
+					if fingerprintHits[diag.Fingerprint] >= 2 {
+						diagnostics = append(diagnostics, diag)
+						lastErr = fmt.Errorf("%w (repeated planner fingerprint=%s)", err, diag.Fingerprint)
+						break
+					}
+				}
 			}
-			note := fmt.Sprintf("auto fallback to static planner: %v", err)
-			return fallback, note, nil
+			diagnostics = append(diagnostics, diag)
+
+			if attempt < attempts && time.Since(started) < maxDuration {
+				time.Sleep(adaptivePlannerBackoff(attempt))
+			}
 		}
-		if plannerMode == "llm" {
-			return orchestrator.RunPlan{}, "", llmCfgErr
+		diagPath, diagErr := persistPlannerAttemptDiagnostics(sessionsDir, runID, diagnostics)
+		if diagErr == nil && strings.TrimSpace(diagPath) != "" {
+			return orchestrator.RunPlan{}, "", fmt.Errorf("llm planner failed after %d attempt(s) in mode %q; rerun with --planner static for explicit static planning: %w (planner_attempts=%s)", len(diagnostics), plannerMode, lastErr, diagPath)
 		}
-		fallback, fallbackErr := buildGoalSeedPlan(runID, goal, scope, constraints, successCriteria, stopCriteria, maxParallelism, hypothesisLimit, now)
-		if fallbackErr != nil {
-			return orchestrator.RunPlan{}, "", fallbackErr
-		}
-		note := ""
-		if llmCfgErr != nil {
-			note = fmt.Sprintf("auto fallback to static planner: %v", llmCfgErr)
-		}
-		return fallback, note, nil
+		return orchestrator.RunPlan{}, "", fmt.Errorf("llm planner failed after %d attempt(s) in mode %q; rerun with --planner static for explicit static planning: %w", len(diagnostics), plannerMode, lastErr)
 	}
 	plan, err := buildGoalSeedPlan(runID, goal, scope, constraints, successCriteria, stopCriteria, maxParallelism, hypothesisLimit, now)
 	return plan, "", err
@@ -130,9 +230,49 @@ func buildGoalLLMPlan(
 	playbookNames []string,
 	now time.Time,
 ) (orchestrator.RunPlan, string, error) {
+	return buildGoalLLMPlanWithStructuredOutput(
+		ctx,
+		cfg,
+		client,
+		model,
+		runID,
+		goal,
+		scope,
+		constraints,
+		successCriteria,
+		stopCriteria,
+		maxParallelism,
+		hypothesisLimit,
+		playbookHints,
+		playbookNames,
+		now,
+		true,
+		0,
+	)
+}
+
+func buildGoalLLMPlanWithStructuredOutput(
+	ctx context.Context,
+	cfg config.Config,
+	client llm.Client,
+	model string,
+	runID, goal string,
+	scope orchestrator.Scope,
+	constraints, successCriteria, stopCriteria []string,
+	maxParallelism, hypothesisLimit int,
+	playbookHints string,
+	playbookNames []string,
+	now time.Time,
+	useJSONSchema bool,
+	maxTokensOverride int,
+) (orchestrator.RunPlan, string, error) {
 	normalizedGoal := normalizeGoal(goal)
 	hypotheses := orchestrator.GenerateHypotheses(normalizedGoal, scope, hypothesisLimit)
 	temperature, maxTokens := cfg.ResolveLLMRoleOptions("planner", 0.05, 1800)
+	if maxTokensOverride > 0 {
+		maxTokens = maxTokensOverride
+	}
+	useJSONSchemaPtr := useJSONSchema
 	tasks, llmRationale, err := orchestrator.SynthesizeTaskGraphWithLLMWithOptions(
 		ctx,
 		client,
@@ -143,9 +283,10 @@ func buildGoalLLMPlan(
 		hypotheses,
 		maxParallelism,
 		orchestrator.LLMPlannerOptions{
-			Temperature: float32Ptr(temperature),
-			MaxTokens:   intPtrPositive(maxTokens),
-			Playbooks:   strings.TrimSpace(playbookHints),
+			Temperature:   float32Ptr(temperature),
+			MaxTokens:     intPtrPositive(maxTokens),
+			Playbooks:     strings.TrimSpace(playbookHints),
+			UseJSONSchema: &useJSONSchemaPtr,
 		},
 	)
 	if err != nil {
@@ -318,6 +459,90 @@ func mergePlannerRationale(reviewRationale, plannerNote string) string {
 	return strings.Join(parts, " | ")
 }
 
+func adaptivePlannerHypothesisLimit(baseLimit, attempt int) int {
+	limit := baseLimit
+	if limit <= 0 {
+		limit = 5
+	}
+	if attempt <= 1 {
+		return limit
+	}
+	reduced := limit - (attempt - 1)
+	if reduced < 2 {
+		reduced = 2
+	}
+	return reduced
+}
+
+func adaptivePlannerBackoff(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	delay := time.Duration(attempt*attempt) * 250 * time.Millisecond
+	if delay > 3*time.Second {
+		delay = 3 * time.Second
+	}
+	return delay
+}
+
+func adaptivePlannerMaxTokens(cfg config.Config, attempt int) int {
+	_, base := cfg.ResolveLLMRoleOptions("planner", 0.05, 1800)
+	if base <= 0 {
+		base = 1800
+	}
+	switch {
+	case attempt <= 2:
+		return base
+	case attempt == 3:
+		return maxInt(base, 2400)
+	case attempt == 4:
+		return maxInt(base, 2800)
+	case attempt == 5:
+		return maxInt(base, 3200)
+	default:
+		return maxInt(base, 3600)
+	}
+}
+
+func persistPlannerAttemptDiagnostics(sessionsDir, runID string, attempts []plannerAttemptDiagnostic) (string, error) {
+	if strings.TrimSpace(sessionsDir) == "" || strings.TrimSpace(runID) == "" || len(attempts) == 0 {
+		return "", nil
+	}
+	baseDir := filepath.Join(sessionsDir, "planner-attempts", runID)
+	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+		return "", err
+	}
+	manifest := make([]plannerAttemptDiagnostic, 0, len(attempts))
+	for _, attempt := range attempts {
+		record := attempt
+		record.RawResponse = ""
+		record.ExtractedJSON = ""
+		prefix := fmt.Sprintf("attempt-%02d", record.Attempt)
+		if raw := strings.TrimSpace(attempt.RawResponse); raw != "" {
+			rawPath := filepath.Join(baseDir, prefix+".raw.txt")
+			if err := os.WriteFile(rawPath, []byte(raw+"\n"), 0o644); err != nil {
+				return "", err
+			}
+		}
+		if extracted := strings.TrimSpace(attempt.ExtractedJSON); extracted != "" {
+			extractedPath := filepath.Join(baseDir, prefix+".extracted.json")
+			if err := os.WriteFile(extractedPath, []byte(extracted+"\n"), 0o644); err != nil {
+				return "", err
+			}
+		}
+		manifest = append(manifest, record)
+	}
+	manifestPath := filepath.Join(baseDir, "attempts.json")
+	if err := orchestrator.WriteJSONAtomic(manifestPath, map[string]any{
+		"run_id":     runID,
+		"created_at": time.Now().UTC(),
+		"attempts":   manifest,
+	}); err != nil {
+		return "", err
+	}
+	return manifestPath, nil
+}
+
 func plannerPromptHash(goal, plannerMode string, scope orchestrator.Scope, constraints, successCriteria, stopCriteria []string, maxParallelism int, playbooks []string) string {
 	payload := map[string]any{
 		"version":           plannerVersion,
@@ -402,6 +627,13 @@ func persistPlanReview(sessionsDir string, plan orchestrator.RunPlan, planFilena
 
 func minInt(a, b int) int {
 	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a, b int) int {
+	if a > b {
 		return a
 	}
 	return b

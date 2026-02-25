@@ -791,6 +791,82 @@ func TestRepairMissingCommandInputPathsRepairsFromLocalWorkspaceForLocalFileWork
 	}
 }
 
+func TestRepairMissingCommandInputPathsRepairsBareFilenameFromLocalWorkspace(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	sessionsDir := filepath.Join(repoRoot, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll sessions: %v", err)
+	}
+	localArchive := filepath.Join(repoRoot, "secret.zip")
+	if err := os.WriteFile(localArchive, []byte("zip"), 0o644); err != nil {
+		t.Fatalf("WriteFile secret.zip: %v", err)
+	}
+
+	cfg := WorkerRunConfig{SessionsDir: sessionsDir}
+	task := TaskSpec{
+		TaskID:   "T-001",
+		Title:    "Verify archive exists",
+		Goal:     "Confirm archive path and scope",
+		Targets:  []string{"127.0.0.1"},
+		Strategy: "local_file_check",
+	}
+	args := []string{"-v", "secret.zip"}
+
+	nextArgs, notes, repaired, err := repairMissingCommandInputPaths(cfg, task, "zipinfo", args)
+	if err != nil {
+		t.Fatalf("repairMissingCommandInputPaths: %v", err)
+	}
+	if !repaired {
+		t.Fatalf("expected bare filename repair")
+	}
+	if len(nextArgs) != 2 || nextArgs[1] != localArchive {
+		t.Fatalf("expected repaired archive path %q, got %#v", localArchive, nextArgs)
+	}
+	if len(notes) == 0 {
+		t.Fatalf("expected repair notes")
+	}
+}
+
+func TestRepairMissingCommandInputPathsRepairsReadFileBareFilenameFromLocalWorkspace(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	sessionsDir := filepath.Join(repoRoot, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll sessions: %v", err)
+	}
+	localArchive := filepath.Join(repoRoot, "secret.zip")
+	if err := os.WriteFile(localArchive, []byte("zip"), 0o644); err != nil {
+		t.Fatalf("WriteFile secret.zip: %v", err)
+	}
+
+	cfg := WorkerRunConfig{SessionsDir: sessionsDir}
+	task := TaskSpec{
+		TaskID:   "task-recon-seed",
+		Title:    "Seed reconnaissance",
+		Goal:     "Establish baseline evidence for local archive task",
+		Targets:  []string{"127.0.0.1"},
+		Strategy: "recon_seed",
+	}
+	args := []string{"secret.zip"}
+
+	nextArgs, notes, repaired, err := repairMissingCommandInputPaths(cfg, task, "read_file", args)
+	if err != nil {
+		t.Fatalf("repairMissingCommandInputPaths: %v", err)
+	}
+	if !repaired {
+		t.Fatalf("expected bare filename repair for read_file")
+	}
+	if len(nextArgs) != 1 || nextArgs[0] != localArchive {
+		t.Fatalf("expected repaired archive path %q, got %#v", localArchive, nextArgs)
+	}
+	if len(notes) == 0 || !strings.Contains(strings.ToLower(notes[0]), "local workspace") {
+		t.Fatalf("expected local workspace repair note, got %v", notes)
+	}
+}
+
 func TestRepairMissingCommandInputPathsSkipsWorkspaceRepairForNonLocalTargets(t *testing.T) {
 	t.Parallel()
 
@@ -955,6 +1031,41 @@ func TestRepairMissingCommandInputPathsForShellWrapperUsesWorkspaceCandidate(t *
 	}
 	if len(nextArgs) < 2 || strings.Contains(nextArgs[1], "/tmp/secret.zip") || !strings.Contains(nextArgs[1], realArchive) {
 		t.Fatalf("expected repaired shell body to reference %q, got %q", realArchive, nextArgs)
+	}
+}
+
+func TestRepairMissingCommandInputPathsForShellWrapperRepairsBareFilename(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	sessionsDir := filepath.Join(repoRoot, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll sessions: %v", err)
+	}
+	localArchive := filepath.Join(repoRoot, "secret.zip")
+	if err := os.WriteFile(localArchive, []byte("PK\x03\x04test-zip-bytes"), 0o644); err != nil {
+		t.Fatalf("WriteFile secret.zip: %v", err)
+	}
+
+	cfg := WorkerRunConfig{SessionsDir: sessionsDir}
+	task := TaskSpec{
+		TaskID:   "T-001",
+		Title:    "Verify archive exists",
+		Goal:     "Confirm archive path and scope",
+		Targets:  []string{"127.0.0.1"},
+		Strategy: "local_file_check",
+	}
+	args := []string{"-lc", "zipinfo -v secret.zip"}
+
+	nextArgs, _, repaired, err := repairMissingCommandInputPaths(cfg, task, "bash", args)
+	if err != nil {
+		t.Fatalf("repairMissingCommandInputPaths: %v", err)
+	}
+	if !repaired {
+		t.Fatalf("expected shell bare filename repair")
+	}
+	if len(nextArgs) < 2 || strings.Contains(nextArgs[1], "secret.zip") && !strings.Contains(nextArgs[1], localArchive) {
+		t.Fatalf("expected repaired shell body to reference %q, got %q", localArchive, nextArgs[1])
 	}
 }
 

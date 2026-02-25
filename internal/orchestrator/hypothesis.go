@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 const maxDefaultHypotheses = 5
@@ -139,13 +140,52 @@ func countKeywordMatches(goal string, keywords []string) int {
 	if goal == "" || len(keywords) == 0 {
 		return 0
 	}
+	tokens := splitKeywordTokens(goal)
+	if len(tokens) == 0 {
+		return 0
+	}
 	matchCount := 0
 	for _, keyword := range keywords {
-		if strings.Contains(goal, keyword) {
+		if containsKeywordToken(tokens, strings.ToLower(strings.TrimSpace(keyword))) {
 			matchCount++
 		}
 	}
 	return matchCount
+}
+
+func splitKeywordTokens(goal string) []string {
+	parts := strings.FieldsFunc(strings.ToLower(goal), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		out = append(out, part)
+	}
+	return out
+}
+
+func containsKeywordToken(tokens []string, keyword string) bool {
+	keyword = strings.TrimSpace(keyword)
+	if keyword == "" {
+		return false
+	}
+	for _, token := range tokens {
+		if token == keyword {
+			return true
+		}
+		if strings.HasPrefix(token, keyword) {
+			suffix := token[len(keyword):]
+			switch suffix {
+			case "s", "es", "ed", "ing":
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func impactRank(impact string) int {

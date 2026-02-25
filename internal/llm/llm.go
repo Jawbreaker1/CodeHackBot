@@ -19,14 +19,16 @@ type Message struct {
 }
 
 type ChatRequest struct {
-	Model       string    `json:"model"`
-	Messages    []Message `json:"messages"`
-	Temperature float32   `json:"temperature,omitempty"`
-	MaxTokens   int       `json:"max_tokens,omitempty"`
+	Model          string    `json:"model"`
+	Messages       []Message `json:"messages"`
+	Temperature    float32   `json:"temperature,omitempty"`
+	MaxTokens      int       `json:"max_tokens,omitempty"`
+	ResponseFormat any       `json:"response_format,omitempty"`
 }
 
 type ChatResponse struct {
-	Content string
+	Content      string
+	FinishReason string
 }
 
 type Client interface {
@@ -107,7 +109,8 @@ func (c *LMStudioClient) Chat(ctx context.Context, req ChatRequest) (ChatRespons
 
 type chatCompletionResponse struct {
 	Choices []struct {
-		Message Message `json:"message"`
+		Message      Message `json:"message"`
+		FinishReason string  `json:"finish_reason"`
 	} `json:"choices"`
 }
 
@@ -176,5 +179,8 @@ func (c *LMStudioClient) chatAtEndpoint(ctx context.Context, endpoint string, pa
 	if strings.TrimSpace(content) == "" {
 		return ChatResponse{}, fmt.Errorf("response empty")
 	}
-	return ChatResponse{Content: content}, nil
+	return ChatResponse{
+		Content:      content,
+		FinishReason: strings.TrimSpace(decoded.Choices[0].FinishReason),
+	}, nil
 }

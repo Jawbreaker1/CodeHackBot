@@ -43,8 +43,16 @@ func isBuiltinBrowse(command string) bool {
 	return strings.EqualFold(strings.TrimSpace(command), "browse")
 }
 
+func isBuiltinCrawl(command string) bool {
+	return strings.EqualFold(strings.TrimSpace(command), "crawl")
+}
+
 func isWorkerLocalBuiltin(command string) bool {
 	return isBuiltinListDir(command) || isBuiltinReadFile(command) || isBuiltinWriteFile(command)
+}
+
+func isWorkerBuiltinCommand(command string) bool {
+	return isWorkerLocalBuiltin(command) || isBuiltinBrowse(command) || isBuiltinCrawl(command)
 }
 
 func builtinListDir(args []string, workDir string) ([]byte, error) {
@@ -194,4 +202,8 @@ func builtinBrowse(ctx context.Context, args []string) ([]byte, error) {
 		_, _ = fmt.Fprintf(&out, "Snippet: %s\n", snippet)
 	}
 	return capBytes([]byte(out.String()), workerAssistOutputLimit), nil
+}
+
+func builtinCrawl(ctx context.Context, args []string) ([]byte, error) {
+	return builtinBrowse(ctx, args)
 }

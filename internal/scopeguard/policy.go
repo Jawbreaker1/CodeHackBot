@@ -25,7 +25,7 @@ var (
 )
 
 var fileLikeHostExtensions = map[string]struct{}{
-	".cfg": {}, ".conf": {}, ".csv": {}, ".gnmap": {}, ".ini": {}, ".json": {}, ".log": {}, ".md": {}, ".nmap": {}, ".out": {}, ".py": {}, ".rb": {}, ".sh": {}, ".txt": {}, ".xml": {}, ".yaml": {}, ".yml": {}, ".zip": {},
+	".cfg": {}, ".conf": {}, ".csv": {}, ".gnmap": {}, ".hash": {}, ".ini": {}, ".json": {}, ".log": {}, ".md": {}, ".nmap": {}, ".out": {}, ".py": {}, ".rb": {}, ".sh": {}, ".txt": {}, ".xml": {}, ".yaml": {}, ".yml": {}, ".zip": {},
 }
 
 var networkCommandSet = map[string]struct{}{
@@ -363,7 +363,7 @@ func netsOverlap(a, b *net.IPNet) bool {
 }
 
 func hostFromURL(token string) string {
-	trimmed := strings.TrimSpace(token)
+	trimmed := trimURLToken(token)
 	if trimmed == "" || !strings.Contains(trimmed, "://") {
 		return ""
 	}
@@ -373,6 +373,14 @@ func hostFromURL(token string) string {
 	}
 	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
 	return host
+}
+
+func trimURLToken(token string) string {
+	trimmed := strings.TrimSpace(token)
+	if trimmed == "" {
+		return ""
+	}
+	return strings.Trim(trimmed, "\"'`()[]{}<>,;.|")
 }
 
 func commandName(command string) string {
@@ -438,8 +446,23 @@ func scriptContainsNetworkIntent(script string) bool {
 	if strings.Contains(text, "://") {
 		return true
 	}
-	if ipv4CIDRPattern.MatchString(text) || ipv4Pattern.MatchString(text) || hostPattern.MatchString(text) {
+	if ipv4CIDRPattern.MatchString(text) || ipv4Pattern.MatchString(text) {
 		return true
+	}
+	for _, field := range strings.Fields(text) {
+		token := trimURLToken(field)
+		if token == "" {
+			continue
+		}
+		if host := hostFromURL(token); host != "" {
+			return true
+		}
+		if looksLikeFileToken(token) {
+			continue
+		}
+		if hostPattern.MatchString(token) {
+			return true
+		}
 	}
 	for cmd := range networkCommandSet {
 		if hasToken(text, cmd) {

@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -12,9 +14,9 @@ import (
 )
 
 const llmPlannerSystemPrompt = "You are the BirdHackBot Orchestrator planner. Return JSON only, no markdown. " +
+	"Follow the provided response schema exactly and keep output concise. " +
 	"Create an executable task graph for authorized internal-lab security testing. " +
 	"Do not use destructive actions by default. " +
-	"Schema: {\"rationale\":\"...\",\"tasks\":[{\"task_id\":\"...\",\"title\":\"...\",\"goal\":\"...\",\"targets\":[\"...\"],\"depends_on\":[\"...\"],\"priority\":1,\"strategy\":\"...\",\"risk_level\":\"recon_readonly|active_probe|exploit_controlled|priv_esc|disruptive\",\"done_when\":[\"...\"],\"fail_when\":[\"...\"],\"expected_artifacts\":[\"...\"],\"action\":{\"type\":\"assist|command|shell\",\"prompt\":\"...\",\"command\":\"...\",\"args\":[\"...\"],\"working_dir\":\"...\",\"timeout_seconds\":120},\"budget\":{\"max_steps\":12,\"max_tool_calls\":20,\"max_runtime_seconds\":600}}]}. " +
 	"Rules: every task must be concrete, bounded, and in-scope; dependencies must form a DAG; " +
 	"if tasks can be split into independent subtasks, do so and maximize safe parallel execution up to max_parallelism; " +
 	"for broad CIDR targets, prefer discovery-first fan-out (discovery -> host subsets -> validation/summarize) instead of one monolithic scan; " +
@@ -61,9 +63,40 @@ type llmPlannerTaskBudget struct {
 }
 
 type LLMPlannerOptions struct {
-	Temperature *float32
-	MaxTokens   *int
-	Playbooks   string
+	Temperature   *float32
+	MaxTokens     *int
+	Playbooks     string
+	UseJSONSchema *bool
+}
+
+type LLMPlannerFailure struct {
+	Stage        string
+	Cause        error
+	RawResponse  string
+	Extracted    string
+	Fingerprint  string
+	FinishReason string
+}
+
+func (e *LLMPlannerFailure) Error() string {
+	if e == nil {
+		return "llm planner failure"
+	}
+	stage := strings.TrimSpace(e.Stage)
+	if stage == "" {
+		stage = "unknown"
+	}
+	if e.Cause == nil {
+		return "llm planner " + stage + " failure"
+	}
+	return fmt.Sprintf("llm planner %s failure: %v", stage, e.Cause)
+}
+
+func (e *LLMPlannerFailure) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
 }
 
 func SynthesizeTaskGraphWithLLM(
@@ -133,7 +166,11 @@ func SynthesizeTaskGraphWithLLMWithOptions(
 	if options.MaxTokens != nil && *options.MaxTokens > 0 {
 		maxTokens = *options.MaxTokens
 	}
-	resp, err := client.Chat(ctx, llm.ChatRequest{
+	useJSONSchema := true
+	if options.UseJSONSchema != nil {
+		useJSONSchema = *options.UseJSONSchema
+	}
+	request := llm.ChatRequest{
 		Model:       strings.TrimSpace(model),
 		Temperature: temperature,
 		MaxTokens:   maxTokens,
@@ -141,25 +178,61 @@ func SynthesizeTaskGraphWithLLMWithOptions(
 			{Role: "system", Content: llmPlannerSystemPrompt},
 			{Role: "user", Content: string(data)},
 		},
-	})
+	}
+	if useJSONSchema {
+		request.ResponseFormat = llmPlannerJSONSchemaResponseFormat()
+	}
+	resp, err := client.Chat(ctx, request)
 	if err != nil {
-		return nil, "", fmt.Errorf("llm planner request: %w", err)
+		return nil, "", &LLMPlannerFailure{
+			Stage: "request",
+			Cause: fmt.Errorf("llm planner request: %w", err),
+		}
 	}
 
-	raw := extractPlannerJSON(resp.Content)
+	rawContent := strings.TrimSpace(resp.Content)
+	finishReason := strings.ToLower(strings.TrimSpace(resp.FinishReason))
+	raw := extractPlannerJSON(rawContent)
 	decoded := llmPlannerResponse{}
 	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
-		return nil, "", fmt.Errorf("parse llm planner response: %w", err)
+		stage := "parse"
+		cause := fmt.Errorf("parse llm planner response: %w", err)
+		if finishReason == "length" {
+			stage = "truncate"
+			cause = fmt.Errorf("planner output truncated by token limit: %w", err)
+		}
+		return nil, "", &LLMPlannerFailure{
+			Stage:        stage,
+			Cause:        cause,
+			RawResponse:  rawContent,
+			Extracted:    raw,
+			Fingerprint:  llmPlannerFingerprint(raw),
+			FinishReason: finishReason,
+		}
 	}
 	if len(decoded.Tasks) == 0 {
-		return nil, "", fmt.Errorf("llm planner returned no tasks")
+		return nil, "", &LLMPlannerFailure{
+			Stage:        "parse",
+			Cause:        fmt.Errorf("llm planner returned no tasks"),
+			RawResponse:  rawContent,
+			Extracted:    raw,
+			Fingerprint:  llmPlannerFingerprint(raw),
+			FinishReason: finishReason,
+		}
 	}
 
 	tasks := make([]TaskSpec, 0, len(decoded.Tasks))
 	for i, task := range decoded.Tasks {
 		spec, err := toTaskSpec(task, i, scope)
 		if err != nil {
-			return nil, "", err
+			return nil, "", &LLMPlannerFailure{
+				Stage:        "validate",
+				Cause:        err,
+				RawResponse:  rawContent,
+				Extracted:    raw,
+				Fingerprint:  llmPlannerFingerprint(raw),
+				FinishReason: finishReason,
+			}
 		}
 		tasks = append(tasks, spec)
 	}
@@ -269,6 +342,15 @@ func normalizeLLMTaskBudget(budget TaskBudget, riskLevel string) TaskBudget {
 	}
 	if budget.MaxRuntime < minRuntime {
 		budget.MaxRuntime = minRuntime
+	}
+	if budget.MaxSteps > maxSynthesizedTaskSteps {
+		budget.MaxSteps = maxSynthesizedTaskSteps
+	}
+	if budget.MaxToolCalls > maxSynthesizedTaskToolCalls {
+		budget.MaxToolCalls = maxSynthesizedTaskToolCalls
+	}
+	if budget.MaxRuntime > maxSynthesizedTaskRuntime {
+		budget.MaxRuntime = maxSynthesizedTaskRuntime
 	}
 	return budget
 }
@@ -416,6 +498,107 @@ func attachGoalFocus(task *TaskSpec, titleSuffix, note string) {
 		} else {
 			task.Action.Prompt = prompt + "\n" + note
 		}
+	}
+}
+
+func llmPlannerFingerprint(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(trimmed))
+	return hex.EncodeToString(sum[:8])
+}
+
+func llmPlannerJSONSchemaResponseFormat() map[string]any {
+	return map[string]any{
+		"type": "json_schema",
+		"json_schema": map[string]any{
+			"name":   "birdhackbot_orchestrator_plan",
+			"strict": true,
+			"schema": map[string]any{
+				"type":                 "object",
+				"additionalProperties": false,
+				"required":             []string{"rationale", "tasks"},
+				"properties": map[string]any{
+					"rationale": map[string]any{
+						"type":      "string",
+						"maxLength": 1200,
+					},
+					"tasks": map[string]any{
+						"type":     "array",
+						"maxItems": 10,
+						"items": map[string]any{
+							"type":                 "object",
+							"additionalProperties": false,
+							"required": []string{
+								"task_id", "title", "goal", "targets", "depends_on", "priority", "strategy",
+								"risk_level", "done_when", "fail_when", "expected_artifacts", "action", "budget",
+							},
+							"properties": map[string]any{
+								"task_id": map[string]any{"type": "string", "maxLength": 64},
+								"title":   map[string]any{"type": "string", "maxLength": 120},
+								"goal":    map[string]any{"type": "string", "maxLength": 240},
+								"targets": map[string]any{
+									"type":     "array",
+									"maxItems": 16,
+									"items":    map[string]any{"type": "string", "maxLength": 128},
+								},
+								"depends_on": map[string]any{
+									"type":     "array",
+									"maxItems": 16,
+									"items":    map[string]any{"type": "string", "maxLength": 64},
+								},
+								"priority": map[string]any{"type": "integer"},
+								"strategy": map[string]any{"type": "string", "maxLength": 120},
+								"risk_level": map[string]any{
+									"type": "string",
+									"enum": []string{"recon_readonly", "active_probe", "exploit_controlled", "priv_esc", "disruptive"},
+								},
+								"done_when": map[string]any{
+									"type":     "array",
+									"maxItems": 4,
+									"items":    map[string]any{"type": "string", "maxLength": 180},
+								},
+								"fail_when": map[string]any{
+									"type":     "array",
+									"maxItems": 4,
+									"items":    map[string]any{"type": "string", "maxLength": 180},
+								},
+								"expected_artifacts": map[string]any{
+									"type":     "array",
+									"maxItems": 6,
+									"items":    map[string]any{"type": "string", "maxLength": 160},
+								},
+								"action": map[string]any{
+									"type":                 "object",
+									"additionalProperties": false,
+									"required":             []string{"type"},
+									"properties": map[string]any{
+										"type":            map[string]any{"type": "string", "enum": []string{"assist", "command", "shell"}},
+										"prompt":          map[string]any{"type": "string", "maxLength": 800},
+										"command":         map[string]any{"type": "string", "maxLength": 128},
+										"args":            map[string]any{"type": "array", "maxItems": 24, "items": map[string]any{"type": "string", "maxLength": 256}},
+										"working_dir":     map[string]any{"type": "string", "maxLength": 256},
+										"timeout_seconds": map[string]any{"type": "integer"},
+									},
+								},
+								"budget": map[string]any{
+									"type":                 "object",
+									"additionalProperties": false,
+									"required":             []string{"max_steps", "max_tool_calls", "max_runtime_seconds"},
+									"properties": map[string]any{
+										"max_steps":           map[string]any{"type": "integer"},
+										"max_tool_calls":      map[string]any{"type": "integer"},
+										"max_runtime_seconds": map[string]any{"type": "integer"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
 	}
 }
 

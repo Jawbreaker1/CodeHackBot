@@ -161,9 +161,17 @@ func memoryKnownFacts(plan RunPlan, findings []Finding) []string {
 		fmt.Sprintf("Goal: %s", plan.Metadata.NormalizedGoal),
 		fmt.Sprintf("Planner decision: %s", plan.Metadata.PlannerDecision),
 	}
+	verifiedCount := 0
 	for _, finding := range findings {
+		if !findingIsVerified(finding) {
+			continue
+		}
+		verifiedCount++
 		entry := fmt.Sprintf("%s | %s | %s | confidence=%s", finding.TaskID, strings.TrimSpace(finding.Target), strings.TrimSpace(finding.Title), strings.TrimSpace(finding.Confidence))
 		facts = append(facts, strings.TrimSpace(entry))
+	}
+	if verifiedCount == 0 {
+		facts = append(facts, "No verified findings yet.")
 	}
 	return dedupeStrings(facts)
 }

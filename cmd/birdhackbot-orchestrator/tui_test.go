@@ -42,6 +42,7 @@ func TestParseTUICommand(t *testing.T) {
 		{in: "log up 3", name: "log"},
 		{in: "log down", name: "log"},
 		{in: "approve apr-1 task ok", name: "approve"},
+		{in: "approve-all session ok", name: "approve_all"},
 		{in: "deny apr-2 nope", name: "deny"},
 		{in: "stop", name: "stop"},
 	}
@@ -343,6 +344,53 @@ func TestExecuteTUICommandApproveDenyStop(t *testing.T) {
 	}
 	if !hasEvent(events, orchestrator.EventTypeOperatorInstruction) {
 		t.Fatalf("expected operator_instruction event")
+	}
+}
+
+func TestExecuteTUICommandApproveAll(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-tui-exec-approve-all"
+	manager := orchestrator.NewManager(base)
+	if _, err := orchestrator.EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	if err := manager.EmitEvent(runID, "orchestrator", "", orchestrator.EventTypeRunStarted, map[string]any{
+		"source": "test",
+	}); err != nil {
+		t.Fatalf("EmitEvent run_started: %v", err)
+	}
+	if err := manager.EmitEvent(runID, "orchestrator", "t1", orchestrator.EventTypeApprovalRequested, map[string]any{
+		"approval_id": "apr-all-1",
+		"tier":        string(orchestrator.RiskActiveProbe),
+		"reason":      "requires approval",
+		"expires_at":  time.Now().Add(time.Minute).UTC().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("EmitEvent approval requested t1: %v", err)
+	}
+	if err := manager.EmitEvent(runID, "orchestrator", "t2", orchestrator.EventTypeApprovalRequested, map[string]any{
+		"approval_id": "apr-all-2",
+		"tier":        string(orchestrator.RiskActiveProbe),
+		"reason":      "requires approval",
+		"expires_at":  time.Now().Add(time.Minute).UTC().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("EmitEvent approval requested t2: %v", err)
+	}
+
+	scroll := 0
+	done, log := executeTUICommand(manager, runID, nil, tuiCommand{name: "approve_all", scope: "task", reason: "authorized"}, &scroll)
+	if done {
+		t.Fatalf("expected approve-all to keep tui open")
+	}
+	if !strings.Contains(log, "approved 2 pending approval(s)") {
+		t.Fatalf("unexpected approve-all log: %q", log)
+	}
+
+	pending, err := manager.PendingApprovals(runID)
+	if err != nil {
+		t.Fatalf("PendingApprovals: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("expected no pending approvals after approve-all, got %d", len(pending))
 	}
 }
 
@@ -758,6 +806,46 @@ func TestFormatProgressSummary(t *testing.T) {
 	want := "step 3 | enumerating services | tools:5"
 	if got != want {
 		t.Fatalf("unexpected summary: got %q want %q", got, want)
+	}
+}
+
+func TestFormatTaskDisplayName(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		taskID string
+		title  string
+		want   string
+	}{
+		{
+			name:   "id and title",
+			taskID: "T-006",
+			title:  "Extract ZIP Contents",
+			want:   "T-006 Extract ZIP Contents",
+		},
+		{
+			name:   "id only",
+			taskID: "T-006",
+			title:  "",
+			want:   "T-006",
+		},
+		{
+			name:   "title only",
+			taskID: "",
+			title:  "Extract ZIP Contents",
+			want:   "Extract ZIP Contents",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := formatTaskDisplayName(tc.taskID, tc.title); got != tc.want {
+				t.Fatalf("formatTaskDisplayName(%q, %q) = %q, want %q", tc.taskID, tc.title, got, tc.want)
+			}
+		})
 	}
 }
 

@@ -236,7 +236,7 @@ func runBenchmarkWith(args []string, stdout, stderr io.Writer, signalCtx context
 	fs.StringVar(&workerCmd, "worker-cmd", "", "worker command to launch for each task")
 	fs.Var(&workerArgs, "worker-arg", "worker argument (repeatable)")
 	fs.Var(&workerEnv, "worker-env", "worker environment variable KEY=VALUE (repeatable)")
-	fs.StringVar(&plannerMode, "planner", "static", "default planner mode for scenarios without override: static|llm|auto")
+	fs.StringVar(&plannerMode, "planner", "auto", "default planner mode for scenarios without override: auto|llm|static (static must be explicitly selected)")
 	fs.StringVar(&permissionMode, "permissions", string(orchestrator.PermissionDefault), "default permission mode for scenarios without override: readonly|default|all")
 	fs.Var(&scenarioFilter, "scenario", "scenario id filter (repeatable)")
 	fs.IntVar(&repeat, "repeat", 5, "number of runs per scenario")

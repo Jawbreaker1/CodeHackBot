@@ -132,7 +132,7 @@ func TestAssembleRunReportIncludesFindingsAndArtifactLinks(t *testing.T) {
 	if !strings.Contains(content, "nmap output") || !strings.Contains(content, "sessions/run-report-1/logs/nmap.log") {
 		t.Fatalf("missing artifact info:\n%s", content)
 	}
-	if !strings.Contains(content, "orchestrator/artifact/e-artifact.json") {
+	if !strings.Contains(content, "artifact/e-artifact.json") {
 		t.Fatalf("missing artifact record path:\n%s", content)
 	}
 }
@@ -413,6 +413,186 @@ func TestAssembleRunReportQualityNetworkAndWebArtifacts(t *testing.T) {
 	}
 	if !strings.Contains(content, "sessions/run-report-quality/logs/nmap.log") || !strings.Contains(content, "sessions/run-report-quality/logs/web.log") {
 		t.Fatalf("expected network + web log links in report:\n%s", content)
+	}
+}
+
+func TestAssembleRunReportIncludesExecutionNarrative(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-report-narrative"
+	manager := NewManager(base)
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	planPath := filepath.Join(base, "plan.json")
+	plan := RunPlan{
+		RunID:           runID,
+		Scope:           Scope{Targets: []string{"127.0.0.1"}},
+		Constraints:     []string{"internal_only"},
+		SuccessCriteria: []string{"report_done"},
+		StopCriteria:    []string{"manual_stop"},
+		MaxParallelism:  2,
+		Metadata: PlanMetadata{
+			Goal: "Recover password from local encrypted archive and report outcome",
+		},
+		Tasks: []TaskSpec{
+			{
+				TaskID:            "t1",
+				Title:             "Prepare archive metadata",
+				Goal:              "Collect ZIP metadata.",
+				DoneWhen:          []string{"metadata captured"},
+				FailWhen:          []string{"metadata collection failed"},
+				ExpectedArtifacts: []string{"zipinfo_verbose.txt"},
+				RiskLevel:         "recon_readonly",
+				Action: TaskAction{
+					Type:    "command",
+					Command: "bash",
+					Args:    []string{"-lc", "zipinfo -v secret.zip > zipinfo_verbose.txt"},
+				},
+				Budget: TaskBudget{MaxSteps: 2, MaxToolCalls: 2, MaxRuntime: time.Minute},
+			},
+			{
+				TaskID:            "t2",
+				Title:             "Attempt password recovery",
+				Goal:              "Recover ZIP password.",
+				DependsOn:         []string{"t1"},
+				DoneWhen:          []string{"password recovered"},
+				FailWhen:          []string{"password recovery failed"},
+				ExpectedArtifacts: []string{"recovered_password.txt"},
+				RiskLevel:         "active_probe",
+				Action: TaskAction{
+					Type:    "command",
+					Command: "bash",
+					Args:    []string{"-lc", "echo attempt > recovered_password.txt"},
+				},
+				Budget: TaskBudget{MaxSteps: 2, MaxToolCalls: 2, MaxRuntime: time.Minute},
+			},
+		},
+	}
+	if err := WriteJSONAtomic(planPath, plan); err != nil {
+		t.Fatalf("WriteJSONAtomic plan: %v", err)
+	}
+	if _, err := manager.Start(planPath, ""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	now := time.Now().UTC()
+	append := func(event EventEnvelope) {
+		if err := AppendEventJSONL(manager.eventPath(runID), event); err != nil {
+			t.Fatalf("append event %s: %v", event.Type, err)
+		}
+	}
+	append(EventEnvelope{
+		EventID:  "e-t1-start",
+		RunID:    runID,
+		WorkerID: "worker-t1",
+		TaskID:   "t1",
+		Seq:      1,
+		TS:       now,
+		Type:     EventTypeTaskStarted,
+		Payload:  mustJSONRaw(map[string]any{"attempt": 1, "worker_id": "worker-t1", "goal": "Collect ZIP metadata."}),
+	})
+	append(EventEnvelope{
+		EventID:  "e-t1-progress",
+		RunID:    runID,
+		WorkerID: "worker-t1",
+		TaskID:   "t1",
+		Seq:      2,
+		TS:       now.Add(20 * time.Millisecond),
+		Type:     EventTypeTaskProgress,
+		Payload: mustJSONRaw(map[string]any{
+			"message": "executing action command",
+			"command": "bash",
+			"args":    []any{"-lc", "zipinfo -v secret.zip > zipinfo_verbose.txt"},
+		}),
+	})
+	append(EventEnvelope{
+		EventID:  "e-t1-art",
+		RunID:    runID,
+		WorkerID: "worker-t1",
+		TaskID:   "t1",
+		Seq:      3,
+		TS:       now.Add(30 * time.Millisecond),
+		Type:     EventTypeTaskArtifact,
+		Payload: mustJSONRaw(map[string]any{
+			"type":  "derived_command_output",
+			"title": "zip metadata",
+			"path":  "sessions/run-report-narrative/artifacts/zipinfo_verbose.txt",
+		}),
+	})
+	append(EventEnvelope{
+		EventID:  "e-t1-complete",
+		RunID:    runID,
+		WorkerID: "worker-t1",
+		TaskID:   "t1",
+		Seq:      4,
+		TS:       now.Add(40 * time.Millisecond),
+		Type:     EventTypeTaskCompleted,
+		Payload: mustJSONRaw(map[string]any{
+			"attempt":   1,
+			"worker_id": "worker-t1",
+			"reason":    "action_completed",
+			"completion_contract": map[string]any{
+				"produced_artifacts": []any{"sessions/run-report-narrative/artifacts/zipinfo_verbose.txt"},
+			},
+		}),
+	})
+	append(EventEnvelope{
+		EventID:  "e-t2-start",
+		RunID:    runID,
+		WorkerID: "worker-t2",
+		TaskID:   "t2",
+		Seq:      1,
+		TS:       now.Add(time.Second),
+		Type:     EventTypeTaskStarted,
+		Payload:  mustJSONRaw(map[string]any{"attempt": 1, "worker_id": "worker-t2"}),
+	})
+	append(EventEnvelope{
+		EventID:  "e-t2-fail",
+		RunID:    runID,
+		WorkerID: "worker-t2",
+		TaskID:   "t2",
+		Seq:      2,
+		TS:       now.Add(1200 * time.Millisecond),
+		Type:     EventTypeTaskFailed,
+		Payload: mustJSONRaw(map[string]any{
+			"attempt":   1,
+			"worker_id": "worker-t2",
+			"reason":    WorkerFailureCommandFailed,
+			"error":     "command exited with status 1",
+		}),
+	})
+
+	reportPath, err := manager.AssembleRunReport(runID, "")
+	if err != nil {
+		t.Fatalf("AssembleRunReport: %v", err)
+	}
+	data, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "## Plan Overview") {
+		t.Fatalf("expected plan overview section:\n%s", content)
+	}
+	if !strings.Contains(content, "## Execution Narrative") {
+		t.Fatalf("expected execution narrative section:\n%s", content)
+	}
+	if !strings.Contains(content, "Recover password from local encrypted archive and report outcome") {
+		t.Fatalf("expected objective in report:\n%s", content)
+	}
+	if !strings.Contains(content, "### `t1` Prepare archive metadata") {
+		t.Fatalf("expected t1 narrative section:\n%s", content)
+	}
+	if !strings.Contains(content, "Outcome: `completed (action_completed)`") {
+		t.Fatalf("expected completed task outcome in narrative:\n%s", content)
+	}
+	if !strings.Contains(content, "### `t2` Attempt password recovery") {
+		t.Fatalf("expected t2 narrative section:\n%s", content)
+	}
+	if !strings.Contains(content, "Outcome: `command_failed: command exited with status 1`") {
+		t.Fatalf("expected failed task outcome in narrative:\n%s", content)
 	}
 }
 

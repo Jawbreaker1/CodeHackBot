@@ -115,3 +115,35 @@ func TestLMStudioClientChatAllEndpointsFail(t *testing.T) {
 		t.Fatalf("expected aggregated endpoint error, got: %v", err)
 	}
 }
+
+func TestLMStudioClientChatCapturesFinishReason(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{
+					"message":       map[string]any{"role": "assistant", "content": "{\"tasks\":[]}"},
+					"finish_reason": "length",
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	cfg := config.Config{}
+	cfg.LLM.BaseURL = server.URL + "/v1"
+	cfg.LLM.Model = "qwen/qwen3-coder-30b"
+	cfg.LLM.TimeoutSeconds = 10
+	client := NewLMStudioClient(cfg)
+
+	resp, err := client.Chat(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Content: "ping"}},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if resp.FinishReason != "length" {
+		t.Fatalf("expected finish reason length, got %q", resp.FinishReason)
+	}
+}

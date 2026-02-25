@@ -90,10 +90,16 @@ func TestIsNoNewEvidenceCandidateShellScripts(t *testing.T) {
 			want:    false,
 		},
 		{
-			name:    "non-network non-script command",
+			name:    "list dir builtin",
 			command: "list_dir",
 			args:    []string{"."},
-			want:    false,
+			want:    true,
+		},
+		{
+			name:    "read file builtin",
+			command: "read_file",
+			args:    []string{"secret.zip"},
+			want:    true,
 		},
 	}
 

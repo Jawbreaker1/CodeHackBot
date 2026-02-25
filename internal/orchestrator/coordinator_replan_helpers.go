@@ -156,6 +156,84 @@ func payloadStringSlice(value any) []string {
 	}
 }
 
+func (c *Coordinator) shouldPromoteAssistLoopExecutionFailure(taskID, eventID string, events []EventEnvelope, idx int) bool {
+	taskID = strings.TrimSpace(taskID)
+	eventID = strings.TrimSpace(eventID)
+	if taskID == "" || eventID == "" {
+		return false
+	}
+	if !hasRepeatedTaskFailureReason(events, taskID, WorkerFailureAssistLoopDetected) {
+		return false
+	}
+	if hasLaterTaskFailureReasonEvent(events, taskID, WorkerFailureAssistLoopDetected, idx) {
+		return false
+	}
+	state, ok := c.scheduler.State(taskID)
+	if !ok || state != TaskStateFailed {
+		return false
+	}
+	task, ok := c.scheduler.Task(taskID)
+	if !ok {
+		loaded, err := c.manager.ReadTask(c.runID, taskID)
+		if err != nil {
+			return false
+		}
+		task = loaded
+	}
+	return strings.EqualFold(strings.TrimSpace(task.Strategy), "recon_seed")
+}
+
+func hasLaterTaskFailureReasonEvent(events []EventEnvelope, taskID, reason string, idx int) bool {
+	taskID = strings.TrimSpace(taskID)
+	reason = strings.TrimSpace(reason)
+	if taskID == "" || reason == "" {
+		return false
+	}
+	if idx < 0 {
+		idx = -1
+	}
+	for i := len(events) - 1; i > idx; i-- {
+		event := events[i]
+		if event.Type != EventTypeTaskFailed || event.TaskID != taskID {
+			continue
+		}
+		payload := map[string]any{}
+		if len(event.Payload) > 0 {
+			_ = json.Unmarshal(event.Payload, &payload)
+		}
+		if strings.TrimSpace(toString(payload["reason"])) == reason {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Coordinator) shouldRewireAssistLoopSeedDependencies(trigger string, source EventEnvelope) bool {
+	if strings.TrimSpace(trigger) != "execution_failure" {
+		return false
+	}
+	taskID := strings.TrimSpace(source.TaskID)
+	if taskID == "" {
+		return false
+	}
+	payload := map[string]any{}
+	if len(source.Payload) > 0 {
+		_ = json.Unmarshal(source.Payload, &payload)
+	}
+	if strings.TrimSpace(toString(payload["reason"])) != WorkerFailureAssistLoopDetected {
+		return false
+	}
+	task, ok := c.scheduler.Task(taskID)
+	if !ok {
+		loaded, err := c.manager.ReadTask(c.runID, taskID)
+		if err != nil {
+			return false
+		}
+		task = loaded
+	}
+	return strings.EqualFold(strings.TrimSpace(task.Strategy), "recon_seed")
+}
+
 func (c *Coordinator) runScopeTargets() []string {
 	plan, err := c.manager.LoadRunPlan(c.runID)
 	if err != nil {

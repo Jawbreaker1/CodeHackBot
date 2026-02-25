@@ -82,6 +82,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runApprovals(rest[1:], stdout, stderr)
 	case "approve":
 		return runApprove(rest[1:], stdout, stderr)
+	case "approve-all":
+		return runApproveAll(rest[1:], stdout, stderr)
 	case "deny":
 		return runDeny(rest[1:], stdout, stderr)
 	case "worker-stop":
@@ -149,7 +151,7 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 	fs.Var(&stopCriteria, "stop-criterion", "stop criterion (repeatable)")
 	fs.StringVar(&planReviewRaw, "plan-review", "approve", "goal plan decision: approve|reject|edit|regenerate")
 	fs.StringVar(&planReviewRationale, "plan-review-rationale", "", "planner decision rationale for audit trail")
-	fs.StringVar(&plannerModeRaw, "planner", "static", "planner mode for --goal runs: static|llm|auto")
+	fs.StringVar(&plannerModeRaw, "planner", "auto", "planner mode for --goal runs: auto|llm|static (static must be explicitly selected)")
 	fs.IntVar(&regenerateCount, "plan-regenerate-count", 1, "number of regeneration attempts when --plan-review=regenerate")
 	fs.IntVar(&maxParallelism, "max-parallelism", 1, "max worker parallelism for goal-seeded runs")
 	fs.DurationVar(&tick, "tick", 250*time.Millisecond, "coordinator tick interval")
@@ -254,6 +256,7 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 			context.Background(),
 			plannerMode,
 			workerConfigPath,
+			resolvedSessionsDir,
 			runID,
 			goal,
 			scope,
@@ -275,6 +278,7 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 					context.Background(),
 					plannerMode,
 					workerConfigPath,
+					resolvedSessionsDir,
 					runID,
 					goal,
 					scope,

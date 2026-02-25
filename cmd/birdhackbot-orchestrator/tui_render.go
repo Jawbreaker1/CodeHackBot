@@ -81,7 +81,7 @@ func renderTUI(out io.Writer, runID string, snap tuiSnapshot, messages []string,
 			if progress == "" {
 				progress = "started; waiting for progress update"
 			}
-			left = append(left, fmt.Sprintf("  - Current: %s | %s", task.TaskID, progress))
+			left = append(left, fmt.Sprintf("  - Current: %s | %s", formatTaskDisplayName(task.TaskID, task.Title), progress))
 		}
 	}
 	left = append(left, "  - Next planned steps:")
@@ -94,7 +94,7 @@ func renderTUI(out io.Writer, runID string, snap tuiSnapshot, messages []string,
 		if row.State == "completed" || row.State == "failed" || row.State == "canceled" {
 			continue
 		}
-		left = append(left, fmt.Sprintf("    %d) %s [%s]", nextCount+1, task.Title, row.State))
+		left = append(left, fmt.Sprintf("    %d) %s [%s]", nextCount+1, formatTaskDisplayName(task.TaskID, task.Title), row.State))
 		nextCount++
 		if nextCount >= 4 {
 			break
@@ -114,7 +114,7 @@ func renderTUI(out io.Writer, runID string, snap tuiSnapshot, messages []string,
 			if ok {
 				state = row.State
 			}
-			left = append(left, fmt.Sprintf("  %d. %s %s", i+1, stepMarker(state), task.Title))
+			left = append(left, fmt.Sprintf("  %d. %s %s", i+1, stepMarker(state), formatTaskDisplayName(task.TaskID, task.Title)))
 			if state == "running" || state == "leased" || state == "awaiting_approval" {
 				if progress := formatProgressSummary(snap.progress[task.TaskID]); progress != "" {
 					left = append(left, "     now: "+progress)
@@ -156,7 +156,7 @@ func renderTUI(out io.Writer, runID string, snap tuiSnapshot, messages []string,
 			if strings.TrimSpace(strategy) == "" {
 				strategy = "-"
 			}
-			left = append(left, fmt.Sprintf("  - %s [%s] worker=%s strategy=%s%s", task.TaskID, task.State, worker, strategy, dynamic))
+			left = append(left, fmt.Sprintf("  - %s [%s] worker=%s strategy=%s%s", formatTaskDisplayName(task.TaskID, task.Title), task.State, worker, strategy, dynamic))
 		}
 	}
 	left = append(left, "")
@@ -165,8 +165,20 @@ func renderTUI(out io.Writer, runID string, snap tuiSnapshot, messages []string,
 		left = append(left, "  (none)")
 	} else {
 		for _, approval := range snap.approvals {
-			left = append(left, fmt.Sprintf("  - %s | task=%s | tier=%s | %s", approval.ApprovalID, approval.TaskID, approval.RiskTier, approval.Reason))
+			taskLabel := approval.TaskID
+			if title := strings.TrimSpace(approval.TaskTitle); title != "" {
+				taskLabel = fmt.Sprintf("%s (%s)", approval.TaskID, title)
+			}
+			left = append(left, fmt.Sprintf("  - %s | task=%s | tier=%s", approval.ApprovalID, taskLabel, approval.RiskTier))
+			if goal := strings.TrimSpace(approval.TaskGoal); goal != "" {
+				left = append(left, "    goal: "+goal)
+			}
+			if len(approval.TaskTargets) > 0 {
+				left = append(left, "    targets: "+strings.Join(approval.TaskTargets, ", "))
+			}
+			left = append(left, "    why: "+approvalWhyText(approval))
 		}
+		left = append(left, fmt.Sprintf("  approve all: birdhackbot-orchestrator approve-all --sessions-dir sessions --run %s --scope task --reason \"authorized\"", runID))
 	}
 	left = append(left, "")
 	left = append(left, "Last Failure:")
@@ -249,4 +261,17 @@ func fitLine(line string, width int) string {
 		return string(runes) + strings.Repeat(" ", max-len(runes))
 	}
 	return string(runes)
+}
+
+func formatTaskDisplayName(taskID, title string) string {
+	id := strings.TrimSpace(taskID)
+	taskTitle := strings.TrimSpace(title)
+	switch {
+	case id == "":
+		return taskTitle
+	case taskTitle == "":
+		return id
+	default:
+		return id + " " + taskTitle
+	}
 }

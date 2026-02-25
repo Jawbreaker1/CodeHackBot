@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -177,7 +178,7 @@ func (c *Coordinator) handleEventDrivenReplanTriggers() error {
 			}
 		}
 	}
-	for _, event := range events {
+	for idx, event := range events {
 		if _, seen := c.seenReplanSourceEvents[event.EventID]; seen {
 			continue
 		}
@@ -196,6 +197,10 @@ func (c *Coordinator) handleEventDrivenReplanTriggers() error {
 				trigger = "worker_recovery"
 			case WorkerFailureCommandFailed, WorkerFailureCommandTimeout, WorkerFailureAssistTimeout, WorkerFailureAssistUnavailable, WorkerFailureAssistParseFailure:
 				trigger = "execution_failure"
+			case WorkerFailureAssistLoopDetected:
+				if c.shouldPromoteAssistLoopExecutionFailure(event.TaskID, event.EventID, events, idx) {
+					trigger = "execution_failure"
+				}
 			case "budget_exhausted":
 				trigger = "budget_exhausted"
 			}
@@ -312,5 +317,100 @@ func (c *Coordinator) maybeMutateTaskGraph(trigger string, source EventEnvelope,
 	out["mutation_status"] = "task_added"
 	out["added_task_id"] = task.TaskID
 	out["added_task_strategy"] = task.Strategy
+	if c.shouldRewireAssistLoopSeedDependencies(trigger, source) {
+		rewiredTaskIDs, err := c.rewireDependentTasksForRecovery(source.TaskID, task.TaskID)
+		if err != nil {
+			out["dependency_rewire_status"] = "failed"
+			out["dependency_rewire_error"] = err.Error()
+		} else if len(rewiredTaskIDs) > 0 {
+			out["dependency_rewire_status"] = "updated"
+			out["dependency_rewire_source_task"] = source.TaskID
+			out["dependency_rewire_task_ids"] = rewiredTaskIDs
+		}
+	}
 	return out
+}
+
+func (c *Coordinator) rewireDependentTasksForRecovery(sourceTaskID, replacementTaskID string) ([]string, error) {
+	sourceTaskID = strings.TrimSpace(sourceTaskID)
+	replacementTaskID = strings.TrimSpace(replacementTaskID)
+	if sourceTaskID == "" || replacementTaskID == "" || sourceTaskID == replacementTaskID {
+		return nil, nil
+	}
+	plan, err := c.manager.LoadRunPlan(c.runID)
+	if err != nil {
+		return nil, err
+	}
+	rewired := make([]string, 0)
+	updatedTasks := map[string]TaskSpec{}
+	for idx := range plan.Tasks {
+		task := plan.Tasks[idx]
+		if task.TaskID == sourceTaskID || task.TaskID == replacementTaskID {
+			continue
+		}
+		if !taskDependsOn(task, sourceTaskID) {
+			continue
+		}
+		deps := make([]string, 0, len(task.DependsOn)+1)
+		hasReplacement := false
+		for _, dep := range task.DependsOn {
+			dep = strings.TrimSpace(dep)
+			if dep == "" || dep == sourceTaskID {
+				continue
+			}
+			if dep == replacementTaskID {
+				hasReplacement = true
+			}
+			deps = append(deps, dep)
+		}
+		if !hasReplacement {
+			deps = append(deps, replacementTaskID)
+		}
+		task.DependsOn = deps
+		plan.Tasks[idx] = task
+		updatedTasks[task.TaskID] = task
+		rewired = append(rewired, task.TaskID)
+	}
+	if len(rewired) == 0 {
+		return nil, nil
+	}
+	if err := ValidateRunPlan(plan); err != nil {
+		return nil, err
+	}
+	taskGraph := make(map[string]TaskSpec, len(c.scheduler.tasks))
+	for taskID, task := range c.scheduler.tasks {
+		if updated, ok := updatedTasks[taskID]; ok {
+			taskGraph[taskID] = updated
+			continue
+		}
+		taskGraph[taskID] = task
+	}
+	if err := validateAcyclic(taskGraph); err != nil {
+		return nil, err
+	}
+	planPath := filepath.Join(BuildRunPaths(c.manager.SessionsDir, c.runID).PlanDir, "plan.json")
+	if err := WriteJSONAtomic(planPath, plan); err != nil {
+		return nil, err
+	}
+	for taskID, task := range updatedTasks {
+		if err := c.manager.WriteTask(c.runID, task); err != nil {
+			return nil, err
+		}
+		c.scheduler.tasks[taskID] = task
+	}
+	sort.Strings(rewired)
+	return rewired, nil
+}
+
+func taskDependsOn(task TaskSpec, dep string) bool {
+	dep = strings.TrimSpace(dep)
+	if dep == "" {
+		return false
+	}
+	for _, current := range task.DependsOn {
+		if strings.TrimSpace(current) == dep {
+			return true
+		}
+	}
+	return false
 }

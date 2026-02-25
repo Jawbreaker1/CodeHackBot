@@ -47,6 +47,9 @@ func TestScopePolicyValidateCommandTargets(t *testing.T) {
 	if err := policy.ValidateCommandTargets("curl", []string{"https://www.systemverification.com/about"}); err != nil {
 		t.Fatalf("expected allowed hostname extracted from URL, got %v", err)
 	}
+	if err := policy.ValidateCommandTargets("bash", []string{"-lc", "(curl -k -I https://www.systemverification.com || curl -I http://www.systemverification.com)"}); err != nil {
+		t.Fatalf("expected allowed hostname extraction from wrapped command with punctuation, got %v", err)
+	}
 	if err := policy.ValidateCommandTargets("nmap", []string{"-sV", "10.0.0.8"}); err == nil {
 		t.Fatalf("expected out-of-scope command target violation")
 	}

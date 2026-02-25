@@ -97,6 +97,12 @@ func TestManagerIngestEvidenceWritesArtifactAndFinding(t *testing.T) {
 	if finding.Target != "192.168.50.20" {
 		t.Fatalf("unexpected finding target: %+v", finding)
 	}
+	if finding.State != FindingStateCandidate {
+		t.Fatalf("expected default finding state %q, got %q", FindingStateCandidate, finding.State)
+	}
+	if finding.Metadata["finding_state"] != FindingStateCandidate {
+		t.Fatalf("expected finding_state metadata %q, got %q", FindingStateCandidate, finding.Metadata["finding_state"])
+	}
 	if finding.Metadata["dedupe_key"] == "" {
 		t.Fatalf("expected dedupe key in finding metadata")
 	}
@@ -270,5 +276,66 @@ func TestManagerIngestEvidenceRetainsConflictingEvidenceBySourceAndConfidence(t 
 	}
 	if len(finding.Conflicts) == 0 {
 		t.Fatalf("expected conflict records to be retained")
+	}
+}
+
+func TestManagerIngestEvidenceResolvesFindingLifecycleState(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-evidence-state-resolution"
+	manager := NewManager(base)
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	now := time.Now().UTC()
+	appendFindingEvent := func(eventID string, seq int64, state string) {
+		t.Helper()
+		if err := AppendEventJSONL(manager.eventPath(runID), EventEnvelope{
+			EventID:  eventID,
+			RunID:    runID,
+			WorkerID: "worker-1",
+			TaskID:   "task-1",
+			Seq:      seq,
+			TS:       now.Add(time.Duration(seq) * time.Second),
+			Type:     EventTypeTaskFinding,
+			Payload: mustJSONRaw(map[string]any{
+				"target":       "192.168.50.22",
+				"finding_type": "web_vuln",
+				"title":        "Lifecycle state conflict",
+				"location":     "/admin",
+				"state":        state,
+				"evidence":     []any{"state=" + state},
+			}),
+		}); err != nil {
+			t.Fatalf("append finding event %s: %v", eventID, err)
+		}
+	}
+	appendFindingEvent("e-candidate", 1, FindingStateCandidate)
+	appendFindingEvent("e-rejected", 2, FindingStateRejected)
+
+	if _, err := manager.IngestEvidence(runID); err != nil {
+		t.Fatalf("IngestEvidence: %v", err)
+	}
+	findingFiles, err := filepath.Glob(filepath.Join(BuildRunPaths(base, runID).FindingDir, "*.json"))
+	if err != nil {
+		t.Fatalf("glob finding files: %v", err)
+	}
+	if len(findingFiles) != 1 {
+		t.Fatalf("expected 1 finding file, got %d", len(findingFiles))
+	}
+	data, err := os.ReadFile(findingFiles[0])
+	if err != nil {
+		t.Fatalf("read finding file: %v", err)
+	}
+	var finding Finding
+	if err := json.Unmarshal(data, &finding); err != nil {
+		t.Fatalf("unmarshal finding: %v", err)
+	}
+	if finding.State != FindingStateRejected {
+		t.Fatalf("expected merged state %q, got %q", FindingStateRejected, finding.State)
+	}
+	if finding.Metadata["finding_state"] != FindingStateRejected {
+		t.Fatalf("expected finding_state metadata %q, got %q", FindingStateRejected, finding.Metadata["finding_state"])
 	}
 }

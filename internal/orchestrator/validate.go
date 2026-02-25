@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -112,6 +113,9 @@ func ValidateTaskSpec(task TaskSpec) error {
 			if strings.TrimSpace(task.Action.Command) == "" {
 				return fmt.Errorf("%w: action.command is required when action is set", ErrInvalidTask)
 			}
+			if err := validateShellWrapperCommandBody(task.Action.Command, task.Action.Args); err != nil {
+				return err
+			}
 		case "assist":
 			if strings.TrimSpace(task.Action.Command) != "" || len(task.Action.Args) > 0 {
 				return fmt.Errorf("%w: assist action cannot set command/args", ErrInvalidTask)
@@ -121,6 +125,68 @@ func ValidateTaskSpec(task TaskSpec) error {
 		}
 	}
 	return nil
+}
+
+func validateShellWrapperCommandBody(command string, args []string) error {
+	base := strings.ToLower(strings.TrimSpace(filepath.Base(command)))
+	if base != "bash" && base != "sh" && base != "zsh" {
+		return nil
+	}
+	if len(args) == 0 {
+		return nil
+	}
+	mode := strings.TrimSpace(args[0])
+	if mode != "-c" && mode != "-lc" {
+		return nil
+	}
+	if len(args) < 2 || strings.TrimSpace(args[1]) == "" {
+		return fmt.Errorf("%w: action.args must include shell command body for %s %s", ErrInvalidTask, base, mode)
+	}
+	body := strings.TrimSpace(args[1])
+	if !hasBalancedShellQuotes(body) {
+		return fmt.Errorf("%w: action shell body appears malformed (unbalanced quotes)", ErrInvalidTask)
+	}
+	if strings.HasSuffix(body, "||") || strings.HasSuffix(body, "&&") || strings.HasSuffix(body, "|") {
+		return fmt.Errorf("%w: action shell body appears malformed (dangling operator)", ErrInvalidTask)
+	}
+	return nil
+}
+
+func hasBalancedShellQuotes(body string) bool {
+	inSingle := false
+	inDouble := false
+	escaped := false
+	for _, r := range body {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if inSingle {
+			if r == '\'' {
+				inSingle = false
+			}
+			continue
+		}
+		if inDouble {
+			if r == '\\' {
+				escaped = true
+				continue
+			}
+			if r == '"' {
+				inDouble = false
+			}
+			continue
+		}
+		switch r {
+		case '\\':
+			escaped = true
+		case '\'':
+			inSingle = true
+		case '"':
+			inDouble = true
+		}
+	}
+	return !inSingle && !inDouble && !escaped
 }
 
 func ValidateTaskLease(lease TaskLease) error {

@@ -1481,6 +1481,133 @@ func TestCoordinator_ReplanTriggerExecutionFailure(t *testing.T) {
 	}
 }
 
+func TestCoordinator_RepeatedSeedAssistLoopPromotesAdaptiveReplanAndRewiresDependencies(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-coord-seed-assist-loop-replan"
+	manager := NewManager(base)
+	seed := task("task-recon-seed", nil, 100)
+	seed.Strategy = "recon_seed"
+	h01 := task("task-h01", []string{"task-recon-seed"}, 90)
+	h01.Strategy = "hypothesis_validate"
+	h02 := task("task-h02", []string{"task-recon-seed"}, 90)
+	h02.Strategy = "hypothesis_validate"
+	summary := task("task-plan-summary", []string{"task-recon-seed", "task-h01", "task-h02"}, 10)
+	summary.Strategy = "summarize_and_replan"
+	plan := RunPlan{
+		RunID:           runID,
+		Scope:           Scope{Targets: []string{"127.0.0.1"}},
+		Constraints:     []string{"local_only"},
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks:           []TaskSpec{seed, h01, h02, summary},
+	}
+	if _, err := manager.StartFromPlan(plan, ""); err != nil {
+		t.Fatalf("StartFromPlan: %v", err)
+	}
+	scheduler, err := NewScheduler(plan, 1)
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	workers := NewWorkerManager(manager)
+	coord, err := NewCoordinator(runID, plan.Scope, manager, workers, scheduler, 2, 2*time.Second, 4*time.Second, 3*time.Second, func(task TaskSpec, attempt int, workerID string) WorkerSpec {
+		return helperWorkerSpec(t, workerID, "ok")
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	if err := manager.EmitEvent(runID, "signal-seed-a1", "task-recon-seed", EventTypeTaskFailed, map[string]any{
+		"reason": WorkerFailureAssistLoopDetected,
+	}); err != nil {
+		t.Fatalf("EmitEvent task_failed a1: %v", err)
+	}
+	if err := scheduler.ForceState("task-recon-seed", TaskStateRunning); err != nil {
+		t.Fatalf("ForceState running a1: %v", err)
+	}
+	if err := coord.markFailedWithReplan("task-recon-seed", WorkerFailureAssistLoopDetected, true, map[string]any{
+		"reason": WorkerFailureAssistLoopDetected,
+	}); err != nil {
+		t.Fatalf("markFailedWithReplan a1: %v", err)
+	}
+	if state, _ := scheduler.State("task-recon-seed"); state != TaskStateQueued {
+		t.Fatalf("expected queued state after first assist loop retry, got %s", state)
+	}
+	if err := manager.EmitEvent(runID, "signal-seed-a2", "task-recon-seed", EventTypeTaskFailed, map[string]any{
+		"reason": WorkerFailureAssistLoopDetected,
+	}); err != nil {
+		t.Fatalf("EmitEvent task_failed a2: %v", err)
+	}
+	if err := scheduler.ForceState("task-recon-seed", TaskStateRunning); err != nil {
+		t.Fatalf("ForceState running a2: %v", err)
+	}
+	if err := coord.markFailedWithReplan("task-recon-seed", WorkerFailureAssistLoopDetected, false, map[string]any{
+		"reason": WorkerFailureAssistLoopDetected,
+	}); err != nil {
+		t.Fatalf("markFailedWithReplan a2: %v", err)
+	}
+	if state, _ := scheduler.State("task-recon-seed"); state != TaskStateFailed {
+		t.Fatalf("expected failed state after second assist loop, got %s", state)
+	}
+
+	if err := coord.handleEventDrivenReplanTriggers(); err != nil {
+		t.Fatalf("handleEventDrivenReplanTriggers: %v", err)
+	}
+
+	events, err := manager.Events(runID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	replanEvents := replanEventsByTrigger(events, "execution_failure")
+	if len(replanEvents) == 0 {
+		t.Fatalf("expected execution_failure replan event")
+	}
+	var addedTaskID string
+	var rewired []string
+	for _, evt := range replanEvents {
+		payload := map[string]any{}
+		if len(evt.Payload) > 0 {
+			_ = json.Unmarshal(evt.Payload, &payload)
+		}
+		if toString(payload["mutation_status"]) != "task_added" {
+			continue
+		}
+		addedTaskID = strings.TrimSpace(toString(payload["added_task_id"]))
+		if raw, ok := payload["dependency_rewire_task_ids"].([]any); ok {
+			for _, item := range raw {
+				value := strings.TrimSpace(toString(item))
+				if value != "" {
+					rewired = append(rewired, value)
+				}
+			}
+		}
+	}
+	if addedTaskID == "" {
+		t.Fatalf("expected task_added adaptive replan event")
+	}
+	if len(rewired) == 0 {
+		t.Fatalf("expected dependency rewiring metadata in replan payload")
+	}
+	if coord.Done() {
+		t.Fatalf("expected coordinator not done immediately after adaptive replan insertion")
+	}
+
+	for _, depTaskID := range []string{"task-h01", "task-h02", "task-plan-summary"} {
+		taskSpec, ok := scheduler.Task(depTaskID)
+		if !ok {
+			t.Fatalf("missing scheduler task %s", depTaskID)
+		}
+		if taskDependsOn(taskSpec, "task-recon-seed") {
+			t.Fatalf("expected %s to remove dependency on failed seed task", depTaskID)
+		}
+		if !taskDependsOn(taskSpec, addedTaskID) {
+			t.Fatalf("expected %s to depend on adaptive task %s", depTaskID, addedTaskID)
+		}
+	}
+}
+
 func TestCoordinator_AdaptiveReplanExecutionFailureDedupesRepeatedCommandFailed(t *testing.T) {
 	t.Parallel()
 

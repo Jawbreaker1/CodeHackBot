@@ -70,6 +70,7 @@ func planningInstructionToDraft(manager *orchestrator.Manager, runID, instructio
 			context.Background(),
 			plannerMode,
 			detectWorkerConfigPath(),
+			manager.SessionsDir,
 			runID,
 			trimmed,
 			scope,
@@ -106,7 +107,10 @@ func plannerModeForPlanMetadata(raw string) string {
 	case "auto":
 		return "auto"
 	default:
-		return "auto"
+		// TUI planning has no explicit --planner flag at command invocation time.
+		// Keep deterministic draft editing behavior by defaulting unknown/legacy
+		// planner metadata to static unless the run already requested llm/auto.
+		return "static"
 	}
 }
 

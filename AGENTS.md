@@ -1,16 +1,18 @@
 # Agent Directives
 
 ## Authorization & Scope
-- Authorized security testing only. Current scope is limited to Johan Engwall's closed lab systems on internal networks.
+- Authorized security testing only. Primary scope is Johan Engwall's closed lab systems on internal networks.
 - No customer or third-party testing until written authorization and RoE exist (owner/approver, storage location, in-scope/out-of-scope targets, allowed/prohibited actions, testing windows, escalation contacts).
-- Evidence collection is allowed only inside the lab and must use minimal, non-sensitive data; no data may leave the lab network.
+- Exception: publicly designated security-testing targets may be used only when explicitly listed in `docs/roe/public-test-targets.md` and only under that document's restrictions.
+- Evidence collection must use minimal, non-sensitive data and remain stored locally in this repo/workspace.
 
 ## Allowed & Prohibited Actions
 - Allowed: recon, scanning, controlled exploitation, and privilege escalation within scope to validate findings.
+- Public test target exception is non-intrusive only: passive recon and low-impact validation scans; no exploitation or authentication attempts.
 - Prohibited by default: DoS, persistence, and real data exfiltration. Any exception requires explicit opt-in and documented approval.
 
 ## Session Configuration & Safety
-- Every session must define target boundaries and enforce sandbox limits (internal networks only).
+- Every session must define target boundaries and enforce sandbox limits (internal networks by default; external targets only from the approved public-test allowlist).
 - Human oversight is required for risky steps (exploitation, escalation).
 - Kill-switch policy: CLI must honor Ctrl-C (SIGINT) and SIGTERM, terminate child processes safely, and emit an “aborted” report. Orchestrators must be able to broadcast a stop signal to all agents.
 - Executor permissions: default to approve-every-tool-use; allow explicit session-level overrides (e.g., full access) only inside the VM sandbox and with clear user acknowledgment.

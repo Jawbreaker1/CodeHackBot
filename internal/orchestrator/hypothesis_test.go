@@ -1,6 +1,9 @@
 package orchestrator
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestGenerateHypotheses_BoundedAndRanked(t *testing.T) {
 	t.Parallel()
@@ -53,5 +56,16 @@ func TestGenerateHypotheses_FallbackWhenNoKeywordMatch(t *testing.T) {
 	}
 	if out[0].Statement == "" {
 		t.Fatalf("expected non-empty fallback statement")
+	}
+}
+
+func TestGenerateHypotheses_DoesNotMatchPortInsideReport(t *testing.T) {
+	t.Parallel()
+
+	out := GenerateHypotheses("recover password for secret.zip and generate final report", Scope{Targets: []string{"127.0.0.1"}}, 5)
+	for _, hypothesis := range out {
+		if strings.Contains(strings.ToLower(hypothesis.Statement), "misconfigured ports") {
+			t.Fatalf("unexpected network-port hypothesis from goal text: %+v", hypothesis)
+		}
 	}
 }

@@ -24,7 +24,7 @@
       },
       "planner": {
         "temperature": 0.05,
-        "max_tokens": 1800
+        "max_tokens": 2800
       },
       "summarize": {
         "temperature": 0.1,

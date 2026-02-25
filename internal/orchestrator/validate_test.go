@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -139,5 +140,64 @@ func TestValidateTaskSpec_AssistActionRejectsCommandArgs(t *testing.T) {
 	}
 	if !errors.Is(err, ErrInvalidTask) {
 		t.Fatalf("expected ErrInvalidTask, got %v", err)
+	}
+}
+
+func TestValidateTaskSpec_RejectsMalformedShellWrapperBody(t *testing.T) {
+	t.Parallel()
+
+	task := TaskSpec{
+		TaskID:            "t1",
+		Goal:              "locate archive",
+		DoneWhen:          []string{"located"},
+		FailWhen:          []string{"not_found"},
+		ExpectedArtifacts: []string{"scan.log"},
+		RiskLevel:         "recon_readonly",
+		Action: TaskAction{
+			Type:    "command",
+			Command: "bash",
+			Args:    []string{"-lc", `find /tmp -name "secret.zip`},
+		},
+		Budget: TaskBudget{
+			MaxSteps:     1,
+			MaxToolCalls: 1,
+			MaxRuntime:   time.Second,
+		},
+	}
+	err := ValidateTaskSpec(task)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, ErrInvalidTask) {
+		t.Fatalf("expected ErrInvalidTask, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "unbalanced quotes") {
+		t.Fatalf("expected malformed quote detail, got %v", err)
+	}
+}
+
+func TestValidateTaskSpec_AllowsWellFormedShellWrapperBody(t *testing.T) {
+	t.Parallel()
+
+	task := TaskSpec{
+		TaskID:            "t1",
+		Goal:              "locate archive",
+		DoneWhen:          []string{"located"},
+		FailWhen:          []string{"not_found"},
+		ExpectedArtifacts: []string{"scan.log"},
+		RiskLevel:         "recon_readonly",
+		Action: TaskAction{
+			Type:    "command",
+			Command: "bash",
+			Args:    []string{"-lc", `find /tmp -name "secret.zip" -type f 2>/dev/null`},
+		},
+		Budget: TaskBudget{
+			MaxSteps:     1,
+			MaxToolCalls: 1,
+			MaxRuntime:   time.Second,
+		},
+	}
+	if err := ValidateTaskSpec(task); err != nil {
+		t.Fatalf("expected shell wrapper to validate, got %v", err)
 	}
 }

@@ -120,6 +120,8 @@ func isWeakReportSynthesisCommand(command string, args []string) bool {
 	switch base {
 	case "cat", "echo", "printf", "true", "false":
 		return true
+	case "report":
+		return true
 	case "nmap", "searchsploit", "msfconsole", "metasploit", "nikto", "nuclei", "curl", "wget", "nc", "netcat":
 		return true
 	case "python", "python3":
@@ -188,6 +190,7 @@ func buildReportSynthesisActionArgs(cfg WorkerRunConfig, task TaskSpec, target, 
 		reportSynthesisPythonScript,
 		cfg.RunID,
 		task.TaskID,
+		strings.TrimSpace(task.Goal),
 		strings.TrimSpace(target),
 		strings.TrimSpace(confidence),
 		strings.TrimSpace(source),
@@ -197,17 +200,19 @@ func buildReportSynthesisActionArgs(cfg WorkerRunConfig, task TaskSpec, target, 
 }
 
 const reportSynthesisPythonScript = `import datetime
+import json
 import os
 import re
 import sys
 
 run_id = sys.argv[1].strip() if len(sys.argv) > 1 else ""
 task_id = sys.argv[2].strip() if len(sys.argv) > 2 else ""
-target = sys.argv[3].strip() if len(sys.argv) > 3 else ""
-target_confidence = sys.argv[4].strip() if len(sys.argv) > 4 else ""
-target_source = sys.argv[5].strip() if len(sys.argv) > 5 else ""
-artifact_root = sys.argv[6].strip() if len(sys.argv) > 6 else ""
-deps = [value.strip() for value in sys.argv[7:] if value.strip()]
+task_goal = sys.argv[3].strip() if len(sys.argv) > 3 else ""
+target = sys.argv[4].strip() if len(sys.argv) > 4 else ""
+target_confidence = sys.argv[5].strip() if len(sys.argv) > 5 else ""
+target_source = sys.argv[6].strip() if len(sys.argv) > 6 else ""
+artifact_root = sys.argv[7].strip() if len(sys.argv) > 7 else ""
+deps = [value.strip() for value in sys.argv[8:] if value.strip()]
 
 if not deps and artifact_root and os.path.isdir(artifact_root):
     for name in sorted(os.listdir(artifact_root)):
@@ -230,6 +235,19 @@ def collect_files(root_dir, dep_ids):
     deduped = sorted(set(files))
     return deduped[:200]
 
+def collect_files_by_dep(root_dir, dep_ids):
+    out = {}
+    for dep in dep_ids:
+        dep_dir = os.path.join(root_dir, dep)
+        if not os.path.isdir(dep_dir):
+            continue
+        files = []
+        for walk_root, _, names in os.walk(dep_dir):
+            for name in sorted(names):
+                files.append(os.path.join(walk_root, name))
+        out[dep] = sorted(set(files))
+    return out
+
 def read_text(path, limit=262144):
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as handle:
@@ -237,24 +255,151 @@ def read_text(path, limit=262144):
     except Exception as err:
         return "read_error: %s" % err
 
+def rel_path(path):
+    if not artifact_root:
+        return path
+    try:
+        return os.path.relpath(path, artifact_root)
+    except Exception:
+        return path
+
+def load_json(path):
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            return json.load(handle)
+    except Exception:
+        return None
+
+def first_nonempty_line(text):
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line:
+            return line
+    return ""
+
+def normalize_target_tokens(raw_target):
+    tokens = set()
+    value = (raw_target or "").strip().lower()
+    if not value:
+        return tokens
+    tokens.add(value)
+    base = value.split("/")[0].strip()
+    if base:
+        tokens.add(base)
+    for prefix in ("http://", "https://"):
+        if base.startswith(prefix):
+            host = base[len(prefix):].split("/")[0].strip()
+            if host:
+                tokens.add(host)
+    if ":" in base and not re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", base):
+        host = base.split(":", 1)[0].strip()
+        if host:
+            tokens.add(host)
+    return tokens
+
+def cve_line_score(line, target_tokens, file_target_relevant):
+    lower = line.lower()
+    score = 0
+    confidence = "low"
+    vuln_markers = (
+        "vulnerable",
+        "vuln",
+        "exploit",
+        "exposed",
+        "nse:",
+        "state: vulnerable",
+        "host appears vulnerable",
+    )
+    for marker in vuln_markers:
+        if marker in lower:
+            score += 4
+            break
+    if file_target_relevant:
+        score += 2
+    if target_tokens and any(token and token in lower for token in target_tokens):
+        score += 2
+    if "nmap" in lower or "port " in lower or "/tcp" in lower or "/udp" in lower:
+        score += 1
+
+    cve_mentions = len(re.findall(r"\bCVE[-_ ]?\d{4}[-_]\d{4,}\b", line, re.IGNORECASE))
+    if cve_mentions >= 3:
+        score -= 3
+
+    noise_markers = (
+        "reference",
+        "references",
+        "advisory",
+        "bulletin",
+        "feed",
+        "cpe:",
+        "nvd.nist",
+        "mitre",
+        "cvss",
+        "vector:",
+        "https://",
+        "http://",
+    )
+    for marker in noise_markers:
+        if marker in lower:
+            score -= 2
+            break
+
+    if score >= 6:
+        confidence = "high"
+    elif score >= 3:
+        confidence = "medium"
+    return score, confidence
+
 def summarize_findings(paths):
     cve_pattern = re.compile(r"\bCVE[-_ ]?(\d{4})[-_](\d{4,})\b", re.IGNORECASE)
     findings = {}
+    target_tokens = normalize_target_tokens(target)
     for path in paths:
         text = read_text(path)
+        lower_text = text.lower()
+        lower_path = path.lower()
+        file_target_relevant = bool(target_tokens and any(token in lower_text or token in lower_path for token in target_tokens))
         for raw_line in text.splitlines():
             line = raw_line.strip()
             if not line:
                 continue
+            score, confidence = cve_line_score(line, target_tokens, file_target_relevant)
             for year, ident in cve_pattern.findall(line):
                 cve = "CVE-%s-%s" % (year, ident)
                 snippet = line
                 if len(snippet) > 220:
                     snippet = snippet[:217] + "..."
                 findings.setdefault(cve, [])
-                if len(findings[cve]) < 3:
-                    findings[cve].append((path, snippet))
-    return findings
+                findings[cve].append({
+                    "path": path,
+                    "snippet": snippet,
+                    "score": score,
+                    "confidence": confidence,
+                })
+
+    reduced = {}
+    for cve, entries in findings.items():
+        if not entries:
+            continue
+        deduped = []
+        seen = set()
+        for entry in entries:
+            key = (entry["path"], entry["snippet"].lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(entry)
+        deduped.sort(key=lambda item: (-item["score"], item["path"], item["snippet"]))
+        high = [item for item in deduped if item["score"] >= 6]
+        medium = [item for item in deduped if item["score"] >= 3]
+        if high:
+            chosen = high
+        elif medium:
+            chosen = medium
+        else:
+            chosen = deduped
+        reduced[cve] = chosen[:3]
+    return reduced
 
 def summarize_execution(paths):
     port_line_pattern = re.compile(r"^\d+/(tcp|udp)\s+\S+", re.IGNORECASE)
@@ -283,9 +428,118 @@ def summarize_execution(paths):
                 summary["open_ports"] += 1
     return summary
 
+def summarize_task_trace(dep_files):
+    traces = []
+    notable = []
+    priority_names = {
+        "admin_attempt_result.json",
+        "admin_access_proof.txt",
+        "router_fingerprint.json",
+        "login_state_before.json",
+        "endpoint_probe.txt",
+    }
+    for dep in deps:
+        files = dep_files.get(dep, [])
+        trace = {
+            "task_id": dep,
+            "artifact_count": len(files),
+            "key_artifacts": [],
+            "observations": [],
+        }
+        seen_obs = set()
+        for path in files:
+            name = os.path.basename(path)
+            lower_name = name.lower()
+            if name in priority_names and len(trace["key_artifacts"]) < 6:
+                trace["key_artifacts"].append(rel_path(path))
+            if lower_name == "admin_access_proof.txt":
+                proof_line = first_nonempty_line(read_text(path, 4096))
+                if proof_line:
+                    obs = "admin access proof status: %s" % proof_line
+                    if obs not in seen_obs:
+                        trace["observations"].append(obs)
+                        seen_obs.add(obs)
+            if lower_name == "endpoint_probe.txt":
+                probe_lines = [line.strip() for line in read_text(path, 8192).splitlines() if line.strip()]
+                if probe_lines:
+                    codes = []
+                    for line in probe_lines:
+                        parts = line.split()
+                        if parts:
+                            code = parts[-1]
+                            if re.match(r"^\d{3}$", code):
+                                codes.append(code)
+                    unique_codes = sorted(set(codes))
+                    obs = "endpoint probe: %d path checks (status codes: %s)" % (
+                        len(probe_lines),
+                        ", ".join(unique_codes) if unique_codes else "n/a",
+                    )
+                    if obs not in seen_obs:
+                        trace["observations"].append(obs)
+                        seen_obs.add(obs)
+            if lower_name.endswith(".json"):
+                data = load_json(path)
+                if not isinstance(data, dict):
+                    continue
+                if isinstance(data.get("attempts"), list) and "success" in data:
+                    attempts = data.get("attempts") or []
+                    method = str(data.get("method") or "unknown")
+                    success = bool(data.get("success"))
+                    stop_reason = str(data.get("stop_reason") or "not_provided")
+                    rejected = 0
+                    maybe_success = 0
+                    for item in attempts:
+                        if not isinstance(item, dict):
+                            continue
+                        outcome = item.get("suspected_success")
+                        if outcome is True:
+                            maybe_success += 1
+                        elif outcome is False:
+                            rejected += 1
+                    obs = "attempt workflow: method=%s, attempts=%d, success=%s, stop_reason=%s, rejected=%d, suspected_success=%d" % (
+                        method,
+                        len(attempts),
+                        "true" if success else "false",
+                        stop_reason,
+                        rejected,
+                        maybe_success,
+                    )
+                    if obs not in seen_obs:
+                        trace["observations"].append(obs)
+                        seen_obs.add(obs)
+                        notable.append("task %s: %s" % (dep, obs))
+                if isinstance(data.get("form_actions"), list) or isinstance(data.get("candidate_auth_endpoints"), list):
+                    actions = data.get("form_actions") or []
+                    endpoints = data.get("candidate_auth_endpoints") or []
+                    model = str(data.get("title") or "unknown")
+                    obs = "auth surface fingerprint: model/title=%s, form_actions=%d, candidate_endpoints=%d" % (
+                        model,
+                        len(actions),
+                        len(endpoints),
+                    )
+                    if obs not in seen_obs:
+                        trace["observations"].append(obs)
+                        seen_obs.add(obs)
+                if all(key in data for key in ("error_num", "error_status", "lock_time")):
+                    obs = "login state snapshot: error_num=%s, error_status=%s, lock_time=%s" % (
+                        data.get("error_num"),
+                        data.get("error_status"),
+                        data.get("lock_time"),
+                    )
+                    if obs not in seen_obs:
+                        trace["observations"].append(obs)
+                        seen_obs.add(obs)
+        if not trace["key_artifacts"]:
+            for path in files[:4]:
+                trace["key_artifacts"].append(rel_path(path))
+        traces.append(trace)
+    return traces, notable
+
 files = collect_files(artifact_root, deps)
+dep_files = collect_files_by_dep(artifact_root, deps)
 findings = summarize_findings(files)
 execution = summarize_execution(files)
+task_traces, notable_results = summarize_task_trace(dep_files)
 finding_count = len(findings)
 
 if finding_count > 0:
@@ -305,6 +559,10 @@ if target:
     print("- In-scope target: %s" % target)
 else:
     print("- In-scope target: not provided")
+if task_goal:
+    print("- Report objective: %s" % task_goal)
+else:
+    print("- Report objective: not provided")
 print("- Attribution confidence: %s" % (target_confidence or "unknown"))
 print("- Attribution source: %s" % (target_source or "unknown"))
 print("- Run ID: %s" % (run_id or "unknown"))
@@ -319,6 +577,9 @@ print("## Executive Summary")
 print("- Outcome: %s" % outcome)
 print("- Assessment confidence: %s" % assessment_confidence)
 print("- Assessment model: network-based, unauthenticated evidence synthesis from prior task artifacts.")
+if notable_results:
+    for line in notable_results[:3]:
+        print("- Observed execution result: %s" % line)
 if finding_count == 0:
     print("- Interpretation: no observed CVE evidence in collected artifacts (this is not proof of absence).")
 print("")
@@ -333,7 +594,27 @@ print("## Methodology")
 print("- Consolidated evidence artifacts generated by prerequisite tasks.")
 print("- Extracted service and vulnerability indicators from command logs and derived artifacts.")
 print("- Mapped explicit CVE identifiers to supporting evidence lines.")
+print("- Summarized per-task execution traces and structured outcome markers from dependency artifacts.")
 print("")
+print("## Task Execution Trace")
+if not task_traces:
+    print("- No dependency task traces were available for summarization.")
+else:
+    for trace in task_traces:
+        print("### Task %s" % trace["task_id"])
+        print("- Artifacts discovered: %d" % trace["artifact_count"])
+        if trace["key_artifacts"]:
+            print("- Key artifacts:")
+            for path in trace["key_artifacts"][:6]:
+                print("  - %s" % path)
+        else:
+            print("- Key artifacts: none")
+        if trace["observations"]:
+            for obs in trace["observations"][:4]:
+                print("- Observed result: %s" % obs)
+        else:
+            print("- Observed result: no structured outcome markers parsed from this task's artifacts.")
+        print("")
 print("## Findings")
 if not findings:
     print("- No explicit CVE identifiers were found in dependency artifacts.")
@@ -341,14 +622,16 @@ else:
     for cve in sorted(findings.keys()):
         print("### %s" % cve)
         entries = findings[cve]
-        for path, snippet in entries:
-            print("- Evidence file: %s" % path)
-            print("- Evidence excerpt: %s" % snippet)
+        for item in entries:
+            print("- Evidence file: %s" % item["path"])
+            print("- Evidence confidence: %s" % item.get("confidence", "unknown"))
+            print("- Evidence excerpt: %s" % item["snippet"])
         print("")
 print("## Limitations")
 print("- Results are limited to network-visible behavior from the analyzed artifacts.")
 print("- No authenticated testing, exploitation, persistence, or data exfiltration actions were performed.")
 print("- Device identity can change over time (for example dynamic IP/MAC); attribution should be re-verified per run.")
+print("- Structured execution traces rely on dependency artifacts and can omit steps that were not logged.")
 print("")
 print("## Evidence")
 if not files:

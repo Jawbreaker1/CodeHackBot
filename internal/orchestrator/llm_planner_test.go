@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -12,9 +13,10 @@ import (
 )
 
 type fakePlannerClient struct {
-	content string
-	err     error
-	reqs    []llm.ChatRequest
+	content      string
+	finishReason string
+	err          error
+	reqs         []llm.ChatRequest
 }
 
 func (f *fakePlannerClient) Chat(_ context.Context, req llm.ChatRequest) (llm.ChatResponse, error) {
@@ -22,7 +24,7 @@ func (f *fakePlannerClient) Chat(_ context.Context, req llm.ChatRequest) (llm.Ch
 	if f.err != nil {
 		return llm.ChatResponse{}, f.err
 	}
-	return llm.ChatResponse{Content: f.content}, nil
+	return llm.ChatResponse{Content: f.content, FinishReason: f.finishReason}, nil
 }
 
 func TestSynthesizeTaskGraphWithLLMParsesTasks(t *testing.T) {
@@ -111,6 +113,38 @@ func TestSynthesizeTaskGraphWithLLMRejectsInvalidTask(t *testing.T) {
 	}
 }
 
+func TestSynthesizeTaskGraphWithLLMClassifiesTruncatedOutput(t *testing.T) {
+	t.Parallel()
+
+	client := &fakePlannerClient{
+		content:      `{"rationale":"partial","tasks":[`,
+		finishReason: "length",
+	}
+	_, _, err := SynthesizeTaskGraphWithLLM(
+		context.Background(),
+		client,
+		"model",
+		"goal",
+		Scope{Targets: []string{"127.0.0.1"}},
+		[]string{"local_only"},
+		nil,
+		1,
+	)
+	if err == nil {
+		t.Fatalf("expected parse failure")
+	}
+	var plannerFailure *LLMPlannerFailure
+	if !errors.As(err, &plannerFailure) {
+		t.Fatalf("expected LLMPlannerFailure, got %T", err)
+	}
+	if plannerFailure.Stage != "truncate" {
+		t.Fatalf("expected truncate stage, got %q", plannerFailure.Stage)
+	}
+	if plannerFailure.FinishReason != "length" {
+		t.Fatalf("expected finish reason length, got %q", plannerFailure.FinishReason)
+	}
+}
+
 func TestSynthesizeTaskGraphWithLLMAppliesBudgetFloors(t *testing.T) {
 	t.Parallel()
 
@@ -173,6 +207,57 @@ func TestSynthesizeTaskGraphWithLLMAppliesBudgetFloors(t *testing.T) {
 	}
 	if got := tasks[1].Budget.MaxRuntime; got < 6*time.Minute {
 		t.Fatalf("expected active probe runtime floor, got %s", got)
+	}
+}
+
+func TestSynthesizeTaskGraphWithLLMClampsBudgetCeilings(t *testing.T) {
+	t.Parallel()
+
+	client := &fakePlannerClient{
+		content: `{
+			"tasks":[
+				{
+					"task_id":"task-oversized-budget",
+					"title":"Oversized budget task",
+					"goal":"collect evidence",
+					"targets":["127.0.0.1"],
+					"priority":90,
+					"strategy":"recon",
+					"risk_level":"recon_readonly",
+					"done_when":["done"],
+					"fail_when":["fail"],
+					"expected_artifacts":["out.log"],
+					"action":{"type":"assist","prompt":"collect evidence"},
+					"budget":{"max_steps":9999,"max_tool_calls":9999,"max_runtime_seconds":99999}
+				}
+			]
+		}`,
+	}
+
+	tasks, _, err := SynthesizeTaskGraphWithLLM(
+		context.Background(),
+		client,
+		"model",
+		"collect evidence",
+		Scope{Targets: []string{"127.0.0.1"}},
+		[]string{"local_only"},
+		nil,
+		1,
+	)
+	if err != nil {
+		t.Fatalf("SynthesizeTaskGraphWithLLM: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(tasks))
+	}
+	if got := tasks[0].Budget.MaxSteps; got != maxSynthesizedTaskSteps {
+		t.Fatalf("expected max steps cap %d, got %d", maxSynthesizedTaskSteps, got)
+	}
+	if got := tasks[0].Budget.MaxToolCalls; got != maxSynthesizedTaskToolCalls {
+		t.Fatalf("expected max tool call cap %d, got %d", maxSynthesizedTaskToolCalls, got)
+	}
+	if got := tasks[0].Budget.MaxRuntime; got != maxSynthesizedTaskRuntime {
+		t.Fatalf("expected max runtime cap %s, got %s", maxSynthesizedTaskRuntime, got)
 	}
 }
 
