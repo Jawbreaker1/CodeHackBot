@@ -77,6 +77,7 @@ func TestAssembleRunReportIncludesFindingsAndArtifactLinks(t *testing.T) {
 			"target":       "192.168.50.77",
 			"finding_type": "open_port",
 			"title":        "SSH open",
+			"state":        FindingStateVerified,
 			"location":     "22/tcp",
 			"severity":     "low",
 			"confidence":   "high",
@@ -98,6 +99,7 @@ func TestAssembleRunReportIncludesFindingsAndArtifactLinks(t *testing.T) {
 			"target":       "192.168.50.77",
 			"finding_type": "open_port",
 			"title":        "SSH open",
+			"state":        FindingStateVerified,
 			"location":     "22/tcp",
 			"severity":     "medium",
 			"confidence":   "medium",
@@ -218,6 +220,7 @@ func TestAssembleRunReportMarksUnverifiedFindings(t *testing.T) {
 			"target":       "192.168.50.77",
 			"finding_type": "open_port",
 			"title":        "SSH open",
+			"state":        FindingStateVerified,
 			"location":     "22/tcp",
 			"severity":     "low",
 			"confidence":   "high",
@@ -274,6 +277,86 @@ func TestAssembleRunReportMarksUnverifiedFindings(t *testing.T) {
 	}
 	if !strings.Contains(content, "- Verified findings: 1") || !strings.Contains(content, "- Unverified findings: 1") {
 		t.Fatalf("expected verified/unverified summary counts:\n%s", content)
+	}
+	if !strings.Contains(content, "- Claim truth gate: `PASS`") {
+		t.Fatalf("expected claim truth gate pass in mixed verified/unverified report:\n%s", content)
+	}
+}
+
+func TestAssembleRunReportTruthGateFailsOnUnverifiedHighImpact(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-report-truth-gate-fail"
+	manager := NewManager(base)
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	planPath := filepath.Join(base, "plan.json")
+	plan := RunPlan{
+		RunID:           runID,
+		Scope:           Scope{Targets: []string{"192.168.50.91"}},
+		Constraints:     []string{"internal_only"},
+		SuccessCriteria: []string{"report_done"},
+		StopCriteria:    []string{"manual_stop"},
+		MaxParallelism:  1,
+		Tasks: []TaskSpec{
+			{
+				TaskID:            "t-web",
+				Goal:              "web scan",
+				DoneWhen:          []string{"done"},
+				FailWhen:          []string{"timeout"},
+				ExpectedArtifacts: []string{"web.log"},
+				RiskLevel:         "recon_readonly",
+				Budget:            TaskBudget{MaxSteps: 3, MaxToolCalls: 3, MaxRuntime: time.Second},
+			},
+		},
+	}
+	if err := WriteJSONAtomic(planPath, plan); err != nil {
+		t.Fatalf("WriteJSONAtomic plan: %v", err)
+	}
+	if _, err := manager.Start(planPath, ""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := AppendEventJSONL(manager.eventPath(runID), EventEnvelope{
+		EventID:  "e-find-high",
+		RunID:    runID,
+		WorkerID: "worker-web",
+		TaskID:   "t-web",
+		Seq:      1,
+		TS:       now,
+		Type:     EventTypeTaskFinding,
+		Payload: mustJSONRaw(map[string]any{
+			"target":       "192.168.50.91",
+			"finding_type": "web_vuln",
+			"title":        "Potential RCE claim",
+			"location":     "/cgi-bin/admin",
+			"severity":     "high",
+			"confidence":   "medium",
+			"source":       "scanner",
+			"evidence":     []any{"response signature matched"},
+		}),
+	}); err != nil {
+		t.Fatalf("append high finding: %v", err)
+	}
+	if _, err := manager.IngestEvidence(runID); err != nil {
+		t.Fatalf("IngestEvidence: %v", err)
+	}
+	reportPath, err := manager.AssembleRunReport(runID, "")
+	if err != nil {
+		t.Fatalf("AssembleRunReport: %v", err)
+	}
+	data, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "- Claim truth gate: `FAIL`") {
+		t.Fatalf("expected claim truth gate fail:\n%s", content)
+	}
+	if !strings.Contains(content, "- High-impact unverified claims: 1") {
+		t.Fatalf("expected high-impact unverified claim count:\n%s", content)
 	}
 }
 
@@ -366,6 +449,7 @@ func TestAssembleRunReportQualityNetworkAndWebArtifacts(t *testing.T) {
 			"target":       "192.168.50.77",
 			"finding_type": "open_port",
 			"title":        "SSH open",
+			"state":        FindingStateVerified,
 			"location":     "22/tcp",
 			"severity":     "low",
 			"confidence":   "high",
@@ -387,6 +471,7 @@ func TestAssembleRunReportQualityNetworkAndWebArtifacts(t *testing.T) {
 			"target":       "192.168.50.77",
 			"finding_type": "web_recon",
 			"title":        "Login panel discovered",
+			"state":        FindingStateVerified,
 			"location":     "/login",
 			"severity":     "info",
 			"confidence":   "high",

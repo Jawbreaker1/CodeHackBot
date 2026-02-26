@@ -622,7 +622,7 @@ Sprint header convention (all new planned sprints): first checklist item must be
   - [ ] checkpoint protocol: after each Phase 4 implementation slice, run targeted tests + quick gate and log outcome in `docs/runbooks/problem-register.md`.
 - [ ] Phase 5 — Contract corrections (minimal behavior changes first):
   - [ ] enforce run success semantics: `completed` requires goal-truth checks, not only task lease completion.
-  - [ ] enforce report truth gates: findings/claims must map to verifier-backed evidence.
+  - [x] enforce report truth gates: findings/claims must map to verifier-backed evidence.
   - [ ] block terminal success when required artifacts/verifications are unresolved.
   - [ ] require every exploratory pivot to cite either a new evidence anchor or explicit unknown under test.
   - [ ] adopt and enforce "hard support exception policy" from `docs/runbooks/architecture-recovery-plan.md` (generic-first, capability-scoped exceptions only).

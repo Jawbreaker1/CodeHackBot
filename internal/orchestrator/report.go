@@ -34,6 +34,15 @@ type reportFinding struct {
 	UnverifiedRationale string
 }
 
+type ReportTruthGateSummary struct {
+	TotalClaims            int    `json:"total_claims"`
+	VerifiedClaims         int    `json:"verified_claims"`
+	UnverifiedClaims       int    `json:"unverified_claims"`
+	HighImpactUnverified   int    `json:"high_impact_unverified"`
+	VerificationGate       string `json:"verification_gate"`
+	VerificationGateReason string `json:"verification_gate_reason,omitempty"`
+}
+
 type reportTaskNarrative struct {
 	TaskID            string
 	Title             string
@@ -115,6 +124,7 @@ func (m *Manager) AssembleRunReport(runID, outPath string) (string, error) {
 		}
 	}
 	unverifiedCount := len(reportFindings) - verifiedCount
+	truthGate := evaluateReportTruthGate(reportFindings)
 	completedTasks, failedTasks, startedTasks := summarizeNarrativeTaskStates(taskNarratives)
 	runStartedAt, runEndedAt, hasRunWindow := runWindow(events)
 
@@ -129,6 +139,13 @@ func (m *Manager) AssembleRunReport(runID, outPath string) (string, error) {
 	fmt.Fprintf(&b, "- Findings: %d\n", len(reportFindings))
 	fmt.Fprintf(&b, "- Verified findings: %d\n", verifiedCount)
 	fmt.Fprintf(&b, "- Unverified findings: %d\n", unverifiedCount)
+	fmt.Fprintf(&b, "- Claim truth gate: `%s`\n", strings.ToUpper(strings.TrimSpace(truthGate.VerificationGate)))
+	if truthGate.HighImpactUnverified > 0 {
+		fmt.Fprintf(&b, "- High-impact unverified claims: %d\n", truthGate.HighImpactUnverified)
+	}
+	if reason := strings.TrimSpace(truthGate.VerificationGateReason); reason != "" {
+		fmt.Fprintf(&b, "- Claim truth gate detail: %s\n", reason)
+	}
 	fmt.Fprintf(&b, "- Artifacts: %d\n", len(artifacts))
 	if hasRunWindow {
 		fmt.Fprintf(&b, "- Runtime window: %s\n", formatRuntimeWindow(runStartedAt, runEndedAt))
@@ -333,13 +350,64 @@ func buildReportFindings(findings []Finding, artifacts []artifactRecord) []repor
 			Verification:   reportFindingVerified,
 			LinkedEvidence: links,
 		}
-		if len(links) == 0 {
+		switch normalizedState := normalizeFindingState(finding.State); normalizedState {
+		case FindingStateVerified:
+			if len(links) == 0 {
+				view.Verification = reportFindingUnverified
+				view.UnverifiedRationale = "verified finding has no linked artifact/log evidence"
+			}
+		case FindingStateRejected:
 			view.Verification = reportFindingUnverified
-			view.UnverifiedRationale = "no linked artifact/log evidence"
+			view.UnverifiedRationale = "finding state is rejected"
+		default:
+			view.Verification = reportFindingUnverified
+			stateLabel := normalizedState
+			if stateLabel == "" {
+				stateLabel = "candidate"
+			}
+			view.UnverifiedRationale = fmt.Sprintf("finding state is %s", stateLabel)
 		}
 		out = append(out, view)
 	}
 	return out
+}
+
+func evaluateReportTruthGate(findings []reportFinding) ReportTruthGateSummary {
+	out := ReportTruthGateSummary{
+		TotalClaims:      len(findings),
+		VerificationGate: "pass",
+	}
+	for _, finding := range findings {
+		if finding.Verification == reportFindingVerified {
+			out.VerifiedClaims++
+			continue
+		}
+		out.UnverifiedClaims++
+		if severityRank(finding.Finding.Severity) >= severityRank("high") {
+			out.HighImpactUnverified++
+		}
+	}
+	if out.HighImpactUnverified > 0 {
+		out.VerificationGate = "fail"
+		out.VerificationGateReason = fmt.Sprintf("unverified high-impact claims: %d", out.HighImpactUnverified)
+	}
+	return out
+}
+
+func (m *Manager) EvaluateReportTruthGate(runID string) (ReportTruthGateSummary, error) {
+	if strings.TrimSpace(runID) == "" {
+		return ReportTruthGateSummary{}, fmt.Errorf("run id is required")
+	}
+	findings, err := m.ListFindings(runID)
+	if err != nil {
+		return ReportTruthGateSummary{}, err
+	}
+	artifacts, err := m.listArtifactRecords(runID)
+	if err != nil {
+		return ReportTruthGateSummary{}, err
+	}
+	reportFindings := buildReportFindings(findings, artifacts)
+	return evaluateReportTruthGate(reportFindings), nil
 }
 
 func buildTaskNarratives(plan RunPlan, events []EventEnvelope, artifacts []artifactRecord, findings []reportFinding) []reportTaskNarrative {

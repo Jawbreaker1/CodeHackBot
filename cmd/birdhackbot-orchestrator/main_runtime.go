@@ -158,6 +158,17 @@ func evaluateRunTerminalOutcome(manager *orchestrator.Manager, runID string) (ru
 		}
 	}
 	if len(failed) == 0 && len(incomplete) == 0 {
+		truthGate, err := manager.EvaluateReportTruthGate(runID)
+		if err != nil {
+			return runOutcomeFailure, "", err
+		}
+		if strings.EqualFold(strings.TrimSpace(truthGate.VerificationGate), "fail") {
+			detail := strings.TrimSpace(truthGate.VerificationGateReason)
+			if detail == "" {
+				detail = fmt.Sprintf("unverified high-impact claims: %d", truthGate.HighImpactUnverified)
+			}
+			return runOutcomeFailure, "report_truth_gate_failed:" + detail, nil
+		}
 		return runOutcomeSuccess, "all_tasks_completed", nil
 	}
 	detailParts := make([]string, 0, 2)
