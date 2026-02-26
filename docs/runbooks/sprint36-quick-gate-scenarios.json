@@ -1,0 +1,61 @@
+{
+  "version": "sprint36_quick_gate_v1",
+  "scenarios": [
+    {
+      "id": "recovery_stress_repeat_pressure",
+      "name": "Recovery stress under repeat pressure",
+      "goal": "Exercise recovery handling under repeated blocked or failed steps without looping.",
+      "scope": {
+        "targets": [
+          "127.0.0.1"
+        ],
+        "networks": [
+          "127.0.0.0/8"
+        ]
+      },
+      "constraints": [
+        "internal_lab_only",
+        "authorized_testing",
+        "loop_resistance_required"
+      ],
+      "success_criteria": [
+        "recovery_path_exercised"
+      ],
+      "stop_criteria": [
+        "max_runtime=8m"
+      ],
+      "planner": "auto",
+      "permission_mode": "default",
+      "max_parallelism": 1,
+      "max_attempts": 2
+    },
+    {
+      "id": "evidence_first_reporting_quality",
+      "name": "Evidence-first reporting quality",
+      "goal": "Generate findings and evidence links that produce high-quality report sections.",
+      "scope": {
+        "targets": [
+          "127.0.0.1"
+        ],
+        "networks": [
+          "127.0.0.0/8"
+        ]
+      },
+      "constraints": [
+        "internal_lab_only",
+        "authorized_testing",
+        "evidence_first_reporting"
+      ],
+      "success_criteria": [
+        "report_quality_checks_passed"
+      ],
+      "stop_criteria": [
+        "max_runtime=8m"
+      ],
+      "planner": "auto",
+      "permission_mode": "default",
+      "max_parallelism": 1,
+      "max_attempts": 2
+    }
+  ]
+}

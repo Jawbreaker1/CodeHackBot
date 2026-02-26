@@ -1,0 +1,119 @@
+{
+  "version": "sprint36_repro_matrix_v1",
+  "defaults": {
+    "sessions_dir": "sessions",
+    "planner": "auto",
+    "approval_timeout": "2m",
+    "worker_cmd": "./birdhackbot",
+    "worker_args": [
+      "worker"
+    ]
+  },
+  "scenarios": [
+    {
+      "id": "zip_local_regression",
+      "problem_id": "PR-001",
+      "kind": "run_goal",
+      "description": "Local encrypted archive workflow regression with loop-pressure visibility.",
+      "command_template": [
+        "./birdhackbot-orchestrator",
+        "run",
+        "--sessions-dir",
+        "{sessions_dir}",
+        "--run",
+        "{run_id}",
+        "--goal",
+        "Extract contents of secret.zip and identify the password needed to decrypt it. Produce a concise local report with method, result, and evidence paths.",
+        "--scope-local",
+        "--constraint",
+        "local_only",
+        "--planner",
+        "{planner}",
+        "--approval-timeout",
+        "{approval_timeout}",
+        "--worker-cmd",
+        "{worker_cmd}",
+        "--worker-arg",
+        "worker"
+      ],
+      "expected_event_signatures": {
+        "required_event_types": [
+          "task_started",
+          "task_completed"
+        ],
+        "forbidden_failure_reasons": [
+          "assist_loop_detected"
+        ]
+      }
+    },
+    {
+      "id": "owasp_report_synthesis_quality",
+      "problem_id": "PR-005",
+      "kind": "benchmark_scenario",
+      "description": "Report synthesis quality scenario with evidence-first focus.",
+      "benchmark_args_template": [
+        "./birdhackbot-orchestrator",
+        "benchmark",
+        "--sessions-dir",
+        "{sessions_dir}",
+        "--benchmark-id",
+        "{benchmark_id}",
+        "--scenario-pack",
+        "docs/runbooks/sprint36-quick-gate-scenarios.json",
+        "--scenario",
+        "evidence_first_reporting_quality",
+        "--repeat",
+        "1",
+        "--seed",
+        "{seed}",
+        "--planner",
+        "auto",
+        "--approval-timeout",
+        "{approval_timeout}",
+        "--worker-cmd",
+        "{worker_cmd}",
+        "--worker-arg",
+        "worker"
+      ],
+      "expected_event_signatures": {
+        "required_metrics": [
+          "task_success_rate",
+          "loop_incident_rate",
+          "verified_finding_precision"
+        ],
+        "forbidden_failure_reasons": [
+          "assist_loop_detected",
+          "assist_budget_exhausted"
+        ]
+      }
+    },
+    {
+      "id": "approval_timeout_stall",
+      "problem_id": "PR-006",
+      "kind": "start_then_run",
+      "description": "Deterministic approval-wait timeout path using static active-probe plan template.",
+      "plan_template_path": "docs/runbooks/repro/approval-stall-plan.template.json",
+      "steps": [
+        "./birdhackbot-orchestrator start --sessions-dir {sessions_dir} --plan {rendered_plan_path}",
+        "./birdhackbot-orchestrator run --sessions-dir {sessions_dir} --run {run_id} --worker-cmd {worker_cmd} --worker-arg worker --approval-timeout 20s"
+      ],
+      "expected_event_signatures": {
+        "required_event_types": [
+          "approval_requested"
+        ],
+        "required_terminal_states": [
+          "blocked",
+          "stopped"
+        ]
+      }
+    },
+    {
+      "id": "planner_truncation_classification",
+      "problem_id": "PR-002",
+      "kind": "unit_test",
+      "description": "Deterministic planner truncation classification guard.",
+      "command": "go test ./internal/orchestrator -run TestSynthesizeTaskGraphWithLLMClassifiesTruncatedOutput",
+      "expected_signal": "PASS"
+    }
+  ]
+}

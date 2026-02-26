@@ -128,10 +128,11 @@ func runStart(args []string, stdout, stderr io.Writer) int {
 func runRun(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	var sessionsDir, runID, goal, permissionModeRaw, workerCmd, planReviewRaw, planReviewRationale, plannerModeRaw string
+	var sessionsDir, runID, goal, permissionModeRaw, workerCmd, planReviewRaw, planReviewRationale, plannerModeRaw, toolInstallPolicyRaw string
 	var tick, startupTimeout, staleTimeout, softStallGrace, approvalTimeout, stopGrace time.Duration
 	var maxAttempts, maxParallelism, regenerateCount int
 	var disruptiveOptIn bool
+	var diagnostic bool
 	var scopeLocal bool
 	var useTUI bool
 	var workerArgs, workerEnv, scopeTargets, scopeNetworks, scopeDenyTargets, constraints, successCriteria, stopCriteria stringFlags
@@ -162,6 +163,8 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 	fs.DurationVar(&stopGrace, "stop-grace", 2*time.Second, "worker stop grace period")
 	fs.IntVar(&maxAttempts, "max-attempts", 2, "max retry attempts per task")
 	fs.BoolVar(&disruptiveOptIn, "disruptive-opt-in", false, "allow disruptive actions to enter approval flow")
+	fs.BoolVar(&diagnostic, "diagnostic", false, "diagnostic mode: minimize adaptive worker rewrites and enable assist tracing")
+	fs.StringVar(&toolInstallPolicyRaw, "tool-install-policy", string(orchestrator.ToolInstallPolicyAsk), "missing-tool install policy: ask|never|auto")
 	fs.BoolVar(&useTUI, "tui", false, "run coordinator with attached TUI in this terminal")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -176,6 +179,11 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 	plannerMode, err := orchestrator.ParsePlannerMode(plannerModeRaw)
 	if err != nil {
 		fmt.Fprintf(stderr, "run invalid --planner: %v\n", err)
+		return 2
+	}
+	toolInstallPolicy, err := orchestrator.ParseToolInstallPolicy(toolInstallPolicyRaw)
+	if err != nil {
+		fmt.Fprintf(stderr, "run invalid --tool-install-policy: %v\n", err)
 		return 2
 	}
 	if regenerateCount < 1 {
@@ -432,7 +440,14 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 			"BIRDHACKBOT_ORCH_WORKER_ID="+workerID,
 			"BIRDHACKBOT_ORCH_PERMISSION_MODE="+string(permissionMode),
 			fmt.Sprintf("BIRDHACKBOT_ORCH_DISRUPTIVE_OPT_IN=%t", disruptiveOptIn),
+			fmt.Sprintf("%s=%t", orchestrator.OrchDiagnosticEnv, diagnostic),
+			fmt.Sprintf("%s=%s", orchestrator.OrchApprovalEnv, approvalTimeout.String()),
+			fmt.Sprintf("%s=%s", orchestrator.OrchToolInstallEnv, string(toolInstallPolicy)),
 		)
+		if diagnostic {
+			env = appendEnvIfMissing(env, "BIRDHACKBOT_WORKER_ASSIST_MODE", "strict")
+			env = appendEnvIfMissing(env, "BIRDHACKBOT_WORKER_ASSIST_TRACE_LLM", "true")
+		}
 		if workerConfigPath != "" {
 			env = append(env, "BIRDHACKBOT_CONFIG_PATH="+workerConfigPath)
 		}
@@ -499,4 +514,18 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 	}
 
 	return executeCoordinatorLoop(ctx, manager, coord, runID, tick, stopGrace, stdout, stderr, true)
+}
+
+func appendEnvIfMissing(env []string, key, value string) []string {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return env
+	}
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(strings.TrimSpace(entry), prefix) {
+			return env
+		}
+	}
+	return append(env, prefix+value)
 }

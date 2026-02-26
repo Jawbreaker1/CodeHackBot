@@ -79,8 +79,12 @@ type LLMAssistant struct {
 }
 
 type LLMSuggestMetadata struct {
-	Model           string
-	ParseRepairUsed bool
+	Model               string
+	ParseRepairUsed     bool
+	PrimaryResponse     string
+	PrimaryFinishReason string
+	RepairResponse      string
+	RepairFinishReason  string
 }
 
 func (a LLMAssistant) Suggest(ctx context.Context, input Input) (Suggestion, error) {
@@ -115,6 +119,8 @@ func (a LLMAssistant) Suggest(ctx context.Context, input Input) (Suggestion, err
 	if err != nil {
 		return Suggestion{}, err
 	}
+	meta.PrimaryResponse = strings.TrimSpace(resp.Content)
+	meta.PrimaryFinishReason = strings.TrimSpace(resp.FinishReason)
 	suggestion, parseErr := parseSuggestionResponse(resp.Content)
 	if parseErr == nil {
 		return suggestion, nil
@@ -141,6 +147,8 @@ func (a LLMAssistant) Suggest(ctx context.Context, input Input) (Suggestion, err
 	}
 	repairResp, repairErr := a.Client.Chat(ctx, repairReq)
 	if repairErr == nil {
+		meta.RepairResponse = strings.TrimSpace(repairResp.Content)
+		meta.RepairFinishReason = strings.TrimSpace(repairResp.FinishReason)
 		repaired, repairedErr := parseSuggestionResponse(repairResp.Content)
 		if repairedErr == nil {
 			return repaired, nil

@@ -898,6 +898,424 @@ func TestRepairMissingCommandInputPathsSkipsWorkspaceRepairForNonLocalTargets(t 
 	}
 }
 
+func TestAdaptArchiveJohnArgsRewritesZipFormatToPKZipAndPinsPot(t *testing.T) {
+	t.Parallel()
+
+	workDir := t.TempDir()
+	hashPath := filepath.Join(workDir, "zip.hash")
+	hash := "secret.zip/secret.txt:$pkzip$1*1*2*0*1*1*abcd*0*0*0*0*$/pkzip$:secret.txt:secret.zip::secret.zip\n"
+	if err := os.WriteFile(hashPath, []byte(hash), 0o644); err != nil {
+		t.Fatalf("WriteFile hash: %v", err)
+	}
+
+	args := []string{"--wordlist=/tmp/rockyou.txt", "--format=zip", hashPath}
+	nextArgs, notes, changed, err := adaptArchiveJohnArgs(args, workDir)
+	if err != nil {
+		t.Fatalf("adaptArchiveJohnArgs: %v", err)
+	}
+	if !changed {
+		t.Fatalf("expected john args adaptation")
+	}
+	if !containsArg(nextArgs, "--format=pkzip") {
+		t.Fatalf("expected --format=pkzip, got %v", nextArgs)
+	}
+	if !containsArgPrefix(nextArgs, "--pot=") {
+		t.Fatalf("expected --pot override, got %v", nextArgs)
+	}
+	if len(notes) == 0 {
+		t.Fatalf("expected adaptation notes")
+	}
+}
+
+func TestValidateCommandOutputEvidenceRejectsJohnNoHashesLoaded(t *testing.T) {
+	t.Parallel()
+
+	task := TaskSpec{
+		TaskID:   "T-003",
+		Title:    "Run Baseline Wordlist Crack",
+		Goal:     "Recover password for secret.zip in local lab",
+		Targets:  []string{"127.0.0.1"},
+		Strategy: "baseline_crack",
+	}
+	output := []byte("Using default input encoding: UTF-8\nNo password hashes loaded (see FAQ)\n")
+	if err := validateCommandOutputEvidence(task, "john", []string{"--format=zip", "zip.hash"}, output); err == nil {
+		t.Fatalf("expected john no-hashes-loaded evidence failure")
+	}
+}
+
+func TestValidateCommandOutputEvidenceRejectsBareUnzipForArchiveWorkflow(t *testing.T) {
+	t.Parallel()
+
+	task := TaskSpec{
+		TaskID:   "T-007",
+		Title:    "Validate access with proof-of-access token",
+		Goal:     "Validate access with minimal proof-of-access",
+		Targets:  []string{"127.0.0.1"},
+		Strategy: "validation",
+	}
+	if err := validateCommandOutputEvidence(task, "unzip", nil, []byte("Usage: unzip\n")); err == nil {
+		t.Fatalf("expected bare unzip validation failure")
+	}
+}
+
+func TestAdaptArchiveExtractionShellArgsUsesRecoveredPasswordArtifact(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-archive-extraction-adapt"
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	artifactDir := filepath.Join(BuildRunPaths(base, runID).ArtifactDir, "T-003")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll artifact dir: %v", err)
+	}
+	recoveredPath := filepath.Join(artifactDir, "recovered_password.txt")
+	if err := os.WriteFile(recoveredPath, []byte("telefo01\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile recovered password: %v", err)
+	}
+
+	cfg := WorkerRunConfig{SessionsDir: base, RunID: runID}
+	task := TaskSpec{
+		TaskID:    "T-006",
+		Title:     "Extract Archive Contents",
+		Goal:      "Extract contents using recovered password",
+		Targets:   []string{"127.0.0.1"},
+		DependsOn: []string{"T-003"},
+	}
+	args := []string{"-lc", "unzip -P $(cat /tmp/john_output.txt | grep 'password' | cut -d' ' -f1) /tmp/secret.zip"}
+	nextArgs, notes, changed, err := adaptArchiveExtractionShellArgs(cfg, task, args)
+	if err != nil {
+		t.Fatalf("adaptArchiveExtractionShellArgs: %v", err)
+	}
+	if !changed {
+		t.Fatalf("expected extraction command adaptation")
+	}
+	if len(nextArgs) < 2 || !strings.Contains(nextArgs[1], recoveredPath) {
+		t.Fatalf("expected rewritten shell command to use recovered password path %q, got %q", recoveredPath, nextArgs)
+	}
+	if len(notes) == 0 {
+		t.Fatalf("expected adaptation note")
+	}
+}
+
+func TestAdaptArchiveWorkflowCommandInjectsZipInputWhenMissing(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	sessionsDir := filepath.Join(repoRoot, "sessions")
+	runID := "run-archive-inject-zip"
+	paths, err := EnsureRunLayout(sessionsDir, runID)
+	if err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+
+	// Simulate a misleading dependency artifact with the expected filename.
+	depDir := filepath.Join(paths.ArtifactDir, "T-001")
+	if err := os.MkdirAll(depDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll depDir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(depDir, "secret.zip"), []byte("not a zip"), 0o644); err != nil {
+		t.Fatalf("WriteFile fake secret.zip: %v", err)
+	}
+
+	realZip := filepath.Join(repoRoot, "secret.zip")
+	if err := os.WriteFile(realZip, []byte("PK\x03\x04archive-bytes"), 0o644); err != nil {
+		t.Fatalf("WriteFile real secret.zip: %v", err)
+	}
+
+	cfg := WorkerRunConfig{SessionsDir: sessionsDir, RunID: runID}
+	task := TaskSpec{
+		TaskID:            "T-003",
+		Title:             "Extract hash material for secret.zip",
+		Goal:              "Generate crackable hash material from secret.zip",
+		Strategy:          "hash_extraction",
+		Targets:           []string{"127.0.0.1"},
+		DependsOn:         []string{"T-001"},
+		ExpectedArtifacts: []string{"zip.hash"},
+	}
+	workDir := filepath.Join(paths.ArtifactDir, "T-003")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll workDir: %v", err)
+	}
+
+	cmd, args, notes, changed, err := adaptArchiveWorkflowCommand(cfg, task, "zip2john", nil, workDir)
+	if err != nil {
+		t.Fatalf("adaptArchiveWorkflowCommand: %v", err)
+	}
+	if !changed {
+		t.Fatalf("expected zip input adaptation")
+	}
+	if cmd != "zip2john" {
+		t.Fatalf("expected command zip2john, got %q", cmd)
+	}
+	if len(args) != 1 || args[0] != realZip {
+		t.Fatalf("expected injected real zip path %q, got %#v", realZip, args)
+	}
+	if len(notes) == 0 || !strings.Contains(strings.ToLower(notes[0]), "injected zip2john input") {
+		t.Fatalf("expected zip injection note, got %v", notes)
+	}
+}
+
+func TestAdaptArchiveWorkflowCommandInjectsJohnInputsWhenMissing(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	sessionsDir := filepath.Join(repoRoot, "sessions")
+	runID := "run-archive-inject-john"
+	paths, err := EnsureRunLayout(sessionsDir, runID)
+	if err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+
+	hashDir := filepath.Join(paths.ArtifactDir, "T-003")
+	if err := os.MkdirAll(hashDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll hashDir: %v", err)
+	}
+	hashPath := filepath.Join(hashDir, "zip.hash")
+	hash := "secret.zip/secret.txt:$pkzip$1*1*2*0*1*1*abcd*0*0*0*0*$/pkzip$:secret.txt:secret.zip::secret.zip\n"
+	if err := os.WriteFile(hashPath, []byte(hash), 0o644); err != nil {
+		t.Fatalf("WriteFile hash: %v", err)
+	}
+
+	wordlistDir := filepath.Join(paths.ArtifactDir, "T-002")
+	if err := os.MkdirAll(wordlistDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll wordlistDir: %v", err)
+	}
+	wordlistPath := filepath.Join(wordlistDir, "wordlist.txt")
+	if err := os.WriteFile(wordlistPath, []byte("password\ntelefo01\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile wordlist: %v", err)
+	}
+
+	cfg := WorkerRunConfig{SessionsDir: sessionsDir, RunID: runID}
+	task := TaskSpec{
+		TaskID:            "T-004",
+		Title:             "Crack archive password",
+		Goal:              "Recover password from zip.hash",
+		Strategy:          "wordlist_crack",
+		Targets:           []string{"127.0.0.1"},
+		DependsOn:         []string{"T-003", "T-002"},
+		ExpectedArtifacts: []string{"john_output.txt"},
+	}
+	workDir := filepath.Join(paths.ArtifactDir, "T-004")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll workDir: %v", err)
+	}
+
+	cmd, args, notes, changed, err := adaptArchiveWorkflowCommand(cfg, task, "john", nil, workDir)
+	if err != nil {
+		t.Fatalf("adaptArchiveWorkflowCommand: %v", err)
+	}
+	if !changed {
+		t.Fatalf("expected john input adaptation")
+	}
+	if cmd != "john" {
+		t.Fatalf("expected command john, got %q", cmd)
+	}
+	if !containsArg(args, hashPath) {
+		t.Fatalf("expected injected hash path %q, got %v", hashPath, args)
+	}
+	if !containsArg(args, "--wordlist="+wordlistPath) {
+		t.Fatalf("expected injected wordlist path %q, got %v", wordlistPath, args)
+	}
+	if !containsArgPrefix(args, "--pot=") {
+		t.Fatalf("expected injected --pot argument, got %v", args)
+	}
+	if len(notes) == 0 {
+		t.Fatalf("expected adaptation notes")
+	}
+}
+
+func TestAdaptArchiveWorkflowCommandInjectsBoundedFcrackzipStrategy(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	sessionsDir := filepath.Join(repoRoot, "sessions")
+	runID := "run-archive-fcrackzip-bounded"
+	paths, err := EnsureRunLayout(sessionsDir, runID)
+	if err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+
+	realZip := filepath.Join(repoRoot, "secret.zip")
+	if err := os.WriteFile(realZip, []byte("PK\x03\x04archive-bytes"), 0o644); err != nil {
+		t.Fatalf("WriteFile real zip: %v", err)
+	}
+	wordlistDir := filepath.Join(paths.ArtifactDir, "T-002")
+	if err := os.MkdirAll(wordlistDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll wordlistDir: %v", err)
+	}
+	wordlistPath := filepath.Join(wordlistDir, "wordlist.txt")
+	if err := os.WriteFile(wordlistPath, []byte("telefo01\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile wordlist: %v", err)
+	}
+
+	cfg := WorkerRunConfig{SessionsDir: sessionsDir, RunID: runID}
+	task := TaskSpec{
+		TaskID:            "T-006",
+		Title:             "Run targeted mask/hybrid cracking strategy",
+		Goal:              "Attempt bounded cracking strategy for secret.zip",
+		Strategy:          "fallback_crack",
+		Targets:           []string{"127.0.0.1"},
+		DependsOn:         []string{"T-002"},
+		ExpectedArtifacts: []string{"fcrackzip_output.txt"},
+	}
+	workDir := filepath.Join(paths.ArtifactDir, "T-006")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll workDir: %v", err)
+	}
+
+	cmd, args, notes, changed, err := adaptArchiveWorkflowCommand(cfg, task, "fcrackzip", nil, workDir)
+	if err != nil {
+		t.Fatalf("adaptArchiveWorkflowCommand: %v", err)
+	}
+	if !changed {
+		t.Fatalf("expected fcrackzip adaptation")
+	}
+	if cmd != "fcrackzip" {
+		t.Fatalf("expected command fcrackzip, got %q", cmd)
+	}
+	for _, expected := range []string{"-D", "-u", "-p", wordlistPath, "-v", realZip} {
+		if !containsArg(args, expected) {
+			t.Fatalf("expected %q in adapted args, got %v", expected, args)
+		}
+	}
+	if len(notes) == 0 {
+		t.Fatalf("expected adaptation notes")
+	}
+}
+
+func TestAdaptArchiveWorkflowCommandRewritesBareUnzipWithRecoveredPassword(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	sessionsDir := filepath.Join(repoRoot, "sessions")
+	runID := "run-archive-unzip-rewrite"
+	paths, err := EnsureRunLayout(sessionsDir, runID)
+	if err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+
+	realZip := filepath.Join(repoRoot, "secret.zip")
+	if err := os.WriteFile(realZip, []byte("PK\x03\x04archive-bytes"), 0o644); err != nil {
+		t.Fatalf("WriteFile real zip: %v", err)
+	}
+	passDir := filepath.Join(paths.ArtifactDir, "T-004")
+	if err := os.MkdirAll(passDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll passDir: %v", err)
+	}
+	passPath := filepath.Join(passDir, "recovered_password.txt")
+	if err := os.WriteFile(passPath, []byte("telefo01\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile recovered_password.txt: %v", err)
+	}
+
+	cfg := WorkerRunConfig{SessionsDir: sessionsDir, RunID: runID}
+	task := TaskSpec{
+		TaskID:            "T-007",
+		Title:             "Validate proof of access",
+		Goal:              "Use recovered password to validate minimal archive access",
+		Targets:           []string{"127.0.0.1"},
+		DependsOn:         []string{"T-004"},
+		ExpectedArtifacts: []string{"proof_token.txt"},
+	}
+	workDir := filepath.Join(paths.ArtifactDir, "T-007")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll workDir: %v", err)
+	}
+
+	cmd, args, notes, changed, err := adaptArchiveWorkflowCommand(cfg, task, "unzip", nil, workDir)
+	if err != nil {
+		t.Fatalf("adaptArchiveWorkflowCommand: %v", err)
+	}
+	if !changed {
+		t.Fatalf("expected unzip adaptation")
+	}
+	if cmd != "bash" {
+		t.Fatalf("expected rewritten unzip command bash, got %q", cmd)
+	}
+	if len(args) < 2 || args[0] != "-lc" {
+		t.Fatalf("expected shell args [-lc <script>], got %v", args)
+	}
+	if !strings.Contains(args[1], passPath) || !strings.Contains(args[1], realZip) {
+		t.Fatalf("expected script to reference password and zip paths, got %q", args[1])
+	}
+	if len(notes) < 2 {
+		t.Fatalf("expected adaptation notes, got %v", notes)
+	}
+
+	cmdZip, argsZip, _, changedZip, err := adaptArchiveWorkflowCommand(cfg, task, "zip", nil, workDir)
+	if err != nil {
+		t.Fatalf("adaptArchiveWorkflowCommand zip: %v", err)
+	}
+	if !changedZip || cmdZip != "bash" || len(argsZip) < 2 || argsZip[0] != "-lc" {
+		t.Fatalf("expected bare zip rewrite to bash proof extraction, got cmd=%q args=%v changed=%v", cmdZip, argsZip, changedZip)
+	}
+}
+
+func TestAdaptArchiveWorkflowCommandConvertsBareZipToUnzipListingWithoutPassword(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	sessionsDir := filepath.Join(repoRoot, "sessions")
+	runID := "run-archive-zip-fallback"
+	paths, err := EnsureRunLayout(sessionsDir, runID)
+	if err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	realZip := filepath.Join(repoRoot, "secret.zip")
+	if err := os.WriteFile(realZip, []byte("PK\x03\x04archive-bytes"), 0o644); err != nil {
+		t.Fatalf("WriteFile real zip: %v", err)
+	}
+
+	cfg := WorkerRunConfig{SessionsDir: sessionsDir, RunID: runID}
+	task := TaskSpec{
+		TaskID:            "T-007",
+		Title:             "Validate minimal proof-of-access using extracted token",
+		Goal:              "Validate minimal proof-of-access using extracted token",
+		Targets:           []string{"127.0.0.1"},
+		ExpectedArtifacts: []string{"proof_token.txt"},
+	}
+	workDir := filepath.Join(paths.ArtifactDir, "T-007")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll workDir: %v", err)
+	}
+
+	cmd, args, notes, changed, err := adaptArchiveWorkflowCommand(cfg, task, "zip", nil, workDir)
+	if err != nil {
+		t.Fatalf("adaptArchiveWorkflowCommand: %v", err)
+	}
+	if !changed {
+		t.Fatalf("expected adaptation")
+	}
+	if cmd != "unzip" {
+		t.Fatalf("expected command unzip, got %q", cmd)
+	}
+	if len(args) != 2 || args[0] != "-l" || args[1] != realZip {
+		t.Fatalf("expected unzip listing args with %q, got %v", realZip, args)
+	}
+	if len(notes) == 0 {
+		t.Fatalf("expected adaptation note")
+	}
+}
+
+func containsArg(args []string, expected string) bool {
+	for _, arg := range args {
+		if strings.TrimSpace(arg) == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func containsArgPrefix(args []string, prefix string) bool {
+	for _, arg := range args {
+		if strings.HasPrefix(strings.TrimSpace(arg), prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestRepairMissingCommandInputPathsUsesReferencedDependencyPath(t *testing.T) {
 	t.Parallel()
 
@@ -924,16 +1342,16 @@ func TestRepairMissingCommandInputPathsUsesReferencedDependencyPath(t *testing.T
 
 	cfg := WorkerRunConfig{SessionsDir: sessionsDir, RunID: runID}
 	task := TaskSpec{
-		TaskID:     "T-002",
-		Title:      "Extract Archive Metadata",
-		Goal:       "Determine encryption/hash type before selecting cracking method",
-		Strategy:   "metadata_discovery",
-		Targets:    []string{"127.0.0.1"},
-		DependsOn:  []string{"T-001"},
-		RiskLevel:  string(RiskReconReadonly),
-		DoneWhen:   []string{"metadata extracted"},
-		FailWhen:   []string{"metadata extraction failed"},
-		Budget:     TaskBudget{MaxSteps: 4, MaxToolCalls: 2, MaxRuntime: 20 * time.Second},
+		TaskID:    "T-002",
+		Title:     "Extract Archive Metadata",
+		Goal:      "Determine encryption/hash type before selecting cracking method",
+		Strategy:  "metadata_discovery",
+		Targets:   []string{"127.0.0.1"},
+		DependsOn: []string{"T-001"},
+		RiskLevel: string(RiskReconReadonly),
+		DoneWhen:  []string{"metadata extracted"},
+		FailWhen:  []string{"metadata extraction failed"},
+		Budget:    TaskBudget{MaxSteps: 4, MaxToolCalls: 2, MaxRuntime: 20 * time.Second},
 	}
 	args := []string{"-v", "/tmp/secret.zip"}
 
@@ -1181,6 +1599,51 @@ func TestRepairMissingCommandInputPathsBootstrapsCompressedWordlist(t *testing.T
 	}
 	if !strings.Contains(string(content), "secret") {
 		t.Fatalf("expected decompressed wordlist content, got %q", string(content))
+	}
+}
+
+func TestRepairMissingCommandInputPathsRepairsWordlistEqualsArg(t *testing.T) {
+	repoRoot := t.TempDir()
+	sessionsDir := filepath.Join(repoRoot, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll sessions: %v", err)
+	}
+	wordlistDir := filepath.Join(repoRoot, "wordlists")
+	if err := os.MkdirAll(wordlistDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll wordlists: %v", err)
+	}
+	requestedWordlist := filepath.Join(wordlistDir, "mini.txt")
+	if err := writeGzipFile(filepath.Join(wordlistDir, "mini.txt.gz"), []byte("secret\npassword\n")); err != nil {
+		t.Fatalf("writeGzipFile: %v", err)
+	}
+	hashPath := filepath.Join(repoRoot, "zip.hash")
+	if err := os.WriteFile(hashPath, []byte("fake"), 0o644); err != nil {
+		t.Fatalf("WriteFile zip.hash: %v", err)
+	}
+	t.Setenv("BIRDHACKBOT_WORDLIST_DIR", wordlistDir)
+
+	cfg := WorkerRunConfig{SessionsDir: sessionsDir}
+	task := TaskSpec{
+		TaskID:   "T-004",
+		Title:    "Run baseline wordlist crack",
+		Goal:     "Run baseline wordlist cracking strategy",
+		Targets:  []string{"127.0.0.1"},
+		Strategy: "wordlist_crack",
+	}
+	args := []string{"--wordlist=" + requestedWordlist, "--format=zip", hashPath}
+
+	nextArgs, notes, repaired, err := repairMissingCommandInputPaths(cfg, task, "john", args)
+	if err != nil {
+		t.Fatalf("repairMissingCommandInputPaths: %v", err)
+	}
+	if !repaired {
+		t.Fatalf("expected wordlist= path repair")
+	}
+	if !containsArgPrefix(nextArgs, "--wordlist=/tmp/birdhackbot-wordlists/") {
+		t.Fatalf("expected repaired --wordlist= arg, got %v", nextArgs)
+	}
+	if len(notes) == 0 {
+		t.Fatalf("expected repair note")
 	}
 }
 
@@ -3715,11 +4178,14 @@ func TestParseWorkerRunConfig(t *testing.T) {
 		OrchAttemptEnv:     "2",
 		OrchPermissionEnv:  string(PermissionAll),
 		OrchDisruptiveEnv:  "true",
+		OrchDiagnosticEnv:  "true",
+		OrchApprovalEnv:    "90s",
+		OrchToolInstallEnv: string(ToolInstallPolicyNever),
 	}
 	cfg := ParseWorkerRunConfig(func(key string) string {
 		return env[key]
 	})
-	if cfg.SessionsDir != "/tmp/sessions" || cfg.RunID != "run-1" || cfg.TaskID != "task-1" || cfg.WorkerID != "worker-1" || cfg.Attempt != 2 || cfg.Permission != PermissionAll || !cfg.Disruptive {
+	if cfg.SessionsDir != "/tmp/sessions" || cfg.RunID != "run-1" || cfg.TaskID != "task-1" || cfg.WorkerID != "worker-1" || cfg.Attempt != 2 || cfg.Permission != PermissionAll || !cfg.Disruptive || !cfg.Diagnostic || cfg.ApprovalTimeout != 90*time.Second || cfg.ToolInstallPolicy != ToolInstallPolicyNever {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 }

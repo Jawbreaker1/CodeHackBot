@@ -1884,6 +1884,23 @@ func hasEventType(events []orchestrator.EventEnvelope, eventType string) bool {
 	return false
 }
 
+func TestAppendEnvIfMissing(t *testing.T) {
+	t.Parallel()
+
+	env := []string{"A=1", "B=2"}
+	env = appendEnvIfMissing(env, "B", "3")
+	if len(env) != 2 {
+		t.Fatalf("expected env length unchanged when key exists, got %d", len(env))
+	}
+	env = appendEnvIfMissing(env, "C", "9")
+	if len(env) != 3 {
+		t.Fatalf("expected env length to grow when key missing, got %d", len(env))
+	}
+	if got := env[2]; got != "C=9" {
+		t.Fatalf("expected appended env C=9, got %q", got)
+	}
+}
+
 func testRepoRoot(t *testing.T) string {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)

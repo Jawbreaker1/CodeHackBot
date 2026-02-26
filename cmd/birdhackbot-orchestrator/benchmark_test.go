@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/orchestrator"
 )
@@ -222,6 +223,41 @@ func TestRunBenchmarkStopsOnCanceledContext(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), "benchmark interrupted") {
 		t.Fatalf("expected interruption message in stderr, got %q", errOut.String())
+	}
+}
+
+func TestBenchmarkScenarioRunArgsIncludesDiagnosticFlag(t *testing.T) {
+	t.Parallel()
+
+	args := benchmarkScenarioRunArgs(
+		"/tmp/sessions",
+		"run-1",
+		benchmarkScenario{
+			ID:    "scenario-1",
+			Goal:  "diagnostic test",
+			Scope: benchmarkScopeLocalhost(),
+		},
+		"auto",
+		"default",
+		"ask",
+		1,
+		1,
+		false,
+		250*time.Millisecond,
+		30*time.Second,
+		20*time.Second,
+		30*time.Second,
+		2*time.Minute,
+		2*time.Second,
+		true,
+		"./birdhackbot",
+		[]string{"worker"},
+		nil,
+	)
+
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--diagnostic") {
+		t.Fatalf("expected --diagnostic in run args, got: %v", args)
 	}
 }
 

@@ -113,6 +113,159 @@ func TestSynthesizeTaskGraphWithLLMRejectsInvalidTask(t *testing.T) {
 	}
 }
 
+func TestSynthesizeTaskGraphWithLLMNormalizesInlineShellCommandAction(t *testing.T) {
+	t.Parallel()
+
+	client := &fakePlannerClient{
+		content: `{
+			"tasks":[
+				{
+					"task_id":"t1",
+					"title":"discover archive",
+					"goal":"find archive path",
+					"targets":["127.0.0.1"],
+					"depends_on":[],
+					"priority":1,
+					"strategy":"discovery",
+					"risk_level":"recon_readonly",
+					"done_when":["path found"],
+					"fail_when":["path missing"],
+					"expected_artifacts":["secret.zip_path"],
+					"action":{"type":"command","command":"find /tmp -name secret.zip -type f || find /home -name secret.zip -type f"},
+					"budget":{"max_steps":6,"max_tool_calls":8,"max_runtime_seconds":240}
+				}
+			]
+		}`,
+	}
+	tasks, _, err := SynthesizeTaskGraphWithLLM(
+		context.Background(),
+		client,
+		"model",
+		"locate secret archive",
+		Scope{Targets: []string{"127.0.0.1"}},
+		[]string{"local_only"},
+		nil,
+		1,
+	)
+	if err != nil {
+		t.Fatalf("SynthesizeTaskGraphWithLLM: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(tasks))
+	}
+	if got := tasks[0].Action.Command; got != "bash" {
+		t.Fatalf("expected normalized shell wrapper command bash, got %q", got)
+	}
+	if len(tasks[0].Action.Args) != 2 || tasks[0].Action.Args[0] != "-lc" {
+		t.Fatalf("expected normalized shell args [-lc <body>], got %#v", tasks[0].Action.Args)
+	}
+}
+
+func TestSynthesizeTaskGraphWithLLMRejectsMalformedInlineShellCommandAction(t *testing.T) {
+	t.Parallel()
+
+	client := &fakePlannerClient{
+		content: `{
+			"tasks":[
+				{
+					"task_id":"t1",
+					"title":"discover archive",
+					"goal":"find archive path",
+					"targets":["127.0.0.1"],
+					"depends_on":[],
+					"priority":1,
+					"strategy":"discovery",
+					"risk_level":"recon_readonly",
+					"done_when":["path found"],
+					"fail_when":["path missing"],
+					"expected_artifacts":["secret.zip_path"],
+					"action":{"type":"command","command":"find /tmp -name \"secret.zip\" -type f || find /home -name \"secret.zip\" -type f || find /var -name \"secret"},
+					"budget":{"max_steps":6,"max_tool_calls":8,"max_runtime_seconds":240}
+				}
+			]
+		}`,
+	}
+	_, _, err := SynthesizeTaskGraphWithLLM(
+		context.Background(),
+		client,
+		"model",
+		"locate secret archive",
+		Scope{Targets: []string{"127.0.0.1"}},
+		[]string{"local_only"},
+		nil,
+		1,
+	)
+	if err == nil {
+		t.Fatalf("expected validation failure for malformed shell body")
+	}
+	var plannerFailure *LLMPlannerFailure
+	if !errors.As(err, &plannerFailure) {
+		t.Fatalf("expected LLMPlannerFailure, got %T", err)
+	}
+	if plannerFailure.Stage != "validate" {
+		t.Fatalf("expected validate stage, got %q", plannerFailure.Stage)
+	}
+	if !strings.Contains(strings.ToLower(plannerFailure.Error()), "unbalanced quotes") {
+		t.Fatalf("expected malformed shell quote validation error, got: %v", plannerFailure)
+	}
+}
+
+func TestLLMPlannerJSONSchemaActionLengthAllowsLongerShellBodies(t *testing.T) {
+	t.Parallel()
+
+	format := llmPlannerJSONSchemaResponseFormat()
+	jsonSchema, ok := format["json_schema"].(map[string]any)
+	if !ok {
+		t.Fatalf("json_schema missing")
+	}
+	schema, ok := jsonSchema["schema"].(map[string]any)
+	if !ok {
+		t.Fatalf("schema missing")
+	}
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("schema.properties missing")
+	}
+	tasksProp, ok := properties["tasks"].(map[string]any)
+	if !ok {
+		t.Fatalf("tasks property missing")
+	}
+	taskItems, ok := tasksProp["items"].(map[string]any)
+	if !ok {
+		t.Fatalf("tasks.items missing")
+	}
+	taskProps, ok := taskItems["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("tasks.items.properties missing")
+	}
+	actionProp, ok := taskProps["action"].(map[string]any)
+	if !ok {
+		t.Fatalf("action property missing")
+	}
+	actionProps, ok := actionProp["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("action.properties missing")
+	}
+	commandProp, ok := actionProps["command"].(map[string]any)
+	if !ok {
+		t.Fatalf("action.command missing")
+	}
+	if got := int(commandProp["maxLength"].(int)); got < 512 {
+		t.Fatalf("expected action.command maxLength >= 512, got %d", got)
+	}
+	argsProp, ok := actionProps["args"].(map[string]any)
+	if !ok {
+		t.Fatalf("action.args missing")
+	}
+	argItem, ok := argsProp["items"].(map[string]any)
+	if !ok {
+		t.Fatalf("action.args.items missing")
+	}
+	if got := int(argItem["maxLength"].(int)); got < 512 {
+		t.Fatalf("expected action.args item maxLength >= 512, got %d", got)
+	}
+}
+
 func TestSynthesizeTaskGraphWithLLMClassifiesTruncatedOutput(t *testing.T) {
 	t.Parallel()
 

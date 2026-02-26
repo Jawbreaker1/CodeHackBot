@@ -32,6 +32,16 @@ Required behavior:
 - Independent validation is required for promoted findings: a separate verifier agent/worker must reproduce or reject candidate findings.
 - For `critical/high` claims, add skeptic validation that explicitly tries to falsify the claim before acceptance.
 
+## 2.2) Exploration Envelope vs Loop Boundaries
+- Keep LLM-driven exploration enabled in routine validation (do not force static-only behavior).
+- Quick validation runs must use at least 2 seeds so action paths can vary.
+- Variation is allowed; blind repetition is not:
+  - repeated low-value actions (for example repeated `list_dir`/`ls -la` with no new evidence) must trigger recovery or `no_progress`.
+  - no run may be considered successful if progress is only repetitive command churn.
+- Each pivot must reference either:
+  - new evidence, or
+  - a concrete unknown/hypothesis gap being tested next.
+
 ## 3) Scorecard Metrics
 For every benchmark run, compute and persist:
 
@@ -66,6 +76,30 @@ Rules:
 
 One-command runner:
 - `./birdhackbot-orchestrator benchmark --sessions-dir sessions --worker-cmd ./birdhackbot --worker-arg worker --repeat 5 --seed 42 --lock-baseline`
+
+## 4.1) Quota-Aware Quick Gate (<=10 minutes)
+Use this for routine commits to avoid high token/runtime cost.
+
+- Must run with LLM-enabled planning mode (`--planner auto`).
+- Must execute at least 2 seeds.
+- Must include loop-pressure coverage and report-truth coverage.
+- Canonical Sprint 36 quick-gate pack:
+  - `docs/runbooks/sprint36-quick-gate-scenarios.json`
+- Canonical runner/check:
+  - `scripts/run_sprint36_quick_gate.sh`
+  - `scripts/check_benchmark_gate.py`
+- Suggested quick-gate set:
+  1. zip local goal regression (`seed=11`)
+  2. zip local goal regression (`seed=17`)
+  3. `recovery_stress_repeat_pressure` benchmark scenario (`repeat=1`)
+- Full `repeat=5` benchmark remains manual/periodic.
+
+## 4.2) Full Gate (Manual/Periodic)
+- Canonical Sprint 36 full-gate pack:
+  - `docs/runbooks/sprint36-full-gate-scenarios.json`
+- Canonical runner:
+  - `scripts/run_sprint36_full_gate.sh`
+- Full gate is not per-commit; use it for milestone checks and baseline refresh.
 
 ## 5) Regression Thresholds
 Flag regression if either condition is met:

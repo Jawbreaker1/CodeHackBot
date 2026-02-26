@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -203,5 +204,43 @@ func TestRefreshMemoryBankCompactsLargeFindingSet(t *testing.T) {
 	}
 	if !ctx.Compacted {
 		t.Fatalf("expected compacted memory context")
+	}
+}
+
+func TestCompactKnownFactsEntriesPreservesAnchorsAndLatestDynamic(t *testing.T) {
+	values := []string{
+		"Goal: test target",
+		"Planner decision: goal_seed_v1",
+	}
+	for i := 0; i < 40; i++ {
+		values = append(values, fmt.Sprintf("dynamic fact %02d", i))
+	}
+	retained := compactKnownFactsEntries(values, 20)
+	if len(retained) != 20 {
+		t.Fatalf("expected retained size 20, got %d", len(retained))
+	}
+	joined := strings.Join(retained, "\n")
+	if !strings.Contains(joined, "Goal: test target") {
+		t.Fatalf("expected Goal anchor retained")
+	}
+	if !strings.Contains(joined, "Planner decision: goal_seed_v1") {
+		t.Fatalf("expected Planner decision anchor retained")
+	}
+	if !strings.Contains(joined, "dynamic fact 39") {
+		t.Fatalf("expected latest dynamic fact retained")
+	}
+	if strings.Contains(joined, "dynamic fact 00") {
+		t.Fatalf("expected oldest dynamic fact dropped")
+	}
+}
+
+func TestCompactTailEntriesKeepsNewest(t *testing.T) {
+	values := []string{"q1", "q2", "q3", "q4", "q5"}
+	retained := compactTailEntries(values, 2)
+	if len(retained) != 2 {
+		t.Fatalf("expected retained size 2, got %d", len(retained))
+	}
+	if retained[0] != "q4" || retained[1] != "q5" {
+		t.Fatalf("expected newest tail [q4 q5], got %#v", retained)
 	}
 }

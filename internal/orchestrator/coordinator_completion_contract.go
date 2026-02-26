@@ -127,16 +127,85 @@ func verifyRequiredArtifacts(required, verified []string) []string {
 	if len(required) == 0 {
 		return nil
 	}
-	remaining := len(verified)
-	missing := make([]string, 0)
-	for _, item := range required {
-		if remaining > 0 {
-			remaining--
+	available := make([]string, 0, len(verified))
+	for _, item := range verified {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
 			continue
 		}
-		missing = append(missing, item)
+		available = append(available, trimmed)
+	}
+	used := make([]bool, len(available))
+	missing := make([]string, 0)
+	for _, item := range required {
+		requirement := strings.TrimSpace(item)
+		if requirement == "" {
+			continue
+		}
+		matchIdx := -1
+		for i, candidate := range available {
+			if used[i] {
+				continue
+			}
+			if artifactRequirementMatches(requirement, candidate) {
+				matchIdx = i
+				break
+			}
+		}
+		if matchIdx >= 0 {
+			used[matchIdx] = true
+			continue
+		}
+		// Backward-compatible fallback for non-concrete artifact labels
+		// (e.g. "command log"): allow any remaining verified artifact.
+		if !artifactRequirementNeedsConcreteMatch(requirement) {
+			for i := range available {
+				if used[i] {
+					continue
+				}
+				used[i] = true
+				matchIdx = i
+				break
+			}
+			if matchIdx >= 0 {
+				continue
+			}
+		}
+		missing = append(missing, requirement)
 	}
 	return compactStrings(missing)
+}
+
+func artifactRequirementMatches(requirement, candidate string) bool {
+	required := strings.ToLower(strings.TrimSpace(requirement))
+	current := strings.ToLower(strings.TrimSpace(candidate))
+	if required == "" || current == "" {
+		return false
+	}
+	if required == current {
+		return true
+	}
+	requiredBase := strings.ToLower(strings.TrimSpace(filepath.Base(required)))
+	candidateBase := strings.ToLower(strings.TrimSpace(filepath.Base(current)))
+	if requiredBase != "" && requiredBase == candidateBase {
+		return true
+	}
+	// Handle relative required paths where verified artifacts are absolute.
+	if strings.Contains(required, string(filepath.Separator)) && strings.HasSuffix(current, required) {
+		return true
+	}
+	return false
+}
+
+func artifactRequirementNeedsConcreteMatch(requirement string) bool {
+	trimmed := strings.TrimSpace(requirement)
+	if trimmed == "" {
+		return false
+	}
+	if strings.Contains(trimmed, string(filepath.Separator)) {
+		return true
+	}
+	return filepath.Ext(trimmed) != ""
 }
 
 func verifyRequiredFindings(required, produced []string) []string {

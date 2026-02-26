@@ -477,8 +477,8 @@ Sprint header convention (all new planned sprints): first checklist item must be
   - [x] reduce `assist_no_action` failures from recover-mode `plan`/`question` churn (recover non-action loops now classified/handled as `assist_loop_detected`; latest smoke did not emit `assist_no_action`).
   - [x] add bounded no-new-evidence completion fallback for repeated recover churn (identical results, extended recover tool churn, and recover tool-call cap).
   - [x] reduce remaining `assist_loop_detected` churn on `task-h01`/`task-h02` under approved active-probe runs (`host_discovery_inventory` targeted `repeat=2` now 2/2 with loop incident rate 0 and no `assist_loop_detected` on `task-h01`/`task-h02`).
-  - [x] [Moved to Sprint 37] reduce `assist_no_new_evidence` dependence for `task-h01`/`task-h02` auth/recon loops when the model alternates helper scripts instead of issuing explicit completion (latest spot checks still show mixed `assist_complete` vs `assist_no_new_evidence` behavior across seeds).
-  - [x] [Moved to Sprint 37] tighten bounded fallback trigger so long-lived recover churn terminates earlier without masking genuine progress (improved from `task-h01` fallback at step/tool-call 14 to step/tool-call 8 in `benchmark-20260223-124754` and `benchmark-20260223-125200`; keep open for variance in scenario runtime).
+  - [x] [Moved to Sprint 38] reduce `assist_no_new_evidence` dependence for `task-h01`/`task-h02` auth/recon loops when the model alternates helper scripts instead of issuing explicit completion (latest spot checks still show mixed `assist_complete` vs `assist_no_new_evidence` behavior across seeds).
+  - [x] [Moved to Sprint 38] tighten bounded fallback trigger so long-lived recover churn terminates earlier without masking genuine progress (improved from `task-h01` fallback at step/tool-call 14 to step/tool-call 8 in `benchmark-20260223-124754` and `benchmark-20260223-125200`; keep open for variance in scenario runtime).
   - [x] harden goal-seeded command compatibility for internal assist builtins (`report`/`browse`/`crawl`) so planner-generated command actions cannot execute unresolved internal command literals as shell binaries (observed `exec: \"report\": executable file not found` loop in `run-scanme-goal-20260223-195012`).
     - command tasks now execute `browse`/`crawl` via internal runtime builtins instead of shell binary lookup; assist tool suggestions reuse the same builtin path with scope validation.
     - report-literal commands are now classified as weak report synthesis inputs for OWASP/report tasks and rewritten to deterministic local report synthesis.
@@ -551,7 +551,7 @@ Sprint header convention (all new planned sprints): first checklist item must be
   - [x] add regression coverage for local encrypted-archive workflow:
     - added `TestLocalArchiveWorkflowArtifactsAndReportNoRewrite` to validate parallel crack-task execution (`t2`/`t3`), real artifact propagation (`john_show.txt`, `recovered_password.txt`, `extraction_status.txt`, `extracted_preview.txt`), and final `zip_crack_report.md` content in orchestrator artifact paths.
     - asserts local non-security report task (`t5`) is not auto-rewritten into OWASP synthesis (no `rewrote weak report command` event for `t5`).
-  - [x] reduce benchmark terminal failures still dominated by `assist_loop_detected`/`assist_budget_exhausted` in `cross_agent_validation_false_claim` and `evidence_first_reporting_quality` (targeted `repeat=2` reruns now 2/2 pass each; post-hardening spot checks also 1/1 pass each in `benchmark-20260223-115835` and `benchmark-20260223-120100`; full-suite confirmation deferred to Sprint 36).
+  - [x] reduce benchmark terminal failures still dominated by `assist_loop_detected`/`assist_budget_exhausted` in `cross_agent_validation_false_claim` and `evidence_first_reporting_quality` (targeted `repeat=2` reruns now 2/2 pass each; post-hardening spot checks also 1/1 pass each in `benchmark-20260223-115835` and `benchmark-20260223-120100`; full-suite confirmation deferred to Sprint 37).
     - latest targeted stability check (`benchmark-20260223-170436`, `repeat=2` over both risky scenarios) regressed only on `evidence_first_reporting_quality-r02` with `command_failed` + downstream `assist_loop_detected`; failure trace shows assist emitted `bash` with a single string arg (`"nmap -sV -p- 127.0.0.1"`) causing `bash: ... No such file or directory` before recovery loop failure.
     - post-fix reruns recovered stability: `benchmark-20260223-170955` (`evidence_first_reporting_quality`, `repeat=2`) and `benchmark-20260223-171117` (both risky scenarios, `repeat=2`) completed `4/4` with zero loop incidents and zero failures.
   - [x] normalize assist-command shell invocation when assistant emits `bash`/`sh` with a single string command arg (auto-rewrite to `-lc <cmd>`) to prevent false `command_failed` on valid shell payloads.
@@ -568,14 +568,94 @@ Sprint header convention (all new planned sprints): first checklist item must be
     - ensure downstream tasks blocked on failed seed dependencies are rewired/superseded so queue remains runnable after recovery insertion.
     - added regression test `TestCoordinator_RepeatedSeedAssistLoopPromotesAdaptiveReplanAndRewiresDependencies` proving second seed-loop failure triggers adaptive replan and does not immediately terminalize the coordinator.
 - [x] Re-run 5x baseline on current commit and refresh locked baseline after smoke is healthy (`benchmark-20260223-092006` locked to `docs/runbooks/autonomy-benchmark-baseline.json`).
-- [x] Exit criteria deferred to Sprint 36 (full-suite rerun postponed by operator request).
+- [x] Exit criteria deferred to Sprint 37 (full-suite rerun postponed by operator request).
 
-## Sprint 36 — Evidence-Backed Exploration State (planned)
+## Sprint 36 — Project Salvage Attack Plan (planned, blocking)
+- [ ] Phase 1 — Stabilize and instrument before more fixes:
+  - [x] freeze non-salvage feature work and treat Sprint 37+ as provisional.
+    - codified freeze policy in `docs/runbooks/salvage-experiment-ops.md` (`Sprint Freeze Policy`): Sprint 36 allows salvage-phase changes only; Sprint 37+ stays provisional until Sprint 36 exit gate passes.
+  - [x] add a diagnostic run mode that minimizes adaptive rewrites so traces show root behavior.
+    - added `--diagnostic` for `run` and `benchmark`, propagated to workers via `BIRDHACKBOT_ORCH_DIAGNOSTIC_MODE=true`.
+    - diagnostic mode disables adaptive worker rewrites (target auto-injection, runtime command adaptation, missing-input auto-repair) while preserving fail-closed scope checks.
+    - diagnostic mode auto-enables assist strict mode + per-turn raw LLM trace artifacts unless explicitly overridden by `--worker-env`.
+    - added regressions: `TestRunWorkerTaskAssistDiagnosticModeSkipsShellRewrite`, `TestBenchmarkScenarioRunArgsIncludesDiagnosticFlag`, `TestAppendEnvIfMissing`.
+  - [x] standardize run-ID + artifact checklist for every salvage experiment.
+    - added `docs/runbooks/salvage-experiment-ops.md` with run-ID convention (`salvage-<problem-id>-<slice>-<timestamp>-s<seed>`) and required artifact checklist.
+  - [x] define quota-aware validation cadence (fast smoke per change, focused regression on milestone, full suite manual/periodic only).
+    - added explicit cadence tiers and command templates in `docs/runbooks/salvage-experiment-ops.md`.
+- [x] Phase 2 — Problem register before implementation:
+  - [x] create `docs/runbooks/problem-register.md` with severity, reproducibility, owner, and component mapping.
+  - [x] log current known failures: zip discovery loops, repeated no-op commands, planner intermittency, report truth gaps, approval UX ambiguity.
+  - [x] require a concrete repro recipe and acceptance signal for every registered problem.
+- [ ] Phase 3 — Deterministic repro harness:
+  - [x] add minimal reproducible scenarios for top failures (zip-local, OWASP report synthesis, approval stalls, planner truncation).
+    - added `docs/runbooks/sprint36-repro-scenarios.json` with command templates and scenario mapping to problem-register IDs.
+    - added deterministic active-probe approval template plan: `docs/runbooks/repro/approval-stall-plan.template.json`.
+  - [x] pin seed/model/runtime flags and expected event signatures per scenario.
+    - repro matrix now pins planner mode (`auto` for runtime cases), seed placeholders, approval timeout, worker command/args, and expected event/metric signatures.
+  - [x] add regression checks that fail when known loop signatures reappear.
+    - added `scripts/check_benchmark_gate.py` to fail on loop signatures (`assist_loop_detected`, `assist_budget_exhausted`, repeated low-value listing streaks, and `assist_no_new_evidence` task completion).
+  - [x] add a "quick gate" benchmark pack (`<=10 min`) for routine iteration with hard pass/fail thresholds.
+    - added `docs/runbooks/sprint36-quick-gate-scenarios.json` and runner `scripts/run_sprint36_quick_gate.sh`.
+  - [x] quick gate must run with `--planner auto` (LLM active) across at least 2 seeds so exploration remains model-driven.
+    - quick-gate runner executes two pinned seeds (`11`, `17`) with `--planner auto`.
+  - [x] quick gate must enforce anti-loop limits (for example max identical low-value action streak per task) and fail on repeated `list_dir`/`ls -la` churn without new evidence.
+    - quick-gate checker enforces `--max-low-value-streak` (default `3`) on command-log event traces.
+  - [x] quick gate must require bounded progress semantics: each pivot cites new evidence or a concrete unknown; otherwise terminate as `no_progress` (not `completed`).
+    - quick-gate checker rejects runs that complete tasks via `assist_no_new_evidence`.
+  - [x] add a "full gate" benchmark pack (`repeat=5`) marked manual/periodic so it is not run on every change.
+    - added `docs/runbooks/sprint36-full-gate-scenarios.json` and manual runner `scripts/run_sprint36_full_gate.sh`.
+- [ ] Phase 4 — Root-cause telemetry and context integrity:
+  - [ ] instrument observation truncation, memory-window eviction, retry-attempt resets, and repeated-command fingerprints.
+  - [ ] emit per-attempt "what changed since prior attempt" summaries to detect blind repeats early.
+  - [ ] classify each failure as context-loss, strategy-failure, or contract-failure before patching behavior.
+  - [x] add context diagnostics artifact per task attempt (`context_envelope.json`) capturing: prompt payload sizes, observation counts, truncation counters, and retained anchors.
+  - [x] persist critical execution anchors across retries (last successful target path(s), last command/result fingerprint, last concrete failure cause).
+  - [x] stop resetting effective context on retry: carry forward bounded prior-attempt observations into next attempt.
+  - [x] replace single rolling text blob with layered context payload (`facts`, `recent_actions`, `recent_artifacts`, `open_unknowns`) for assist input.
+  - [x] add oversized-context smoke regression (`TestBuildWorkerAssistLayeredContextStressCompaction`) to prove compaction caps and retained-vs-dropped slices are deterministic.
+  - [x] enforce context compaction retention policy: always keep anchors (`Goal`, `Planner decision`), keep newest dynamic facts/questions/actions/artifacts, and inject explicit `compaction_summary` lines into assist context.
+  - [x] raise minimum retained observation budget and enforce token-aware compaction that preserves file paths/errors/targets first.
+  - [x] add regression test: repeated `list_dir`/`ls -la` without new evidence must trigger alternate strategy or `no_progress`, never silent completion.
+  - [ ] enforce orchestrator-owned shared-memory contract for parallel workers (single writer orchestrator; workers append-only via events/artifacts).
+  - [ ] attach event-id provenance for promoted shared-memory facts (candidate -> verified/rejected auditability).
+  - [ ] checkpoint protocol: after each Phase 4 implementation slice, run targeted tests + quick gate and log outcome in `docs/runbooks/problem-register.md`.
+- [ ] Phase 5 — Contract corrections (minimal behavior changes first):
+  - [ ] enforce run success semantics: `completed` requires goal-truth checks, not only task lease completion.
+  - [ ] enforce report truth gates: findings/claims must map to verifier-backed evidence.
+  - [ ] block terminal success when required artifacts/verifications are unresolved.
+  - [ ] require every exploratory pivot to cite either a new evidence anchor or explicit unknown under test.
+  - [ ] adopt and enforce "hard support exception policy" from `docs/runbooks/architecture-recovery-plan.md` (generic-first, capability-scoped exceptions only).
+  - [ ] missing-tool recovery contract: if a recommended tool is unavailable, request operator approval for install (when policy allows); otherwise force LLM replan against available tools without repeated missing-tool retries.
+- [ ] Phase 6 — Early role deployment (thin slice):
+  - [ ] introduce a read-only validator role/worker that independently confirms or rejects candidate findings.
+  - [ ] route report synthesis through validator verdict states (`verified`/`rejected`/`unverified`).
+  - [ ] defer full multi-role expansion until execution/context reliability is stable.
+- [ ] Phase 7 — Cleanup sweep to reduce accidental complexity:
+  - [ ] split oversized runtime/planner files by responsibility with no behavior change.
+  - [ ] remove overlapping adapters/fallbacks after contracts are enforced.
+  - [ ] document ownership boundaries for planner, executor, verifier, and reporter.
+- [ ] Phase 8 — Exit gate (must pass before Sprint 37 starts):
+  - [ ] zip regression passes `>=5/5` under LLM planner without repeated no-op loop signatures.
+  - [ ] planner success/retry metrics meet agreed thresholds on the salvage smoke matrix.
+  - [ ] reports include concise human-readable method/results and zero unverified critical claims.
+  - [ ] quick-gate benchmark trend is non-regressing across salvage commits (token/time budget respected).
+  - [ ] hold sprint replanning review to rewrite Sprint 37-43 scope based on measured outcomes.
+
+## Sprint 37 — Evidence-Backed Exploration State (planned, provisional)
+- [ ] Prerequisite: Sprint 36 exit gate completed; otherwise keep this sprint queued and revise.
 - [ ] [Deferred from Sprint 35] Full benchmark-suite confirmation:
   - [ ] prerequisite: restore stable LLM endpoint availability for unattended reruns.
   - [ ] rerun full benchmark suite (`repeat=5`) on current hardening commit.
   - [ ] confirm baseline is reproducible on the same commit.
   - [ ] confirm scorecard artifacts are complete for every scenario run.
+- [ ] Architecture evaluation + cleanup sweep before further hardening:
+  - [ ] produce architecture recovery doc with current failure classes, ownership boundaries, and acceptance criteria (`docs/runbooks/architecture-recovery-plan.md`).
+  - [ ] define explicit planner->executor contract (action shape, artifact contract, success semantics) and reject off-contract behavior instead of adding runtime special-cases.
+  - [ ] run a no-behavior-change cleanup pass to split oversized files (`worker_runtime.go`, `worker_runtime_assist_loop.go`, `main_planner.go`) into focused units.
+  - [ ] remove or consolidate redundant adapters/heuristics that overlap in responsibility (input repair vs command adaptation vs artifact synthesis).
+  - [ ] add regression coverage for run terminal semantics so `completed` requires success criteria evidence, not only task lease completion.
+  - [ ] gate report claims behind verified evidence (no "password recovered"/"CVE found" statements without matching verifier evidence).
 - [x] Harden LLM planner reliability contract for goal runs:
   - [x] enforce schema-constrained planner output (`response_format=json_schema`) before parse/validate.
   - [x] replace fixed retry with bounded adaptive retries (attempt cap + wall-clock cap + backoff + context narrowing).
@@ -606,7 +686,8 @@ Sprint header convention (all new planned sprints): first checklist item must be
   - [ ] improved verified finding precision vs Sprint 35 baseline
   - [ ] verification lag (claim -> verified/rejected) stays within bounded step budget
 
-## Sprint 37 — Recovery Strategy Diversification (planned)
+## Sprint 38 — Recovery Strategy Diversification (planned, provisional)
+- [ ] Prerequisite: Sprint 36 exit gate completed; revise scope if salvage findings invalidate assumptions.
 - [ ] Add recovery policy that enforces strategy-class changes after repeated failures.
 - [ ] Prevent near-duplicate retry loops (semantic intent class, not just exact command string).
 - [ ] Add bounded guard for repeated non-tool churn (`command`/`plan`) similar to tool-loop guard.
@@ -624,8 +705,9 @@ Sprint header convention (all new planned sprints): first checklist item must be
   - [ ] recovery success rate improved vs baseline
   - [ ] reduced false-positive carry-forward from initial discovery steps
 
-## Sprint 38 — Novelty Scoring + Anti-Redundancy (planned, conditional)
-- [ ] Prerequisite: execute only if Sprint 37 loop/fallback metrics are still below exit criteria.
+## Sprint 39 — Novelty Scoring + Anti-Redundancy (planned, conditional, provisional)
+- [ ] Prerequisite: Sprint 36 exit gate completed.
+- [ ] Prerequisite: execute only if Sprint 38 loop/fallback metrics are still below exit criteria.
 - [ ] Add novelty scoring for actions/evidence and feed score into recovery/planning prompts.
 - [ ] Penalize repeated low-value actions when no new evidence is produced.
 - [ ] Add tests for novelty gain and anti-redundancy behavior.
@@ -633,7 +715,8 @@ Sprint header convention (all new planned sprints): first checklist item must be
   - [ ] higher novel-evidence-per-step vs baseline
   - [ ] no regression in safety metrics
 
-## Sprint 39 — Kali Controlled Pilot (planned)
+## Sprint 40 — Kali Controlled Pilot (planned, provisional)
+- [ ] Prerequisite: Sprint 36 exit gate completed and Sprint 37/38 contract metrics are stable.
 - [ ] Run the same benchmark pack on Kali in authorized internal lab only.
 - [ ] Compare Kali metrics to local baseline with documented tolerance bands.
 - [ ] Capture full event/artifact bundles for reproducibility.
@@ -643,7 +726,8 @@ Sprint header convention (all new planned sprints): first checklist item must be
   - [ ] no policy/scope violations during pilot runs
   - [ ] no candidate finding is reported as verified without validator evidence
 
-## Sprint 40 — Regression Gates + Revert Discipline (planned)
+## Sprint 41 — Regression Gates + Revert Discipline (planned, provisional)
+- [ ] Prerequisite: Sprint 36 exit gate completed.
 - [ ] Add targeted benchmark regression gate to CI for key scorecard metrics (`smoke` + highest-risk scenarios); keep full-suite gate as periodic/manual until runtime budget is acceptable.
 - [ ] Add explicit revert policy and threshold checks (auto-fail gate on severe regressions).
 - [ ] Keep report-time backstop gate strict: only `verified` findings in confirmed findings section; all other claims excluded or labeled `UNVERIFIED`.
@@ -652,7 +736,8 @@ Sprint header convention (all new planned sprints): first checklist item must be
   - [ ] merge blocked on benchmark regression
   - [ ] revert decision path documented and tested
 
-## Sprint 41 — Wireless Access Security (planned, lab-only)
+## Sprint 42 — Wireless Access Security (planned, lab-only, provisional)
+- [ ] Prerequisite: Sprint 36 exit gate completed.
 - [ ] Define wireless scope contract (SSID/BSSID/channel/interface allowlists + deny lists) for authorized internal lab environments.
 - [ ] Add wireless command policy/guardrails in runtime:
   - [ ] classify wireless tooling risk tiers (passive recon, auth probing, handshake capture, rogue-AP simulation).
@@ -679,9 +764,10 @@ Sprint header convention (all new planned sprints): first checklist item must be
   - [ ] operator-visible approvals explain exactly what wireless action is requested and why.
   - [ ] generated wireless reports include concise human-readable method/results plus reproducible evidence links.
 
-## Sprint 42 — Bluetooth Security (planned, blocked until Sprint 41 is complete)
-- [ ] Prerequisite: Sprint 41 must be completed (or unfinished tasks explicitly moved) before Sprint 42 starts.
-- [ ] Keep Bluetooth work explicitly lower priority than Sprint 41 Wi-Fi scope.
+## Sprint 43 — Bluetooth Security (planned, blocked until Sprint 42 is complete, provisional)
+- [ ] Prerequisite: Sprint 36 exit gate completed.
+- [ ] Prerequisite: Sprint 42 must be completed (or unfinished tasks explicitly moved) before Sprint 43 starts.
+- [ ] Keep Bluetooth work explicitly lower priority than Sprint 42 Wi-Fi scope.
 - [ ] Define Bluetooth lab scope contract (adapter/controller allowlist, target device allowlist, prohibited actions).
 - [ ] Add runtime guardrails for Bluetooth tooling:
   - [ ] fail-closed scope validation for device identifiers and adapter selection.

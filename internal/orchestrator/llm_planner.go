@@ -23,6 +23,7 @@ const llmPlannerSystemPrompt = "You are the BirdHackBot Orchestrator planner. Re
 	"only keep work serialized when there is a clear dependency/safety reason, and state that reason in rationale; " +
 	"ground tasks in the operator goal: preserve goal-specific entities (for example router/gateway/firewall/webapp) and include at least one explicit task focused on that entity; " +
 	"never emit placeholder/demo/example-only commands that just print canned findings; command actions must run real tooling against in-scope targets or prior task artifacts; " +
+	"for action.type=command, set action.command to the executable and pass flags/inputs in action.args; use action.type=shell only for compound shell bodies; " +
 	"when input.playbooks is provided, use it as bounded procedural guidance and adapt tasks to those playbooks without copying blindly; " +
 	"if the goal asks for vulnerabilities, include a dedicated vulnerability-mapping step tied to discovered versions/configuration."
 
@@ -269,6 +270,17 @@ func toTaskSpec(task llmPlannerTask, index int, scope Scope) (TaskSpec, error) {
 		budget.MaxRuntime = 8 * time.Minute
 	}
 	budget = normalizeLLMTaskBudget(budget, riskLevel)
+	normalizedAction, err := normalizeTaskAction(TaskAction{
+		Type:           actionType,
+		Prompt:         strings.TrimSpace(task.Action.Prompt),
+		Command:        strings.TrimSpace(task.Action.Command),
+		Args:           compactStringSlice(task.Action.Args),
+		WorkingDir:     strings.TrimSpace(task.Action.WorkingDir),
+		TimeoutSeconds: task.Action.TimeoutSeconds,
+	})
+	if err != nil {
+		return TaskSpec{}, fmt.Errorf("normalize llm task action: %w", err)
+	}
 	spec := TaskSpec{
 		TaskID:            taskID,
 		Title:             strings.TrimSpace(task.Title),
@@ -277,7 +289,7 @@ func toTaskSpec(task llmPlannerTask, index int, scope Scope) (TaskSpec, error) {
 		DependsOn:         compactStringSlice(task.DependsOn),
 		Priority:          task.Priority,
 		Strategy:          strings.TrimSpace(task.Strategy),
-		Action:            TaskAction{Type: actionType, Prompt: strings.TrimSpace(task.Action.Prompt), Command: strings.TrimSpace(task.Action.Command), Args: compactStringSlice(task.Action.Args), WorkingDir: strings.TrimSpace(task.Action.WorkingDir), TimeoutSeconds: task.Action.TimeoutSeconds},
+		Action:            normalizedAction,
 		DoneWhen:          compactStringSlice(task.DoneWhen),
 		FailWhen:          compactStringSlice(task.FailWhen),
 		ExpectedArtifacts: compactStringSlice(task.ExpectedArtifacts),
@@ -577,8 +589,8 @@ func llmPlannerJSONSchemaResponseFormat() map[string]any {
 									"properties": map[string]any{
 										"type":            map[string]any{"type": "string", "enum": []string{"assist", "command", "shell"}},
 										"prompt":          map[string]any{"type": "string", "maxLength": 800},
-										"command":         map[string]any{"type": "string", "maxLength": 128},
-										"args":            map[string]any{"type": "array", "maxItems": 24, "items": map[string]any{"type": "string", "maxLength": 256}},
+										"command":         map[string]any{"type": "string", "maxLength": 1024},
+										"args":            map[string]any{"type": "array", "maxItems": 24, "items": map[string]any{"type": "string", "maxLength": 1024}},
 										"working_dir":     map[string]any{"type": "string", "maxLength": 256},
 										"timeout_seconds": map[string]any{"type": "integer"},
 									},

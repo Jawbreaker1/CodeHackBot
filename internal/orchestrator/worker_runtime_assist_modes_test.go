@@ -260,7 +260,210 @@ func TestRunWorkerTaskAssistDegradedModeEmitsFallbackMetadata(t *testing.T) {
 	}
 }
 
-func TestRunWorkerTaskAssistLoopGuardDetectsSemanticRepeats(t *testing.T) {
+func TestRunWorkerTaskAssistTraceLLMResponsesWritesArtifacts(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-worker-task-assist-trace-llm"
+	taskID := "t1"
+	workerID := "worker-t1-a1"
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	writeWorkerPlan(t, base, runID, Scope{Targets: []string{"127.0.0.1"}})
+	writeAssistTask(t, base, runID, TaskSpec{
+		TaskID:            taskID,
+		Goal:              "assist llm trace",
+		Targets:           []string{"127.0.0.1"},
+		DoneWhen:          []string{"task complete"},
+		FailWhen:          []string{"task failed"},
+		ExpectedArtifacts: []string{"assist logs"},
+		RiskLevel:         string(RiskReconReadonly),
+		Action: TaskAction{
+			Type:   "assist",
+			Prompt: "Inspect then finish",
+		},
+		Budget: TaskBudget{
+			MaxSteps:     4,
+			MaxToolCalls: 4,
+			MaxRuntime:   10 * time.Second,
+		},
+	})
+
+	var calls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.NotFound(w, r)
+			return
+		}
+		seq := atomic.AddInt32(&calls, 1)
+		w.Header().Set("Content-Type", "application/json")
+		if seq == 1 {
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"command\",\"command\":\"list_dir\",\"args\":[\".\"],\"summary\":\"Inspect workspace\"}"}}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"complete\",\"final\":\"done\"}"}}]}`))
+	}))
+	defer server.Close()
+
+	t.Setenv(workerConfigPathEnv, "")
+	t.Setenv(workerLLMBaseURLEnv, server.URL)
+	t.Setenv(workerLLMModelEnv, "test-model")
+	t.Setenv(workerLLMTimeoutSeconds, "10")
+	t.Setenv(workerAssistModeEnv, "strict")
+	t.Setenv(workerAssistTraceLLMEnv, "true")
+
+	if err := RunWorkerTask(WorkerRunConfig{
+		SessionsDir: base,
+		RunID:       runID,
+		TaskID:      taskID,
+		WorkerID:    workerID,
+		Attempt:     1,
+	}); err != nil {
+		t.Fatalf("RunWorkerTask assist trace llm: %v", err)
+	}
+
+	events, err := NewManager(base).Events(runID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	tracePaths := []string{}
+	progressReferenced := false
+	for _, event := range events {
+		payload := map[string]any{}
+		if len(event.Payload) > 0 {
+			_ = json.Unmarshal(event.Payload, &payload)
+		}
+		if event.Type == EventTypeTaskArtifact {
+			if got, _ := payload["type"].(string); got == "assist_llm_response" {
+				if path, _ := payload["path"].(string); strings.TrimSpace(path) != "" {
+					tracePaths = append(tracePaths, path)
+				}
+			}
+		}
+		if event.Type == EventTypeTaskProgress {
+			if _, ok := payload["llm_response_path"].(string); ok {
+				progressReferenced = true
+			}
+		}
+	}
+	if len(tracePaths) == 0 {
+		t.Fatalf("expected assist_llm_response artifact events")
+	}
+	if !progressReferenced {
+		t.Fatalf("expected progress events to include llm_response_path when trace mode is enabled")
+	}
+	data, err := os.ReadFile(tracePaths[0])
+	if err != nil {
+		t.Fatalf("read llm trace artifact: %v", err)
+	}
+	text := string(data)
+	if !strings.Contains(text, "\"primary_response\"") || !strings.Contains(text, "Inspect workspace") {
+		t.Fatalf("expected trace artifact to include raw llm response, got %q", text)
+	}
+}
+
+func TestRunWorkerTaskAssistDiagnosticModeSkipsShellRewrite(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-worker-task-assist-diagnostic-shell"
+	taskID := "t1"
+	workerID := "worker-t1-a1"
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	writeWorkerPlan(t, base, runID, Scope{Targets: []string{"127.0.0.1"}})
+	writeAssistTask(t, base, runID, TaskSpec{
+		TaskID:            taskID,
+		Goal:              "assist diagnostic shell rewrite",
+		Targets:           []string{"127.0.0.1"},
+		DoneWhen:          []string{"task complete"},
+		FailWhen:          []string{"task failed"},
+		ExpectedArtifacts: []string{"assist logs"},
+		RiskLevel:         string(RiskReconReadonly),
+		Action: TaskAction{
+			Type:   "assist",
+			Prompt: "Run bash payload as a command.",
+		},
+		Budget: TaskBudget{
+			MaxSteps:     4,
+			MaxToolCalls: 4,
+			MaxRuntime:   10 * time.Second,
+		},
+	})
+
+	var calls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.NotFound(w, r)
+			return
+		}
+		seq := atomic.AddInt32(&calls, 1)
+		w.Header().Set("Content-Type", "application/json")
+		if seq == 1 {
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"command\",\"command\":\"bash\",\"args\":[\"echo hi\"],\"summary\":\"run shell payload\"}"}}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"complete\",\"final\":\"done\"}"}}]}`))
+	}))
+	defer server.Close()
+
+	t.Setenv(workerConfigPathEnv, "")
+	t.Setenv(workerLLMBaseURLEnv, server.URL)
+	t.Setenv(workerLLMModelEnv, "test-model")
+	t.Setenv(workerLLMTimeoutSeconds, "10")
+	t.Setenv(workerAssistModeEnv, "strict")
+
+	if err := RunWorkerTask(WorkerRunConfig{
+		SessionsDir: base,
+		RunID:       runID,
+		TaskID:      taskID,
+		WorkerID:    workerID,
+		Attempt:     1,
+		Diagnostic:  true,
+	}); err != nil {
+		t.Fatalf("RunWorkerTask assist diagnostic: %v", err)
+	}
+
+	events, err := NewManager(base).Events(runID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if !hasEventType(events, EventTypeTaskCompleted) {
+		t.Fatalf("expected task_completed event")
+	}
+	foundDiagnosticProgress := false
+	foundCommandLog := false
+	for _, event := range events {
+		payload := map[string]any{}
+		if len(event.Payload) > 0 {
+			_ = json.Unmarshal(event.Payload, &payload)
+		}
+		if event.Type == EventTypeTaskProgress {
+			if msg, _ := payload["message"].(string); strings.Contains(msg, "diagnostic mode active") {
+				foundDiagnosticProgress = true
+			}
+		}
+		if event.Type == EventTypeTaskArtifact {
+			if typ, _ := payload["type"].(string); typ != "command_log" {
+				continue
+			}
+			foundCommandLog = true
+			if got, _ := payload["command"].(string); got != "bash" {
+				t.Fatalf("expected command bash, got %q", got)
+			}
+			args := sliceFromAny(payload["args"])
+			if len(args) != 1 || args[0] != "echo hi" {
+				t.Fatalf("expected raw shell arg without rewrite, got %#v", args)
+			}
+		}
+	}
+	if !foundDiagnosticProgress {
+		t.Fatalf("expected diagnostic mode progress event")
+	}
+	if !foundCommandLog {
+		t.Fatalf("expected command_log artifact event")
+	}
+}
+
+func TestRunWorkerTaskAssistLoopGuardDetectsSemanticRepeatsAsNoProgress(t *testing.T) {
 	base := t.TempDir()
 	runID := "run-worker-task-assist-semantic-loop"
 	taskID := "t1"
@@ -324,6 +527,9 @@ func TestRunWorkerTaskAssistLoopGuardDetectsSemanticRepeats(t *testing.T) {
 	if evErr != nil {
 		t.Fatalf("Events: %v", evErr)
 	}
+	if hasEventType(events, EventTypeTaskCompleted) {
+		t.Fatalf("did not expect task_completed event for repeated low-value listing churn")
+	}
 	failEvent, ok := firstEventByType(events, EventTypeTaskFailed)
 	if !ok {
 		t.Fatalf("expected task_failed event")
@@ -332,8 +538,106 @@ func TestRunWorkerTaskAssistLoopGuardDetectsSemanticRepeats(t *testing.T) {
 	if len(failEvent.Payload) > 0 {
 		_ = json.Unmarshal(failEvent.Payload, &payload)
 	}
-	if got, _ := payload["reason"].(string); got != WorkerFailureAssistLoopDetected {
-		t.Fatalf("expected %s reason, got %q", WorkerFailureAssistLoopDetected, got)
+	if got, _ := payload["reason"].(string); got != WorkerFailureNoProgress {
+		t.Fatalf("expected %s reason, got %q", WorkerFailureNoProgress, got)
+	}
+}
+
+func TestRunWorkerTaskAssistMaterializesConcreteExpectedArtifact(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-worker-task-assist-concrete-artifact"
+	taskID := "task-recon-seed"
+	workerID := "worker-task-recon-seed-a1"
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	writeWorkerPlan(t, base, runID, Scope{Targets: []string{"127.0.0.1"}})
+	writeAssistTask(t, base, runID, TaskSpec{
+		TaskID:            taskID,
+		Goal:              "collect baseline evidence",
+		Targets:           []string{"127.0.0.1"},
+		DoneWhen:          []string{"task complete"},
+		FailWhen:          []string{"task failed"},
+		ExpectedArtifacts: []string{"recon-seed.log"},
+		RiskLevel:         string(RiskReconReadonly),
+		Action: TaskAction{
+			Type:   "assist",
+			Prompt: "Run one directory check then complete.",
+		},
+		Budget: TaskBudget{
+			MaxSteps:     6,
+			MaxToolCalls: 6,
+			MaxRuntime:   20 * time.Second,
+		},
+	})
+
+	var calls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.NotFound(w, r)
+			return
+		}
+		seq := atomic.AddInt32(&calls, 1)
+		w.Header().Set("Content-Type", "application/json")
+		if seq == 1 {
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"command\",\"command\":\"list_dir\",\"args\":[\".\"],\"summary\":\"inspect\"}"}}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"complete\",\"final\":\"done\"}"}}]}`))
+	}))
+	defer server.Close()
+
+	t.Setenv(workerConfigPathEnv, "")
+	t.Setenv(workerLLMBaseURLEnv, server.URL)
+	t.Setenv(workerLLMModelEnv, "test-model")
+	t.Setenv(workerLLMTimeoutSeconds, "10")
+	t.Setenv(workerAssistModeEnv, "strict")
+
+	if err := RunWorkerTask(WorkerRunConfig{
+		SessionsDir: base,
+		RunID:       runID,
+		TaskID:      taskID,
+		WorkerID:    workerID,
+		Attempt:     1,
+	}); err != nil {
+		t.Fatalf("RunWorkerTask assist concrete artifact: %v", err)
+	}
+
+	events, err := NewManager(base).Events(runID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if !hasEventType(events, EventTypeTaskCompleted) {
+		t.Fatalf("expected task_completed event")
+	}
+	for _, event := range events {
+		if event.Type != EventTypeTaskFailed {
+			continue
+		}
+		payload := map[string]any{}
+		if len(event.Payload) > 0 {
+			_ = json.Unmarshal(event.Payload, &payload)
+		}
+		t.Fatalf("did not expect task_failed event: %#v", payload)
+	}
+
+	expectedPath := filepath.Join(BuildRunPaths(base, runID).ArtifactDir, taskID, "recon-seed.log")
+	if _, err := os.Stat(expectedPath); err != nil {
+		t.Fatalf("expected derived artifact %s: %v", expectedPath, err)
+	}
+	completed, ok := firstEventByType(events, EventTypeTaskCompleted)
+	if !ok {
+		t.Fatalf("expected task_completed payload")
+	}
+	payload := map[string]any{}
+	if len(completed.Payload) > 0 {
+		_ = json.Unmarshal(completed.Payload, &payload)
+	}
+	contract, _ := payload["completion_contract"].(map[string]any)
+	produced := sliceFromAny(contract["produced_artifacts"])
+	joined := strings.Join(produced, "\n")
+	if !strings.Contains(joined, "recon-seed.log") {
+		t.Fatalf("expected produced_artifacts to include recon-seed.log, got %#v", produced)
 	}
 }
 
@@ -990,6 +1294,99 @@ func TestRunWorkerTaskAssistRecoverCommandKeepsRecoverModeForToolCapFallback(t *
 	}
 }
 
+func TestRunWorkerTaskAssistRecoverRepeatedCommandFallsBackToNoNewEvidence(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-worker-task-assist-recover-command-repeat"
+	taskID := "t1"
+	workerID := "worker-t1-a1"
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	writeWorkerPlan(t, base, runID, Scope{Targets: []string{"127.0.0.1"}})
+	writeAssistTask(t, base, runID, TaskSpec{
+		TaskID:            taskID,
+		Goal:              "recover repeated command fallback",
+		Targets:           []string{"127.0.0.1"},
+		DoneWhen:          []string{"task complete"},
+		FailWhen:          []string{"task failed"},
+		ExpectedArtifacts: []string{"assist logs"},
+		RiskLevel:         string(RiskReconReadonly),
+		Action: TaskAction{
+			Type:   "assist",
+			Prompt: "Enter recover mode and repeat the same non-list command.",
+		},
+		Budget: TaskBudget{
+			MaxSteps:     20,
+			MaxToolCalls: 20,
+			MaxRuntime:   30 * time.Second,
+		},
+	})
+
+	var calls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.NotFound(w, r)
+			return
+		}
+		seq := atomic.AddInt32(&calls, 1)
+		w.Header().Set("Content-Type", "application/json")
+		switch seq {
+		case 1:
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"plan\",\"plan\":\"need recover\"}"}}]}`))
+		case 2:
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"command\",\"command\":\"write_file\",\"args\":[\"evidence.txt\",\"seed\"],\"summary\":\"seed file\"}"}}]}`))
+		default:
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"command\",\"command\":\"read_file\",\"args\":[\"evidence.txt\"],\"summary\":\"repeat read\"}"}}]}`))
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv(workerConfigPathEnv, "")
+	t.Setenv(workerLLMBaseURLEnv, server.URL)
+	t.Setenv(workerLLMModelEnv, "test-model")
+	t.Setenv(workerLLMTimeoutSeconds, "10")
+	t.Setenv(workerAssistModeEnv, "strict")
+
+	if err := RunWorkerTask(WorkerRunConfig{
+		SessionsDir: base,
+		RunID:       runID,
+		TaskID:      taskID,
+		WorkerID:    workerID,
+		Attempt:     1,
+	}); err != nil {
+		t.Fatalf("RunWorkerTask recover repeated command fallback: %v", err)
+	}
+
+	events, err := NewManager(base).Events(runID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if !hasEventType(events, EventTypeTaskCompleted) {
+		t.Fatalf("expected task_completed event")
+	}
+	for _, event := range events {
+		if event.Type != EventTypeTaskFailed {
+			continue
+		}
+		payload := map[string]any{}
+		if len(event.Payload) > 0 {
+			_ = json.Unmarshal(event.Payload, &payload)
+		}
+		t.Fatalf("did not expect task_failed event: %#v", payload)
+	}
+	completed, ok := firstEventByType(events, EventTypeTaskCompleted)
+	if !ok {
+		t.Fatalf("expected task_completed payload")
+	}
+	payload := map[string]any{}
+	if len(completed.Payload) > 0 {
+		_ = json.Unmarshal(completed.Payload, &payload)
+	}
+	if got, _ := payload["reason"].(string); got != "assist_no_new_evidence" {
+		t.Fatalf("expected assist_no_new_evidence completion reason, got %q", got)
+	}
+}
+
 func TestRunWorkerTaskAssistRecoverPlanDoesNotFailImmediately(t *testing.T) {
 	base := t.TempDir()
 	runID := "run-worker-task-assist-recover-plan"
@@ -1596,6 +1993,81 @@ func TestRunWorkerTaskAssistRecoverPlanLoopClassifiedAsLoopDetected(t *testing.T
 	}
 	if got, _ := payload["reason"].(string); got == WorkerFailureAssistNoAction {
 		t.Fatalf("did not expect %s for recover plan loop", WorkerFailureAssistNoAction)
+	}
+}
+
+func TestRunWorkerTaskAssistMissingToolInRecoverModeFallsBackToReplan(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-worker-task-assist-missing-tool-recover"
+	taskID := "t1"
+	workerID := "worker-t1-a1"
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	writeWorkerPlan(t, base, runID, Scope{Targets: []string{"127.0.0.1"}})
+	writeAssistTask(t, base, runID, TaskSpec{
+		TaskID:            taskID,
+		Goal:              "recover from missing tool without hard fail",
+		Targets:           []string{"127.0.0.1"},
+		DoneWhen:          []string{"task complete"},
+		FailWhen:          []string{"task failed"},
+		ExpectedArtifacts: []string{"assist logs"},
+		RiskLevel:         string(RiskReconReadonly),
+		Action: TaskAction{
+			Type:   "assist",
+			Prompt: "Use a missing tool first, then complete.",
+		},
+		Budget: TaskBudget{
+			MaxSteps:     6,
+			MaxToolCalls: 6,
+			MaxRuntime:   20 * time.Second,
+		},
+	})
+
+	var calls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch atomic.AddInt32(&calls, 1) {
+		case 1:
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"command\",\"command\":\"definitelymissingtool\",\"args\":[],\"summary\":\"run missing tool\"}"}}]}`))
+		case 2:
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"command\",\"command\":\"definitelymissingtool\",\"args\":[],\"summary\":\"retry missing tool\"}"}}]}`))
+		default:
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"complete\",\"final\":\"done\"}"}}]}`))
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv(workerConfigPathEnv, "")
+	t.Setenv(workerLLMBaseURLEnv, server.URL)
+	t.Setenv(workerLLMModelEnv, "test-model")
+	t.Setenv(workerLLMTimeoutSeconds, "10")
+	t.Setenv(workerAssistModeEnv, "strict")
+
+	if err := RunWorkerTask(WorkerRunConfig{
+		SessionsDir:       base,
+		RunID:             runID,
+		TaskID:            taskID,
+		WorkerID:          workerID,
+		Attempt:           1,
+		ToolInstallPolicy: ToolInstallPolicyNever,
+	}); err != nil {
+		t.Fatalf("RunWorkerTask missing-tool recover fallback: %v", err)
+	}
+
+	events, err := NewManager(base).Events(runID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if !hasEventType(events, EventTypeTaskCompleted) {
+		t.Fatalf("expected task_completed event")
+	}
+	if hasEventType(events, EventTypeTaskFailed) {
+		t.Fatalf("did not expect task_failed event")
 	}
 }
 

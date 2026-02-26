@@ -17,24 +17,28 @@ const (
 )
 
 type MemoryContext struct {
-	UpdatedAt          time.Time `json:"updated_at"`
-	RunID              string    `json:"run_id"`
-	Goal               string    `json:"goal,omitempty"`
-	NormalizedGoal     string    `json:"normalized_goal,omitempty"`
-	PlannerMode        string    `json:"planner_mode,omitempty"`
-	PlannerVersion     string    `json:"planner_version,omitempty"`
-	PlannerModel       string    `json:"planner_model,omitempty"`
-	PlannerPlaybooks   []string  `json:"planner_playbooks,omitempty"`
-	PlannerPromptHash  string    `json:"planner_prompt_hash,omitempty"`
-	PlannerDecision    string    `json:"planner_decision,omitempty"`
-	PlannerRationale   string    `json:"planner_rationale,omitempty"`
-	RegenerationCount  int       `json:"regeneration_count,omitempty"`
-	HypothesisCount    int       `json:"hypothesis_count"`
-	ArtifactCount      int       `json:"artifact_count"`
-	FindingCount       int       `json:"finding_count"`
-	KnownFactsCount    int       `json:"known_facts_count"`
-	OpenQuestionsCount int       `json:"open_questions_count"`
-	Compacted          bool      `json:"compacted"`
+	UpdatedAt             time.Time `json:"updated_at"`
+	RunID                 string    `json:"run_id"`
+	Goal                  string    `json:"goal,omitempty"`
+	NormalizedGoal        string    `json:"normalized_goal,omitempty"`
+	PlannerMode           string    `json:"planner_mode,omitempty"`
+	PlannerVersion        string    `json:"planner_version,omitempty"`
+	PlannerModel          string    `json:"planner_model,omitempty"`
+	PlannerPlaybooks      []string  `json:"planner_playbooks,omitempty"`
+	PlannerPromptHash     string    `json:"planner_prompt_hash,omitempty"`
+	PlannerDecision       string    `json:"planner_decision,omitempty"`
+	PlannerRationale      string    `json:"planner_rationale,omitempty"`
+	RegenerationCount     int       `json:"regeneration_count,omitempty"`
+	HypothesisCount       int       `json:"hypothesis_count"`
+	ArtifactCount         int       `json:"artifact_count"`
+	FindingCount          int       `json:"finding_count"`
+	KnownFactsCount       int       `json:"known_facts_count"`
+	OpenQuestionsCount    int       `json:"open_questions_count"`
+	KnownFactsRetained    int       `json:"known_facts_retained,omitempty"`
+	OpenQuestionsRetained int       `json:"open_questions_retained,omitempty"`
+	KnownFactsDropped     int       `json:"known_facts_dropped,omitempty"`
+	OpenQuestionsDropped  int       `json:"open_questions_dropped,omitempty"`
+	Compacted             bool      `json:"compacted"`
 }
 
 func (m *Manager) InitializeMemoryBank(runID string, plan RunPlan) error {
@@ -52,21 +56,23 @@ func (m *Manager) InitializeMemoryBank(runID string, plan RunPlan) error {
 	}
 	openQuestions := memoryOpenQuestions(hypotheses)
 	ctx := MemoryContext{
-		UpdatedAt:          m.Now(),
-		RunID:              runID,
-		Goal:               plan.Metadata.Goal,
-		NormalizedGoal:     plan.Metadata.NormalizedGoal,
-		PlannerMode:        plan.Metadata.PlannerMode,
-		PlannerVersion:     plan.Metadata.PlannerVersion,
-		PlannerModel:       plan.Metadata.PlannerModel,
-		PlannerPlaybooks:   append([]string{}, plan.Metadata.PlannerPlaybooks...),
-		PlannerPromptHash:  plan.Metadata.PlannerPromptHash,
-		PlannerDecision:    plan.Metadata.PlannerDecision,
-		PlannerRationale:   plan.Metadata.PlannerRationale,
-		RegenerationCount:  plan.Metadata.RegenerationCount,
-		HypothesisCount:    len(hypotheses),
-		KnownFactsCount:    len(knownFacts),
-		OpenQuestionsCount: len(openQuestions),
+		UpdatedAt:             m.Now(),
+		RunID:                 runID,
+		Goal:                  plan.Metadata.Goal,
+		NormalizedGoal:        plan.Metadata.NormalizedGoal,
+		PlannerMode:           plan.Metadata.PlannerMode,
+		PlannerVersion:        plan.Metadata.PlannerVersion,
+		PlannerModel:          plan.Metadata.PlannerModel,
+		PlannerPlaybooks:      append([]string{}, plan.Metadata.PlannerPlaybooks...),
+		PlannerPromptHash:     plan.Metadata.PlannerPromptHash,
+		PlannerDecision:       plan.Metadata.PlannerDecision,
+		PlannerRationale:      plan.Metadata.PlannerRationale,
+		RegenerationCount:     plan.Metadata.RegenerationCount,
+		HypothesisCount:       len(hypotheses),
+		KnownFactsCount:       len(knownFacts),
+		OpenQuestionsCount:    len(openQuestions),
+		KnownFactsRetained:    len(knownFacts),
+		OpenQuestionsRetained: len(openQuestions),
 	}
 	if err := m.writeMemoryFiles(paths.MemoryDir, hypotheses, knownFacts, openQuestions, ctx); err != nil {
 		return err
@@ -99,36 +105,38 @@ func (m *Manager) RefreshMemoryBank(runID string) error {
 	})
 	knownFacts := memoryKnownFacts(plan, findings)
 	openQuestions := memoryOpenQuestions(plan.Metadata.Hypotheses)
+	knownFactsTotal := len(knownFacts)
+	openQuestionsTotal := len(openQuestions)
 	artifactCount, findingCount, err := m.CountEvidence(runID)
 	if err != nil {
 		return err
 	}
-	compacted := len(knownFacts) > memoryMaxKnownFacts || len(openQuestions) > memoryMaxOpenQuestions
-	if len(knownFacts) > memoryMaxKnownFacts {
-		knownFacts = knownFacts[:memoryMaxKnownFacts]
-	}
-	if len(openQuestions) > memoryMaxOpenQuestions {
-		openQuestions = openQuestions[:memoryMaxOpenQuestions]
-	}
+	compacted := knownFactsTotal > memoryMaxKnownFacts || openQuestionsTotal > memoryMaxOpenQuestions
+	knownFacts = compactKnownFactsEntries(knownFacts, memoryMaxKnownFacts)
+	openQuestions = compactTailEntries(openQuestions, memoryMaxOpenQuestions)
 	ctx := MemoryContext{
-		UpdatedAt:          m.Now(),
-		RunID:              runID,
-		Goal:               plan.Metadata.Goal,
-		NormalizedGoal:     plan.Metadata.NormalizedGoal,
-		PlannerMode:        plan.Metadata.PlannerMode,
-		PlannerVersion:     plan.Metadata.PlannerVersion,
-		PlannerModel:       plan.Metadata.PlannerModel,
-		PlannerPlaybooks:   append([]string{}, plan.Metadata.PlannerPlaybooks...),
-		PlannerPromptHash:  plan.Metadata.PlannerPromptHash,
-		PlannerDecision:    plan.Metadata.PlannerDecision,
-		PlannerRationale:   plan.Metadata.PlannerRationale,
-		RegenerationCount:  plan.Metadata.RegenerationCount,
-		HypothesisCount:    len(plan.Metadata.Hypotheses),
-		ArtifactCount:      artifactCount,
-		FindingCount:       findingCount,
-		KnownFactsCount:    len(knownFacts),
-		OpenQuestionsCount: len(openQuestions),
-		Compacted:          compacted,
+		UpdatedAt:             m.Now(),
+		RunID:                 runID,
+		Goal:                  plan.Metadata.Goal,
+		NormalizedGoal:        plan.Metadata.NormalizedGoal,
+		PlannerMode:           plan.Metadata.PlannerMode,
+		PlannerVersion:        plan.Metadata.PlannerVersion,
+		PlannerModel:          plan.Metadata.PlannerModel,
+		PlannerPlaybooks:      append([]string{}, plan.Metadata.PlannerPlaybooks...),
+		PlannerPromptHash:     plan.Metadata.PlannerPromptHash,
+		PlannerDecision:       plan.Metadata.PlannerDecision,
+		PlannerRationale:      plan.Metadata.PlannerRationale,
+		RegenerationCount:     plan.Metadata.RegenerationCount,
+		HypothesisCount:       len(plan.Metadata.Hypotheses),
+		ArtifactCount:         artifactCount,
+		FindingCount:          findingCount,
+		KnownFactsCount:       knownFactsTotal,
+		OpenQuestionsCount:    openQuestionsTotal,
+		KnownFactsRetained:    len(knownFacts),
+		OpenQuestionsRetained: len(openQuestions),
+		KnownFactsDropped:     maxInt(0, knownFactsTotal-len(knownFacts)),
+		OpenQuestionsDropped:  maxInt(0, openQuestionsTotal-len(openQuestions)),
+		Compacted:             compacted,
 	}
 	return m.writeMemoryFiles(paths.MemoryDir, plan.Metadata.Hypotheses, knownFacts, openQuestions, ctx)
 }
@@ -191,6 +199,42 @@ func memoryOpenQuestions(hypotheses []Hypothesis) []string {
 	return dedupeStrings(questions)
 }
 
+func compactKnownFactsEntries(values []string, max int) []string {
+	if max <= 0 || len(values) == 0 {
+		return nil
+	}
+	anchors := make([]string, 0, len(values))
+	dynamic := make([]string, 0, len(values))
+	for _, value := range values {
+		if isKnownFactAnchor(value) {
+			anchors = append(anchors, value)
+			continue
+		}
+		dynamic = append(dynamic, value)
+	}
+	if len(anchors) > max {
+		anchors = anchors[:max]
+	}
+	dynamicCap := max - len(anchors)
+	if dynamicCap <= 0 {
+		return append([]string{}, anchors...)
+	}
+	dynamic = compactTailEntries(dynamic, dynamicCap)
+	out := append([]string{}, anchors...)
+	out = append(out, dynamic...)
+	return out
+}
+
+func compactTailEntries(values []string, max int) []string {
+	if max <= 0 || len(values) == 0 {
+		return nil
+	}
+	if len(values) <= max {
+		return append([]string{}, values...)
+	}
+	return append([]string{}, values[len(values)-max:]...)
+}
+
 func renderHypothesesMD(hypotheses []Hypothesis) string {
 	var b strings.Builder
 	b.WriteString("# Hypotheses\n\n")
@@ -228,6 +272,13 @@ func renderPlanSummaryMD(ctx MemoryContext) string {
 	b.WriteString(fmt.Sprintf("- Hypotheses: %d\n", ctx.HypothesisCount))
 	b.WriteString(fmt.Sprintf("- Artifacts: %d\n", ctx.ArtifactCount))
 	b.WriteString(fmt.Sprintf("- Findings: %d\n", ctx.FindingCount))
+	if ctx.KnownFactsRetained > 0 || ctx.OpenQuestionsRetained > 0 {
+		b.WriteString(fmt.Sprintf("- Known facts (retained/total): %d/%d\n", maxInt(0, ctx.KnownFactsRetained), maxInt(0, ctx.KnownFactsCount)))
+		b.WriteString(fmt.Sprintf("- Open questions (retained/total): %d/%d\n", maxInt(0, ctx.OpenQuestionsRetained), maxInt(0, ctx.OpenQuestionsCount)))
+	}
+	if ctx.KnownFactsDropped > 0 || ctx.OpenQuestionsDropped > 0 {
+		b.WriteString(fmt.Sprintf("- Compaction dropped: known_facts=%d, open_questions=%d\n", maxInt(0, ctx.KnownFactsDropped), maxInt(0, ctx.OpenQuestionsDropped)))
+	}
 	return b.String()
 }
 

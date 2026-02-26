@@ -195,7 +195,7 @@ func (c *Coordinator) handleEventDrivenReplanTriggers() error {
 				trigger = "repeated_step_loop"
 			case "stale_lease", "worker_exit", "startup_sla_missed", "worker_reconcile_stale":
 				trigger = "worker_recovery"
-			case WorkerFailureCommandFailed, WorkerFailureCommandTimeout, WorkerFailureAssistTimeout, WorkerFailureAssistUnavailable, WorkerFailureAssistParseFailure:
+			case WorkerFailureCommandFailed, WorkerFailureCommandTimeout, WorkerFailureAssistTimeout, WorkerFailureAssistUnavailable, WorkerFailureAssistParseFailure, WorkerFailureNoProgress:
 				trigger = "execution_failure"
 			case WorkerFailureAssistLoopDetected:
 				if c.shouldPromoteAssistLoopExecutionFailure(event.TaskID, event.EventID, events, idx) {

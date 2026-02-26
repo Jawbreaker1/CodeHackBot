@@ -243,6 +243,34 @@ func TestLLMAssistantRepairRetryParsesSecondResponse(t *testing.T) {
 	}
 }
 
+func TestLLMAssistantSuggestMetadataIncludesRawResponses(t *testing.T) {
+	client := &scriptedClient{
+		contents: []string{
+			"I cannot help with that request.",
+			`{"type":"command","command":"ls","args":["-la"]}`,
+		},
+	}
+	var gotMeta LLMSuggestMetadata
+	assistant := LLMAssistant{
+		Client: client,
+		OnSuggestMeta: func(meta LLMSuggestMetadata) {
+			gotMeta = meta
+		},
+	}
+	if _, err := assistant.Suggest(context.Background(), Input{SessionID: "s"}); err != nil {
+		t.Fatalf("suggest error: %v", err)
+	}
+	if !gotMeta.ParseRepairUsed {
+		t.Fatalf("expected parse repair metadata to be true")
+	}
+	if !strings.Contains(gotMeta.PrimaryResponse, "cannot help") {
+		t.Fatalf("expected primary response in metadata, got %q", gotMeta.PrimaryResponse)
+	}
+	if !strings.Contains(gotMeta.RepairResponse, `"type":"command"`) {
+		t.Fatalf("expected repair response in metadata, got %q", gotMeta.RepairResponse)
+	}
+}
+
 func TestLLMAssistantUsesConfiguredTemperaturesAndTokens(t *testing.T) {
 	primaryTemp := float32(0.33)
 	primaryTokens := 777

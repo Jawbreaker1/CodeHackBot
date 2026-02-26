@@ -210,6 +210,7 @@ func runBenchmarkWith(args []string, stdout, stderr io.Writer, signalCtx context
 		workerCmd       string
 		plannerMode     string
 		permissionMode  string
+		toolInstallMode string
 		repeat          int
 		maxParallelism  int
 		maxAttempts     int
@@ -218,6 +219,7 @@ func runBenchmarkWith(args []string, stdout, stderr io.Writer, signalCtx context
 		lockBaseline    bool
 		continueOnErr   bool
 		disruptiveOptIn bool
+		diagnostic      bool
 		tick            time.Duration
 		startupTimeout  time.Duration
 		staleTimeout    time.Duration
@@ -238,6 +240,7 @@ func runBenchmarkWith(args []string, stdout, stderr io.Writer, signalCtx context
 	fs.Var(&workerEnv, "worker-env", "worker environment variable KEY=VALUE (repeatable)")
 	fs.StringVar(&plannerMode, "planner", "auto", "default planner mode for scenarios without override: auto|llm|static (static must be explicitly selected)")
 	fs.StringVar(&permissionMode, "permissions", string(orchestrator.PermissionDefault), "default permission mode for scenarios without override: readonly|default|all")
+	fs.StringVar(&toolInstallMode, "tool-install-policy", string(orchestrator.ToolInstallPolicyAsk), "missing-tool install policy for worker runs: ask|never|auto")
 	fs.Var(&scenarioFilter, "scenario", "scenario id filter (repeatable)")
 	fs.IntVar(&repeat, "repeat", 5, "number of runs per scenario")
 	fs.IntVar(&maxParallelism, "max-parallelism", 1, "default max parallelism for scenarios without override")
@@ -247,6 +250,7 @@ func runBenchmarkWith(args []string, stdout, stderr io.Writer, signalCtx context
 	fs.BoolVar(&lockBaseline, "lock-baseline", false, "write baseline file with median/p90 aggregates")
 	fs.BoolVar(&continueOnErr, "continue-on-error", true, "continue running scenarios when one run fails")
 	fs.BoolVar(&disruptiveOptIn, "disruptive-opt-in", false, "allow disruptive actions to enter approval flow (global default)")
+	fs.BoolVar(&diagnostic, "diagnostic", false, "pass --diagnostic to each scenario run")
 	fs.DurationVar(&tick, "tick", 250*time.Millisecond, "coordinator tick interval")
 	fs.DurationVar(&startupTimeout, "startup-timeout", 30*time.Second, "startup SLA timeout")
 	fs.DurationVar(&staleTimeout, "stale-timeout", 20*time.Second, "stale lease timeout")
@@ -270,6 +274,11 @@ func runBenchmarkWith(args []string, stdout, stderr io.Writer, signalCtx context
 	}
 	if err := validatePermissionMode(permissionMode); err != nil {
 		fmt.Fprintf(stderr, "benchmark invalid --permissions: %v\n", err)
+		return 2
+	}
+	toolInstallPolicy, err := orchestrator.ParseToolInstallPolicy(toolInstallMode)
+	if err != nil {
+		fmt.Fprintf(stderr, "benchmark invalid --tool-install-policy: %v\n", err)
 		return 2
 	}
 	if tick <= 0 || startupTimeout <= 0 || staleTimeout <= 0 || softStallGrace <= 0 || approvalTimeout <= 0 || stopGrace <= 0 {
@@ -378,6 +387,7 @@ scenarioLoop:
 				scenario,
 				plannerMode,
 				permissionMode,
+				string(toolInstallPolicy),
 				maxParallelism,
 				maxAttempts,
 				disruptiveOptIn,
@@ -387,6 +397,7 @@ scenarioLoop:
 				softStallGrace,
 				approvalTimeout,
 				stopGrace,
+				diagnostic,
 				strings.TrimSpace(workerCmd),
 				workerArgs,
 				append(compactStringFlags(workerEnv),
@@ -595,6 +606,7 @@ func benchmarkScenarioRunArgs(
 	scenario benchmarkScenario,
 	defaultPlanner string,
 	defaultPermissions string,
+	toolInstallPolicy string,
 	defaultMaxParallelism int,
 	defaultMaxAttempts int,
 	defaultDisruptiveOptIn bool,
@@ -604,6 +616,7 @@ func benchmarkScenarioRunArgs(
 	softStallGrace time.Duration,
 	approvalTimeout time.Duration,
 	stopGrace time.Duration,
+	diagnostic bool,
 	workerCmd string,
 	workerArgs []string,
 	workerEnv []string,
@@ -637,6 +650,7 @@ func benchmarkScenarioRunArgs(
 		"--goal", scenario.Goal,
 		"--planner", planner,
 		"--permissions", permissions,
+		"--tool-install-policy", toolInstallPolicy,
 		"--worker-cmd", workerCmd,
 		"--plan-review", "approve",
 		"--max-parallelism", strconv.Itoa(maxParallelism),
@@ -650,6 +664,9 @@ func benchmarkScenarioRunArgs(
 	}
 	if disruptiveOptIn {
 		args = append(args, "--disruptive-opt-in")
+	}
+	if diagnostic {
+		args = append(args, "--diagnostic")
 	}
 	for _, target := range scenario.Scope.Targets {
 		args = append(args, "--scope-target", target)

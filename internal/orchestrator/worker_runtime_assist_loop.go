@@ -28,6 +28,12 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 		_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureAssistNoAction, nil)
 		return err
 	}
+	contextEnvelope := newWorkerAssistContextEnvelope(cfg, task, goal)
+	var observations []string
+	defer func() {
+		contextEnvelope.recordObservationSnapshot(observations)
+		_ = writeWorkerAssistContextEnvelope(cfg, task.TaskID, contextEnvelope, manager.Now)
+	}()
 
 	maxActionSteps := task.Budget.MaxSteps
 	if maxActionSteps <= 0 {
@@ -42,7 +48,7 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 		maxTurns = workerAssistMinTurns
 	}
 
-	observations := make([]string, 0, workerAssistObsLimit)
+	observations = make([]string, 0, workerAssistObsLimit)
 	lastActionKey := ""
 	lastActionStreak := 0
 	lastResultKey := ""
@@ -56,7 +62,20 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 	consecutiveToolTurns := 0
 	consecutiveRecoverToolTurns := 0
 	recoveryTransitions := 0
+	missingToolInstallAttempts := map[string]struct{}{}
 	promptScope := buildAssistPromptScope(runScope, task.Targets)
+	if priorEnvelope, priorErr := loadPreviousWorkerAssistContextEnvelope(cfg, task.TaskID); priorErr == nil && priorEnvelope != nil {
+		contextEnvelope.applyCarryover(priorEnvelope)
+		for _, entry := range priorEnvelope.Observations.RetainedTail {
+			observations = appendObservation(observations, "carryover: "+strings.TrimSpace(entry))
+		}
+		if strings.TrimSpace(priorEnvelope.Anchors.LastFailure) != "" {
+			recoverHint = "prior attempt failure: " + strings.TrimSpace(priorEnvelope.Anchors.LastFailure)
+		}
+		if strings.TrimSpace(priorEnvelope.Anchors.LastResultFingerprint) != "" {
+			lastResultKey = strings.TrimSpace(priorEnvelope.Anchors.LastResultFingerprint)
+		}
+	}
 
 	assistTurnMetadata := func(turnMeta workerAssistantTurnMeta, callTimeout time.Duration, remainingBudget time.Duration) map[string]any {
 		model := strings.TrimSpace(turnMeta.Model)
@@ -68,6 +87,7 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			"assistant_model":           model,
 			"llm_timeout_seconds":       int(callTimeout.Seconds()),
 			"remaining_budget_seconds":  int(remainingBudget.Seconds()),
+			"llm_trace_enabled":         turnMeta.TraceEnabled,
 			"parse_repair_used":         turnMeta.ParseRepairUsed,
 			"fallback_used":             turnMeta.FallbackUsed,
 			"fallback_reason":           strings.TrimSpace(turnMeta.FallbackReason),
@@ -114,6 +134,13 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			_ = emitWorkerFailure(manager, cfg, task, logErr, WorkerFailureArtifactWrite, nil)
 			return logErr
 		}
+		producedArtifacts := []string{logPath}
+		derivedPaths, derivedErr := materializeAssistExpectedArtifacts(cfg, task, logPath)
+		if derivedErr != nil {
+			_ = emitWorkerFailure(manager, cfg, task, derivedErr, WorkerFailureArtifactWrite, nil)
+			return derivedErr
+		}
+		producedArtifacts = compactStrings(append(producedArtifacts, derivedPaths...))
 		_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskArtifact, map[string]any{
 			"type":      "assist_summary",
 			"title":     fmt.Sprintf("assistant completion summary (%s)", cfg.TaskID),
@@ -121,6 +148,15 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			"step":      step,
 			"tool_call": toolCalls,
 		})
+		for _, derivedPath := range derivedPaths {
+			_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskArtifact, map[string]any{
+				"type":      "derived_assist_output",
+				"title":     fmt.Sprintf("derived expected artifact (%s)", cfg.TaskID),
+				"path":      derivedPath,
+				"step":      step,
+				"tool_call": toolCalls,
+			})
+		}
 		findingMeta := map[string]any{
 			"attempt":       cfg.Attempt,
 			"reason":        statusReason,
@@ -141,7 +177,7 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			"severity":     "info",
 			"confidence":   "medium",
 			"source":       "worker_runtime_assist",
-			"evidence":     []string{logPath},
+			"evidence":     producedArtifacts,
 			"metadata":     findingMeta,
 		})
 		_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskCompleted, map[string]any{
@@ -152,13 +188,48 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			"completion_contract": map[string]any{
 				"status_reason":       statusReason,
 				"required_artifacts":  task.ExpectedArtifacts,
-				"produced_artifacts":  []string{logPath},
+				"produced_artifacts":  producedArtifacts,
 				"required_findings":   []string{"task_execution_result"},
 				"produced_findings":   []string{"task_execution_result"},
 				"verification_status": "reported_by_worker",
 			},
 		})
 		return nil
+	}
+
+	emitNoProgressFailure := func(turn int, command string, args []string, reason string, extra map[string]any) error {
+		lastAction := strings.TrimSpace(strings.Join(append([]string{command}, args...), " "))
+		if lastAction == "" {
+			lastAction = "unknown"
+		}
+		reason = strings.TrimSpace(reason)
+		if reason == "" {
+			reason = "no evidence progress"
+		}
+		_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
+			"message":              "no progress after repeated low-value actions; failing task for replan",
+			"step":                 actionSteps,
+			"turn":                 turn,
+			"tool_calls":           toolCalls,
+			"mode":                 mode,
+			"bounded_fallback":     "no_progress",
+			"last_repeated_action": lastAction,
+			"fallback_reason":      reason,
+		})
+		failErr := fmt.Errorf("no progress: repeated low-value action without new evidence (%s)", lastAction)
+		details := map[string]any{
+			"step":                 actionSteps,
+			"turn":                 turn,
+			"tool_calls":           toolCalls,
+			"bounded_fallback":     "no_progress",
+			"last_repeated_action": lastAction,
+			"fallback_reason":      reason,
+		}
+		for k, v := range extra {
+			details[k] = v
+		}
+		_ = emitWorkerFailure(manager, cfg, task, failErr, WorkerFailureNoProgress, details)
+		return failErr
 	}
 
 	emitNoNewEvidenceCompletion := func(turn int, command string, args []string, resultStreak int, reason string) error {
@@ -171,6 +242,11 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			reason = "repeated identical command results"
 		}
 		summary := fmt.Sprintf("No new evidence after repeated identical runtime results. Last action: %s (result_streak=%d, reason=%s).", lastAction, resultStreak, reason)
+		if isLowValueListingCommand(command, args) {
+			return emitNoProgressFailure(turn, command, args, reason, map[string]any{
+				"result_streak": resultStreak,
+			})
+		}
 		_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
 			"message":              "no new evidence after repeated identical results; completing task with bounded fallback",
 			"step":                 actionSteps,
@@ -278,13 +354,23 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			return err
 		}
 
-		recent := strings.Join(observations, "\n\n")
-		if recoverHint != "" {
-			if recent != "" {
-				recent += "\n\n"
+		layeredContext := buildWorkerAssistLayeredContext(cfg, observations, recoverHint)
+		recent := layeredContext.RecentLog
+		chatHistory := layeredContext.ChatHistory
+		if recent == "" {
+			recent = strings.Join(observations, "\n\n")
+			if recoverHint != "" {
+				if recent != "" {
+					recent += "\n\n"
+				}
+				recent += "Recovery context: " + recoverHint
 			}
-			recent += "Recovery context: " + recoverHint
 		}
+		if chatHistory == "" {
+			chatHistory = strings.Join(observations, "\n\n")
+		}
+		contextEnvelope.recordProgress(turn, actionSteps, toolCalls, len(observations))
+		contextEnvelope.recordPrompt(mode, recoverHint, recent, chatHistory)
 		suggestCtx, suggestCancel, callTimeout, remainingBudget, timeoutErr := newAssistCallContext(ctx)
 		if timeoutErr != nil {
 			_ = emitWorkerFailure(manager, cfg, task, timeoutErr, WorkerFailureAssistTimeout, map[string]any{
@@ -302,15 +388,41 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			Scope:       promptScope,
 			Targets:     task.Targets,
 			Goal:        goal,
-			Summary:     fmt.Sprintf("Task %s attempt %d (%s)", task.TaskID, cfg.Attempt, assistantModel),
+			Summary:     layeredContext.Summary,
+			KnownFacts:  layeredContext.KnownFacts,
 			Focus:       task.Goal,
 			Plan:        strings.Join(task.DoneWhen, "; "),
+			Inventory:   layeredContext.Inventory,
 			WorkingDir:  workDir,
 			RecentLog:   recent,
-			ChatHistory: recent,
+			ChatHistory: chatHistory,
 			Mode:        mode,
 		})
 		suggestCancel()
+		llmTracePath := ""
+		if turnMeta.TraceEnabled {
+			tracePath, traceErr := writeWorkerAssistLLMTrace(cfg, turn, mode, turnMeta, suggestion, suggestErr)
+			if traceErr != nil {
+				_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
+					"message":    "failed to write llm response trace artifact",
+					"step":       actionSteps,
+					"turn":       turn,
+					"tool_calls": toolCalls,
+					"mode":       mode,
+					"error":      traceErr.Error(),
+				})
+			} else if strings.TrimSpace(tracePath) != "" {
+				llmTracePath = tracePath
+				_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskArtifact, map[string]any{
+					"type":      "assist_llm_response",
+					"title":     fmt.Sprintf("assistant raw response turn %d (%s)", turn, cfg.TaskID),
+					"path":      tracePath,
+					"step":      actionSteps,
+					"tool_call": toolCalls,
+					"turn":      turn,
+				})
+			}
+		}
 		if suggestErr != nil {
 			failureReason := WorkerFailureAssistUnavailable
 			if isAssistTimeoutError(suggestErr, suggestCtx.Err(), ctx.Err()) {
@@ -331,6 +443,9 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			}
 			for k, v := range assistTurnMetadata(turnMeta, callTimeout, remainingBudget) {
 				details[k] = v
+			}
+			if llmTracePath != "" {
+				details["llm_response_path"] = llmTracePath
 			}
 			_ = emitWorkerFailure(manager, cfg, task, suggestErr, failureReason, details)
 			return suggestErr
@@ -379,6 +494,9 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 		}
 		for k, v := range assistTurnMetadata(turnMeta, callTimeout, remainingBudget) {
 			progressPayload[k] = v
+		}
+		if llmTracePath != "" {
+			progressPayload["llm_response_path"] = llmTracePath
 		}
 		_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, progressPayload)
 
@@ -741,7 +859,9 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 				"tool_call": toolCalls,
 				"exit_code": commandExitCode(runErr),
 			})
-			observations = appendObservation(observations, summarizeCommandResult(result.command, result.args, runErr, result.output))
+			summary, summaryMeta := summarizeCommandResultWithMeta(result.command, result.args, runErr, result.output)
+			contextEnvelope.recordCommandSummary(summaryMeta)
+			observations = appendObservation(observations, summary)
 			if runErr != nil {
 				lastResultKey = ""
 				lastResultStreak = 0
@@ -760,10 +880,11 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 					return nil
 				}
 			}
+			contextEnvelope.recordCommandOutcome(result.command, result.args, runErr, lastResultKey)
 			if runErr != nil {
 				if isAssistInvalidToolSpecError(runErr) {
 					mode = "recover"
-					recoverHint = summarizeCommandResult(result.command, result.args, runErr, result.output)
+					recoverHint = summary
 					observations = appendObservation(observations, "recovery: invalid tool specification; request command/tool with concrete files+run")
 					if recErr := markRecoverTransition(turn, "invalid_tool_spec", map[string]any{
 						"command": result.command,
@@ -772,6 +893,30 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 						return recErr
 					}
 					continue
+				}
+				if missingTool := detectMissingExecutable(result.command, runErr, result.output); missingTool != "" {
+					remediation := handleMissingToolRemediation(ctx, manager, cfg, task, workDir, actionSteps, turn, toolCalls, result.command, result.args, missingTool, missingToolInstallAttempts)
+					if remediation.Handled {
+						if remediation.Observation != "" {
+							observations = appendObservation(observations, remediation.Observation)
+						}
+						if remediation.RecoverHint != "" {
+							recoverHint = remediation.RecoverHint
+						} else {
+							recoverHint = summary
+						}
+						if mode != "recover" {
+							mode = "recover"
+							if recErr := markRecoverTransition(turn, "missing_tool", map[string]any{
+								"command": result.command,
+								"args":    result.args,
+								"tool":    remediation.ToolName,
+							}); recErr != nil {
+								return recErr
+							}
+						}
+						continue
+					}
 				}
 				if strings.Contains(strings.ToLower(runErr.Error()), WorkerFailureScopeDenied) {
 					_ = emitWorkerFailure(manager, cfg, task, runErr, WorkerFailureScopeDenied, map[string]any{
@@ -800,7 +945,7 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 					return runErr
 				}
 				mode = "recover"
-				recoverHint = summarizeCommandResult(result.command, result.args, runErr, result.output)
+				recoverHint = summary
 				if recErr := markRecoverTransition(turn, "tool_execution_failed", map[string]any{
 					"command": result.command,
 					"args":    result.args,
@@ -831,7 +976,9 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 				})
 				return err
 			}
-			command, args = normalizeWorkerAssistCommand(command, args)
+			if !cfg.Diagnostic {
+				command, args = normalizeWorkerAssistCommand(command, args)
+			}
 			args, scriptPathNote, scriptPathAdapted := resolveShellToolScriptPath(workDir, command, args)
 			if scriptPathAdapted {
 				_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
@@ -844,41 +991,43 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 					"args":       args,
 				})
 			}
-			args, injected, injectedTarget := applyCommandTargetFallback(scopePolicy, task, command, args)
-			if injected {
-				_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
-					"message":    fmt.Sprintf("auto-injected target %s for command %s", injectedTarget, command),
-					"step":       actionSteps,
-					"turn":       turn,
-					"tool_calls": toolCalls,
-					"mode":       mode,
-				})
-			}
-			var adapted bool
-			var adaptNote string
-			command, args, adaptNote, adapted = adaptCommandForRuntime(scopePolicy, command, args)
-			if adapted && adaptNote != "" {
-				_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
-					"message":    adaptNote,
-					"step":       actionSteps,
-					"turn":       turn,
-					"tool_calls": toolCalls,
-					"mode":       mode,
-					"command":    command,
-					"args":       args,
-				})
-			}
-			args, reinjected, reinjectedTarget := applyCommandTargetFallback(scopePolicy, task, command, args)
-			if reinjected {
-				_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
-					"message":    fmt.Sprintf("auto-injected target %s for command %s after runtime adaptation", reinjectedTarget, command),
-					"step":       actionSteps,
-					"turn":       turn,
-					"tool_calls": toolCalls,
-					"mode":       mode,
-					"command":    command,
-					"args":       args,
-				})
+			if !cfg.Diagnostic {
+				args, injected, injectedTarget := applyCommandTargetFallback(scopePolicy, task, command, args)
+				if injected {
+					_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
+						"message":    fmt.Sprintf("auto-injected target %s for command %s", injectedTarget, command),
+						"step":       actionSteps,
+						"turn":       turn,
+						"tool_calls": toolCalls,
+						"mode":       mode,
+					})
+				}
+				var adapted bool
+				var adaptNote string
+				command, args, adaptNote, adapted = adaptCommandForRuntime(scopePolicy, command, args)
+				if adapted && adaptNote != "" {
+					_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
+						"message":    adaptNote,
+						"step":       actionSteps,
+						"turn":       turn,
+						"tool_calls": toolCalls,
+						"mode":       mode,
+						"command":    command,
+						"args":       args,
+					})
+				}
+				args, reinjected, reinjectedTarget := applyCommandTargetFallback(scopePolicy, task, command, args)
+				if reinjected {
+					_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
+						"message":    fmt.Sprintf("auto-injected target %s for command %s after runtime adaptation", reinjectedTarget, command),
+						"step":       actionSteps,
+						"turn":       turn,
+						"tool_calls": toolCalls,
+						"mode":       mode,
+						"command":    command,
+						"args":       args,
+					})
+				}
 			}
 			if !isWorkerLocalBuiltin(command) {
 				if err := scopePolicy.ValidateCommandTargets(command, args); err != nil {
@@ -894,6 +1043,17 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			}
 			key := buildAssistActionKey(command, args)
 			lastActionKey, lastActionStreak = trackAssistActionStreak(lastActionKey, lastActionStreak, key)
+			if isLowValueListingCommand(command, args) && lastActionStreak >= workerAssistNoNewEvidenceResultRepeat {
+				return emitNoProgressFailure(turn, command, args, "repeated low-value listing command streak", map[string]any{
+					"streak": lastActionStreak,
+				})
+			}
+			if mode == "recover" && lastActionStreak >= workerAssistNoNewEvidenceResultRepeat && isNoNewEvidenceCandidate(command, args) {
+				if completionErr := emitNoNewEvidenceCompletion(turn, command, args, lastActionStreak, "repeated recover command streak without new evidence"); completionErr != nil {
+					return completionErr
+				}
+				return nil
+			}
 			if lastActionStreak > workerAssistLoopMaxRepeat {
 				wasRecover := mode == "recover"
 				loopBlocks++
@@ -953,7 +1113,9 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 				"tool_call": toolCalls,
 				"exit_code": commandExitCode(result.runErr),
 			})
-			observations = appendObservation(observations, summarizeCommandResult(result.command, result.args, result.runErr, result.output))
+			summary, summaryMeta := summarizeCommandResultWithMeta(result.command, result.args, result.runErr, result.output)
+			contextEnvelope.recordCommandSummary(summaryMeta)
+			observations = appendObservation(observations, summary)
 			if result.runErr != nil {
 				lastResultKey = ""
 				lastResultStreak = 0
@@ -972,7 +1134,32 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 					return nil
 				}
 			}
+			contextEnvelope.recordCommandOutcome(result.command, result.args, result.runErr, lastResultKey)
 			if result.runErr != nil {
+				if missingTool := detectMissingExecutable(result.command, result.runErr, result.output); missingTool != "" {
+					remediation := handleMissingToolRemediation(ctx, manager, cfg, task, workDir, actionSteps, turn, toolCalls, result.command, result.args, missingTool, missingToolInstallAttempts)
+					if remediation.Handled {
+						if remediation.Observation != "" {
+							observations = appendObservation(observations, remediation.Observation)
+						}
+						if remediation.RecoverHint != "" {
+							recoverHint = remediation.RecoverHint
+						} else {
+							recoverHint = summary
+						}
+						if mode != "recover" {
+							mode = "recover"
+							if recErr := markRecoverTransition(turn, "missing_tool", map[string]any{
+								"command": result.command,
+								"args":    result.args,
+								"tool":    remediation.ToolName,
+							}); recErr != nil {
+								return recErr
+							}
+						}
+						continue
+					}
+				}
 				if mode == "recover" {
 					reason := WorkerFailureCommandFailed
 					if errorsIsTimeout(result.runErr) {
@@ -989,7 +1176,7 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 					return result.runErr
 				}
 				mode = "recover"
-				recoverHint = summarizeCommandResult(result.command, result.args, result.runErr, result.output)
+				recoverHint = summary
 				if recErr := markRecoverTransition(turn, "command_execution_failed", map[string]any{
 					"command": result.command,
 					"args":    result.args,
@@ -1116,6 +1303,15 @@ func isNoNewEvidenceCandidate(command string, args []string) bool {
 	return false
 }
 
+func isLowValueListingCommand(command string, args []string) bool {
+	base := canonicalAssistActionCommand(command)
+	if base != "list_dir" {
+		return false
+	}
+	_ = args
+	return true
+}
+
 func buildAssistPromptScope(runScope Scope, taskTargets []string) []string {
 	seen := map[string]struct{}{}
 	out := make([]string, 0, len(runScope.Networks)+len(runScope.Targets)+len(runScope.DenyTargets))
@@ -1150,6 +1346,54 @@ func buildAssistPromptScope(runScope Scope, taskTargets []string) []string {
 		add(target)
 	}
 	return out
+}
+
+func materializeAssistExpectedArtifacts(cfg WorkerRunConfig, task TaskSpec, sourcePath string) ([]string, error) {
+	sourcePath = strings.TrimSpace(sourcePath)
+	if sourcePath == "" {
+		return nil, nil
+	}
+	data, err := os.ReadFile(sourcePath)
+	if err != nil {
+		return nil, fmt.Errorf("read assist completion log: %w", err)
+	}
+	artifactDir := filepath.Join(BuildRunPaths(cfg.SessionsDir, cfg.RunID).ArtifactDir, task.TaskID)
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create assist artifact dir: %w", err)
+	}
+	out := make([]string, 0, len(task.ExpectedArtifacts))
+	for _, raw := range task.ExpectedArtifacts {
+		requirement := strings.TrimSpace(raw)
+		if requirement == "" || !artifactRequirementNeedsConcreteMatch(requirement) {
+			continue
+		}
+		relative := requirement
+		if filepath.IsAbs(relative) {
+			relative = filepath.Base(relative)
+		}
+		relative = filepath.Clean(relative)
+		if relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			relative = filepath.Base(requirement)
+		}
+		if strings.TrimSpace(relative) == "" {
+			continue
+		}
+		targetPath := filepath.Join(artifactDir, relative)
+		if !pathWithinRoot(targetPath, artifactDir) {
+			targetPath = filepath.Join(artifactDir, filepath.Base(relative))
+		}
+		if strings.EqualFold(filepath.Clean(targetPath), filepath.Clean(sourcePath)) {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+			return nil, fmt.Errorf("create expected artifact dir: %w", err)
+		}
+		if err := os.WriteFile(targetPath, data, 0o644); err != nil {
+			return nil, fmt.Errorf("write expected artifact %s: %w", requirement, err)
+		}
+		out = append(out, targetPath)
+	}
+	return compactStrings(out), nil
 }
 
 func buildAutonomousQuestionAnswer(task TaskSpec, question string, observations []string) string {

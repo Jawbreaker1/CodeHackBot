@@ -23,11 +23,16 @@ const (
 )
 
 type workerAssistantTurnMeta struct {
-	Model           string
-	AssistMode      string
-	ParseRepairUsed bool
-	FallbackUsed    bool
-	FallbackReason  string
+	Model               string
+	AssistMode          string
+	ParseRepairUsed     bool
+	FallbackUsed        bool
+	FallbackReason      string
+	TraceEnabled        bool
+	PrimaryResponse     string
+	PrimaryFinishReason string
+	RepairResponse      string
+	RepairFinishReason  string
 }
 
 type workerAssistant interface {
@@ -37,6 +42,7 @@ type workerAssistant interface {
 type workerAssistRuntime struct {
 	mode     workerAssistMode
 	model    string
+	traceLLM bool
 	primary  assist.LLMAssistant
 	fallback assist.Assistant
 }
@@ -61,8 +67,9 @@ func buildWorkerAssistant() (string, string, workerAssistant, error) {
 	assistTemp, assistTokens := cfg.ResolveLLMRoleOptions("assist", 0.15, 1200)
 	recoveryTemp, recoveryTokens := cfg.ResolveLLMRoleOptions("recovery", 0.1, 900)
 	runtime := &workerAssistRuntime{
-		mode:  mode,
-		model: model,
+		mode:     mode,
+		model:    model,
+		traceLLM: parseBoolEnv(os.Getenv(workerAssistTraceLLMEnv)),
 		primary: assist.LLMAssistant{
 			Client:            client,
 			Model:             model,
@@ -80,13 +87,18 @@ func buildWorkerAssistant() (string, string, workerAssistant, error) {
 
 func (r *workerAssistRuntime) Suggest(ctx context.Context, input assist.Input) (assist.Suggestion, workerAssistantTurnMeta, error) {
 	meta := workerAssistantTurnMeta{
-		Model:      strings.TrimSpace(r.model),
-		AssistMode: string(r.mode),
+		Model:        strings.TrimSpace(r.model),
+		AssistMode:   string(r.mode),
+		TraceEnabled: r.traceLLM,
 	}
 	parseRepairUsed := false
 	primary := r.primary
 	primary.OnSuggestMeta = func(primaryMeta assist.LLMSuggestMetadata) {
 		parseRepairUsed = primaryMeta.ParseRepairUsed
+		meta.PrimaryResponse = strings.TrimSpace(primaryMeta.PrimaryResponse)
+		meta.PrimaryFinishReason = strings.TrimSpace(primaryMeta.PrimaryFinishReason)
+		meta.RepairResponse = strings.TrimSpace(primaryMeta.RepairResponse)
+		meta.RepairFinishReason = strings.TrimSpace(primaryMeta.RepairFinishReason)
 		if model := strings.TrimSpace(primaryMeta.Model); model != "" {
 			meta.Model = model
 		}
@@ -192,6 +204,11 @@ func loadWorkerLLMConfig() (config.Config, error) {
 		loaded.Agent.WorkerAssistMode = v
 	}
 	return loaded, nil
+}
+
+func parseBoolEnv(raw string) bool {
+	enabled, err := strconv.ParseBool(strings.TrimSpace(raw))
+	return err == nil && enabled
 }
 
 func errorsIsTimeout(err error) bool {
