@@ -775,9 +775,12 @@ Sprint header convention (all new planned sprints): first checklist item must be
     - [x] block reasoning-style leakage in final/user report text (summary/report output must be concise findings/method/results only).
     - [ ] acceptance gate: `secret.zip` CLI run succeeds `>=5/5` without prose-command exec failures; router CLI run yields evidence-backed findings or explicit `objective_not_met` (no false-success report).
   - [ ] LLM-freedom guardrail audit (anti-hardcoding, required before Sprint 36 exit):
-    - [ ] inventory every non-LLM command adaptation/rewrite path in CLI + orchestrator (`adapt`, `repair`, fallback command synthesis) with owner + policy rationale.
-    - [ ] classify each adaptation path as `generic_capability` vs `scenario_literal`; remove/disable `scenario_literal` behavior from production runtime paths.
-    - [ ] add regression check that production (non-test) adaptation paths do not embed scenario literals (`secret.zip`, fixed lab IPs/domains) outside examples/docs.
+    - [x] inventory every non-LLM command adaptation/rewrite path in CLI + orchestrator (`adapt`, `repair`, fallback command synthesis) with owner + policy rationale.
+      - documented in `docs/runbooks/llm-freedom-guardrail-audit.md`.
+    - [x] classify each adaptation path as `generic_capability` vs `scenario_literal`; remove/disable `scenario_literal` behavior from production runtime paths.
+      - current inventory classification is `generic_capability` only; removed remaining runtime example-domain literal from adaptation/recovery path text.
+    - [x] add regression check that production (non-test) adaptation paths do not embed scenario literals (`secret.zip`, fixed lab IPs/domains) outside examples/docs.
+      - added `TestAdaptationPathsAvoidScenarioLiterals` in `internal/orchestrator/hardcoding_guard_test.go`.
     - [ ] emit decision-source mix per run (`llm_direct`, `llm_repair`, `runtime_adapt`, `static_fallback`) and surface in run summary/report.
     - [ ] set and enforce a salvage acceptance threshold where LLM-led decisions are the majority for successful CLI smoke runs.
   - [ ] LLM autonomy contract verification (CLI-first, then worker adoption plan):

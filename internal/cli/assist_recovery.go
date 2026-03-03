@@ -357,7 +357,7 @@ func assistFailureHint(suggestion assist.Suggestion, cmdErr commandError) string
 	}
 	if command == "whois" {
 		if strings.Contains(outputLower, "no match") || strings.Contains(outputLower, "not found") {
-			return "WHOIS typically only supports root domains (e.g., systemverification.com), not subdomains."
+			return "WHOIS typically only supports root domains (e.g., example.com), not subdomains."
 		}
 	}
 	if command == "fcrackzip" {
