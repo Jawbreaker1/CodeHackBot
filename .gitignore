@@ -41,6 +41,14 @@
 /syve.md
 /zip_crack_report.md
 /zipinfo_verbose.txt
+/zip.hash
+/temp_hash.txt
+/secret_text.txt
+/ping_sweep.txt
+/john.pot
+/owasp_iphone*.md
+/output=sessions/
+/--output=sessions/
 
 # Local lab run scratch directories
 /extracted_content/
