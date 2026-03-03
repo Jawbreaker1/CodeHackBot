@@ -11,10 +11,32 @@ func normalizeAssistantOutput(text string) string {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\r", "\n")
 	text = ansiEscapePattern.ReplaceAllString(text, "")
+	text = stripThinkBlocks(text)
 	text = strings.ReplaceAll(text, "\t", "    ")
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return text
+	}
+	original := text
+	hadReasoningPrefix := startsWithReasoningMarker(text)
+	if looksLikeStructuredReasoningLeak(text) {
+		hadReasoningPrefix = true
+		if extracted := extractUserFacingSection(text); extracted != "" {
+			text = extracted
+		} else {
+			text = ""
+		}
+	}
+	text = stripReasoningTail(text)
+	if strings.TrimSpace(text) == "" {
+		if hadReasoningPrefix {
+			// Never surface chain-of-thought-only output to the operator.
+			text = "I could not produce a clean user-facing summary for this step."
+		} else {
+			// Prefer a noisy answer over an empty one; empty replies create confusing
+			// delayed interactions where the next prompt appears to answer the prior one.
+			text = original
+		}
 	}
 	width := 0
 	if isTerminalStdout() {
@@ -23,7 +45,124 @@ func normalizeAssistantOutput(text string) string {
 	return wrapTextForTerminal(text, width)
 }
 
+func stripThinkBlocks(text string) string {
+	if strings.TrimSpace(text) == "" {
+		return text
+	}
+	clean := thinkBlockPattern.ReplaceAllString(text, "")
+	return strings.TrimSpace(clean)
+}
+
+func stripReasoningTail(text string) string {
+	// Some models leak chain-of-thought markers at start-of-line or inline.
+	// Trim everything from the first marker onward.
+	markers := []string{
+		"thinking process:",
+		"reasoning:",
+		"internal reasoning:",
+		"chain of thought:",
+		"analyze the request:",
+		"analyze the input data:",
+		"evaluate current state:",
+		"drafting the response:",
+		"refine based on constraints:",
+		"final review against constraints:",
+		"constructing output:",
+	}
+	lower := strings.ToLower(text)
+	cut := -1
+	for _, marker := range markers {
+		idx := strings.Index(lower, marker)
+		if idx >= 0 && (cut == -1 || idx < cut) {
+			cut = idx
+		}
+	}
+	if cut < 0 {
+		return text
+	}
+	if cut == 0 {
+		// Model started with reasoning. Try to salvage a user-facing section.
+		if extracted := extractUserFacingSection(text); extracted != "" {
+			return extracted
+		}
+		return ""
+	}
+	return strings.TrimSpace(text[:cut])
+}
+
+func looksLikeStructuredReasoningLeak(text string) bool {
+	lower := strings.ToLower(text)
+	if strings.Contains(lower, "analyze the request:") ||
+		strings.Contains(lower, "refine based on constraints:") ||
+		strings.Contains(lower, "final review against constraints:") ||
+		strings.Contains(lower, "constructing output:") {
+		return true
+	}
+	structured := regexp.MustCompile(`(?m)^\s*\d+\.\s+\*\*(analyze|evaluate|drafting|refine|final review|constructing)\b`)
+	return structured.MatchString(lower)
+}
+
+func startsWithReasoningMarker(text string) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(text))
+	if trimmed == "" {
+		return false
+	}
+	markers := []string{
+		"thinking process:",
+		"reasoning:",
+		"internal reasoning:",
+		"chain of thought:",
+	}
+	for _, marker := range markers {
+		if strings.HasPrefix(trimmed, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func extractUserFacingSection(text string) string {
+	type marker struct {
+		display string
+		query   string
+	}
+	markers := []marker{
+		{display: "summary:", query: "summary:"},
+		{display: "findings:", query: "findings:"},
+		{display: "result:", query: "result:"},
+		{display: "final answer:", query: "final answer:"},
+		{display: "next steps:", query: "next steps:"},
+		{display: "answer:", query: "answer:"},
+	}
+	lower := strings.ToLower(text)
+	best := -1
+	bestDisplay := ""
+	for _, marker := range markers {
+		if idx := strings.Index(lower, marker.query); idx >= 0 && (best < 0 || idx < best) {
+			best = idx
+			bestDisplay = marker.display
+		}
+		emphasized := "*" + marker.display
+		if idx := strings.Index(lower, emphasized); idx >= 0 && (best < 0 || idx < best) {
+			best = idx
+			bestDisplay = marker.display
+		}
+	}
+	if best < 0 {
+		return ""
+	}
+	out := strings.TrimSpace(text[best:])
+	// Normalize markdown-emphasized heading variants.
+	out = strings.TrimPrefix(out, "*")
+	out = strings.TrimPrefix(out, "*")
+	if bestDisplay != "" && strings.HasPrefix(strings.ToLower(out), bestDisplay) {
+		return out
+	}
+	return strings.TrimSpace(out)
+}
+
 var ansiEscapePattern = regexp.MustCompile("\x1b\\[[0-9;?]*[ -/]*[@-~]")
+var thinkBlockPattern = regexp.MustCompile(`(?is)<think>.*?</think>`)
 
 func wrapTextForTerminal(text string, width int) string {
 	if width < 10 {
@@ -124,6 +263,7 @@ func looksLikeAction(text string) bool {
 		"test": {}, "probe": {}, "search": {}, "ping": {}, "nmap": {}, "curl": {}, "msf": {}, "msfconsole": {},
 		"netstat": {}, "ls": {}, "whoami": {}, "cat": {}, "dir": {}, "open": {}, "dump": {}, "inspect": {}, "analyze": {},
 		"investigate": {}, "recon": {}, "crawl": {}, "browse": {}, "report": {}, "summarize": {},
+		"extract": {}, "crack": {}, "decrypt": {}, "recover": {}, "unlock": {}, "bruteforce": {},
 	}
 	for _, token := range splitTokens(text) {
 		if _, ok := verbs[token]; ok {
@@ -196,10 +336,7 @@ func hasURLHint(text string) bool {
 	}
 	for _, token := range strings.Fields(text) {
 		clean := strings.Trim(token, " \t\r\n\"'()[]{}<>.,;:")
-		if strings.Count(clean, ".") >= 1 && len(clean) >= 4 {
-			if strings.HasPrefix(clean, ".") || strings.HasSuffix(clean, ".") {
-				continue
-			}
+		if isLikelyURLOrHostToken(clean) {
 			return true
 		}
 	}
@@ -221,14 +358,66 @@ func extractFirstURL(text string) string {
 		if strings.Contains(clean, "://") {
 			return clean
 		}
-		if strings.HasPrefix(strings.ToLower(clean), "www.") || strings.Count(clean, ".") >= 1 {
-			if strings.HasPrefix(clean, ".") || strings.HasSuffix(clean, ".") {
-				continue
-			}
+		if isLikelyURLOrHostToken(clean) {
 			return clean
 		}
 	}
 	return ""
+}
+
+func isLikelyURLOrHostToken(token string) bool {
+	clean := strings.TrimSpace(token)
+	if clean == "" {
+		return false
+	}
+	lower := strings.ToLower(clean)
+	if strings.Contains(lower, "://") {
+		return true
+	}
+	// Do not treat local files/paths as URLs (e.g. secret.zip).
+	if looksLikePathOrFilename(clean) {
+		return false
+	}
+	if lower == "localhost" {
+		return true
+	}
+	// Accept raw IPv4 literals.
+	digitsOrDots := true
+	for _, r := range lower {
+		if (r >= '0' && r <= '9') || r == '.' {
+			continue
+		}
+		digitsOrDots = false
+		break
+	}
+	if digitsOrDots && strings.Count(lower, ".") == 3 {
+		return true
+	}
+	if strings.HasPrefix(lower, "www.") {
+		return strings.Count(lower, ".") >= 1
+	}
+	if !strings.Contains(lower, ".") {
+		return false
+	}
+	parts := strings.Split(lower, ".")
+	if len(parts) < 2 {
+		return false
+	}
+	tld := parts[len(parts)-1]
+	if len(tld) < 2 || len(tld) > 24 {
+		return false
+	}
+	for _, r := range tld {
+		if r < 'a' || r > 'z' {
+			return false
+		}
+	}
+	for _, part := range parts {
+		if part == "" || strings.HasPrefix(part, "-") || strings.HasSuffix(part, "-") || strings.Contains(part, "_") {
+			return false
+		}
+	}
+	return true
 }
 
 func findURLWithScheme(text string) string {

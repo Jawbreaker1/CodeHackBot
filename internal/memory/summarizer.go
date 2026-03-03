@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -39,28 +40,64 @@ type Summarizer interface {
 type FallbackSummarizer struct{}
 
 func (FallbackSummarizer) Summarize(_ context.Context, input SummaryInput) (SummaryOutput, error) {
-	summary := append([]string{}, input.ExistingSummary...)
-	if len(summary) == 0 {
-		summary = []string{"Summary unavailable; review recent logs."}
-	}
-	summary = append(summary, fmt.Sprintf("Summary refreshed (%s).", fallbackReason(input.Reason)))
-
+	summary := carryForwardSummary(input.ExistingSummary, 8)
 	commands := extractCommands(input.LogSnippets)
+	blockers := extractBlockers(input.LogSnippets, 2)
+	if len(summary) == 0 && len(commands) == 0 && len(blockers) == 0 && len(input.LogSnippets) == 0 {
+		summary = []string{"Summary unavailable; evidence review in progress."}
+	}
+
+	summary = append(summary, fmt.Sprintf("Summary refreshed (%s).", fallbackReason(input.Reason)))
 	if len(commands) > 0 {
-		summary = append(summary, fmt.Sprintf("Commands: %s", strings.Join(commands, ", ")))
+		summary = append(summary, fmt.Sprintf("Recent actions: %s", strings.Join(compactCommandLabels(commands, 3), "; ")))
+	}
+	if len(blockers) > 0 {
+		summary = append(summary, fmt.Sprintf("Recent blockers: %s", strings.Join(blockers, " | ")))
 	}
 	if len(input.LogSnippets) > 0 {
-		paths := []string{}
-		for _, snippet := range input.LogSnippets {
-			paths = append(paths, snippet.Path)
-		}
-		summary = append(summary, fmt.Sprintf("Recent logs: %s", strings.Join(paths, ", ")))
-	}
-	if input.ChatHistory != "" {
-		summary = append(summary, "Recent conversation included.")
+		summary = append(summary, fmt.Sprintf("Evidence reviewed: %d recent log snippet(s).", len(input.LogSnippets)))
 	}
 	facts := mergeLines(input.ExistingFacts, extractFacts(input))
 	return SummaryOutput{Summary: summary, Facts: facts}, nil
+}
+
+func carryForwardSummary(existing []string, keep int) []string {
+	filtered := []string{}
+	for _, line := range normalizeLines(existing) {
+		if isLowSignalSummaryLine(line) {
+			continue
+		}
+		filtered = append(filtered, line)
+	}
+	if keep > 0 && len(filtered) > keep {
+		filtered = filtered[len(filtered)-keep:]
+	}
+	return filtered
+}
+
+func isLowSignalSummaryLine(line string) bool {
+	lower := strings.ToLower(strings.TrimSpace(line))
+	if lower == "" {
+		return true
+	}
+	switch {
+	case lower == "summary pending.",
+		lower == "summary unavailable; evidence review in progress.",
+		lower == "conversation context considered.",
+		strings.HasPrefix(lower, "summary refreshed ("),
+		strings.HasPrefix(lower, "evidence reviewed:"),
+		strings.HasPrefix(lower, "recent actions:"),
+		strings.HasPrefix(lower, "recent blockers:"),
+		strings.HasPrefix(lower, "commands:"),
+		strings.HasPrefix(lower, "recent logs:"),
+		strings.HasPrefix(lower, "recent conversation included."):
+		return true
+	}
+	// Path-heavy bullets tend to drown out actionable context.
+	if strings.Contains(lower, "sessions/") && strings.Contains(lower, ".log") {
+		return true
+	}
+	return false
 }
 
 type ChainedSummarizer struct {
@@ -192,6 +229,7 @@ var (
 	ipv4CIDRPattern = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}/\d{1,2}\b`)
 	ipv4Pattern     = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
 	urlPattern      = regexp.MustCompile(`https?://[^\s]+`)
+	nmapHostPattern = regexp.MustCompile(`(?i)^nmap scan report for\s+(.+?)\s+\((\d{1,3}(?:\.\d{1,3}){3})\)$`)
 )
 
 func extractCommands(snippets []LogSnippet) []string {
@@ -216,6 +254,122 @@ func extractCommands(snippets []LogSnippet) []string {
 	return commands
 }
 
+func compactCommandLabels(commands []string, max int) []string {
+	out := []string{}
+	seen := map[string]struct{}{}
+	for _, cmd := range commands {
+		label := compactCommandLabel(cmd)
+		if label == "" {
+			continue
+		}
+		if _, ok := seen[label]; ok {
+			continue
+		}
+		seen[label] = struct{}{}
+		out = append(out, label)
+		if max > 0 && len(out) >= max {
+			break
+		}
+	}
+	return out
+}
+
+func compactCommandLabel(command string) string {
+	fields := strings.Fields(strings.TrimSpace(command))
+	if len(fields) == 0 {
+		return ""
+	}
+	limit := 4
+	if len(fields) < limit {
+		limit = len(fields)
+	}
+	tokens := make([]string, 0, limit+1)
+	for i := 0; i < limit; i++ {
+		token := strings.TrimSpace(fields[i])
+		if token == "" {
+			continue
+		}
+		trimmed := strings.Trim(token, "\"'`")
+		if strings.Contains(trimmed, "/") {
+			base := filepath.Base(trimmed)
+			if base != "." && base != "/" && base != "" {
+				token = strings.Replace(token, trimmed, base, 1)
+			}
+		}
+		tokens = append(tokens, clampSummaryText(token, 40))
+	}
+	if len(fields) > limit {
+		tokens = append(tokens, "...")
+	}
+	return clampSummaryText(strings.Join(tokens, " "), 96)
+}
+
+func extractBlockers(snippets []LogSnippet, max int) []string {
+	blockers := []string{}
+	seen := map[string]struct{}{}
+	for _, snippet := range snippets {
+		if shouldSkipSummaryLogPath(snippet.Path) {
+			continue
+		}
+		for _, raw := range strings.Split(snippet.Content, "\n") {
+			line := strings.TrimSpace(raw)
+			if line == "" || strings.HasPrefix(line, "$ ") {
+				continue
+			}
+			lower := strings.ToLower(line)
+			if !containsAny(lower,
+				"no such file or directory",
+				"not found",
+				"permission denied",
+				"timed out",
+				"failed",
+				"unable",
+				"error",
+				"denied",
+			) {
+				continue
+			}
+			blocker := clampSummaryText(collapseWhitespace(line), 110)
+			if blocker == "" {
+				continue
+			}
+			if _, ok := seen[blocker]; ok {
+				continue
+			}
+			seen[blocker] = struct{}{}
+			blockers = append(blockers, blocker)
+			if max > 0 && len(blockers) >= max {
+				return blockers
+			}
+		}
+	}
+	return blockers
+}
+
+func containsAny(text string, needles ...string) bool {
+	for _, needle := range needles {
+		if needle != "" && strings.Contains(text, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func collapseWhitespace(text string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+}
+
+func clampSummaryText(text string, max int) string {
+	text = strings.TrimSpace(text)
+	if max <= 0 || len(text) <= max {
+		return text
+	}
+	if max <= 16 {
+		return text[:max]
+	}
+	return strings.TrimSpace(text[:max-14]) + "...(truncated)"
+}
+
 func extractFacts(input SummaryInput) []string {
 	facts := []string{}
 	seen := map[string]struct{}{}
@@ -232,6 +386,20 @@ func extractFacts(input SummaryInput) []string {
 	}
 
 	for _, snippet := range input.LogSnippets {
+		for _, line := range strings.Split(snippet.Content, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			match := nmapHostPattern.FindStringSubmatch(line)
+			if len(match) == 3 {
+				host := strings.TrimSpace(match[1])
+				ip := strings.TrimSpace(match[2])
+				if host != "" && ip != "" && host != ip {
+					add(fmt.Sprintf("Observed host: %s (%s)", host, ip))
+				}
+			}
+		}
 		for _, match := range ipv4CIDRPattern.FindAllString(snippet.Content, -1) {
 			add(fmt.Sprintf("Observed CIDR: %s", match))
 		}

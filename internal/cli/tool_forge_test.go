@@ -108,6 +108,108 @@ func TestToolForgeRejectsOutOfBoundsPaths(t *testing.T) {
 	}
 }
 
+func TestToolForgeRejectsAbsoluteUnmappedFilePath(t *testing.T) {
+	cfg := config.Config{}
+	cfg.Session.LogDir = t.TempDir()
+	cfg.Permissions.Level = "all"
+	cfg.Tools.Shell.Enabled = true
+	r := NewRunner(cfg, "session-tool-abs-bad", "", "")
+	if _, err := r.ensureSessionScaffold(); err != nil {
+		t.Fatalf("ensure scaffold: %v", err)
+	}
+	tool := assist.ToolSpec{
+		Language: "bash",
+		Name:     "bad-abs",
+		Files:    []assist.ToolFile{{Path: "/tmp/escape.sh", Content: "#!/bin/sh\necho nope\n"}},
+		Run:      assist.ToolRun{Command: "sh", Args: []string{"/tmp/escape.sh"}},
+	}
+	if err := r.executeToolSuggestion(tool, false); err == nil {
+		t.Fatalf("expected absolute path rejection")
+	}
+}
+
+func TestToolForgeRepairsSessionPrefixedFileAndRunPaths(t *testing.T) {
+	cfg := config.Config{}
+	cfg.Session.LogDir = t.TempDir()
+	cfg.Permissions.Level = "all"
+	cfg.Tools.Shell.Enabled = true
+	cfg.Tools.Shell.TimeoutSeconds = 5
+
+	r := NewRunner(cfg, "session-tool-canon", "", "")
+	sessionDir, err := r.ensureSessionScaffold()
+	if err != nil {
+		t.Fatalf("ensure scaffold: %v", err)
+	}
+
+	tool := assist.ToolSpec{
+		Language: "bash",
+		Name:     "canon",
+		Purpose:  "verify path normalization",
+		Files: []assist.ToolFile{
+			{
+				Path:    "sessions/session-tool-canon/artifacts/tools/sessions/session-tool-canon/scripts/run.sh",
+				Content: "#!/bin/sh\necho canon-ok\n",
+			},
+		},
+		Run: assist.ToolRun{
+			Command: "bash",
+			Args:    []string{filepath.Join(sessionDir, "scripts", "run.sh")},
+		},
+	}
+
+	if err := r.executeToolSuggestion(tool, false); err != nil {
+		t.Fatalf("executeToolSuggestion: %v", err)
+	}
+
+	canonicalScript := filepath.Join(sessionDir, "artifacts", "tools", "scripts", "run.sh")
+	if _, err := os.Stat(canonicalScript); err != nil {
+		t.Fatalf("expected canonical script under tools root: %v", err)
+	}
+	badScript := filepath.Join(sessionDir, "scripts", "run.sh")
+	if _, err := os.Stat(badScript); !os.IsNotExist(err) {
+		t.Fatalf("unexpected script outside tools root: err=%v", err)
+	}
+}
+
+func TestNormalizeToolRunRewritesShellCSnippetPaths(t *testing.T) {
+	cfg := config.Config{}
+	cfg.Session.LogDir = t.TempDir()
+	cfg.Permissions.Level = "all"
+	cfg.Tools.Shell.Enabled = true
+
+	r := NewRunner(cfg, "session-tool-shell", "", "")
+	sessionDir, err := r.ensureSessionScaffold()
+	if err != nil {
+		t.Fatalf("ensure scaffold: %v", err)
+	}
+	toolsRoot := filepath.Join(sessionDir, "artifacts", "tools")
+	if err := os.MkdirAll(filepath.Join(toolsRoot, "logs"), 0o755); err != nil {
+		t.Fatalf("mkdir tools logs: %v", err)
+	}
+
+	cmd, args := r.normalizeToolRun("bash", []string{
+		"-c",
+		"chmod +x artifacts/tools/crack_zip.sh && bash sessions/session-tool-shell/logs/crack_zip.sh",
+	})
+
+	if cmd != "bash" {
+		t.Fatalf("expected bash command, got %q", cmd)
+	}
+	if len(args) != 2 {
+		t.Fatalf("expected 2 args, got %d", len(args))
+	}
+	rewritten := args[1]
+	if strings.Contains(rewritten, " artifacts/tools/") || strings.HasPrefix(rewritten, "artifacts/tools/") || strings.Contains(rewritten, " sessions/session-tool-shell/logs/") {
+		t.Fatalf("expected shell snippet paths rewritten to canonical tools root, got: %s", rewritten)
+	}
+	if want := filepath.Join(toolsRoot, "crack_zip.sh"); !strings.Contains(rewritten, want) {
+		t.Fatalf("expected rewritten snippet to include %q, got: %s", want, rewritten)
+	}
+	if want := filepath.Join(toolsRoot, "logs", "crack_zip.sh"); !strings.Contains(rewritten, want) {
+		t.Fatalf("expected rewritten snippet to include %q, got: %s", want, rewritten)
+	}
+}
+
 func TestToolForgeAutoFixesWithLLMRecovery(t *testing.T) {
 	// LLM server returns a corrected tool spec when the first run fails.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -301,6 +403,51 @@ func TestNormalizeToolRunKeepsExistingPythonUnbufferedFlag(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("expected exactly one -u flag, got %d in %v", count, args)
+	}
+}
+
+func TestMapToolPathToToolsRoot(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+		ok   bool
+	}{
+		{
+			name: "session prefixed path",
+			in:   "sessions/session-abc/scripts/run.sh",
+			want: filepath.Join("scripts", "run.sh"),
+			ok:   true,
+		},
+		{
+			name: "tools rooted path",
+			in:   "sessions/session-abc/artifacts/tools/demo/run.sh",
+			want: filepath.Join("demo", "run.sh"),
+			ok:   true,
+		},
+		{
+			name: "absolute tools rooted path",
+			in:   "/tmp/work/sessions/session-abc/artifacts/tools/demo/run.sh",
+			want: filepath.Join("demo", "run.sh"),
+			ok:   true,
+		},
+		{
+			name: "plain command",
+			in:   "python3",
+			ok:   false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := mapToolPathToToolsRoot("session-abc", tc.in)
+			if ok != tc.ok {
+				t.Fatalf("ok mismatch: got %v want %v (got path=%q)", ok, tc.ok, got)
+			}
+			if tc.ok && got != tc.want {
+				t.Fatalf("path mismatch: got %q want %q", got, tc.want)
+			}
+		})
 	}
 }
 

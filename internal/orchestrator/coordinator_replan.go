@@ -9,6 +9,10 @@ import (
 )
 
 func (c *Coordinator) markFailedWithReplan(taskID, reason string, retryable bool, context map[string]any) error {
+	reason = CanonicalTaskFailureReason(reason)
+	if reason == "" {
+		reason = TaskFailureReasonWorkerExit
+	}
 	if err := c.scheduler.MarkFailed(taskID, reason, retryable, c.maxAttempts); err != nil {
 		return err
 	}
@@ -33,15 +37,13 @@ func (c *Coordinator) handleRunStateAndReplan() error {
 	if err := c.manager.RefreshMemoryBank(c.runID); err != nil {
 		return err
 	}
-	leases, err := c.manager.ReadLeases(c.runID)
-	if err != nil {
-		return err
-	}
 	blocked := make([]string, 0)
-	for _, lease := range leases {
-		if lease.Status == LeaseStatusBlocked {
-			blocked = append(blocked, lease.TaskID)
+	for taskID := range c.scheduler.tasks {
+		state, ok := c.scheduler.State(taskID)
+		if !ok || state != TaskStateBlocked {
+			continue
 		}
+		blocked = append(blocked, taskID)
 	}
 	sort.Strings(blocked)
 
@@ -160,8 +162,8 @@ func (c *Coordinator) handleEventDrivenReplanTriggers() error {
 			if len(event.Payload) > 0 {
 				_ = json.Unmarshal(event.Payload, &payload)
 			}
-			reason := toString(payload["reason"])
-			if reason == "missing_required_artifacts" {
+			reason := CanonicalTaskFailureReason(toString(payload["reason"]))
+			if reason == TaskFailureReasonMissingRequiredArtifacts {
 				missingArtifactsFailureCount[event.TaskID]++
 				if missingArtifactsFailureCount[event.TaskID] >= c.maxAttempts {
 					if _, seen := c.seenMissingArtifactTasks[event.TaskID]; !seen {
@@ -189,11 +191,14 @@ func (c *Coordinator) handleEventDrivenReplanTriggers() error {
 		}
 		switch event.Type {
 		case EventTypeTaskFailed:
-			reason := toString(payload["reason"])
+			if err := RequireEventMutationDomain(EventTypeTaskFailed, MutationDomainReplanGraph); err != nil {
+				return err
+			}
+			reason := CanonicalTaskFailureReason(toString(payload["reason"]))
 			switch reason {
-			case "repeated_step_loop":
+			case TaskFailureReasonRepeatedStepLoop:
 				trigger = "repeated_step_loop"
-			case "stale_lease", "worker_exit", "startup_sla_missed", "worker_reconcile_stale":
+			case TaskFailureReasonStaleLease, TaskFailureReasonWorkerExit, TaskFailureReasonStartupSLAMissed, TaskFailureReasonWorkerReconcileStale:
 				trigger = "worker_recovery"
 			case WorkerFailureCommandFailed, WorkerFailureCommandTimeout, WorkerFailureAssistTimeout, WorkerFailureAssistUnavailable, WorkerFailureAssistParseFailure, WorkerFailureNoProgress:
 				trigger = "execution_failure"
@@ -201,14 +206,23 @@ func (c *Coordinator) handleEventDrivenReplanTriggers() error {
 				if c.shouldPromoteAssistLoopExecutionFailure(event.TaskID, event.EventID, events, idx) {
 					trigger = "execution_failure"
 				}
-			case "budget_exhausted":
+			case TaskFailureReasonBudgetExhausted:
 				trigger = "budget_exhausted"
 			}
 		case EventTypeApprovalDenied:
+			if err := RequireEventMutationDomain(EventTypeApprovalDenied, MutationDomainReplanGraph); err != nil {
+				return err
+			}
 			trigger = "approval_denied"
 		case EventTypeApprovalExpired:
+			if err := RequireEventMutationDomain(EventTypeApprovalExpired, MutationDomainReplanGraph); err != nil {
+				return err
+			}
 			trigger = "approval_expired"
 		case EventTypeOperatorInstruction:
+			if err := RequireEventMutationDomain(EventTypeOperatorInstruction, MutationDomainReplanGraph); err != nil {
+				return err
+			}
 			trigger = "operator_instruction"
 		}
 		if trigger == "" {
@@ -296,11 +310,17 @@ func (c *Coordinator) maybeMutateTaskGraph(trigger string, source EventEnvelope,
 		return out
 	}
 	now := c.manager.Now()
+	queuedStatus, mapErr := LeaseStatusFromTaskState(TaskStateQueued)
+	if mapErr != nil {
+		out["mutation_status"] = "lease_status_map_failed"
+		out["mutation_error"] = mapErr.Error()
+		return out
+	}
 	lease := TaskLease{
 		TaskID:    task.TaskID,
 		LeaseID:   fmt.Sprintf("lease-%s-%d", task.TaskID, now.UnixNano()),
 		WorkerID:  "",
-		Status:    LeaseStatusQueued,
+		Status:    queuedStatus,
 		Attempt:   1,
 		StartedAt: now,
 		Deadline:  now.Add(c.startupTimeout),

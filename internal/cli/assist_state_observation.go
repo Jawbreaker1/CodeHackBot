@@ -28,7 +28,7 @@ func (r *Runner) recordObservationFromResult(kind string, result exec.CommandRes
 	if command == "" {
 		return
 	}
-	excerpt := firstLines(result.Output, 12)
+	excerpt := observationExcerpt(result.Output, 12)
 	errText := ""
 	if err != nil {
 		errText = err.Error()
@@ -42,6 +42,43 @@ func (r *Runner) recordObservation(kind string, args []string, logPath string, o
 		errText = err.Error()
 	}
 	r.recordObservationWithCommand(kind, kind, args, logPath, outputExcerpt, errText, exitCodeFromErr(err))
+}
+
+func observationExcerpt(text string, maxLines int) string {
+	if maxLines <= 0 {
+		return ""
+	}
+	lines := strings.Split(strings.TrimSpace(text), "\n")
+	clean := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		clean = append(clean, line)
+	}
+	if len(clean) == 0 {
+		return ""
+	}
+	if len(clean) <= maxLines {
+		return strings.Join(clean, " / ")
+	}
+	head := maxLines / 2
+	if head < 2 {
+		head = 2
+	}
+	tail := maxLines - head
+	if tail < 2 {
+		tail = 2
+	}
+	if head+tail > len(clean) {
+		return strings.Join(clean, " / ")
+	}
+	out := make([]string, 0, head+tail+1)
+	out = append(out, clean[:head]...)
+	out = append(out, "...")
+	out = append(out, clean[len(clean)-tail:]...)
+	return strings.Join(out, " / ")
 }
 
 func (r *Runner) recordObservationWithCommand(kind string, command string, args []string, logPath string, outputExcerpt string, errText string, exitCode int) {
@@ -58,6 +95,17 @@ func (r *Runner) recordObservationWithCommand(kind string, command string, args 
 		LogPath:       logPath,
 		OutputExcerpt: strings.TrimSpace(outputExcerpt),
 	})
+	if artifacts, err := memory.EnsureArtifacts(sessionDir); err == nil {
+		_ = r.appendAssistMemoryOp(sessionDir, assistMemoryOperation{
+			Direction: "write",
+			Component: "observations",
+			Source:    "memory.state.recent_observations",
+			Path:      artifacts.StatePath,
+			Chars:     len(strings.TrimSpace(outputExcerpt)) + len(strings.TrimSpace(errText)),
+			Items:     1,
+			Reason:    "record_observation",
+		})
+	}
 	if logPath != "" && exitCode == 0 {
 		r.lastSuccessLogPath = logPath
 	}
@@ -151,6 +199,15 @@ func (r *Runner) appendConversation(role, content string) {
 		return
 	}
 	r.appendChatHistory(artifacts.ChatPath, role, content)
+	_ = r.appendAssistMemoryOp(sessionDir, assistMemoryOperation{
+		Direction: "write",
+		Component: "chat_history",
+		Source:    "memory.chat",
+		Path:      artifacts.ChatPath,
+		Chars:     len(content),
+		Items:     1,
+		Reason:    "append_conversation",
+	})
 	r.maybeAutoSummarizeChat(sessionDir, artifacts.ChatPath)
 }
 
@@ -159,8 +216,9 @@ func (r *Runner) updateTaskFoundation(goal string) {
 	if goal == "" {
 		return
 	}
-	if len(goal) > 240 {
-		goal = goal[:240]
+	const maxFocusGoalChars = 1200
+	if len(goal) > maxFocusGoalChars {
+		goal = strings.TrimSpace(goal[:maxFocusGoalChars-14]) + "...(truncated)"
 	}
 	sessionDir, err := r.ensureSessionScaffold()
 	if err != nil {
@@ -186,6 +244,15 @@ func (r *Runner) updateTaskFoundation(goal string) {
 		}
 	}
 	_ = memory.WriteFocus(artifacts.FocusPath, items)
+	_ = r.appendAssistMemoryOp(sessionDir, assistMemoryOperation{
+		Direction: "write",
+		Component: "focus",
+		Source:    "memory.focus",
+		Path:      artifacts.FocusPath,
+		Chars:     len(goal),
+		Items:     len(items),
+		Reason:    "update_task_foundation",
+	})
 }
 
 func (r *Runner) maybeAutoSummarizeChat(sessionDir, chatPath string) {

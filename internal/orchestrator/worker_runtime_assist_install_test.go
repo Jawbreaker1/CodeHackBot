@@ -57,3 +57,14 @@ func TestDetectMissingExecutableFromShellOutput(t *testing.T) {
 		t.Fatalf("detectMissingExecutable shell output: got %q want nikto", got)
 	}
 }
+
+func TestShouldSkipMissingToolInstall(t *testing.T) {
+	t.Parallel()
+
+	if skip, _ := shouldSkipMissingToolInstall("summary", "summary", nil); !skip {
+		t.Fatalf("expected summary workflow command to skip install")
+	}
+	if skip, _ := shouldSkipMissingToolInstall("nuclei", "nuclei", nil); skip {
+		t.Fatalf("did not expect nuclei to be treated as pseudo workflow command")
+	}
+}

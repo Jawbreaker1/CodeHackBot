@@ -278,6 +278,9 @@ func readTailLines(path string, maxLines, maxBytes int) string {
 func readLogSnippets(paths []string, maxBytes int) []LogSnippet {
 	snippets := []LogSnippet{}
 	for _, path := range paths {
+		if shouldSkipSummaryLogPath(path) {
+			continue
+		}
 		content := readSnippet(path, maxBytes)
 		if content == "" {
 			continue
@@ -288,4 +291,14 @@ func readLogSnippets(paths []string, maxBytes int) []LogSnippet {
 		})
 	}
 	return snippets
+}
+
+func shouldSkipSummaryLogPath(path string) bool {
+	base := strings.ToLower(strings.TrimSpace(filepath.Base(path)))
+	switch base {
+	case "", "chat.log":
+		return true
+	default:
+		return false
+	}
 }

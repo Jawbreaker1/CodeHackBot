@@ -86,6 +86,11 @@ func TestGenerateReportWithContextSections(t *testing.T) {
 			t.Fatalf("expected section %q", want)
 		}
 	}
+	for _, want := range []string{"## Objective Status", "## Method And Rationale", "## Results Overview"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected narrative section %q", want)
+		}
+	}
 }
 
 func TestGenerateWithProfileUsesOWASPTemplate(t *testing.T) {
@@ -178,6 +183,36 @@ func TestGenerateReportSkipsUnverifiedPrivilegeFinding(t *testing.T) {
 	content := strings.ToLower(string(data))
 	if strings.Contains(content, "confirmed root access on target host") {
 		t.Fatalf("expected unverified privilege finding to be filtered")
+	}
+}
+
+func TestGenerateReportFiltersLowValueFindingNoise(t *testing.T) {
+	temp := t.TempDir()
+	outPath := filepath.Join(temp, "report.md")
+	info := Info{
+		Findings: []string{
+			"Observed IP: 192.168.50.185",
+			"Observed host: Johans-iPhone (192.168.50.185)",
+			"Open port 62078/tcp was observed on target host.",
+		},
+		Observations: "[2026-03-03T00:00:00Z] run: nmap -sV 192.168.50.185 (exit=0)\nout: Nmap scan report for Johans-iPhone (192.168.50.185)\nout: 62078/tcp open tcpwrapped",
+	}
+	if err := Generate("", outPath, info); err != nil {
+		t.Fatalf("Generate error: %v", err)
+	}
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	content := string(data)
+	if strings.Contains(content, "Description: Observed IP: 192.168.50.185") {
+		t.Fatalf("expected low-value observed-ip finding to be filtered")
+	}
+	if strings.Contains(content, "Description: Observed host: Johans-iPhone (192.168.50.185)") {
+		t.Fatalf("expected low-value observed-host finding to be filtered")
+	}
+	if !strings.Contains(content, "Open port 62078/tcp was observed on target host.") {
+		t.Fatalf("expected evidence-bearing finding to remain")
 	}
 }
 

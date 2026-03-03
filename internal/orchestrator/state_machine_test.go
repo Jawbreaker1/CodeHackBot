@@ -43,10 +43,10 @@ func TestValidateTransition_InvalidTransitions(t *testing.T) {
 func TestMapFailureReasonToState(t *testing.T) {
 	t.Parallel()
 
-	if got := MapFailureReasonToState("approval_timeout"); got != TaskStateBlocked {
+	if got := MapFailureReasonToState(TaskFailureReasonApprovalTimeout); got != TaskStateBlocked {
 		t.Fatalf("approval_timeout should map to blocked, got %s", got)
 	}
-	if got := MapFailureReasonToState("scope_denied"); got != TaskStateBlocked {
+	if got := MapFailureReasonToState(WorkerFailureScopeDenied); got != TaskStateBlocked {
 		t.Fatalf("scope_denied should map to blocked, got %s", got)
 	}
 	if got := MapFailureReasonToState("tool_exit_1"); got != TaskStateFailed {

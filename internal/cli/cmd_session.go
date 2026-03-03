@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -243,6 +244,56 @@ func (r *Runner) handleContextShow() error {
 	r.logger.Printf("Context Usage: %s", usage.statusLine())
 	r.logger.Printf("Context Buckets: logs=%s observations=%s chat=%s", usage.Logs.label(), usage.Observed.label(), usage.Chat.label())
 	r.logger.Printf("Context Auto-Summary: steps=%s recent_logs=%s (%s)", usage.StepWindow.label(), usage.LogWindow.label(), usage.summarizeRemainingLine())
+	return nil
+}
+
+func (r *Runner) handleContextPacket() error {
+	sessionDir, err := r.ensureSessionScaffold()
+	if err != nil {
+		return err
+	}
+	packetPath := assistContextPacketPath(sessionDir)
+	data, err := os.ReadFile(packetPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			r.logger.Printf("No assist context packet yet. Run an assist step first.")
+			return nil
+		}
+		return fmt.Errorf("read context packet: %w", err)
+	}
+	var packet assistContextPacket
+	if err := json.Unmarshal(data, &packet); err != nil {
+		return fmt.Errorf("parse context packet: %w", err)
+	}
+	r.logger.Printf("Context Packet: time=%s mode=%s approx_prompt_chars=%d", statusValueOrFallback(packet.Time, "(unknown)"), statusValueOrFallback(packet.Mode, "(none)"), packet.ApproxPromptChars)
+	r.logger.Printf("Context Packet Goal: %s", fallbackBlock(packet.Goal))
+	r.logger.Printf("Context Packet Sections:")
+	for _, section := range packet.Sections {
+		source := statusValueOrFallback(section.Source, "(none)")
+		path := statusValueOrFallback(section.Path, "(none)")
+		r.logger.Printf("- %s source=%s chars=%d items=%d path=%s", section.Section, source, section.Chars, section.Items, path)
+	}
+	ops, err := r.recentAssistMemoryOps(sessionDir, 12)
+	if err != nil {
+		return fmt.Errorf("read memory ops: %w", err)
+	}
+	if len(ops) == 0 {
+		r.logger.Printf("Memory Ops: none yet")
+		return nil
+	}
+	r.logger.Printf("Memory Ops (latest %d):", len(ops))
+	for _, op := range ops {
+		r.logger.Printf("- %s %s component=%s source=%s chars=%d items=%d path=%s reason=%s",
+			statusValueOrFallback(op.Time, "(unknown)"),
+			statusValueOrFallback(op.Direction, "(none)"),
+			statusValueOrFallback(op.Component, "(none)"),
+			statusValueOrFallback(op.Source, "(none)"),
+			op.Chars,
+			op.Items,
+			statusValueOrFallback(op.Path, "(none)"),
+			statusValueOrFallback(op.Reason, "(none)"),
+		)
+	}
 	return nil
 }
 

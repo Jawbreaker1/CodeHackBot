@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -47,8 +48,12 @@ func isBuiltinCrawl(command string) bool {
 	return strings.EqualFold(strings.TrimSpace(command), "crawl")
 }
 
+func isBuiltinReport(command string) bool {
+	return strings.EqualFold(strings.TrimSpace(command), "report")
+}
+
 func isWorkerLocalBuiltin(command string) bool {
-	return isBuiltinListDir(command) || isBuiltinReadFile(command) || isBuiltinWriteFile(command)
+	return isBuiltinListDir(command) || isBuiltinReadFile(command) || isBuiltinWriteFile(command) || isBuiltinReport(command)
 }
 
 func isWorkerBuiltinCommand(command string) bool {
@@ -206,4 +211,40 @@ func builtinBrowse(ctx context.Context, args []string) ([]byte, error) {
 
 func builtinCrawl(ctx context.Context, args []string) ([]byte, error) {
 	return builtinBrowse(ctx, args)
+}
+
+func builtinReport(ctx context.Context, cfg WorkerRunConfig, task TaskSpec, args []string, workDir string) ([]byte, error) {
+	target := strings.TrimSpace(firstTaskTarget(task.Targets))
+	if target == "" {
+		target = "local"
+	}
+	scriptArgs := buildReportSynthesisActionArgs(cfg, task, target, "medium", "assist_report_builtin")
+	cmd := exec.Command("python3", scriptArgs...)
+	cmd.Dir = workDir
+	cmd.Env = os.Environ()
+	output, runErr := runWorkerCommand(ctx, cmd, workerCommandStopGrace)
+	if runErr != nil {
+		return output, runErr
+	}
+	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
+		return output, nil
+	}
+	reportPath := strings.TrimSpace(args[0])
+	if filepath.IsAbs(reportPath) {
+		return output, fmt.Errorf("report output path must be relative")
+	}
+	fullPath := filepath.Clean(filepath.Join(workDir, reportPath))
+	if !pathWithinRoot(fullPath, workDir) {
+		return output, fmt.Errorf("report output path escapes workspace")
+	}
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+		return output, err
+	}
+	if err := os.WriteFile(fullPath, output, 0o644); err != nil {
+		return output, err
+	}
+	out := make([]byte, 0, len(output)+len(fullPath)+32)
+	out = append(out, output...)
+	out = append(out, []byte("\nSaved report to "+fullPath+"\n")...)
+	return capBytes(out, workerAssistOutputLimit), nil
 }

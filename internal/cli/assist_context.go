@@ -43,7 +43,7 @@ func (r *Runner) assistInput(sessionDir, goal, mode string) (assist.Input, error
 			recentLog = snippets
 		}
 	}
-	playbooks := r.playbookHints(goal)
+	playbooks := r.playbookHints(goal, mode, recentLog)
 	tools := r.toolsSummary(sessionDir, 12)
 	planPath := filepath.Join(sessionDir, r.cfg.Session.PlanFilename)
 	inventoryPath := filepath.Join(sessionDir, r.cfg.Session.InventoryFilename)
@@ -253,7 +253,7 @@ func (r *Runner) readRecentObservations(artifacts memory.Artifacts, max int) str
 	return strings.TrimSpace(builder.String())
 }
 
-func (r *Runner) playbookHints(goal string) string {
+func (r *Runner) playbookHints(goal string, mode string, recentLog string) string {
 	if r.cfg.Context.PlaybookMax == 0 {
 		return ""
 	}
@@ -261,19 +261,7 @@ func (r *Runner) playbookHints(goal string) string {
 	if err != nil || len(entries) == 0 {
 		return ""
 	}
-	text := strings.TrimSpace(goal)
-	if text == "" {
-		return ""
-	}
-	matches := playbook.Match(entries, text, r.cfg.Context.PlaybookMax)
-	if len(matches) == 0 {
-		lower := strings.ToLower(text)
-		if strings.Contains(lower, "playbook") || strings.Contains(lower, "workflow") || strings.Contains(lower, "procedure") {
-			return playbook.List(entries)
-		}
-		return ""
-	}
-	return playbook.Render(matches, r.cfg.Context.PlaybookLines)
+	return buildPlaybookHints(entries, goal, recentLog, mode, r.cfg.Context.PlaybookMax, r.cfg.Context.PlaybookLines)
 }
 
 func sanitizeFilename(name string) string {
@@ -300,7 +288,7 @@ func fallbackBlock(content string) string {
 	return content
 }
 
-func (r *Runner) assistGenerator() assist.Assistant {
+func (r *Runner) assistGenerator(metaHook func(assist.LLMSuggestMetadata)) assist.Assistant {
 	assistTemp, assistTokens := r.llmRoleOptions("assist", 0.15, 1200)
 	recoveryTemp, recoveryTokens := r.llmRoleOptions("recovery", 0.1, 900)
 	llmAssistant := assist.LLMAssistant{
@@ -310,6 +298,7 @@ func (r *Runner) assistGenerator() assist.Assistant {
 		MaxTokens:         r.intPtr(assistTokens),
 		RepairTemperature: r.float32Ptr(recoveryTemp),
 		RepairMaxTokens:   r.intPtr(recoveryTokens),
+		OnSuggestMeta:     metaHook,
 	}
 	fallback := assist.FallbackAssistant{}
 	return guardedAssistant{
@@ -361,12 +350,37 @@ func (r *Runner) getAssistSuggestion(goal string, mode string) (assist.Suggestio
 	if err != nil {
 		return assist.Suggestion{}, err
 	}
+	if err := r.refreshAssistContextSummarySnapshot(sessionDir, mode); err != nil && r.cfg.UI.Verbose {
+		r.logger.Printf("Context summary refresh warning: %v", err)
+	}
 	input, err := r.assistInput(sessionDir, r.enrichAssistGoal(goal, mode), mode)
 	if err != nil {
 		return assist.Suggestion{}, err
 	}
-	assistant := r.assistGenerator()
+	if artifacts, artifactsErr := memory.EnsureArtifacts(sessionDir); artifactsErr == nil {
+		sections := r.buildAssistContextSections(sessionDir, artifacts, input)
+		if packetErr := r.writeAssistContextPacket(sessionDir, goal, mode, input, sections); packetErr != nil && r.cfg.UI.Verbose {
+			r.logger.Printf("Assist context packet warning: %v", packetErr)
+		}
+		if traceErr := r.appendAssistMemoryReadTrace(sessionDir, sections, "assist_input_build"); traceErr != nil && r.cfg.UI.Verbose {
+			r.logger.Printf("Assist memory read trace warning: %v", traceErr)
+		}
+	} else if r.cfg.UI.Verbose {
+		r.logger.Printf("Assist context artifact warning: %v", artifactsErr)
+	}
+	var (
+		meta     assist.LLMSuggestMetadata
+		metaSeen bool
+	)
+	assistant := r.assistGenerator(func(m assist.LLMSuggestMetadata) {
+		meta = m
+		metaSeen = true
+	})
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	return assistant.Suggest(ctx, input)
+	suggestion, suggestErr := assistant.Suggest(ctx, input)
+	if auditErr := r.writeAssistContextAudit(sessionDir, goal, mode, input, suggestion, suggestErr, metaSeen, meta); auditErr != nil && r.cfg.UI.Verbose {
+		r.logger.Printf("Assist context audit warning: %v", auditErr)
+	}
+	return suggestion, suggestErr
 }

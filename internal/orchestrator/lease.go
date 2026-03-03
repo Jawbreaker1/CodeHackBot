@@ -19,6 +19,48 @@ const (
 	LeaseStatusCanceled         = "canceled"
 )
 
+var taskStateToLeaseStatus = map[TaskState]string{
+	TaskStateQueued:           LeaseStatusQueued,
+	TaskStateLeased:           LeaseStatusLeased,
+	TaskStateRunning:          LeaseStatusRunning,
+	TaskStateAwaitingApproval: LeaseStatusAwaitingApproval,
+	TaskStateCompleted:        LeaseStatusCompleted,
+	TaskStateFailed:           LeaseStatusFailed,
+	TaskStateBlocked:          LeaseStatusBlocked,
+	TaskStateCanceled:         LeaseStatusCanceled,
+}
+
+var leaseStatusToTaskState = map[string]TaskState{
+	LeaseStatusQueued:           TaskStateQueued,
+	LeaseStatusLeased:           TaskStateLeased,
+	LeaseStatusRunning:          TaskStateRunning,
+	LeaseStatusAwaitingApproval: TaskStateAwaitingApproval,
+	LeaseStatusCompleted:        TaskStateCompleted,
+	LeaseStatusFailed:           TaskStateFailed,
+	LeaseStatusBlocked:          TaskStateBlocked,
+	LeaseStatusCanceled:         TaskStateCanceled,
+}
+
+func LeaseStatusFromTaskState(state TaskState) (string, error) {
+	if err := ValidateTaskState(state); err != nil {
+		return "", err
+	}
+	status, ok := taskStateToLeaseStatus[state]
+	if !ok {
+		return "", fmt.Errorf("no lease status mapping for task state %q", state)
+	}
+	return status, nil
+}
+
+func TaskStateFromLeaseStatus(status string) (TaskState, error) {
+	normalized := strings.ToLower(strings.TrimSpace(status))
+	state, ok := leaseStatusToTaskState[normalized]
+	if !ok {
+		return "", fmt.Errorf("invalid lease status %q", status)
+	}
+	return state, nil
+}
+
 func (m *Manager) WriteLease(runID string, lease TaskLease) error {
 	if strings.TrimSpace(runID) == "" {
 		return fmt.Errorf("run id is required")
@@ -96,8 +138,19 @@ func (m *Manager) UpdateLeaseStatus(runID, taskID, status, workerID string) erro
 	}
 	lease.Status = status
 	lease.WorkerID = workerID
+	if err := ValidateTaskLease(lease); err != nil {
+		return err
+	}
 	taskDir := BuildRunPaths(m.SessionsDir, runID).TaskDir
 	return WriteJSONAtomic(leaseFilePath(taskDir, taskID), lease)
+}
+
+func (m *Manager) UpdateLeaseFromTaskState(runID, taskID string, state TaskState, workerID string) error {
+	status, err := LeaseStatusFromTaskState(state)
+	if err != nil {
+		return err
+	}
+	return m.UpdateLeaseStatus(runID, taskID, status, workerID)
 }
 
 func (m *Manager) ReclaimMissedStartup(runID string, startupTimeout time.Duration) ([]TaskLease, error) {
@@ -200,7 +253,7 @@ func (m *Manager) emitReclaimedEvents(runID string, lease TaskLease) error {
 		Type:     EventTypeTaskFailed,
 		Payload: mustJSONRaw(map[string]any{
 			"lease_id": lease.LeaseID,
-			"reason":   "startup_sla_missed",
+			"reason":   TaskFailureReasonStartupSLAMissed,
 			"reclaim":  true,
 		}),
 	}
@@ -223,7 +276,7 @@ func (m *Manager) emitReclaimedEvents(runID string, lease TaskLease) error {
 			"lease_id":        lease.LeaseID,
 			"status":          lease.Status,
 			"assigned_worker": "",
-			"requeue_reason":  "startup_sla_missed",
+			"requeue_reason":  TaskFailureReasonStartupSLAMissed,
 		}),
 	}
 	return AppendEventJSONL(m.eventPath(runID), requeued)
@@ -244,7 +297,7 @@ func (m *Manager) emitStaleReclaimedEvents(runID string, lease TaskLease) error 
 		Type:     EventTypeTaskFailed,
 		Payload: mustJSONRaw(map[string]any{
 			"lease_id": lease.LeaseID,
-			"reason":   "stale_lease",
+			"reason":   TaskFailureReasonStaleLease,
 			"reclaim":  true,
 		}),
 	}
@@ -267,7 +320,7 @@ func (m *Manager) emitStaleReclaimedEvents(runID string, lease TaskLease) error 
 			"lease_id":        lease.LeaseID,
 			"status":          lease.Status,
 			"assigned_worker": "",
-			"requeue_reason":  "stale_lease",
+			"requeue_reason":  TaskFailureReasonStaleLease,
 		}),
 	}
 	return AppendEventJSONL(m.eventPath(runID), requeued)

@@ -145,8 +145,31 @@ func TestAdaptCommandForRuntimeCapsLoopbackDiscoveryRange(t *testing.T) {
 	if !strings.Contains(joined, "127.0.0.1") {
 		t.Fatalf("expected loopback discovery capped to 127.0.0.1, got %#v", args)
 	}
-	if !strings.Contains(note, "limit output volume") {
-		t.Fatalf("expected output volume note, got %q", note)
+	if !strings.Contains(note, "bounded scan runtime") {
+		t.Fatalf("expected bounded-runtime note, got %q", note)
+	}
+}
+
+func TestAdaptCommandForRuntimeCapsLoopbackRangeForNonDiscoveryScan(t *testing.T) {
+	t.Parallel()
+
+	scope := Scope{Networks: []string{"127.0.0.0/8"}, Targets: []string{"127.0.0.1"}}
+	policy := NewScopePolicy(scope)
+	original := []string{"-n", "--max-retries", "1", "127.0.0.0/8"}
+
+	_, args, note, adapted := adaptCommandForRuntime(policy, "nmap", original)
+	if !adapted {
+		t.Fatalf("expected adaptation for broad loopback target")
+	}
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "127.0.0.0/8") {
+		t.Fatalf("expected broad loopback target removed, got %#v", args)
+	}
+	if !strings.Contains(joined, "127.0.0.1") {
+		t.Fatalf("expected target capped to 127.0.0.1, got %#v", args)
+	}
+	if !strings.Contains(note, "bounded scan runtime") {
+		t.Fatalf("expected bounded-runtime note, got %q", note)
 	}
 }
 

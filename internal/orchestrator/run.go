@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 )
@@ -235,6 +234,23 @@ func (m *Manager) SetRunPhase(runID, phase string) error {
 	return WriteJSONAtomic(planPath, plan)
 }
 
+func (m *Manager) SetRunOutcome(runID string, outcome RunOutcome) error {
+	normalized := NormalizeRunOutcome(string(outcome))
+	if normalized == "" {
+		return fmt.Errorf("invalid run outcome: %s", outcome)
+	}
+	plan, err := m.LoadRunPlan(runID)
+	if err != nil {
+		return err
+	}
+	if NormalizeRunOutcome(plan.Metadata.RunOutcome) == normalized {
+		return nil
+	}
+	plan.Metadata.RunOutcome = string(normalized)
+	planPath := filepath.Join(BuildRunPaths(m.SessionsDir, runID).PlanDir, "plan.json")
+	return WriteJSONAtomic(planPath, plan)
+}
+
 func ValidatePlanForStart(plan RunPlan) error {
 	if err := ValidateRunPlan(plan); err != nil {
 		return err
@@ -254,7 +270,7 @@ func ValidatePlanForStart(plan RunPlan) error {
 func BuildRunStatus(runID string, events []EventEnvelope) RunStatus {
 	status := RunStatus{
 		RunID: runID,
-		State: "unknown",
+		State: runProjectionStateUnknown,
 	}
 	if len(events) == 0 {
 		return status
@@ -265,35 +281,11 @@ func BuildRunStatus(runID string, events []EventEnvelope) RunStatus {
 	hasRunStarted := false
 
 	for _, event := range events {
-		taskID := strings.TrimSpace(event.TaskID)
-		switch event.Type {
-		case EventTypeRunStarted:
-			hasRunStarted = true
-		case EventTypeRunStopped:
-			status.State = "stopped"
-		case EventTypeRunCompleted:
-			status.State = "completed"
-		case EventTypeWorkerStarted:
-			workerState[event.WorkerID] = true
-		case EventTypeWorkerStopped:
-			workerState[event.WorkerID] = false
-		case EventTypeTaskLeased:
-			if taskID != "" {
-				taskState[taskID] = "queued"
-			}
-		case EventTypeTaskStarted, EventTypeTaskProgress, EventTypeTaskArtifact, EventTypeTaskFinding:
-			if taskID != "" {
-				taskState[taskID] = "running"
-			}
-		case EventTypeTaskCompleted, EventTypeTaskFailed:
-			if taskID != "" {
-				taskState[taskID] = "done"
-			}
-		}
+		applyEventToRunTaskWorkerProjection(&hasRunStarted, &status.State, workerState, taskState, event)
 	}
 
-	if status.State == "unknown" && hasRunStarted {
-		status.State = "running"
+	if status.State == runProjectionStateUnknown && hasRunStarted {
+		status.State = runProjectionStateRunning
 	}
 	for _, active := range workerState {
 		if active {
@@ -302,9 +294,9 @@ func BuildRunStatus(runID string, events []EventEnvelope) RunStatus {
 	}
 	for _, task := range taskState {
 		switch task {
-		case "queued":
+		case taskProjectionStateQueued:
 			status.QueuedTasks++
-		case "running":
+		case taskProjectionStateRunning:
 			status.RunningTasks++
 		}
 	}
@@ -315,38 +307,7 @@ func BuildWorkerStatus(events []EventEnvelope) []WorkerStatus {
 	byWorker := map[string]WorkerStatus{}
 
 	for _, event := range events {
-		if event.WorkerID == "" {
-			continue
-		}
-		ws := byWorker[event.WorkerID]
-		if ws.WorkerID == "" {
-			ws.WorkerID = event.WorkerID
-			ws.State = "seen"
-		}
-		ws.LastSeq = maxI64(ws.LastSeq, event.Seq)
-		if event.TS.After(ws.LastEvent) {
-			ws.LastEvent = event.TS
-		}
-		switch event.Type {
-		case EventTypeWorkerStarted:
-			ws.State = "active"
-		case EventTypeWorkerHeartbeat:
-			if ws.State != "stopped" {
-				ws.State = "active"
-			}
-		case EventTypeWorkerStopped:
-			ws.State = "stopped"
-		case EventTypeTaskStarted, EventTypeTaskProgress, EventTypeTaskArtifact, EventTypeTaskFinding:
-			if ws.State != "stopped" {
-				ws.State = "active"
-			}
-			ws.CurrentTask = event.TaskID
-		case EventTypeTaskCompleted, EventTypeTaskFailed:
-			if ws.CurrentTask == event.TaskID {
-				ws.CurrentTask = ""
-			}
-		}
-		byWorker[event.WorkerID] = ws
+		applyEventToWorkerStatusMap(byWorker, event)
 	}
 
 	out := make([]WorkerStatus, 0, len(byWorker))

@@ -42,7 +42,7 @@ func (c *Coordinator) validateTaskCompletionContract(task TaskSpec, taskID, sign
 		requiredArtifacts = compactStrings(task.ExpectedArtifacts)
 	}
 	requiredFindings := compactStrings(sliceFromAny(contract["required_findings"]))
-	if len(requiredFindings) == 0 {
+	if len(requiredFindings) == 0 && !completionContractAllowsNoFindings(contract) {
 		requiredFindings = []string{"task_execution_result"}
 	}
 
@@ -59,7 +59,7 @@ func (c *Coordinator) validateTaskCompletionContract(task TaskSpec, taskID, sign
 	reason := ""
 	if len(missingArtifacts) > 0 || len(missingFindings) > 0 {
 		status = "failed"
-		reason = "missing_required_artifacts"
+		reason = TaskFailureReasonMissingRequiredArtifacts
 	}
 
 	return completionContractCheck{
@@ -324,6 +324,25 @@ func sliceFromAny(v any) []string {
 		return out
 	default:
 		return nil
+	}
+}
+
+func completionContractAllowsNoFindings(contract map[string]any) bool {
+	if len(contract) == 0 {
+		return false
+	}
+	raw, ok := contract["allow_fallback_without_findings"]
+	if !ok {
+		return false
+	}
+	switch typed := raw.(type) {
+	case bool:
+		return typed
+	case string:
+		trimmed := strings.TrimSpace(strings.ToLower(typed))
+		return trimmed == "1" || trimmed == "true" || trimmed == "yes"
+	default:
+		return false
 	}
 }
 

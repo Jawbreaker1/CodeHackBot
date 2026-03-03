@@ -30,3 +30,21 @@ func ValidateRequiredSections(profile, content string) error {
 	}
 	return nil
 }
+
+func ValidateGeneratedNarrative(content string) error {
+	required := []string{
+		"## Objective Status",
+		"## Method And Rationale",
+		"## Results Overview",
+	}
+	missing := make([]string, 0, len(required))
+	for _, section := range required {
+		if !strings.Contains(content, section) {
+			missing = append(missing, section)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("generated report missing required narrative sections: %s", strings.Join(missing, ", "))
+	}
+	return nil
+}

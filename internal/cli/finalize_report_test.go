@@ -222,6 +222,9 @@ func TestParseReportArgs(t *testing.T) {
 		{name: "profile only", args: []string{"owasp"}, wantP: "owasp"},
 		{name: "output only", args: []string{"security_report.md"}, wantP: "standard", wantOut: "security_report.md"},
 		{name: "profile and output", args: []string{"nis2", "security_report.md"}, wantP: "nis2", wantOut: "security_report.md"},
+		{name: "flag output equals", args: []string{"--output=security_report.md"}, wantP: "standard", wantOut: "security_report.md"},
+		{name: "flag output split", args: []string{"owasp", "--output", "security_report.md"}, wantP: "owasp", wantOut: "security_report.md"},
+		{name: "legacy output equals", args: []string{"output=security_report.md"}, wantP: "standard", wantOut: "security_report.md"},
 		{name: "invalid extra args", args: []string{"owasp", "a.md", "b.md"}, wantErr: true},
 	}
 	for _, tc := range tests {
@@ -243,5 +246,71 @@ func TestParseReportArgs(t *testing.T) {
 				t.Fatalf("output mismatch: got %q want %q", gotOut, tc.wantOut)
 			}
 		})
+	}
+}
+
+func TestMaybeFinalizeReportSkippedWhenObjectiveUnmetInOpenLikeMode(t *testing.T) {
+	cfg := config.Config{}
+	cfg.Session.LogDir = t.TempDir()
+	cfg.Agent.AssistLoopMode = "open_like"
+	cfg.Permissions.Level = "all"
+	r := NewRunner(cfg, "session-openlike-no-finalize", "", "")
+
+	sessionDir, err := r.ensureSessionScaffold()
+	if err != nil {
+		t.Fatalf("ensureSessionScaffold: %v", err)
+	}
+	r.assistObjectiveMet = false
+	r.maybeFinalizeReport("extract secret.zip password and create a report", false)
+
+	if _, err := os.Stat(filepath.Join(sessionDir, "report.md")); !os.IsNotExist(err) {
+		t.Fatalf("expected report to be skipped when objective unmet, got err=%v", err)
+	}
+}
+
+func TestFinalizeReportIncludesObjectiveAndTargetStatus(t *testing.T) {
+	cfg := config.Config{}
+	cfg.Session.LogDir = t.TempDir()
+	cfg.Session.PlanFilename = "plan.md"
+	cfg.Session.InventoryFilename = "inventory.md"
+	cfg.Session.LedgerFilename = "ledger.md"
+	cfg.Permissions.Level = "all"
+
+	r := NewRunner(cfg, "session-objective-status", "", "")
+	sessionDir, err := r.ensureSessionScaffold()
+	if err != nil {
+		t.Fatalf("ensureSessionScaffold: %v", err)
+	}
+	if _, err := memory.EnsureArtifacts(sessionDir); err != nil {
+		t.Fatalf("EnsureArtifacts: %v", err)
+	}
+	manager := r.memoryManager(sessionDir)
+	if _, err := manager.RecordObservation(memory.Observation{
+		Time:          "now",
+		Kind:          "run",
+		Command:       "nmap",
+		Args:          []string{"-sn", "192.168.50.185"},
+		ExitCode:      0,
+		OutputExcerpt: "Note: Host seems down. If it is really up, but blocking our ping probes, try -Pn",
+		LogPath:       filepath.Join(sessionDir, "logs", "scan.log"),
+	}); err != nil {
+		t.Fatalf("RecordObservation: %v", err)
+	}
+	r.assistObjectiveMet = false
+
+	path, err := r.finalizeReport("Scan internal network and verify Johans-iphone (expected at 192.168.50.185). Create OWASP report.")
+	if err != nil {
+		t.Fatalf("finalizeReport: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	content := strings.ToLower(string(data))
+	if !strings.Contains(content, "objective status: not_met") {
+		t.Fatalf("expected objective status to be reported as not_met")
+	}
+	if !strings.Contains(content, "target verification: not_verified") {
+		t.Fatalf("expected target verification status to be not_verified")
 	}
 }

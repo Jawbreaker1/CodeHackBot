@@ -93,7 +93,7 @@ func (r *Runner) handlePlanAuto(reason string) error {
 	if reason != "" {
 		input.Goal = reason
 	}
-	input.Playbooks = r.playbookHints(reason)
+	input.Playbooks = r.playbookHints(reason, "next-steps", "")
 	planner := r.planGenerator()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -126,7 +126,7 @@ func (r *Runner) handleNext(_ []string) error {
 	if err != nil {
 		return err
 	}
-	input.Playbooks = r.playbookHints(input.Plan)
+	input.Playbooks = r.playbookHints(input.Plan, "next-steps", "")
 	planner := r.planGenerator()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -171,7 +171,7 @@ func (r *Runner) handleExecute(args []string) error {
 	if err != nil {
 		return err
 	}
-	input.Playbooks = r.playbookHints(input.Plan)
+	input.Playbooks = r.playbookHints(input.Plan, "next-steps", "")
 	planner := r.planGenerator()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()

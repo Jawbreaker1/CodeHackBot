@@ -9,13 +9,15 @@ import (
 
 type Config struct {
 	Agent struct {
-		Name             string `json:"name"`
-		Model            string `json:"model"`
-		SystemPrompt     string `json:"system_prompt"`
-		MaxSteps         int    `json:"max_steps"`
-		ToolMaxFixes     int    `json:"tool_max_fixes"`
-		ToolMaxFiles     int    `json:"tool_max_files"`
-		WorkerAssistMode string `json:"worker_assist_mode,omitempty"`
+		Name                 string `json:"name"`
+		Model                string `json:"model"`
+		SystemPrompt         string `json:"system_prompt"`
+		MaxSteps             int    `json:"max_steps"`
+		AssistLoopMode       string `json:"assist_loop_mode,omitempty"`
+		AssistRepairAttempts int    `json:"assist_repair_attempts,omitempty"`
+		ToolMaxFixes         int    `json:"tool_max_fixes"`
+		ToolMaxFiles         int    `json:"tool_max_files"`
+		WorkerAssistMode     string `json:"worker_assist_mode,omitempty"`
 	} `json:"agent"`
 	LLM struct {
 		BaseURL         string                `json:"base_url"`

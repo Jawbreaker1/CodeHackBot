@@ -62,7 +62,7 @@ func (r *Runner) handleAsk(text string) error {
 		Messages: []llm.Message{
 			{
 				Role:    "system",
-				Content: "You are BirdHackBot, a security testing assistant operating in an authorized lab owned by the user. Never claim to be Claude, OpenAI, Anthropic, or any other assistant identity. Provide direct help within scope, including inspecting local files or assisting with encrypted files the user created. If access requires a password, ask for it; if asked to crack a password, proceed only when the user confirms authorization for that file. Do not emit tool-call markup; respond in plain text. If web access is needed, ask the user to run /browse with the URL (it requires approval). Answer clearly and concisely and ask follow-up questions when needed.",
+				Content: "You are BirdHackBot, a security testing assistant operating in an authorized lab owned by the user. Never claim to be Claude, OpenAI, Anthropic, or any other assistant identity. Provide direct help within scope, including inspecting local files or assisting with encrypted files the user created. Assume the standard Kali Linux toolchain is available, including Metasploit (msfconsole), and suggest/use those tools when suitable to the goal and scope. If access requires a password, ask for it; if asked to crack a password, proceed only when the user confirms authorization for that file. Do not emit tool-call markup; respond in plain text. If web access is needed, ask the user to run /browse with the URL (it requires approval). Answer clearly and concisely and ask follow-up questions when needed.",
 			},
 			{
 				Role:    "user",
@@ -201,6 +201,7 @@ func (r *Runner) handleAssistGoal(goal string, dryRun bool) error {
 		r.updateTaskFoundation(trimmedGoal)
 		r.pendingAssistGoal = ""
 		r.pendingAssistQ = ""
+		r.assistObjectiveMet = false
 		r.resetAssistLoopState()
 	}
 	if !dryRun && isSummaryIntent(trimmedGoal) {
@@ -245,6 +246,10 @@ func (r *Runner) handleAssistSingleStep(goal string, dryRun bool, mode string) e
 		return r.handleAssistNoop(goal, dryRun)
 	}
 	if err := r.executeAssistSuggestion(suggestion, dryRun); err != nil {
+		if isOperatorInterrupted(err) {
+			r.handleOperatorInterrupt(strings.TrimSpace(goal))
+			return nil
+		}
 		if r.handleAssistCommandFailure(goal, suggestion, err) {
 			r.maybeEmitGoalSummary(goal, dryRun)
 			return nil
@@ -266,14 +271,34 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 	}
 
 	budget := newAssistBudget(goal, r.assistMaxSteps())
+	if r.openLikeAssistLoopEnabled() {
+		budget.enableLongHorizon()
+	}
 	r.startAssistRuntime(goal, mode, budget)
 	defer r.clearAssistRuntime()
+	if !dryRun {
+		proceed, err := r.maybeConfirmGoalExecution(goal, dryRun)
+		if err != nil {
+			return err
+		}
+		if !proceed {
+			return nil
+		}
+	}
 	repeatedGuardHits := 0
 	stepMode := mode
 	lastCommand := assist.Suggestion{}
 	for {
 		r.updateAssistRuntime(stepMode, budget)
 		if budget.exhausted() {
+			if r.openLikeAssistLoopEnabled() && r.isActionGoal(goal) && !r.assistObjectiveMet {
+				if budget.extendForPersistence(3, "open-like persistence extension") {
+					if r.cfg.UI.Verbose {
+						r.logger.Printf("Open-like mode extended step budget to %d/%d while objective remains unmet.", budget.used, budget.currentCap)
+					}
+					continue
+				}
+			}
 			if r.cfg.UI.Verbose {
 				r.logger.Printf("Reached step budget (%d/%d).", budget.used, budget.currentCap)
 			}
@@ -286,6 +311,13 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 			}
 			if !dryRun && lastCommand.Type == "command" {
 				r.maybeSuggestNextSteps(goal, lastCommand)
+			}
+			if !dryRun && r.openLikeAssistLoopEnabled() && r.isActionGoal(goal) && !r.assistObjectiveMet {
+				msg := "Objective not met yet from current evidence. Continue with more attempts by replying `continue`, or provide a new strategy/wordlist/tool hint."
+				safePrintln(msg)
+				r.appendConversation("Assistant", msg)
+				r.pendingAssistGoal = goal
+				r.pendingAssistQ = msg
 			}
 			r.maybeEmitGoalSummary(goal, dryRun)
 			r.maybeFinalizeReport(goal, dryRun)
@@ -309,11 +341,34 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 		if err != nil {
 			return err
 		}
+		var normalizeNote string
+		suggestion, normalizeNote = r.normalizeAssistDecision(suggestion)
+		if normalizeNote != "" && r.cfg.UI.Verbose {
+			r.logger.Printf("%s", normalizeNote)
+		}
 		if suggestion.Type == "noop" && strings.TrimSpace(goal) != "" {
 			budget.consume("noop -> clarify")
 			budget.onStall("noop suggestion")
 			r.updateAssistRuntime("recover", budget)
 			return r.handleAssistNoop(goal, dryRun)
+		}
+		if err := r.validateAssistDecisionContract(suggestion); err != nil {
+			budget.consume("invalid decision contract")
+			budget.onStall("invalid decision contract")
+			r.updateAssistRuntime("recover", budget)
+			if r.cfg.UI.Verbose {
+				r.logger.Printf("Decision contract violation: %v", err)
+			}
+			if r.handleAssistCommandFailure(goal, suggestion, err) {
+				if shouldPauseAfterHandledFailure(dryRun, r.pendingAssistGoal, r.pendingAssistQ) {
+					r.maybeEmitGoalSummary(goal, dryRun)
+					r.maybeFinalizeReport(goal, dryRun)
+					return nil
+				}
+				stepMode = "recover"
+				continue
+			}
+			return err
 		}
 		r.announceAssistStep(stepNum, maxSteps, suggestion)
 		if suggestion.Type == "plan" {
@@ -336,7 +391,26 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 			budget.consume("goal completed")
 			budget.onProgress("assistant completion")
 			r.updateAssistRuntime(stepMode, budget)
-			_ = r.executeAssistSuggestion(suggestion, dryRun)
+			if err := r.executeAssistSuggestion(suggestion, dryRun); err != nil {
+				if isOperatorInterrupted(err) {
+					r.handleOperatorInterrupt(strings.TrimSpace(goal))
+					r.maybeEmitGoalSummary(goal, dryRun)
+					r.maybeFinalizeReport(goal, dryRun)
+					return nil
+				}
+				budget.onStall("invalid completion contract")
+				r.updateAssistRuntime("recover", budget)
+				if r.handleAssistCommandFailure(goal, suggestion, err) {
+					if shouldPauseAfterHandledFailure(dryRun, r.pendingAssistGoal, r.pendingAssistQ) {
+						r.maybeEmitGoalSummary(goal, dryRun)
+						r.maybeFinalizeReport(goal, dryRun)
+						return nil
+					}
+					stepMode = "recover"
+					continue
+				}
+				return err
+			}
 			r.maybeFinalizeReport(goal, dryRun)
 			return nil
 		}
@@ -346,6 +420,12 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 			actionKey = canonicalAssistActionKey(suggestion.Command, suggestion.Args)
 		}
 		if err := r.executeAssistSuggestion(suggestion, dryRun); err != nil {
+			if isOperatorInterrupted(err) {
+				r.handleOperatorInterrupt(strings.TrimSpace(goal))
+				r.maybeEmitGoalSummary(goal, dryRun)
+				r.maybeFinalizeReport(goal, dryRun)
+				return nil
+			}
 			if isAssistRepeatedGuard(err) {
 				if !dryRun && r.tryConcludeGoalFromArtifacts(goal) {
 					r.maybeFinalizeReport(goal, dryRun)
@@ -390,6 +470,20 @@ func (r *Runner) handleAssistAgentic(goal string, dryRun bool, mode string) erro
 				}
 				stepMode = "recover"
 				continue
+			}
+			if r.openLikeAssistLoopEnabled() && !dryRun {
+				if r.tryImmediateAssistRepair(goal, suggestion, err) {
+					budget.consume("step repaired")
+					budget.onProgress("immediate repair succeeded")
+					r.updateAssistRuntime("recover", budget)
+					if r.tryConcludeGoalFromArtifacts(goal) {
+						r.assistObjectiveMet = true
+						r.maybeFinalizeReport(goal, dryRun)
+						return nil
+					}
+					stepMode = "recover"
+					continue
+				}
 			}
 			budget.consume("step failed")
 			budget.onStall("step execution failed")
@@ -511,7 +605,7 @@ func assistStepDescription(suggestion assist.Suggestion) string {
 		}
 		return "proposed plan"
 	case "complete":
-		return "goal completed"
+		return "validating completion claim"
 	default:
 		return ""
 	}
@@ -540,6 +634,10 @@ func (r *Runner) handleAssistNoop(goal string, dryRun bool) error {
 		return nil
 	}
 	if err := r.executeAssistSuggestion(suggestion, dryRun); err != nil {
+		if isOperatorInterrupted(err) {
+			r.handleOperatorInterrupt(strings.TrimSpace(goal))
+			return nil
+		}
 		if r.handleAssistCommandFailure(goal, suggestion, err) {
 			return nil
 		}
@@ -616,15 +714,9 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 		}
 		question := normalizeAssistantOutput(suggestion.Question)
 		question = r.enforceEvidenceClaims(question)
-		if r.cfg.UI.Verbose {
-			r.logger.Printf("Assistant question: %s", suggestion.Question)
-			if suggestion.Summary != "" {
-				r.logger.Printf("Summary: %s", suggestion.Summary)
-			}
-		} else {
-			safePrintln(question)
-		}
-		r.appendConversation("Assistant", question)
+		handoff := formatAssistQuestionForUser(question, suggestion.Summary)
+		safePrintln(handoff)
+		r.appendConversation("Assistant", handoff)
 		r.pendingAssistQ = suggestion.Question
 		return nil
 	case "noop":
@@ -633,6 +725,9 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 		}
 		return nil
 	case "complete":
+		if err := r.validateAssistCompletionContract(suggestion); err != nil {
+			return err
+		}
 		final := strings.TrimSpace(suggestion.Final)
 		if final == "" {
 			final = strings.TrimSpace(suggestion.Summary)
@@ -644,12 +739,20 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 		final = r.enforceEvidenceClaims(final)
 		safePrintln(final)
 		r.appendConversation("Assistant", final)
+		r.assistObjectiveMet = suggestion.ObjectiveMet != nil && *suggestion.ObjectiveMet
 		r.pendingAssistGoal = ""
 		r.pendingAssistQ = ""
 		return nil
 	case "tool":
 		if suggestion.Tool == nil {
 			return fmt.Errorf("assistant returned tool without tool spec")
+		}
+		approved, err := r.maybeConfirmAssistExecution(suggestion, dryRun)
+		if err != nil {
+			return err
+		}
+		if !approved {
+			return executionApprovalRequiredError()
 		}
 		return r.executeToolSuggestion(*suggestion.Tool, dryRun)
 	case "plan":
@@ -659,9 +762,25 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 		if suggestion.Command == "" {
 			return fmt.Errorf("assistant returned empty command")
 		}
+		var contractErr error
+		suggestion.Command, suggestion.Args, contractErr = normalizeAssistCommandContract(suggestion.Command, suggestion.Args)
+		if contractErr != nil {
+			return contractErr
+		}
 		suggestion.Args = normalizeShellScriptArgs(suggestion.Command, suggestion.Args)
+		if strings.EqualFold(suggestion.Command, "write_file") || strings.EqualFold(suggestion.Command, "write") {
+			if len(suggestion.Args) < 2 {
+				return fmt.Errorf("assistant command contract: write_file requires path and content arguments (non-interactive mode)")
+			}
+		}
 		if script, ok := extractShellScript(suggestion.Command, suggestion.Args); ok && looksLikeFragileShellPipeline(script) {
 			return fmt.Errorf("fragile shell pipeline blocked: prefer internal tools (/crawl, /browse, /parse_links, /read_file, /list_dir) or return type=tool to build a helper instead of bash pipelines")
+		}
+		if reason, blocked := assistInteractiveCommandReason(suggestion.Command, suggestion.Args); blocked {
+			return fmt.Errorf("assistant command contract: interactive command blocked: %s", reason)
+		}
+		if err := r.enforceAssistTargetPivotContract(suggestion); err != nil {
+			return err
 		}
 	default:
 		return fmt.Errorf("assistant returned unknown type: %s", suggestion.Type)
@@ -679,6 +798,13 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 	}
 	if dryRun {
 		return nil
+	}
+	approved, err := r.maybeConfirmAssistExecution(suggestion, dryRun)
+	if err != nil {
+		return err
+	}
+	if !approved {
+		return executionApprovalRequiredError()
 	}
 	if err := r.guardAssistCommandLoop(suggestion.Command, suggestion.Args); err != nil {
 		return err
@@ -713,12 +839,12 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 		return r.handleBrowse([]string{suggestion.Command})
 	}
 	args := append([]string{suggestion.Command}, suggestion.Args...)
-	err := r.handleRun(args)
-	if isBenignNoMatchError(err) {
+	runErr := r.handleRun(args)
+	if isBenignNoMatchError(runErr) {
 		r.logger.Printf("No matches found for this step; continuing.")
 		return nil
 	}
-	return err
+	return runErr
 }
 
 func (r *Runner) handlePlanSuggestion(suggestion assist.Suggestion, dryRun bool) error {
@@ -762,6 +888,19 @@ func (r *Runner) handlePlanSuggestion(suggestion assist.Suggestion, dryRun bool)
 		r.appendConversation("Assistant", "Plan steps: "+strings.Join(steps, " | "))
 		suggestion.Steps = steps
 	}
+	goal := strings.TrimSpace(r.assistRuntime.Goal)
+	if goal == "" {
+		goal = strings.TrimSpace(r.pendingAssistGoal)
+	}
+	if !dryRun {
+		proceed, err := r.maybeConfirmComplexPlanExecution(goal, suggestion.Steps, planText)
+		if err != nil {
+			return err
+		}
+		if !proceed {
+			return nil
+		}
+	}
 	if dryRun {
 		return nil
 	}
@@ -771,6 +910,8 @@ func (r *Runner) handlePlanSuggestion(suggestion assist.Suggestion, dryRun bool)
 		}
 		return nil
 	}
+	lastResult := assist.Suggestion{}
+	pausedForQuestion := false
 	for i, step := range suggestion.Steps {
 		r.logger.Printf("Executing step %d/%d: %s", i+1, len(suggestion.Steps), step)
 		stopIndicator := r.startLLMIndicatorIfAllowed("assist")
@@ -780,15 +921,48 @@ func (r *Runner) handlePlanSuggestion(suggestion assist.Suggestion, dryRun bool)
 			return err
 		}
 		if err := r.executeAssistSuggestion(result, false); err != nil {
+			if isOperatorInterrupted(err) {
+				r.handleOperatorInterrupt(strings.TrimSpace(goal))
+				return nil
+			}
 			if r.handleAssistCommandFailure(step, result, err) {
 				return nil
 			}
 			return err
 		}
+		lastResult = result
+		if r.tryConcludeGoalFromArtifacts(goal) {
+			if r.cfg.UI.Verbose {
+				r.logger.Printf("Plan objective satisfied after step %d; skipping remaining steps.", i+1)
+			}
+			return nil
+		}
 		if result.Type == "question" {
 			r.logger.Printf("Plan paused for user input. Continue after answering.")
+			pausedForQuestion = true
 			break
 		}
+	}
+	if pausedForQuestion || dryRun {
+		return nil
+	}
+	if r.tryConcludeGoalFromArtifacts(goal) {
+		return nil
+	}
+	msg := "Plan finished, but objective is not yet verified from evidence. Reviewing latest output and suggesting next steps."
+	safePrintln(msg)
+	r.appendConversation("Assistant", msg)
+	if strings.TrimSpace(goal) != "" {
+		r.pendingAssistGoal = goal
+		r.pendingAssistQ = msg
+	}
+	if strings.TrimSpace(r.summaryArtifactPath(goal)) != "" {
+		if err := r.summarizeFromLatestArtifact(goal); err != nil && r.cfg.UI.Verbose {
+			r.logger.Printf("Plan-end summary failed: %v", err)
+		}
+	}
+	if lastResult.Type == "command" || lastResult.Type == "tool" {
+		r.maybeSuggestNextSteps(goal, lastResult)
 	}
 	return nil
 }
@@ -874,35 +1048,28 @@ func isFlagLike(arg string) bool {
 }
 
 func looksLikeURLOrHost(arg string) bool {
-	lower := strings.ToLower(strings.TrimSpace(arg))
-	if lower == "" {
-		return false
-	}
-	if strings.Contains(lower, "://") {
-		return true
-	}
-	// Very small heuristic: hosts normally have a dot or are localhost.
-	if lower == "localhost" {
-		return true
-	}
-	if strings.Contains(lower, ".") {
-		return true
-	}
-	// Allow raw IPs.
-	for _, r := range lower {
-		if (r >= '0' && r <= '9') || r == '.' {
-			continue
-		}
-		return false
-	}
-	return strings.Count(lower, ".") == 3
+	return isLikelyURLOrHostToken(strings.TrimSpace(arg))
 }
 
 func (r *Runner) enrichAssistGoal(goal, mode string) string {
-	if mode != "recover" && mode != "follow-up" && mode != "next-steps" {
-		return goal
+	goal = strings.TrimSpace(goal)
+	runtimeGoal := strings.TrimSpace(r.assistRuntime.Goal)
+	includeRuntimeObjective := runtimeGoal != "" && !sameAssistGoal(runtimeGoal, goal)
+	includeRecoveryContext := mode == "recover" || mode == "follow-up" || mode == "next-steps"
+	includeChecklist := includeRecoveryContext || includeRuntimeObjective
+	checklistGoal := goal
+	if checklistGoal == "" {
+		checklistGoal = runtimeGoal
 	}
-	directive := r.recoveryDirectiveForGoal(goal, mode)
+	checklist := []string{}
+	if includeChecklist {
+		checklist = objectiveChecklist(checklistGoal)
+	}
+
+	directive := ""
+	if includeRecoveryContext {
+		directive = r.recoveryDirectiveForGoal(goal, mode)
+	}
 	if mode == "recover" && strings.TrimSpace(r.lastAssistCmdKey) != "" {
 		repeatDirective := "Recovery directive: previous command was blocked as repeated (" + strings.TrimSpace(r.lastAssistCmdKey) + "). Propose a different next action; do not repeat that same command."
 		if strings.TrimSpace(directive) == "" {
@@ -911,12 +1078,24 @@ func (r *Runner) enrichAssistGoal(goal, mode string) string {
 			directive = strings.TrimSpace(directive) + "\n" + repeatDirective
 		}
 	}
-	path := strings.TrimSpace(r.lastActionLogPath)
-	if path == "" && directive == "" {
+	path := ""
+	if includeRecoveryContext {
+		path = strings.TrimSpace(r.lastActionLogPath)
+	}
+	if !includeRuntimeObjective && path == "" && directive == "" && len(checklist) == 0 {
 		return goal
 	}
 	builder := strings.Builder{}
-	builder.WriteString(strings.TrimSpace(goal))
+	builder.WriteString(goal)
+	if includeRuntimeObjective {
+		builder.WriteString("\n")
+		builder.WriteString("Session objective: ")
+		builder.WriteString(runtimeGoal)
+		if mode == "execute-step" {
+			builder.WriteString("\n")
+			builder.WriteString("Execution rule: Keep the session objective primary while executing this step. Do not lock onto a specific host/service identity without concrete evidence. If identity remains uncertain, run one disambiguation action or ask one precise clarifying question.")
+		}
+	}
 	if path != "" {
 		if _, err := os.Stat(path); err == nil {
 			builder.WriteString("\n")
@@ -929,5 +1108,19 @@ func (r *Runner) enrichAssistGoal(goal, mode string) string {
 		builder.WriteString("\n")
 		builder.WriteString(strings.TrimSpace(directive))
 	}
+	if len(checklist) > 0 {
+		builder.WriteString("\n")
+		builder.WriteString("Objective completion checklist:\n")
+		for _, item := range checklist {
+			builder.WriteString("- " + item + "\n")
+		}
+		builder.WriteString("Only return type=complete when the checklist is satisfied by concrete evidence refs.")
+	}
 	return builder.String()
+}
+
+func sameAssistGoal(a, b string) bool {
+	a = strings.ToLower(collapseWhitespace(strings.TrimSpace(a)))
+	b = strings.ToLower(collapseWhitespace(strings.TrimSpace(b)))
+	return a != "" && b != "" && a == b
 }

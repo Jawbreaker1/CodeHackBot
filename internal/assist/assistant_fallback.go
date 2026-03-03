@@ -12,46 +12,69 @@ type FallbackAssistant struct{}
 func (FallbackAssistant) Suggest(_ context.Context, input Input) (Suggestion, error) {
 	if isConversationalGoal(input.Goal) {
 		return normalizeSuggestion(Suggestion{
-			Type:  "complete",
-			Final: "I can help with authorized lab security testing: recon, scanning, controlled validation, artifact analysis, and report drafting. Share a target (IP/host/URL/path) and goal, and I will plan and execute step by step.",
-			Risk:  "low",
+			Type:     "complete",
+			Decision: "step_complete",
+			Final:    "I can help with authorized lab security testing: recon, scanning, controlled validation, artifact analysis, and report drafting. Share a target (IP/host/URL/path) and goal, and I will plan and execute step by step.",
+			Risk:     "low",
 		}), nil
 	}
 	if path := extractLikelyPath(input.Goal); path != "" && isPathActionGoal(input.Goal) {
 		return normalizeSuggestion(Suggestion{
-			Type:    "command",
-			Command: "read_file",
-			Args:    []string{path},
-			Summary: "Read the referenced local file to continue.",
-			Risk:    "low",
+			Type:     "command",
+			Decision: "pivot_strategy",
+			Command:  "read_file",
+			Args:     []string{path},
+			Summary:  "Read the referenced local file to continue.",
+			Risk:     "low",
 		}), nil
 	}
 	if isReportGoal(input.Goal) {
+		if strings.EqualFold(strings.TrimSpace(input.Mode), "recover") {
+			return normalizeSuggestion(Suggestion{
+				Type:     "complete",
+				Decision: "step_complete",
+				Final:    "Report generation step has already been attempted. Continue by finalizing with available report evidence instead of rerunning the same command.",
+				Summary:  "Recover mode report goal: finalize with existing report evidence.",
+				Risk:     "low",
+			}), nil
+		}
+		if reportEvidenceAlreadyPresent(input) {
+			return normalizeSuggestion(Suggestion{
+				Type:     "complete",
+				Decision: "step_complete",
+				Final:    "Report evidence is already generated in recent outputs. Proceed by reviewing the latest report artifact and summarizing key findings/remediation.",
+				Summary:  "Report artifacts already present; avoid re-running report generation.",
+				Risk:     "low",
+			}), nil
+		}
 		args := []string{}
 		if path := extractReportPath(input.Goal); path != "" {
 			args = append(args, path)
 		}
 		return normalizeSuggestion(Suggestion{
-			Type:    "command",
-			Command: "report",
-			Args:    args,
-			Summary: "Generate a security report from collected session evidence.",
-			Risk:    "low",
+			Type:     "command",
+			Decision: "pivot_strategy",
+			Command:  "report",
+			Args:     args,
+			Summary:  "Generate a security report from collected session evidence.",
+			Risk:     "low",
 		}), nil
 	}
 	if isLocalFileGoal(input.Goal) {
 		lowerGoal := strings.ToLower(strings.TrimSpace(input.Goal))
 		if strings.Contains(lowerGoal, "folder") || strings.Contains(lowerGoal, "directory") || strings.Contains(lowerGoal, "current") {
 			return normalizeSuggestion(Suggestion{
-				Type:    "command",
-				Command: "list_dir",
-				Args:    []string{"."},
-				Summary: "List current directory to locate the target file.",
-				Risk:    "low",
+				Type:     "command",
+				Decision: "pivot_strategy",
+				Command:  "list_dir",
+				Args:     []string{"."},
+				Summary:  "List current directory to locate the target file.",
+				Risk:     "low",
 			}), nil
 		}
 		return normalizeSuggestion(Suggestion{
 			Type:     "question",
+			Decision: "ask_user",
 			Question: "The primary LLM response was unavailable or unusable. For local file analysis, share the exact file path/name (for example `./secret.zip`) and any known password or wordlist path, and I will run the next step.",
 			Summary:  "Awaiting local file details.",
 			Risk:     "low",
@@ -59,27 +82,30 @@ func (FallbackAssistant) Suggest(_ context.Context, input Input) (Suggestion, er
 	}
 	if url, ok := extractWebTarget(input.Goal); ok {
 		return normalizeSuggestion(Suggestion{
-			Type:    "command",
-			Command: "browse",
-			Args:    []string{url},
-			Summary: "Fetch the target URL for analysis.",
-			Risk:    "low",
+			Type:     "command",
+			Decision: "pivot_strategy",
+			Command:  "browse",
+			Args:     []string{url},
+			Summary:  "Fetch the target URL for analysis.",
+			Risk:     "low",
 		}), nil
 	}
 	if len(input.Targets) == 0 {
 		return normalizeSuggestion(Suggestion{
 			Type:     "question",
+			Decision: "ask_user",
 			Question: "I need one concrete target to continue. Share an IP/hostname/URL or a local file path.",
 			Summary:  "Awaiting actionable target.",
 			Risk:     "low",
 		}), nil
 	}
 	return normalizeSuggestion(Suggestion{
-		Type:    "command",
-		Command: "nmap",
-		Args:    []string{"-sV", "-v", input.Targets[0]},
-		Summary: "Run a safe service/version scan on the primary target.",
-		Risk:    "low",
+		Type:     "command",
+		Decision: "pivot_strategy",
+		Command:  "nmap",
+		Args:     []string{"-sV", "-v", input.Targets[0]},
+		Summary:  "Run a safe service/version scan on the primary target.",
+		Risk:     "low",
 	}), nil
 }
 
@@ -100,9 +126,23 @@ func isReportGoal(goal string) bool {
 	return false
 }
 
+func reportEvidenceAlreadyPresent(input Input) bool {
+	corpus := strings.ToLower(strings.TrimSpace(strings.Join([]string{
+		input.Summary,
+		input.RecentLog,
+		strings.Join(input.KnownFacts, "\n"),
+	}, "\n")))
+	if corpus == "" {
+		return false
+	}
+	return strings.Contains(corpus, "owasp-style security assessment report") ||
+		strings.Contains(corpus, "## executive summary") ||
+		strings.Contains(corpus, "saved report to")
+}
+
 func extractReportPath(goal string) string {
 	for _, token := range strings.Fields(goal) {
-		candidate := strings.Trim(token, "\"'`(),;:[]{}<>")
+		candidate := cleanGoalToken(token)
 		if candidate == "" || strings.Contains(candidate, "://") {
 			continue
 		}
@@ -118,7 +158,7 @@ func extractReportPath(goal string) string {
 func extractLikelyPath(goal string) string {
 	tokens := strings.Fields(goal)
 	for _, token := range tokens {
-		candidate := strings.Trim(token, "\"'()[]{}<>,;:")
+		candidate := cleanGoalToken(token)
 		if candidate == "" {
 			continue
 		}
@@ -166,7 +206,7 @@ func extractWebTarget(goal string) (string, bool) {
 
 	tokens := strings.Fields(goal)
 	for _, token := range tokens {
-		candidate := strings.Trim(token, "\"'()[]{}<>,;:")
+		candidate := cleanGoalToken(token)
 		if candidate == "" {
 			continue
 		}
@@ -242,4 +282,12 @@ func isLocalFileGoal(goal string) bool {
 		}
 	}
 	return false
+}
+
+func cleanGoalToken(token string) string {
+	candidate := strings.Trim(token, "\"'`")
+	candidate = strings.Trim(candidate, "()[]{}<>")
+	candidate = strings.TrimRight(candidate, ",;:!?")
+	candidate = strings.TrimRight(candidate, ".")
+	return strings.TrimSpace(candidate)
 }

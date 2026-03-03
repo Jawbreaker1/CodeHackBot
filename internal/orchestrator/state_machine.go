@@ -1,9 +1,6 @@
 package orchestrator
 
-import (
-	"fmt"
-	"strings"
-)
+import "fmt"
 
 type TaskState string
 
@@ -19,10 +16,10 @@ const (
 )
 
 var blockedReasons = map[string]struct{}{
-	"approval_timeout": {},
-	"approval_denied":  {},
-	"missing_prereq":   {},
-	"scope_denied":     {},
+	TaskFailureReasonApprovalTimeout: {},
+	TaskFailureReasonApprovalDenied:  {},
+	TaskFailureReasonMissingPrereq:   {},
+	WorkerFailureScopeDenied:         {},
 }
 
 var allowedTransitions = map[TaskState]map[TaskState]struct{}{
@@ -83,7 +80,7 @@ func ValidateTransition(from, to TaskState) error {
 }
 
 func MapFailureReasonToState(reason string) TaskState {
-	reason = strings.TrimSpace(strings.ToLower(reason))
+	reason = CanonicalTaskFailureReason(reason)
 	if _, ok := blockedReasons[reason]; ok {
 		return TaskStateBlocked
 	}

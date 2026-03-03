@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -13,7 +11,7 @@ import (
 )
 
 func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunConfig, task TaskSpec, action TaskAction, scopePolicy *ScopePolicy, runScope Scope, workDir string) error {
-	assistantModel, assistMode, assistant, err := buildWorkerAssistant()
+	assistantModel, assistMode, assistant, err := cfg.resolveAssistantBuilder()()
 	if err != nil {
 		_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureAssistUnavailable, nil)
 		return err
@@ -30,8 +28,24 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 	}
 	contextEnvelope := newWorkerAssistContextEnvelope(cfg, task, goal)
 	var observations []string
+	var priorEnvelope *workerAssistContextEnvelope
+	mode := "execute-step"
+	toolCalls := 0
+	actionSteps := 0
 	defer func() {
 		contextEnvelope.recordObservationSnapshot(observations)
+		contextEnvelope.finalizeRetryResetSignals(priorEnvelope)
+		if summary := contextEnvelope.finalizeAttemptDelta(priorEnvelope); summary != "" {
+			_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
+				"message":               "attempt delta summary",
+				"step":                  actionSteps,
+				"turn":                  0,
+				"tool_calls":            toolCalls,
+				"mode":                  mode,
+				"attempt_delta_summary": summary,
+				"attempt":               cfg.Attempt,
+			})
+		}
 		_ = writeWorkerAssistContextEnvelope(cfg, task.TaskID, contextEnvelope, manager.Now)
 	}()
 
@@ -49,32 +63,44 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 	}
 
 	observations = make([]string, 0, workerAssistObsLimit)
+	addObservation := func(entry string) {
+		before := append([]string{}, observations...)
+		observations = appendObservation(observations, entry)
+		contextEnvelope.recordObservationAppend(before, observations)
+	}
 	lastActionKey := ""
 	lastActionStreak := 0
 	lastResultKey := ""
 	lastResultStreak := 0
-	mode := "execute-step"
 	recoverHint := ""
-	toolCalls := 0
-	actionSteps := 0
 	loopBlocks := 0
 	questionLoops := 0
 	consecutiveToolTurns := 0
 	consecutiveRecoverToolTurns := 0
 	recoveryTransitions := 0
 	missingToolInstallAttempts := map[string]struct{}{}
+	missingToolRetryCount := map[string]int{}
 	promptScope := buildAssistPromptScope(runScope, task.Targets)
-	if priorEnvelope, priorErr := loadPreviousWorkerAssistContextEnvelope(cfg, task.TaskID); priorErr == nil && priorEnvelope != nil {
+	if loadedPriorEnvelope, priorErr := loadPreviousWorkerAssistContextEnvelope(cfg, task.TaskID); priorErr == nil && loadedPriorEnvelope != nil {
+		priorEnvelope = loadedPriorEnvelope
 		contextEnvelope.applyCarryover(priorEnvelope)
+		carryoverObs := 0
 		for _, entry := range priorEnvelope.Observations.RetainedTail {
-			observations = appendObservation(observations, "carryover: "+strings.TrimSpace(entry))
+			addObservation("carryover: " + strings.TrimSpace(entry))
+			carryoverObs++
 		}
+		contextEnvelope.recordCarryoverObservations(carryoverObs)
+		restoredLastFailure := false
 		if strings.TrimSpace(priorEnvelope.Anchors.LastFailure) != "" {
 			recoverHint = "prior attempt failure: " + strings.TrimSpace(priorEnvelope.Anchors.LastFailure)
+			restoredLastFailure = true
 		}
+		restoredLastResultFingerprint := false
 		if strings.TrimSpace(priorEnvelope.Anchors.LastResultFingerprint) != "" {
 			lastResultKey = strings.TrimSpace(priorEnvelope.Anchors.LastResultFingerprint)
+			restoredLastResultFingerprint = true
 		}
+		contextEnvelope.recordCarryoverRecoverySignals(restoredLastFailure, restoredLastResultFingerprint)
 	}
 
 	assistTurnMetadata := func(turnMeta workerAssistantTurnMeta, callTimeout time.Duration, remainingBudget time.Duration) map[string]any {
@@ -120,210 +146,19 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 		return failErr
 	}
 
-	emitAssistCompletion := func(statusReason, final string, step, turn, toolCalls int, extraMeta map[string]any) error {
-		statusReason = strings.TrimSpace(statusReason)
-		if statusReason == "" {
-			statusReason = "assist_complete"
-		}
-		final = strings.TrimSpace(final)
-		if final == "" {
-			final = "assistant marked task complete"
-		}
-		logPath, logErr := writeWorkerActionLog(cfg, fmt.Sprintf("%s-a%d-complete.log", sanitizePathComponent(cfg.WorkerID), cfg.Attempt), []byte(final+"\n"))
-		if logErr != nil {
-			_ = emitWorkerFailure(manager, cfg, task, logErr, WorkerFailureArtifactWrite, nil)
-			return logErr
-		}
-		producedArtifacts := []string{logPath}
-		derivedPaths, derivedErr := materializeAssistExpectedArtifacts(cfg, task, logPath)
-		if derivedErr != nil {
-			_ = emitWorkerFailure(manager, cfg, task, derivedErr, WorkerFailureArtifactWrite, nil)
-			return derivedErr
-		}
-		producedArtifacts = compactStrings(append(producedArtifacts, derivedPaths...))
-		_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskArtifact, map[string]any{
-			"type":      "assist_summary",
-			"title":     fmt.Sprintf("assistant completion summary (%s)", cfg.TaskID),
-			"path":      logPath,
-			"step":      step,
-			"tool_call": toolCalls,
-		})
-		for _, derivedPath := range derivedPaths {
-			_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskArtifact, map[string]any{
-				"type":      "derived_assist_output",
-				"title":     fmt.Sprintf("derived expected artifact (%s)", cfg.TaskID),
-				"path":      derivedPath,
-				"step":      step,
-				"tool_call": toolCalls,
-			})
-		}
-		findingMeta := map[string]any{
-			"attempt":       cfg.Attempt,
-			"reason":        statusReason,
-			"assistant":     assistantModel,
-			"steps":         step,
-			"turns":         turn,
-			"tool_calls":    toolCalls,
-			"final_summary": final,
-		}
-		for k, v := range extraMeta {
-			findingMeta[k] = v
-		}
-		_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskFinding, map[string]any{
-			"target":       primaryTaskTarget(task),
-			"finding_type": "task_execution_result",
-			"title":        "task action completed",
-			"state":        FindingStateVerified,
-			"severity":     "info",
-			"confidence":   "medium",
-			"source":       "worker_runtime_assist",
-			"evidence":     producedArtifacts,
-			"metadata":     findingMeta,
-		})
-		_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskCompleted, map[string]any{
-			"attempt":   cfg.Attempt,
-			"worker_id": cfg.WorkerID,
-			"reason":    statusReason,
-			"log_path":  logPath,
-			"completion_contract": map[string]any{
-				"status_reason":       statusReason,
-				"required_artifacts":  task.ExpectedArtifacts,
-				"produced_artifacts":  producedArtifacts,
-				"required_findings":   []string{"task_execution_result"},
-				"produced_findings":   []string{"task_execution_result"},
-				"verification_status": "reported_by_worker",
-			},
-		})
-		return nil
-	}
-
-	emitNoProgressFailure := func(turn int, command string, args []string, reason string, extra map[string]any) error {
-		lastAction := strings.TrimSpace(strings.Join(append([]string{command}, args...), " "))
-		if lastAction == "" {
-			lastAction = "unknown"
-		}
-		reason = strings.TrimSpace(reason)
-		if reason == "" {
-			reason = "no evidence progress"
-		}
-		_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
-			"message":              "no progress after repeated low-value actions; failing task for replan",
-			"step":                 actionSteps,
-			"turn":                 turn,
-			"tool_calls":           toolCalls,
-			"mode":                 mode,
-			"bounded_fallback":     "no_progress",
-			"last_repeated_action": lastAction,
-			"fallback_reason":      reason,
-		})
-		failErr := fmt.Errorf("no progress: repeated low-value action without new evidence (%s)", lastAction)
-		details := map[string]any{
-			"step":                 actionSteps,
-			"turn":                 turn,
-			"tool_calls":           toolCalls,
-			"bounded_fallback":     "no_progress",
-			"last_repeated_action": lastAction,
-			"fallback_reason":      reason,
-		}
-		for k, v := range extra {
-			details[k] = v
-		}
-		_ = emitWorkerFailure(manager, cfg, task, failErr, WorkerFailureNoProgress, details)
-		return failErr
-	}
-
-	emitNoNewEvidenceCompletion := func(turn int, command string, args []string, resultStreak int, reason string) error {
-		lastAction := strings.TrimSpace(strings.Join(append([]string{command}, args...), " "))
-		if lastAction == "" {
-			lastAction = "unknown"
-		}
-		reason = strings.TrimSpace(reason)
-		if reason == "" {
-			reason = "repeated identical command results"
-		}
-		summary := fmt.Sprintf("No new evidence after repeated identical runtime results. Last action: %s (result_streak=%d, reason=%s).", lastAction, resultStreak, reason)
-		if isLowValueListingCommand(command, args) {
-			return emitNoProgressFailure(turn, command, args, reason, map[string]any{
-				"result_streak": resultStreak,
-			})
-		}
-		_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
-			"message":              "no new evidence after repeated identical results; completing task with bounded fallback",
-			"step":                 actionSteps,
-			"turn":                 turn,
-			"tool_calls":           toolCalls,
-			"mode":                 mode,
-			"result_streak":        resultStreak,
-			"bounded_fallback":     "no_new_evidence",
-			"last_repeated_action": lastAction,
-			"fallback_reason":      reason,
-		})
-		return emitAssistCompletion("assist_no_new_evidence", summary, actionSteps, turn, toolCalls, map[string]any{
-			"result_streak":        resultStreak,
-			"bounded_fallback":     "no_new_evidence",
-			"last_repeated_action": lastAction,
-			"fallback_reason":      reason,
-		})
-	}
 	isSummaryTask := isAssistSummaryTask(task)
 	isAdaptiveReplanTask := isAssistAdaptiveReplanTask(task)
-	emitSummaryFallback := func(turn int, fallbackReason string) error {
-		fallbackReason = strings.TrimSpace(fallbackReason)
-		if fallbackReason == "" {
-			fallbackReason = "summary recover fallback"
-		}
-		_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
-			"message":          "summary task recover fallback triggered; completing with available evidence",
-			"step":             actionSteps,
-			"turn":             turn,
-			"tool_calls":       toolCalls,
-			"mode":             mode,
-			"bounded_fallback": "summary_autocomplete",
-			"fallback_reason":  fallbackReason,
-		})
-		final := fmt.Sprintf("Completed summary synthesis from available run evidence with bounded recover fallback (%s).", fallbackReason)
-		return emitAssistCompletion("assist_summary_autocomplete", final, actionSteps, turn, toolCalls, map[string]any{
-			"bounded_fallback": "summary_autocomplete",
-			"fallback_reason":  fallbackReason,
-		})
-	}
-	emitAdaptiveBudgetFallback := func(turn int, fallbackReason string) error {
-		fallbackReason = strings.TrimSpace(fallbackReason)
-		if fallbackReason == "" {
-			fallbackReason = "adaptive replan budget cap"
-		}
-		lastAction := strings.TrimSpace(lastActionKey)
-		if lastAction == "" {
-			lastAction = "unknown"
-		}
-		_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
-			"message":              "adaptive replan budget cap reached; completing with bounded fallback",
-			"step":                 actionSteps,
-			"turn":                 turn,
-			"tool_calls":           toolCalls,
-			"mode":                 mode,
-			"bounded_fallback":     "adaptive_replan_budget_cap",
-			"last_repeated_action": lastAction,
-			"fallback_reason":      fallbackReason,
-		})
-		final := fmt.Sprintf("Adaptive replan completed with bounded fallback after budget cap (%s). Last action: %s.", fallbackReason, lastAction)
-		return emitAssistCompletion("assist_no_new_evidence", final, actionSteps, turn, toolCalls, map[string]any{
-			"bounded_fallback":     "adaptive_replan_budget_cap",
-			"last_repeated_action": lastAction,
-			"fallback_reason":      fallbackReason,
-		})
-	}
 
 	for turn := 1; turn <= maxTurns; turn++ {
 		if isSummaryTask && mode == "recover" && recoveryTransitions > 0 && actionSteps >= workerAssistSummaryRecoverStepCap {
-			if completionErr := emitSummaryFallback(turn, fmt.Sprintf("recover step cap reached (%d)", actionSteps)); completionErr != nil {
+			if completionErr := emitAssistSummaryFallback(manager, cfg, task, assistantModel, mode, actionSteps, turn, toolCalls, fmt.Sprintf("recover step cap reached (%d)", actionSteps)); completionErr != nil {
 				return completionErr
 			}
 			return nil
 		}
 		if actionSteps >= maxActionSteps {
 			if isAdaptiveReplanTask && actionSteps > 0 {
-				if completionErr := emitAdaptiveBudgetFallback(turn, fmt.Sprintf("action step cap reached (%d/%d)", actionSteps, maxActionSteps)); completionErr != nil {
+				if completionErr := emitAssistAdaptiveBudgetFallback(manager, cfg, task, assistantModel, mode, lastActionKey, actionSteps, turn, toolCalls, fmt.Sprintf("action step cap reached (%d/%d)", actionSteps, maxActionSteps)); completionErr != nil {
 					return completionErr
 				}
 				return nil
@@ -339,7 +174,7 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 		}
 		if toolCalls >= maxToolCalls {
 			if isAdaptiveReplanTask && toolCalls > 0 {
-				if completionErr := emitAdaptiveBudgetFallback(turn, fmt.Sprintf("tool call cap reached (%d/%d)", toolCalls, maxToolCalls)); completionErr != nil {
+				if completionErr := emitAssistAdaptiveBudgetFallback(manager, cfg, task, assistantModel, mode, lastActionKey, actionSteps, turn, toolCalls, fmt.Sprintf("tool call cap reached (%d/%d)", toolCalls, maxToolCalls)); completionErr != nil {
 					return completionErr
 				}
 				return nil
@@ -455,7 +290,7 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			if mode == "recover" {
 				loopBlocks++
 				recoverHint = schemaErr.Error()
-				observations = appendObservation(observations, "recovery: "+schemaErr.Error())
+				addObservation("recovery: " + schemaErr.Error())
 				if loopBlocks >= workerAssistMaxLoopBlocks {
 					_ = emitWorkerFailure(manager, cfg, task, schemaErr, WorkerFailureAssistLoopDetected, map[string]any{
 						"step":         actionSteps,
@@ -471,7 +306,7 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			}
 			mode = "recover"
 			recoverHint = schemaErr.Error()
-			observations = appendObservation(observations, "recovery: "+schemaErr.Error())
+			addObservation("recovery: " + schemaErr.Error())
 			if recErr := markRecoverTransition(turn, "invalid_suggestion_schema", map[string]any{
 				"schema_error": schemaErr.Error(),
 			}); recErr != nil {
@@ -508,16 +343,16 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			if final == "" {
 				final = strings.TrimSpace(suggestion.Summary)
 			}
-			return emitAssistCompletion("assist_complete", final, actionSteps, turn, toolCalls, nil)
+			return emitAssistCompletion(manager, cfg, task, assistantModel, "assist_complete", final, actionSteps, turn, toolCalls, nil)
 		case "question":
 			consecutiveToolTurns = 0
 			consecutiveRecoverToolTurns = 0
 			questionLoops++
 			question := strings.TrimSpace(suggestion.Question)
-			observations = appendObservation(observations, "assistant asked for input in non-interactive worker mode: "+question)
+			addObservation("assistant asked for input in non-interactive worker mode: " + question)
 			autoAnswer := buildAutonomousQuestionAnswer(task, question, observations)
 			if autoAnswer != "" {
-				observations = appendObservation(observations, "autonomous answer: "+autoAnswer)
+				addObservation("autonomous answer: " + autoAnswer)
 			}
 			_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
 				"message":             "assistant asked a question; worker is non-interactive, forcing autonomous recovery",
@@ -531,13 +366,13 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			})
 			if mode == "recover" {
 				if isSummaryTask && questionLoops >= workerAssistSummaryRecoverQuestionCap {
-					if completionErr := emitSummaryFallback(turn, "repeated recover questions in non-interactive summary task"); completionErr != nil {
+					if completionErr := emitAssistSummaryFallback(manager, cfg, task, assistantModel, mode, actionSteps, turn, toolCalls, "repeated recover questions in non-interactive summary task"); completionErr != nil {
 						return completionErr
 					}
 					return nil
 				}
 				if toolCalls >= workerAssistNoNewEvidenceToolCallCap && recoveryTransitions > 0 && actionSteps > 0 {
-					if completionErr := emitNoNewEvidenceCompletion(turn, "assistant_question", []string{"recover_non_interactive"}, questionLoops, "recover question churn after tool-call cap"); completionErr != nil {
+					if completionErr := emitAssistNoNewEvidenceCompletion(manager, cfg, task, assistantModel, mode, actionSteps, turn, toolCalls, "assistant_question", []string{"recover_non_interactive"}, questionLoops, "recover question churn after tool-call cap"); completionErr != nil {
 						return completionErr
 					}
 					return nil
@@ -584,20 +419,20 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			questionLoops = 0
 			if mode == "recover" {
 				if isSummaryTask && loopBlocks+1 >= workerAssistSummaryRecoverLoopCap {
-					if completionErr := emitSummaryFallback(turn, fmt.Sprintf("recover %s churn in summary task", suggestion.Type)); completionErr != nil {
+					if completionErr := emitAssistSummaryFallback(manager, cfg, task, assistantModel, mode, actionSteps, turn, toolCalls, fmt.Sprintf("recover %s churn in summary task", suggestion.Type)); completionErr != nil {
 						return completionErr
 					}
 					return nil
 				}
 				if toolCalls >= workerAssistNoNewEvidenceToolCallCap && recoveryTransitions > 0 && actionSteps > 0 {
-					if completionErr := emitNoNewEvidenceCompletion(turn, "assistant_"+suggestion.Type, []string{"recover_non_action"}, 1, "recover non-action churn after tool-call cap"); completionErr != nil {
+					if completionErr := emitAssistNoNewEvidenceCompletion(manager, cfg, task, assistantModel, mode, actionSteps, turn, toolCalls, "assistant_"+suggestion.Type, []string{"recover_non_action"}, 1, "recover non-action churn after tool-call cap"); completionErr != nil {
 						return completionErr
 					}
 					return nil
 				}
 				loopBlocks++
 				recoverHint = fmt.Sprintf("assistant returned %s in recover mode without an executable step; return one concrete command or tool action", suggestion.Type)
-				observations = appendObservation(observations, "recovery: "+recoverHint)
+				addObservation("recovery: " + recoverHint)
 				if recErr := markRecoverTransition(turn, "recover_non_action", map[string]any{
 					"type": suggestion.Type,
 				}); recErr != nil {
@@ -618,7 +453,7 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 				continue
 			}
 			mode = "execute-step"
-			observations = appendObservation(observations, summarizeSuggestion(suggestion))
+			addObservation(summarizeSuggestion(suggestion))
 			continue
 		case "tool":
 			consecutiveToolTurns++
@@ -630,7 +465,7 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			if suggestion.Tool == nil {
 				questionLoops = 0
 				if mode == "recover" {
-					observations = appendObservation(observations, "recovery: assistant returned tool without spec")
+					addObservation("recovery: assistant returned tool without spec")
 					recoverHint = "Tool suggestion was invalid (missing spec). Return a concrete command or valid tool with files and run command."
 					loopBlocks++
 					if recErr := markRecoverTransition(turn, "tool_missing_spec", nil); recErr != nil {
@@ -650,7 +485,7 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 				err := fmt.Errorf("assistant tool suggestion missing spec")
 				mode = "recover"
 				recoverHint = err.Error()
-				observations = appendObservation(observations, "recovery: "+err.Error())
+				addObservation("recovery: " + err.Error())
 				if recErr := markRecoverTransition(turn, "tool_missing_spec", nil); recErr != nil {
 					return recErr
 				}
@@ -658,10 +493,29 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			}
 			runCommand := strings.TrimSpace(suggestion.Tool.Run.Command)
 			runArgs := append([]string{}, suggestion.Tool.Run.Args...)
+			if mode == "recover" && actionSteps > 0 {
+				pivotBasis, pivotSource, pivotKind := resolveRecoverPivotBasis(strings.TrimSpace(suggestion.Summary), recoverHint, observations)
+				if pivotBasis == "" {
+					return emitAssistNoProgressFailure(manager, cfg, task, mode, actionSteps, turn, toolCalls, runCommand, runArgs, "recover pivot missing evidence anchor or unknown-under-test citation", map[string]any{
+						"recover_pivot_contract": "missing_basis",
+					})
+				}
+				addObservation(fmt.Sprintf("recover pivot basis (%s/%s): %s", pivotKind, pivotSource, pivotBasis))
+				_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
+					"message":            "recover pivot accepted with citation",
+					"step":               actionSteps,
+					"turn":               turn,
+					"tool_calls":         toolCalls,
+					"mode":               mode,
+					"pivot_basis":        pivotBasis,
+					"pivot_basis_source": pivotSource,
+					"pivot_basis_kind":   pivotKind,
+				})
+			}
 			if consecutiveRecoverToolTurns > workerAssistMaxConsecutiveRecoverToolTurns {
 				loopBlocks++
 				recoverHint = "recover tool-churn detected; stop generating helper scripts and return a direct command or complete"
-				observations = appendObservation(observations, fmt.Sprintf("recovery: recover tool churn blocked for %s", strings.TrimSpace(strings.Join(append([]string{runCommand}, runArgs...), " "))))
+				addObservation(fmt.Sprintf("recovery: recover tool churn blocked for %s", strings.TrimSpace(strings.Join(append([]string{runCommand}, runArgs...), " "))))
 				_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
 					"message":                        "recover tool churn detected; requesting direct command or completion",
 					"step":                           actionSteps,
@@ -678,7 +532,6 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 						if heldAction == "" {
 							heldAction = "unknown"
 						}
-						summary := fmt.Sprintf("No new evidence after extended recover tool churn. Last repeated action: %s (action_steps=%d, blocked_turns=%d).", heldAction, actionSteps, loopBlocks)
 						_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
 							"message":                        "no new evidence after extended recover tool churn; completing task with bounded fallback",
 							"step":                           actionSteps,
@@ -690,21 +543,26 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 							"bounded_fallback":               "no_new_evidence",
 							"last_repeated_action":           heldAction,
 						})
-						return emitAssistCompletion("assist_no_new_evidence", summary, actionSteps, turn, toolCalls, map[string]any{
-							"loop_blocks":                    loopBlocks,
-							"consecutive_tool_turns":         consecutiveToolTurns,
-							"consecutive_recover_tool_turns": consecutiveRecoverToolTurns,
-							"bounded_fallback":               "no_new_evidence",
-							"last_repeated_action":           heldAction,
-							"fallback_reason":                "extended_recover_tool_churn",
-						})
+						return emitAssistNoNewEvidenceCompletion(
+							manager,
+							cfg,
+							task,
+							assistantModel,
+							mode,
+							actionSteps,
+							turn,
+							toolCalls,
+							runCommand,
+							runArgs,
+							loopBlocks,
+							"extended_recover_tool_churn",
+						)
 					}
 					if actionSteps > 0 && currentKey != "" && currentKey == lastActionKey && lastActionStreak >= workerAssistLoopMaxRepeat {
 						heldAction := strings.TrimSpace(strings.Join(append([]string{runCommand}, runArgs...), " "))
 						if heldAction == "" {
 							heldAction = "unknown"
 						}
-						summary := fmt.Sprintf("No new evidence after repeated recover tool churn. Last repeated action: %s (consecutive_recover_tool_turns=%d, blocked_turns=%d).", heldAction, consecutiveRecoverToolTurns, loopBlocks)
 						_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
 							"message":                        "no new evidence after repeated recover tool churn; completing task with bounded fallback",
 							"step":                           actionSteps,
@@ -716,13 +574,20 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 							"bounded_fallback":               "no_new_evidence",
 							"last_repeated_action":           heldAction,
 						})
-						return emitAssistCompletion("assist_no_new_evidence", summary, actionSteps, turn, toolCalls, map[string]any{
-							"loop_blocks":                    loopBlocks,
-							"consecutive_tool_turns":         consecutiveToolTurns,
-							"consecutive_recover_tool_turns": consecutiveRecoverToolTurns,
-							"bounded_fallback":               "no_new_evidence",
-							"last_repeated_action":           heldAction,
-						})
+						return emitAssistNoNewEvidenceCompletion(
+							manager,
+							cfg,
+							task,
+							assistantModel,
+							mode,
+							actionSteps,
+							turn,
+							toolCalls,
+							runCommand,
+							runArgs,
+							consecutiveRecoverToolTurns,
+							"repeated_recover_tool_churn",
+						)
 					}
 					err := fmt.Errorf("assistant tool loop detected: consecutive_tool_turns=%d consecutive_recover_tool_turns=%d", consecutiveToolTurns, consecutiveRecoverToolTurns)
 					_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureAssistLoopDetected, map[string]any{
@@ -742,7 +607,7 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 				loopBlocks++
 				mode = "recover"
 				recoverHint = "tool-churn detected; avoid creating another helper script and respond with a concrete command or complete"
-				observations = appendObservation(observations, fmt.Sprintf("recovery: tool churn blocked for %s", strings.TrimSpace(strings.Join(append([]string{runCommand}, runArgs...), " "))))
+				addObservation(fmt.Sprintf("recovery: tool churn blocked for %s", strings.TrimSpace(strings.Join(append([]string{runCommand}, runArgs...), " "))))
 				if recErr := markRecoverTransition(turn, "tool_churn_execute", map[string]any{
 					"command":                        runCommand,
 					"args":                           runArgs,
@@ -777,12 +642,13 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			}
 			actionKey := buildAssistActionKey(runCommand, runArgs)
 			lastActionKey, lastActionStreak = trackAssistActionStreak(lastActionKey, lastActionStreak, actionKey)
+			contextEnvelope.recordActionFingerprint(actionKey, lastActionStreak)
 			if lastActionStreak > workerAssistLoopMaxRepeat {
 				wasRecover := mode == "recover"
 				loopBlocks++
 				mode = "recover"
 				recoverHint = "same action repeated too many times; choose a different command path"
-				observations = appendObservation(observations, fmt.Sprintf("recovery: repeated action blocked for %s", strings.TrimSpace(strings.Join(append([]string{runCommand}, runArgs...), " "))))
+				addObservation(fmt.Sprintf("recovery: repeated action blocked for %s", strings.TrimSpace(strings.Join(append([]string{runCommand}, runArgs...), " "))))
 				if !wasRecover {
 					if recErr := markRecoverTransition(turn, "repeated_action", map[string]any{
 						"command": runCommand,
@@ -806,7 +672,6 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 						if heldAction == "" {
 							heldAction = "unknown"
 						}
-						summary := fmt.Sprintf("No new evidence after repeated recover attempts. Last repeated action: %s (streak=%d, blocked_turns=%d).", heldAction, lastActionStreak, loopBlocks)
 						_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
 							"message":              "no new evidence after repeated recover attempts; completing task with bounded fallback",
 							"step":                 actionSteps,
@@ -817,12 +682,20 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 							"bounded_fallback":     "no_new_evidence",
 							"last_repeated_action": heldAction,
 						})
-						return emitAssistCompletion("assist_no_new_evidence", summary, actionSteps, turn, toolCalls, map[string]any{
-							"loop_blocks":          loopBlocks,
-							"streak":               lastActionStreak,
-							"bounded_fallback":     "no_new_evidence",
-							"last_repeated_action": heldAction,
-						})
+						return emitAssistNoNewEvidenceCompletion(
+							manager,
+							cfg,
+							task,
+							assistantModel,
+							mode,
+							actionSteps,
+							turn,
+							toolCalls,
+							runCommand,
+							runArgs,
+							lastActionStreak,
+							"repeated_recover_attempts",
+						)
 					}
 					err := fmt.Errorf("repeated command blocked too many times")
 					_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureAssistLoopDetected, map[string]any{
@@ -861,31 +734,39 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			})
 			summary, summaryMeta := summarizeCommandResultWithMeta(result.command, result.args, runErr, result.output)
 			contextEnvelope.recordCommandSummary(summaryMeta)
-			observations = appendObservation(observations, summary)
-			if runErr != nil {
-				lastResultKey = ""
-				lastResultStreak = 0
-			} else {
-				lastResultKey, lastResultStreak = trackAssistResultStreak(lastResultKey, lastResultStreak, result.command, result.args, runErr, result.output)
-				if actionSteps >= workerAssistNoNewEvidenceResultRepeat && lastResultStreak >= workerAssistNoNewEvidenceResultRepeat && isNoNewEvidenceCandidate(result.command, result.args) {
-					if completionErr := emitNoNewEvidenceCompletion(turn, result.command, result.args, lastResultStreak, "identical runtime result repeated"); completionErr != nil {
-						return completionErr
-					}
-					return nil
-				}
-				if toolCalls >= workerAssistNoNewEvidenceToolCallCap && recoveryTransitions > 0 && isNoNewEvidenceCandidate(result.command, result.args) {
-					if completionErr := emitNoNewEvidenceCompletion(turn, result.command, result.args, lastResultStreak, "recover tool-call cap reached without new evidence"); completionErr != nil {
-						return completionErr
-					}
-					return nil
-				}
+			addObservation(summary)
+			var completed bool
+			var completionErr error
+			lastResultKey, lastResultStreak, completed, completionErr = updateAssistResultStreakAndCheckNoEvidence(
+				manager,
+				cfg,
+				task,
+				contextEnvelope,
+				assistantModel,
+				mode,
+				actionSteps,
+				turn,
+				toolCalls,
+				recoveryTransitions,
+				result.command,
+				result.args,
+				runErr,
+				result.output,
+				lastResultKey,
+				lastResultStreak,
+			)
+			if completionErr != nil {
+				return completionErr
+			}
+			if completed {
+				return nil
 			}
 			contextEnvelope.recordCommandOutcome(result.command, result.args, runErr, lastResultKey)
 			if runErr != nil {
 				if isAssistInvalidToolSpecError(runErr) {
 					mode = "recover"
 					recoverHint = summary
-					observations = appendObservation(observations, "recovery: invalid tool specification; request command/tool with concrete files+run")
+					addObservation("recovery: invalid tool specification; request command/tool with concrete files+run")
 					if recErr := markRecoverTransition(turn, "invalid_tool_spec", map[string]any{
 						"command": result.command,
 						"args":    result.args,
@@ -894,74 +775,38 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 					}
 					continue
 				}
-				if missingTool := detectMissingExecutable(result.command, runErr, result.output); missingTool != "" {
-					remediation := handleMissingToolRemediation(ctx, manager, cfg, task, workDir, actionSteps, turn, toolCalls, result.command, result.args, missingTool, missingToolInstallAttempts)
-					if remediation.Handled {
-						if remediation.Observation != "" {
-							observations = appendObservation(observations, remediation.Observation)
-						}
-						if remediation.RecoverHint != "" {
-							recoverHint = remediation.RecoverHint
-						} else {
-							recoverHint = summary
-						}
-						if mode != "recover" {
-							mode = "recover"
-							if recErr := markRecoverTransition(turn, "missing_tool", map[string]any{
-								"command": result.command,
-								"args":    result.args,
-								"tool":    remediation.ToolName,
-							}); recErr != nil {
-								return recErr
-							}
-						}
-						continue
-					}
+				failureHandled, failureErr := handleAssistExecutionFailure(
+					ctx,
+					manager,
+					cfg,
+					task,
+					workDir,
+					actionSteps,
+					turn,
+					toolCalls,
+					result.command,
+					result.args,
+					runErr,
+					result.output,
+					summary,
+					logPath,
+					&mode,
+					&recoverHint,
+					missingToolInstallAttempts,
+					missingToolRetryCount,
+					addObservation,
+					markRecoverTransition,
+					"tool_execution_failed",
+					true,
+				)
+				if failureErr != nil {
+					return failureErr
 				}
-				if strings.Contains(strings.ToLower(runErr.Error()), WorkerFailureScopeDenied) {
-					_ = emitWorkerFailure(manager, cfg, task, runErr, WorkerFailureScopeDenied, map[string]any{
-						"step":       actionSteps,
-						"turn":       turn,
-						"tool_calls": toolCalls,
-						"command":    result.command,
-						"args":       result.args,
-						"log_path":   logPath,
-					})
-					return runErr
+				if failureHandled {
+					continue
 				}
-				if mode == "recover" {
-					reason := WorkerFailureCommandFailed
-					if errorsIsTimeout(runErr) {
-						reason = WorkerFailureCommandTimeout
-					}
-					_ = emitWorkerFailure(manager, cfg, task, runErr, reason, map[string]any{
-						"step":       actionSteps,
-						"turn":       turn,
-						"tool_calls": toolCalls,
-						"command":    result.command,
-						"args":       result.args,
-						"log_path":   logPath,
-					})
-					return runErr
-				}
-				mode = "recover"
-				recoverHint = summary
-				if recErr := markRecoverTransition(turn, "tool_execution_failed", map[string]any{
-					"command": result.command,
-					"args":    result.args,
-				}); recErr != nil {
-					return recErr
-				}
-				continue
 			}
-			if wasRecover {
-				mode = "recover"
-				recoverHint = "recovery mode active: use direct command or complete if evidence is sufficient"
-			} else {
-				mode = "execute-step"
-				recoverHint = ""
-				recoveryTransitions = 0
-			}
+			settleAssistModeAfterSuccessfulExecution(&mode, &recoverHint, &recoveryTransitions, wasRecover)
 		case "command":
 			consecutiveToolTurns = 0
 			consecutiveRecoverToolTurns = 0
@@ -992,42 +837,23 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 				})
 			}
 			if !cfg.Diagnostic {
-				args, injected, injectedTarget := applyCommandTargetFallback(scopePolicy, task, command, args)
-				if injected {
-					_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
-						"message":    fmt.Sprintf("auto-injected target %s for command %s", injectedTarget, command),
-						"step":       actionSteps,
-						"turn":       turn,
-						"tool_calls": toolCalls,
-						"mode":       mode,
-					})
-				}
-				var adapted bool
-				var adaptNote string
-				command, args, adaptNote, adapted = adaptCommandForRuntime(scopePolicy, command, args)
-				if adapted && adaptNote != "" {
-					_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
-						"message":    adaptNote,
-						"step":       actionSteps,
-						"turn":       turn,
-						"tool_calls": toolCalls,
-						"mode":       mode,
-						"command":    command,
-						"args":       args,
-					})
-				}
-				args, reinjected, reinjectedTarget := applyCommandTargetFallback(scopePolicy, task, command, args)
-				if reinjected {
-					_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
-						"message":    fmt.Sprintf("auto-injected target %s for command %s after runtime adaptation", reinjectedTarget, command),
-						"step":       actionSteps,
-						"turn":       turn,
-						"tool_calls": toolCalls,
-						"mode":       mode,
-						"command":    command,
-						"args":       args,
-					})
-				}
+				prepared := prepareRuntimeCommand(scopePolicy, task, command, args)
+				command = prepared.Command
+				args = prepared.Args
+				emitRuntimePreparationProgress(
+					manager,
+					cfg.RunID,
+					WorkerSignalID(cfg.WorkerID),
+					cfg.TaskID,
+					actionSteps,
+					turn,
+					toolCalls,
+					"tool_calls",
+					mode,
+					command,
+					args,
+					runtimePreparationMessages(prepared),
+				)
 			}
 			if !isWorkerLocalBuiltin(command) {
 				if err := scopePolicy.ValidateCommandTargets(command, args); err != nil {
@@ -1041,15 +867,66 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 					return err
 				}
 			}
+			if blocked, reason := shouldSkipMissingToolInstall(command, command, args); blocked {
+				loopBlocks++
+				recoverHint = fmt.Sprintf("%s; use available tools (%s) or forge a helper via type=tool", reason, discoverAvailableFallbackTools())
+				addObservation("recovery: " + recoverHint)
+				_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
+					"message":    "blocked non-executable workflow command; requesting executable action",
+					"step":       actionSteps,
+					"turn":       turn,
+					"tool_calls": toolCalls,
+					"mode":       "recover",
+					"command":    command,
+					"args":       args,
+					"reason":     reason,
+				})
+				if mode != "recover" {
+					mode = "recover"
+					if recErr := markRecoverTransition(turn, "pseudo_workflow_command", map[string]any{
+						"command": command,
+						"args":    args,
+						"reason":  reason,
+					}); recErr != nil {
+						return recErr
+					}
+				}
+				if loopBlocks >= workerAssistMaxLoopBlocks {
+					return emitAssistNoProgressFailure(manager, cfg, task, mode, actionSteps, turn, toolCalls, command, args, "repeated non-executable workflow command suggestions", map[string]any{
+						"pseudo_command_reason": reason,
+					})
+				}
+				continue
+			}
+			if mode == "recover" && actionSteps > 0 {
+				pivotBasis, pivotSource, pivotKind := resolveRecoverPivotBasis(strings.TrimSpace(suggestion.Summary), recoverHint, observations)
+				if pivotBasis == "" {
+					return emitAssistNoProgressFailure(manager, cfg, task, mode, actionSteps, turn, toolCalls, command, args, "recover pivot missing evidence anchor or unknown-under-test citation", map[string]any{
+						"recover_pivot_contract": "missing_basis",
+					})
+				}
+				addObservation(fmt.Sprintf("recover pivot basis (%s/%s): %s", pivotKind, pivotSource, pivotBasis))
+				_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
+					"message":            "recover pivot accepted with citation",
+					"step":               actionSteps,
+					"turn":               turn,
+					"tool_calls":         toolCalls,
+					"mode":               mode,
+					"pivot_basis":        pivotBasis,
+					"pivot_basis_source": pivotSource,
+					"pivot_basis_kind":   pivotKind,
+				})
+			}
 			key := buildAssistActionKey(command, args)
 			lastActionKey, lastActionStreak = trackAssistActionStreak(lastActionKey, lastActionStreak, key)
+			contextEnvelope.recordActionFingerprint(key, lastActionStreak)
 			if isLowValueListingCommand(command, args) && lastActionStreak >= workerAssistNoNewEvidenceResultRepeat {
-				return emitNoProgressFailure(turn, command, args, "repeated low-value listing command streak", map[string]any{
+				return emitAssistNoProgressFailure(manager, cfg, task, mode, actionSteps, turn, toolCalls, command, args, "repeated low-value listing command streak", map[string]any{
 					"streak": lastActionStreak,
 				})
 			}
 			if mode == "recover" && lastActionStreak >= workerAssistNoNewEvidenceResultRepeat && isNoNewEvidenceCandidate(command, args) {
-				if completionErr := emitNoNewEvidenceCompletion(turn, command, args, lastActionStreak, "repeated recover command streak without new evidence"); completionErr != nil {
+				if completionErr := emitAssistNoNewEvidenceCompletion(manager, cfg, task, assistantModel, mode, actionSteps, turn, toolCalls, command, args, lastActionStreak, "repeated recover command streak without new evidence"); completionErr != nil {
 					return completionErr
 				}
 				return nil
@@ -1059,7 +936,7 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 				loopBlocks++
 				mode = "recover"
 				recoverHint = "same command repeated too many times; choose a different command path"
-				observations = appendObservation(observations, fmt.Sprintf("recovery: repeated command blocked for %s", strings.TrimSpace(strings.Join(append([]string{command}, args...), " "))))
+				addObservation(fmt.Sprintf("recovery: repeated command blocked for %s", strings.TrimSpace(strings.Join(append([]string{command}, args...), " "))))
 				if !wasRecover {
 					if recErr := markRecoverTransition(turn, "repeated_command", map[string]any{
 						"command": command,
@@ -1115,84 +992,67 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 			})
 			summary, summaryMeta := summarizeCommandResultWithMeta(result.command, result.args, result.runErr, result.output)
 			contextEnvelope.recordCommandSummary(summaryMeta)
-			observations = appendObservation(observations, summary)
-			if result.runErr != nil {
-				lastResultKey = ""
-				lastResultStreak = 0
-			} else {
-				lastResultKey, lastResultStreak = trackAssistResultStreak(lastResultKey, lastResultStreak, result.command, result.args, result.runErr, result.output)
-				if actionSteps >= workerAssistNoNewEvidenceResultRepeat && lastResultStreak >= workerAssistNoNewEvidenceResultRepeat && isNoNewEvidenceCandidate(result.command, result.args) {
-					if completionErr := emitNoNewEvidenceCompletion(turn, result.command, result.args, lastResultStreak, "identical runtime result repeated"); completionErr != nil {
-						return completionErr
-					}
-					return nil
-				}
-				if toolCalls >= workerAssistNoNewEvidenceToolCallCap && recoveryTransitions > 0 && isNoNewEvidenceCandidate(result.command, result.args) {
-					if completionErr := emitNoNewEvidenceCompletion(turn, result.command, result.args, lastResultStreak, "recover tool-call cap reached without new evidence"); completionErr != nil {
-						return completionErr
-					}
-					return nil
-				}
+			addObservation(summary)
+			var completed bool
+			var completionErr error
+			lastResultKey, lastResultStreak, completed, completionErr = updateAssistResultStreakAndCheckNoEvidence(
+				manager,
+				cfg,
+				task,
+				contextEnvelope,
+				assistantModel,
+				mode,
+				actionSteps,
+				turn,
+				toolCalls,
+				recoveryTransitions,
+				result.command,
+				result.args,
+				result.runErr,
+				result.output,
+				lastResultKey,
+				lastResultStreak,
+			)
+			if completionErr != nil {
+				return completionErr
+			}
+			if completed {
+				return nil
 			}
 			contextEnvelope.recordCommandOutcome(result.command, result.args, result.runErr, lastResultKey)
 			if result.runErr != nil {
-				if missingTool := detectMissingExecutable(result.command, result.runErr, result.output); missingTool != "" {
-					remediation := handleMissingToolRemediation(ctx, manager, cfg, task, workDir, actionSteps, turn, toolCalls, result.command, result.args, missingTool, missingToolInstallAttempts)
-					if remediation.Handled {
-						if remediation.Observation != "" {
-							observations = appendObservation(observations, remediation.Observation)
-						}
-						if remediation.RecoverHint != "" {
-							recoverHint = remediation.RecoverHint
-						} else {
-							recoverHint = summary
-						}
-						if mode != "recover" {
-							mode = "recover"
-							if recErr := markRecoverTransition(turn, "missing_tool", map[string]any{
-								"command": result.command,
-								"args":    result.args,
-								"tool":    remediation.ToolName,
-							}); recErr != nil {
-								return recErr
-							}
-						}
-						continue
-					}
+				failureHandled, failureErr := handleAssistExecutionFailure(
+					ctx,
+					manager,
+					cfg,
+					task,
+					workDir,
+					actionSteps,
+					turn,
+					toolCalls,
+					result.command,
+					result.args,
+					result.runErr,
+					result.output,
+					summary,
+					logPath,
+					&mode,
+					&recoverHint,
+					missingToolInstallAttempts,
+					missingToolRetryCount,
+					addObservation,
+					markRecoverTransition,
+					"command_execution_failed",
+					false,
+				)
+				if failureErr != nil {
+					return failureErr
 				}
-				if mode == "recover" {
-					reason := WorkerFailureCommandFailed
-					if errorsIsTimeout(result.runErr) {
-						reason = WorkerFailureCommandTimeout
-					}
-					_ = emitWorkerFailure(manager, cfg, task, result.runErr, reason, map[string]any{
-						"step":       actionSteps,
-						"turn":       turn,
-						"tool_calls": toolCalls,
-						"command":    result.command,
-						"args":       result.args,
-						"log_path":   logPath,
-					})
-					return result.runErr
+				if failureHandled {
+					continue
 				}
-				mode = "recover"
-				recoverHint = summary
-				if recErr := markRecoverTransition(turn, "command_execution_failed", map[string]any{
-					"command": result.command,
-					"args":    result.args,
-				}); recErr != nil {
-					return recErr
-				}
-				continue
 			}
-			if wasRecover {
-				mode = "recover"
-				recoverHint = "recovery mode active: use direct command or complete if evidence is sufficient"
-			} else {
-				mode = "execute-step"
-				recoverHint = ""
-				recoveryTransitions = 0
-			}
+			settleAssistModeAfterSuccessfulExecution(&mode, &recoverHint, &recoveryTransitions, wasRecover)
 		default:
 			err := fmt.Errorf("assistant returned unsupported type %q", suggestion.Type)
 			_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureAssistNoAction, map[string]any{
@@ -1213,241 +1073,4 @@ func runWorkerAssistTask(ctx context.Context, manager *Manager, cfg WorkerRunCon
 		"action_steps": actionSteps,
 	})
 	return err
-}
-
-func trackAssistActionStreak(lastKey string, lastStreak int, currentKey string) (string, int) {
-	currentKey = strings.TrimSpace(currentKey)
-	if currentKey == "" {
-		return "", 0
-	}
-	if currentKey == lastKey {
-		return currentKey, lastStreak + 1
-	}
-	return currentKey, 1
-}
-
-func trackAssistResultStreak(lastKey string, lastStreak int, command string, args []string, runErr error, output []byte) (string, int) {
-	currentKey := buildAssistResultKey(command, args, runErr, output)
-	if currentKey == "" {
-		return "", 0
-	}
-	if currentKey == lastKey {
-		return currentKey, lastStreak + 1
-	}
-	return currentKey, 1
-}
-
-func buildAssistResultKey(command string, args []string, runErr error, output []byte) string {
-	command = strings.ToLower(strings.TrimSpace(command))
-	if command == "" {
-		return ""
-	}
-	normalizedArgs := normalizeArgs(args)
-	status := "ok"
-	if runErr != nil {
-		status = "err:" + strings.TrimSpace(runErr.Error())
-	}
-	fragment := strings.Join(strings.Fields(string(capBytes(output, workerAssistResultFingerprintBytes))), " ")
-	return strings.Join([]string{command, strings.Join(normalizedArgs, " "), status, fragment}, "|")
-}
-
-func isAssistSummaryTask(task TaskSpec) bool {
-	strategy := strings.ToLower(strings.TrimSpace(task.Strategy))
-	switch strategy {
-	case "summarize_and_replan", "summary", "report_summary":
-		return true
-	}
-	if strings.EqualFold(strings.TrimSpace(task.TaskID), "task-plan-summary") {
-		return true
-	}
-	title := strings.ToLower(strings.TrimSpace(task.Title))
-	return strings.Contains(title, "plan synthesis summary")
-}
-
-func isAssistAdaptiveReplanTask(task TaskSpec) bool {
-	strategy := strings.ToLower(strings.TrimSpace(task.Strategy))
-	return strings.HasPrefix(strategy, "adaptive_replan_")
-}
-
-func isNoNewEvidenceCandidate(command string, args []string) bool {
-	command = strings.TrimSpace(command)
-	if command == "" {
-		return false
-	}
-	if isNetworkSensitiveCommand(command) {
-		return true
-	}
-	base := strings.ToLower(filepath.Base(command))
-	switch base {
-	case "list_dir", "ls", "dir", "read_file", "read":
-		return true
-	}
-	if base != "bash" && base != "sh" && base != "zsh" {
-		return false
-	}
-	if len(args) == 0 {
-		return false
-	}
-	script := strings.TrimSpace(args[0])
-	if script == "" || strings.HasPrefix(script, "-") {
-		return false
-	}
-	if strings.Contains(filepath.ToSlash(script), "tools/") {
-		return true
-	}
-	ext := strings.ToLower(filepath.Ext(script))
-	switch ext {
-	case ".sh", ".bash", ".zsh", ".py", ".rb", ".pl":
-		return true
-	}
-	return false
-}
-
-func isLowValueListingCommand(command string, args []string) bool {
-	base := canonicalAssistActionCommand(command)
-	if base != "list_dir" {
-		return false
-	}
-	_ = args
-	return true
-}
-
-func buildAssistPromptScope(runScope Scope, taskTargets []string) []string {
-	seen := map[string]struct{}{}
-	out := make([]string, 0, len(runScope.Networks)+len(runScope.Targets)+len(runScope.DenyTargets))
-	add := func(value string) {
-		trimmed := strings.TrimSpace(value)
-		if trimmed == "" {
-			return
-		}
-		if _, ok := seen[trimmed]; ok {
-			return
-		}
-		seen[trimmed] = struct{}{}
-		out = append(out, trimmed)
-	}
-	for _, network := range runScope.Networks {
-		add(network)
-	}
-	for _, target := range runScope.Targets {
-		add(target)
-	}
-	for _, deny := range runScope.DenyTargets {
-		trimmed := strings.TrimSpace(deny)
-		if trimmed == "" {
-			continue
-		}
-		add("deny:" + trimmed)
-	}
-	if len(out) > 0 {
-		return out
-	}
-	for _, target := range taskTargets {
-		add(target)
-	}
-	return out
-}
-
-func materializeAssistExpectedArtifacts(cfg WorkerRunConfig, task TaskSpec, sourcePath string) ([]string, error) {
-	sourcePath = strings.TrimSpace(sourcePath)
-	if sourcePath == "" {
-		return nil, nil
-	}
-	data, err := os.ReadFile(sourcePath)
-	if err != nil {
-		return nil, fmt.Errorf("read assist completion log: %w", err)
-	}
-	artifactDir := filepath.Join(BuildRunPaths(cfg.SessionsDir, cfg.RunID).ArtifactDir, task.TaskID)
-	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create assist artifact dir: %w", err)
-	}
-	out := make([]string, 0, len(task.ExpectedArtifacts))
-	for _, raw := range task.ExpectedArtifacts {
-		requirement := strings.TrimSpace(raw)
-		if requirement == "" || !artifactRequirementNeedsConcreteMatch(requirement) {
-			continue
-		}
-		relative := requirement
-		if filepath.IsAbs(relative) {
-			relative = filepath.Base(relative)
-		}
-		relative = filepath.Clean(relative)
-		if relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-			relative = filepath.Base(requirement)
-		}
-		if strings.TrimSpace(relative) == "" {
-			continue
-		}
-		targetPath := filepath.Join(artifactDir, relative)
-		if !pathWithinRoot(targetPath, artifactDir) {
-			targetPath = filepath.Join(artifactDir, filepath.Base(relative))
-		}
-		if strings.EqualFold(filepath.Clean(targetPath), filepath.Clean(sourcePath)) {
-			continue
-		}
-		if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
-			return nil, fmt.Errorf("create expected artifact dir: %w", err)
-		}
-		if err := os.WriteFile(targetPath, data, 0o644); err != nil {
-			return nil, fmt.Errorf("write expected artifact %s: %w", requirement, err)
-		}
-		out = append(out, targetPath)
-	}
-	return compactStrings(out), nil
-}
-
-func buildAutonomousQuestionAnswer(task TaskSpec, question string, observations []string) string {
-	parts := make([]string, 0, 4)
-	if trimmed := strings.TrimSpace(question); trimmed != "" {
-		parts = append(parts, "question="+trimmed)
-	}
-	if len(task.Targets) > 0 {
-		parts = append(parts, "targets="+strings.Join(task.Targets, ", "))
-	}
-	if len(task.DoneWhen) > 0 {
-		parts = append(parts, "done_when="+strings.Join(task.DoneWhen, "; "))
-	}
-	if len(observations) > 0 {
-		latest := strings.TrimSpace(observations[len(observations)-1])
-		if latest != "" {
-			if len(latest) > 240 {
-				latest = latest[:240] + "..."
-			}
-			parts = append(parts, "latest_observation="+latest)
-		}
-	}
-	return strings.Join(parts, " | ")
-}
-
-func resolveShellToolScriptPath(workDir, command string, args []string) ([]string, string, bool) {
-	if len(args) == 0 {
-		return args, "", false
-	}
-	shell := strings.ToLower(filepath.Base(strings.TrimSpace(command)))
-	switch shell {
-	case "bash", "sh", "zsh":
-	default:
-		return args, "", false
-	}
-	script := strings.TrimSpace(args[0])
-	if script == "" || strings.HasPrefix(script, "-") {
-		return args, "", false
-	}
-	if strings.Contains(script, "/") || strings.Contains(script, string(os.PathSeparator)) {
-		return args, "", false
-	}
-	if !strings.HasSuffix(strings.ToLower(script), ".sh") {
-		return args, "", false
-	}
-	if _, err := os.Stat(filepath.Join(workDir, script)); err == nil {
-		return args, "", false
-	}
-	candidate := filepath.Join(workDir, "tools", script)
-	if _, err := os.Stat(candidate); err != nil {
-		return args, "", false
-	}
-	updated := append([]string{}, args...)
-	updated[0] = filepath.ToSlash(filepath.Join("tools", script))
-	note := fmt.Sprintf("resolved shell script %s to %s from worker tools directory", script, updated[0])
-	return updated, note, true
 }

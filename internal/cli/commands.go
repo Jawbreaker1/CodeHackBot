@@ -28,8 +28,13 @@ func (r *Runner) handleCommand(line string) error {
 	case "verbose":
 		return r.handleVerbose(args)
 	case "context":
-		if len(args) > 0 && (strings.ToLower(args[0]) == "show" || strings.ToLower(args[0]) == "usage") {
-			return r.handleContextShow()
+		if len(args) > 0 {
+			switch strings.ToLower(args[0]) {
+			case "show", "usage":
+				return r.handleContextShow()
+			case "packet":
+				return r.handleContextPacket()
+			}
 		}
 		r.logger.Printf("Context: max_recent=%d summarize_every=%d summarize_at=%d%%", r.cfg.Context.MaxRecentOutputs, r.cfg.Context.SummarizeEvery, r.cfg.Context.SummarizeAtPercent)
 		usage, err := r.contextUsageSnapshot()
@@ -42,6 +47,8 @@ func (r *Runner) handleCommand(line string) error {
 		return r.handleLedger(args)
 	case "status":
 		r.handleStatus()
+	case "scope":
+		return r.handleScope(args)
 	case "plan":
 		return r.handlePlan(args)
 	case "next":

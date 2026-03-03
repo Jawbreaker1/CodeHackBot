@@ -27,6 +27,16 @@ var (
 	workerInstallSafeTokenPattern = regexp.MustCompile(`^[A-Za-z0-9._+-]+$`)
 )
 
+var workerPseudoWorkflowCommands = map[string]struct{}{
+	"summary":   {},
+	"summarize": {},
+	"analysis":  {},
+	"analyze":   {},
+	"plan":      {},
+	"replan":    {},
+	"review":    {},
+}
+
 type missingToolRemediation struct {
 	Handled     bool
 	RecoverHint string
@@ -115,14 +125,42 @@ func normalizeToolToken(raw string) string {
 	return strings.ToLower(token)
 }
 
+func shouldSkipMissingToolInstall(tool, command string, args []string) (bool, string) {
+	tool = normalizeToolToken(tool)
+	if tool == "" {
+		return false, ""
+	}
+	commandToken := normalizeToolToken(command)
+	if commandToken != "" {
+		if _, blocked := workerPseudoWorkflowCommands[commandToken]; blocked {
+			if len(normalizeArgs(args)) == 0 {
+				return true, fmt.Sprintf("command %q appears to be a workflow directive, not an installable executable", commandToken)
+			}
+		}
+	}
+	if _, blocked := workerPseudoWorkflowCommands[tool]; blocked {
+		return true, fmt.Sprintf("missing tool token %q appears to be a workflow directive, not an installable executable", tool)
+	}
+	return false, ""
+}
+
 func handleMissingToolRemediation(ctx context.Context, manager *Manager, cfg WorkerRunConfig, task TaskSpec, workDir string, step, turn, toolCalls int, command string, args []string, missingTool string, attempted map[string]struct{}) missingToolRemediation {
 	tool := normalizeToolToken(missingTool)
 	if tool == "" {
 		return missingToolRemediation{}
 	}
+	if skipInstall, reason := shouldSkipMissingToolInstall(tool, command, args); skipInstall {
+		msg := fmt.Sprintf("%s; do not retry %s; pivot using available tools (%s) or forge a helper script via type=tool", reason, tool, discoverAvailableFallbackTools())
+		return missingToolRemediation{
+			Handled:     true,
+			ToolName:    tool,
+			Observation: "runtime remediation skipped: " + msg,
+			RecoverHint: msg,
+		}
+	}
 	key := strings.ToLower(tool)
 	if _, seen := attempted[key]; seen {
-		msg := fmt.Sprintf("tool %s remains unavailable after a previous install attempt; pivot to available tools (%s)", tool, discoverAvailableFallbackTools())
+		msg := fmt.Sprintf("tool %s remains unavailable after a previous install attempt; do not retry %s; pivot to available tools (%s)", tool, tool, discoverAvailableFallbackTools())
 		return missingToolRemediation{
 			Handled:     true,
 			ToolName:    tool,
@@ -141,7 +179,7 @@ func handleMissingToolRemediation(ctx context.Context, manager *Manager, cfg Wor
 	}
 	installSpec, ok := buildToolInstallCommand(tool)
 	if !ok {
-		msg := fmt.Sprintf("tool %s is unavailable and no supported package manager command was found; pivot using available tools (%s)", tool, discoverAvailableFallbackTools())
+		msg := fmt.Sprintf("tool %s is unavailable and no supported package manager command was found; do not retry %s; pivot using available tools (%s)", tool, tool, discoverAvailableFallbackTools())
 		return missingToolRemediation{
 			Handled:     true,
 			ToolName:    tool,
@@ -150,7 +188,7 @@ func handleMissingToolRemediation(ctx context.Context, manager *Manager, cfg Wor
 		}
 	}
 	if policy == ToolInstallPolicyNever {
-		msg := fmt.Sprintf("tool %s unavailable and install policy is never; pivot using available tools (%s)", tool, discoverAvailableFallbackTools())
+		msg := fmt.Sprintf("tool %s unavailable and install policy is never; do not retry %s; pivot using available tools (%s)", tool, tool, discoverAvailableFallbackTools())
 		return missingToolRemediation{
 			Handled:     true,
 			ToolName:    tool,
@@ -197,7 +235,7 @@ func handleMissingToolRemediation(ctx context.Context, manager *Manager, cfg Wor
 		case "approved":
 			approved = true
 		case "denied":
-			msg := fmt.Sprintf("install denied for missing tool %s (%s); pivot using available tools (%s)", tool, decisionReason, discoverAvailableFallbackTools())
+			msg := fmt.Sprintf("install denied for missing tool %s (%s); do not retry %s; pivot using available tools (%s)", tool, decisionReason, tool, discoverAvailableFallbackTools())
 			return missingToolRemediation{
 				Handled:     true,
 				ToolName:    tool,
@@ -210,7 +248,7 @@ func handleMissingToolRemediation(ctx context.Context, manager *Manager, cfg Wor
 				"tier":        "tool_install",
 				"reason":      "approval_timeout",
 			})
-			msg := fmt.Sprintf("install approval timed out for missing tool %s; pivot using available tools (%s)", tool, discoverAvailableFallbackTools())
+			msg := fmt.Sprintf("install approval timed out for missing tool %s; do not retry %s; pivot using available tools (%s)", tool, tool, discoverAvailableFallbackTools())
 			return missingToolRemediation{
 				Handled:     true,
 				ToolName:    tool,
@@ -221,7 +259,7 @@ func handleMissingToolRemediation(ctx context.Context, manager *Manager, cfg Wor
 	}
 
 	if !approved {
-		msg := fmt.Sprintf("tool %s unavailable and install not approved; pivot using available tools (%s)", tool, discoverAvailableFallbackTools())
+		msg := fmt.Sprintf("tool %s unavailable and install not approved; do not retry %s; pivot using available tools (%s)", tool, tool, discoverAvailableFallbackTools())
 		return missingToolRemediation{
 			Handled:     true,
 			ToolName:    tool,
@@ -256,7 +294,7 @@ func handleMissingToolRemediation(ctx context.Context, manager *Manager, cfg Wor
 		})
 	}
 	if installResult.runErr != nil {
-		msg := fmt.Sprintf("install failed for tool %s via %s; pivot using available tools (%s)", tool, installLabel, discoverAvailableFallbackTools())
+		msg := fmt.Sprintf("install failed for tool %s via %s; do not retry %s; pivot using available tools (%s)", tool, installLabel, tool, discoverAvailableFallbackTools())
 		if strings.TrimSpace(logPath) != "" {
 			msg += fmt.Sprintf("; see %s", logPath)
 		}
@@ -268,7 +306,7 @@ func handleMissingToolRemediation(ctx context.Context, manager *Manager, cfg Wor
 		}
 	}
 	if _, lookErr := exec.LookPath(tool); lookErr != nil {
-		msg := fmt.Sprintf("install command completed but tool %s is still unavailable; pivot using available tools (%s)", tool, discoverAvailableFallbackTools())
+		msg := fmt.Sprintf("install command completed but tool %s is still unavailable; do not retry %s; pivot using available tools (%s)", tool, tool, discoverAvailableFallbackTools())
 		if strings.TrimSpace(logPath) != "" {
 			msg += fmt.Sprintf("; see %s", logPath)
 		}

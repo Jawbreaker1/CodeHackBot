@@ -57,11 +57,16 @@ type Runner struct {
 	lastActionLogPath  string
 	lastSuccessLogPath string
 	lastKnownTarget    string
+	assistExecApproved bool
+	assistExecGoal     string
 	assistRuntime      assistRuntimeStatus
+	assistObjectiveMet bool
 
 	inputRenderLines int
 
 	llmGuard llm.Guard
+
+	interactiveSession bool
 }
 
 type assistRuntimeStatus struct {
@@ -96,6 +101,10 @@ func NewRunner(cfg config.Config, sessionID, defaultConfigPath, profilePath stri
 }
 
 func (r *Runner) Run() error {
+	r.interactiveSession = true
+	defer func() {
+		r.interactiveSession = false
+	}()
 	r.printLogo()
 	r.logger.Printf("BirdHackBot interactive mode. Type /help for commands.")
 	for {
@@ -220,8 +229,9 @@ func (r *Runner) Stop() {
 }
 
 func (r *Runner) printHelp() {
-	r.logger.Printf("Commands: /init /permissions /verbose /context [/show|usage] /ledger /status /plan /next /execute /assist /script /clean /ask /browse /crawl /links /read /ls /write /summarize /run /msf /report /resume /stop /exit")
+	r.logger.Printf("Commands: /init /permissions /verbose /context [/show|usage|packet] /ledger /status /scope /plan /next /execute /assist /script /clean /ask /browse /crawl /links /read /ls /write /summarize /run /msf /report /resume /stop /exit")
 	r.logger.Printf("Example: /permissions readonly")
+	r.logger.Printf("Scope example: /scope add-target www.systemverification.com")
 	r.logger.Printf("Plain text routes to /assist. Use /ask for explicit non-agentic chat.")
 	r.logger.Printf("/plan starts guided planning; /plan done or /plan cancel ends it.")
 	r.logger.Printf("Session logs live under: %s", filepath.Clean(r.cfg.Session.LogDir))

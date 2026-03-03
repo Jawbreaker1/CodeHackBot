@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1561,6 +1562,13 @@ func TestRunEndToEndLifecycleFanoutEvidenceAndReport(t *testing.T) {
 	if status.State != "completed" {
 		t.Fatalf("expected completed run state, got %s", status.State)
 	}
+	storedPlan, err := manager.LoadRunPlan("run-cli-e2e")
+	if err != nil {
+		t.Fatalf("LoadRunPlan: %v", err)
+	}
+	if got := orchestrator.NormalizeRunOutcome(storedPlan.Metadata.RunOutcome); got != orchestrator.RunOutcomeSuccess {
+		t.Fatalf("expected plan metadata run_outcome=success, got %q", storedPlan.Metadata.RunOutcome)
+	}
 	findings, err := manager.ListFindings("run-cli-e2e")
 	if err != nil {
 		t.Fatalf("ListFindings: %v", err)
@@ -1574,6 +1582,23 @@ func TestRunEndToEndLifecycleFanoutEvidenceAndReport(t *testing.T) {
 	}
 	if !hasEventType(events, orchestrator.EventTypeRunReportGenerated) {
 		t.Fatalf("expected run_report_generated event in terminal outcome")
+	}
+	foundRunCompletedOutcome := false
+	for _, event := range events {
+		if event.Type != orchestrator.EventTypeRunCompleted {
+			continue
+		}
+		payload := map[string]any{}
+		if len(event.Payload) > 0 {
+			_ = json.Unmarshal(event.Payload, &payload)
+		}
+		if got, _ := payload["run_outcome"].(string); got == string(orchestrator.RunOutcomeSuccess) {
+			foundRunCompletedOutcome = true
+			break
+		}
+	}
+	if !foundRunCompletedOutcome {
+		t.Fatalf("expected run_completed event payload to include run_outcome=success")
 	}
 
 	out.Reset()
@@ -1655,6 +1680,30 @@ func TestRunBudgetGuardStopsOnStepExhaustion(t *testing.T) {
 	events, err := manager.Events("run-cli-budget", 0)
 	if err != nil {
 		t.Fatalf("Events: %v", err)
+	}
+	storedPlan, err := manager.LoadRunPlan("run-cli-budget")
+	if err != nil {
+		t.Fatalf("LoadRunPlan: %v", err)
+	}
+	if got := orchestrator.NormalizeRunOutcome(storedPlan.Metadata.RunOutcome); got != orchestrator.RunOutcomeFailed {
+		t.Fatalf("expected plan metadata run_outcome=failed, got %q", storedPlan.Metadata.RunOutcome)
+	}
+	foundRunStoppedOutcome := false
+	for _, event := range events {
+		if event.Type != orchestrator.EventTypeRunStopped {
+			continue
+		}
+		payload := map[string]any{}
+		if len(event.Payload) > 0 {
+			_ = json.Unmarshal(event.Payload, &payload)
+		}
+		if got, _ := payload["run_outcome"].(string); got == string(orchestrator.RunOutcomeFailed) {
+			foundRunStoppedOutcome = true
+			break
+		}
+	}
+	if !foundRunStoppedOutcome {
+		t.Fatalf("expected run_stopped event payload to include run_outcome=failed")
 	}
 	if !hasTaskFailedReason(events, "budget_exhausted") {
 		t.Fatalf("expected task_failed with budget_exhausted reason")
@@ -1749,6 +1798,10 @@ func TestHelperProcessOrchestratorWorker(t *testing.T) {
 	}
 	switch mode {
 	case "worker-ok":
+		if err := helperEmitTaskCompletion(nil, nil); err != nil {
+			_, _ = os.Stderr.WriteString(err.Error())
+			os.Exit(2)
+		}
 		os.Exit(0)
 	case "worker-evidence":
 		if err := helperEmitEvidence(); err != nil {
@@ -1796,14 +1849,15 @@ func helperEmitEvidence() error {
 		return err
 	}
 	signalWorker := "signal-" + workerID
+	artifactPath := filepath.ToSlash(filepath.Join("sessions", runID, "logs", taskID+".log"))
 	if err := manager.EmitEvent(runID, signalWorker, taskID, orchestrator.EventTypeTaskArtifact, map[string]any{
 		"type":  "log",
 		"title": "artifact-" + taskID,
-		"path":  filepath.ToSlash(filepath.Join("sessions", runID, "logs", taskID+".log")),
+		"path":  artifactPath,
 	}); err != nil {
 		return err
 	}
-	return manager.EmitEvent(runID, signalWorker, taskID, orchestrator.EventTypeTaskFinding, map[string]any{
+	if err := manager.EmitEvent(runID, signalWorker, taskID, orchestrator.EventTypeTaskFinding, map[string]any{
 		"target":       "192.168.50.10",
 		"finding_type": "service",
 		"title":        "finding-" + taskID,
@@ -1812,7 +1866,10 @@ func helperEmitEvidence() error {
 		"confidence":   "high",
 		"source":       "helper-worker",
 		"evidence":     []string{"evidence-" + taskID},
-	})
+	}); err != nil {
+		return err
+	}
+	return helperEmitTaskCompletion([]string{artifactPath}, []string{"service"})
 }
 
 func helperEmitBudgetOverrun() error {
@@ -1829,6 +1886,9 @@ func helperEmitBudgetOverrun() error {
 
 func helperManagerAndIDs() (*orchestrator.Manager, string, string, string, error) {
 	sessionsDir := strings.TrimSpace(os.Getenv("TEST_SESSIONS_DIR"))
+	if sessionsDir == "" {
+		sessionsDir = strings.TrimSpace(os.Getenv("BIRDHACKBOT_ORCH_SESSIONS_DIR"))
+	}
 	runID := strings.TrimSpace(os.Getenv("BIRDHACKBOT_ORCH_RUN_ID"))
 	taskID := strings.TrimSpace(os.Getenv("BIRDHACKBOT_ORCH_TASK_ID"))
 	workerID := strings.TrimSpace(os.Getenv("BIRDHACKBOT_ORCH_WORKER_ID"))
@@ -1836,6 +1896,77 @@ func helperManagerAndIDs() (*orchestrator.Manager, string, string, string, error
 		return nil, "", "", "", os.ErrInvalid
 	}
 	return orchestrator.NewManager(sessionsDir), runID, taskID, workerID, nil
+}
+
+func helperEmitTaskCompletion(producedArtifacts []string, producedFindings []string) error {
+	manager, runID, taskID, workerID, err := helperManagerAndIDs()
+	if err != nil {
+		return err
+	}
+	task, err := manager.ReadTask(runID, taskID)
+	if err != nil {
+		return err
+	}
+	requiredArtifacts := append([]string{}, task.ExpectedArtifacts...)
+	workspace := filepath.Join(manager.SessionsDir, runID, "orchestrator", "artifact", "helper", taskID)
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		return err
+	}
+	materializedArtifacts := make([]string, 0, len(requiredArtifacts))
+	for idx, required := range requiredArtifacts {
+		name := strings.TrimSpace(filepath.Base(required))
+		if name == "" || name == "." || name == string(filepath.Separator) {
+			name = fmt.Sprintf("artifact-%02d.txt", idx+1)
+		}
+		path := filepath.Join(workspace, name)
+		if err := os.WriteFile(path, []byte("helper artifact\n"), 0o644); err != nil {
+			return err
+		}
+		materializedArtifacts = append(materializedArtifacts, path)
+	}
+	if len(producedArtifacts) == 0 {
+		producedArtifacts = append([]string{}, materializedArtifacts...)
+	} else {
+		producedArtifacts = append(append([]string{}, producedArtifacts...), materializedArtifacts...)
+	}
+	if len(producedFindings) == 0 {
+		producedFindings = []string{"task_execution_result"}
+	}
+	requiredFindings := append([]string{}, producedFindings...)
+	target := "127.0.0.1"
+	if len(task.Targets) > 0 && strings.TrimSpace(task.Targets[0]) != "" {
+		target = strings.TrimSpace(task.Targets[0])
+	}
+	for _, findingType := range producedFindings {
+		if err := manager.EmitEvent(runID, "signal-"+workerID, taskID, orchestrator.EventTypeTaskFinding, map[string]any{
+			"target":       target,
+			"finding_type": findingType,
+			"title":        "helper finding " + findingType,
+			"severity":     "info",
+			"confidence":   "high",
+			"source":       "helper-worker",
+			"evidence":     []string{"helper-generated"},
+		}); err != nil {
+			return err
+		}
+	}
+	logPath := filepath.Join(workspace, "worker.log")
+	if err := os.WriteFile(logPath, []byte("helper completion log\n"), 0o644); err != nil {
+		return err
+	}
+	completionPayload := map[string]any{
+		"attempt":   1,
+		"worker_id": workerID,
+		"log_path":  logPath,
+		"completion_contract": map[string]any{
+			"verification_status": "reported_by_worker",
+			"required_artifacts":  requiredArtifacts,
+			"produced_artifacts":  producedArtifacts,
+			"required_findings":   requiredFindings,
+			"produced_findings":   requiredFindings,
+		},
+	}
+	return manager.EmitEvent(runID, "signal-"+workerID, taskID, orchestrator.EventTypeTaskCompleted, completionPayload)
 }
 
 func hasTaskFailedReason(events []orchestrator.EventEnvelope, reason string) bool {

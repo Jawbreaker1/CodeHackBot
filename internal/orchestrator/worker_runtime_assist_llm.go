@@ -227,7 +227,8 @@ func isAssistTimeoutError(suggestErr error, suggestCtxErr error, runCtxErr error
 }
 
 func newAssistCallContext(runCtx context.Context) (context.Context, context.CancelFunc, time.Duration, time.Duration, error) {
-	remaining := workerAssistLLMCallMax
+	callCap := workerAssistCallTimeoutCap()
+	remaining := callCap
 	if deadline, ok := runCtx.Deadline(); ok {
 		remaining = time.Until(deadline)
 	}
@@ -238,7 +239,7 @@ func newAssistCallContext(runCtx context.Context) (context.Context, context.Canc
 		}
 		return runCtx, func() {}, 0, remaining, fmt.Errorf("assist call timeout: remaining budget too low (%ds)", remainingSecs)
 	}
-	callTimeout := workerAssistLLMCallMax
+	callTimeout := callCap
 	available := remaining - workerAssistBudgetReserve
 	if available > 0 && available < callTimeout {
 		callTimeout = available
@@ -257,6 +258,19 @@ func newAssistCallContext(runCtx context.Context) (context.Context, context.Canc
 	}
 	ctx, cancel := context.WithTimeout(runCtx, callTimeout)
 	return ctx, cancel, callTimeout, remaining, nil
+}
+
+func workerAssistCallTimeoutCap() time.Duration {
+	cap := workerAssistLLMCallMax
+	if raw := strings.TrimSpace(os.Getenv(workerLLMTimeoutSeconds)); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			cap = time.Duration(parsed) * time.Second
+		}
+	}
+	if cap < 3*time.Second {
+		return 3 * time.Second
+	}
+	return cap
 }
 
 func minDuration(a, b time.Duration) time.Duration {

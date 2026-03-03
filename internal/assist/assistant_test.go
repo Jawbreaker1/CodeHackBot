@@ -126,6 +126,32 @@ func TestFallbackAssistantReportGoalUsesReportCommand(t *testing.T) {
 	}
 }
 
+func TestFallbackAssistantReportGoalCompletesWhenReportEvidenceExists(t *testing.T) {
+	suggestion, err := (FallbackAssistant{}).Suggest(context.Background(), Input{
+		Goal:      "Create an OWASP report for this run.",
+		RecentLog: "# OWASP-Style Security Assessment Report\n\n## Executive Summary\n- Outcome: ...",
+	})
+	if err != nil {
+		t.Fatalf("fallback error: %v", err)
+	}
+	if suggestion.Type != "complete" {
+		t.Fatalf("expected complete, got %s", suggestion.Type)
+	}
+}
+
+func TestFallbackAssistantReportGoalInRecoverModeCompletes(t *testing.T) {
+	suggestion, err := (FallbackAssistant{}).Suggest(context.Background(), Input{
+		Goal: "Generate an OWASP report for this run.",
+		Mode: "recover",
+	})
+	if err != nil {
+		t.Fatalf("fallback error: %v", err)
+	}
+	if suggestion.Type != "complete" {
+		t.Fatalf("expected complete, got %s", suggestion.Type)
+	}
+}
+
 func TestFallbackAssistantNoTargetsAsksGenericTargetQuestion(t *testing.T) {
 	suggestion, err := (FallbackAssistant{}).Suggest(context.Background(), Input{
 		Goal: "continue",
@@ -401,6 +427,20 @@ func TestParseSimpleCommandIgnoresChannelEnvelope(t *testing.T) {
 	raw := `<channel>final <constrain>json<message>{"type":"tool","tool":{"name":"x"}}`
 	if got := parseSimpleCommand(raw); got != "" {
 		t.Fatalf("expected no command, got %q", got)
+	}
+}
+
+func TestParseSimpleCommandRejectsProseTypePrefix(t *testing.T) {
+	raw := `type: should be "tool" based on previous responses`
+	if got := parseSimpleCommand(raw); got != "" {
+		t.Fatalf("expected no command, got %q", got)
+	}
+}
+
+func TestParseSimpleCommandRejectsNumberedNarrativeLine(t *testing.T) {
+	raw := `1. There's a secret.zip file in the working directory`
+	if got := parseSimpleCommand(raw); got != "" {
+		t.Fatalf("expected no command from numbered narrative line, got %q", got)
 	}
 }
 

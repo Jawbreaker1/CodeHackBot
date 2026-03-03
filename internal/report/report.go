@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -32,23 +33,30 @@ const (
 )
 
 type Info struct {
-	Date         string
-	Scope        []string
-	Findings     []string
-	SessionID    string
-	Ledger       string
-	Summary      string
-	KnownFacts   string
-	Focus        string
-	Plan         string
-	Inventory    string
-	Observations string
+	Date            string
+	Scope           []string
+	Findings        []string
+	SessionID       string
+	Goal            string
+	Ledger          string
+	Summary         string
+	KnownFacts      string
+	Focus           string
+	Plan            string
+	Inventory       string
+	Observations    string
+	PrimaryTarget   string
+	ObjectiveStatus string
+	ObjectiveReason string
+	TargetStatus    string
+	TargetReason    string
 }
 
 var (
 	ipv4Pattern        = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
 	openPortPattern    = regexp.MustCompile(`\b(\d{1,5})/(tcp|udp)\s+open\b`)
 	nmapHostLinePrefix = "Nmap scan report for "
+	obsHeaderPattern   = regexp.MustCompile(`^\[[^\]]+\]\s+[a-zA-Z0-9_-]+:\s+(.+?)\s+\(exit=(-?\d+)\)`)
 )
 
 func DefaultTemplatePath() string {
@@ -132,12 +140,18 @@ func writeReportContent(profile, content, outPath string, info Info) error {
 		scopeText = "(not provided)"
 	}
 	highLevel := deriveHighLevelFindings(info)
+	objectiveBody := deriveObjectiveStatusBlock(info)
+	methodBody := deriveMethodRationaleBlock(info.Observations)
+	resultsBody := deriveResultsOverviewBlock(info.Observations, highLevel)
 	content = strings.ReplaceAll(content, "Date:", fmt.Sprintf("Date: %s", date))
 	content = strings.ReplaceAll(content, "Scope:", fmt.Sprintf("Scope: %s", scopeText))
 	content = strings.ReplaceAll(content, "High-level findings:", fmt.Sprintf("High-level findings: %s", strings.Join(highLevel, "; ")))
 	content = strings.ReplaceAll(content, "- Targets:", fmt.Sprintf("- Targets: %s", scopeText))
 	content = strings.ReplaceAll(content, "- Out of scope:", "- Out of scope: (not specified)")
 	content = strings.ReplaceAll(content, "- Testing window:", fmt.Sprintf("- Testing window: %s UTC session", date))
+	content = insertSectionBefore(content, "## Findings", "## Objective Status", objectiveBody)
+	content = insertSectionBefore(content, "## Findings", "## Method And Rationale", methodBody)
+	content = insertSectionBefore(content, "## Findings", "## Results Overview", resultsBody)
 	if info.SessionID != "" {
 		content = strings.ReplaceAll(content, "Session IDs", fmt.Sprintf("Session IDs\n- %s", info.SessionID))
 	}
@@ -154,6 +168,9 @@ func writeReportContent(profile, content, outPath string, info Info) error {
 	if err := ValidateRequiredSections(profile, content); err != nil {
 		return err
 	}
+	if err := ValidateGeneratedNarrative(content); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
 		return fmt.Errorf("create output dir: %w", err)
 	}
@@ -161,6 +178,166 @@ func writeReportContent(profile, content, outPath string, info Info) error {
 		return fmt.Errorf("write report: %w", err)
 	}
 	return nil
+}
+
+func insertSectionBefore(content, anchor, sectionHeader, body string) string {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return content
+	}
+	if strings.Contains(content, sectionHeader) {
+		return content
+	}
+	section := strings.TrimSpace(sectionHeader) + "\n\n" + body + "\n\n"
+	idx := strings.Index(content, anchor)
+	if idx < 0 {
+		return strings.TrimSpace(content) + "\n\n" + section
+	}
+	return content[:idx] + section + content[idx:]
+}
+
+func deriveObjectiveStatusBlock(info Info) string {
+	status := strings.TrimSpace(strings.ToLower(info.ObjectiveStatus))
+	if status == "" {
+		status = "unknown"
+	}
+	reason := strings.TrimSpace(info.ObjectiveReason)
+	if reason == "" {
+		switch status {
+		case "met":
+			reason = "Objective satisfied by evidence-backed completion output."
+		case "not_met":
+			reason = "Objective not verified from currently available evidence."
+		default:
+			reason = "Objective state could not be determined from this report context."
+		}
+	}
+	target := strings.TrimSpace(info.PrimaryTarget)
+	if target == "" {
+		target = "(not specified)"
+	}
+	targetStatus := strings.TrimSpace(strings.ToLower(info.TargetStatus))
+	if targetStatus == "" {
+		targetStatus = "unknown"
+	}
+	targetReason := strings.TrimSpace(info.TargetReason)
+	if targetReason == "" {
+		targetReason = "No explicit target verification details were captured."
+	}
+	lines := []string{
+		fmt.Sprintf("- Objective status: %s", status),
+		fmt.Sprintf("- Objective rationale: %s", reason),
+		fmt.Sprintf("- Primary target: %s", target),
+		fmt.Sprintf("- Target verification: %s", targetStatus),
+		fmt.Sprintf("- Target verification rationale: %s", targetReason),
+	}
+	return strings.Join(lines, "\n")
+}
+
+func deriveMethodRationaleBlock(observations string) string {
+	entries := parseObservationEntries(observations)
+	if len(entries) == 0 {
+		return "- No execution observations were captured; rerun with evidence logging enabled."
+	}
+	lines := []string{
+		"- The assessment used bounded, non-intrusive command execution and adjusted each step using the latest evidence.",
+	}
+	limit := len(entries)
+	if limit > 6 {
+		limit = 6
+	}
+	for i := 0; i < limit; i++ {
+		entry := entries[i]
+		lines = append(lines, fmt.Sprintf("%d. `%s` (exit=%d) — %s", i+1, entry.Command, entry.ExitCode, actionRationale(entry.Command)))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func deriveResultsOverviewBlock(observations string, highLevel []string) string {
+	entries := parseObservationEntries(observations)
+	if len(entries) == 0 {
+		return "- No command outcomes available."
+	}
+	success := 0
+	failed := 0
+	for _, entry := range entries {
+		if entry.ExitCode == 0 {
+			success++
+		} else {
+			failed++
+		}
+	}
+	lines := []string{
+		fmt.Sprintf("- Executed steps: %d (successful=%d, failed=%d).", len(entries), success, failed),
+	}
+	if len(highLevel) > 0 {
+		limit := len(highLevel)
+		if limit > 3 {
+			limit = 3
+		}
+		lines = append(lines, fmt.Sprintf("- Key outcomes: %s.", strings.Join(highLevel[:limit], "; ")))
+	}
+	if failed > 0 {
+		lines = append(lines, "- At least one command failed and required recovery; review Recent Observations for exact error handling.")
+	}
+	return strings.Join(lines, "\n")
+}
+
+type observationEntry struct {
+	Command  string
+	ExitCode int
+}
+
+func parseObservationEntries(observations string) []observationEntry {
+	if strings.TrimSpace(observations) == "" {
+		return nil
+	}
+	lines := strings.Split(observations, "\n")
+	out := make([]observationEntry, 0, len(lines))
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		match := obsHeaderPattern.FindStringSubmatch(line)
+		if len(match) != 3 {
+			continue
+		}
+		exitCode, err := strconv.Atoi(strings.TrimSpace(match[2]))
+		if err != nil {
+			continue
+		}
+		command := strings.TrimSpace(match[1])
+		if command == "" {
+			continue
+		}
+		out = append(out, observationEntry{
+			Command:  command,
+			ExitCode: exitCode,
+		})
+	}
+	return out
+}
+
+func actionRationale(command string) string {
+	lower := strings.ToLower(strings.TrimSpace(command))
+	switch {
+	case strings.HasPrefix(lower, "nmap -sn"):
+		return "host discovery to identify reachable systems before targeted validation"
+	case strings.HasPrefix(lower, "nmap"):
+		if strings.Contains(lower, "-sv") || strings.Contains(lower, "-o") || strings.Contains(lower, "-ss") || strings.Contains(lower, "--script") {
+			return "service/device fingerprinting to validate target identity and exposure"
+		}
+		return "scoped network/service reconnaissance for evidence collection"
+	case strings.HasPrefix(lower, "curl "), strings.HasPrefix(lower, "wget "):
+		return "HTTP evidence collection for externally visible behavior"
+	case strings.HasPrefix(lower, "read_file "), strings.HasPrefix(lower, "list_dir "):
+		return "local evidence inspection to verify artifacts and task output"
+	case strings.HasPrefix(lower, "report "):
+		return "report synthesis after evidence collection"
+	default:
+		return "bounded execution step selected to reduce uncertainty in the objective"
+	}
 }
 
 func sanitizeKnownFactsForReport(knownFacts, observations string) string {
@@ -204,12 +381,12 @@ func compactValues(values []string) []string {
 }
 
 func deriveHighLevelFindings(info Info) []string {
-	findings := filterFindingsWithEvidence(compactValues(info.Findings), info.Observations)
+	findings := filterLowValueFindings(filterFindingsWithEvidence(compactValues(info.Findings), info.Observations))
 	if len(findings) == 0 {
 		findings = append(findings, deriveObservationFindings(info.Observations)...)
 	}
 	if len(findings) == 0 {
-		findings = append(findings, deriveFactFindings(info.KnownFacts, info.Observations)...)
+		findings = append(findings, filterLowValueFindings(deriveFactFindings(info.KnownFacts, info.Observations))...)
 	}
 	if len(findings) == 0 {
 		findings = append(findings, "Command observations captured; review Recent Observations for evidence.")
@@ -218,6 +395,29 @@ func deriveHighLevelFindings(info Info) []string {
 		findings = findings[:6]
 	}
 	return findings
+}
+
+func filterLowValueFindings(findings []string) []string {
+	if len(findings) == 0 {
+		return findings
+	}
+	out := make([]string, 0, len(findings))
+	for _, finding := range findings {
+		lower := strings.ToLower(strings.TrimSpace(finding))
+		if lower == "" {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(lower, "observed ip:"),
+			strings.HasPrefix(lower, "observed cidr:"),
+			strings.HasPrefix(lower, "observed url:"),
+			strings.HasPrefix(lower, "observed host:"),
+			lower == "plan updated":
+			continue
+		}
+		out = append(out, finding)
+	}
+	return out
 }
 
 func filterFindingsWithEvidence(findings []string, observations string) []string {

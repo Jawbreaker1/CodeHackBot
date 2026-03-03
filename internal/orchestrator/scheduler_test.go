@@ -103,7 +103,7 @@ func TestScheduler_RetryAndBlockedMapping(t *testing.T) {
 	if err := s.MarkRunning("t1"); err != nil {
 		t.Fatalf("MarkRunning #2: %v", err)
 	}
-	if err := s.MarkFailed("t1", "approval_timeout", false, 2); err != nil {
+	if err := s.MarkFailed("t1", TaskFailureReasonApprovalTimeout, false, 2); err != nil {
 		t.Fatalf("MarkFailed blocked reason: %v", err)
 	}
 	if st, _ := s.State("t1"); st != TaskStateBlocked {

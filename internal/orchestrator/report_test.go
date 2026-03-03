@@ -360,6 +360,177 @@ func TestAssembleRunReportTruthGateFailsOnUnverifiedHighImpact(t *testing.T) {
 	}
 }
 
+func TestAssembleRunReportUsesValidatorVerdictStates(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-report-validator-verdict"
+	manager := NewManager(base)
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	planPath := filepath.Join(base, "plan.json")
+	plan := RunPlan{
+		RunID:           runID,
+		Scope:           Scope{Targets: []string{"127.0.0.1"}},
+		Constraints:     []string{"local_only"},
+		SuccessCriteria: []string{"report_done"},
+		StopCriteria:    []string{"manual_stop"},
+		MaxParallelism:  1,
+		Tasks: []TaskSpec{
+			{
+				TaskID:            "t1",
+				Goal:              "discovery",
+				DoneWhen:          []string{"done"},
+				FailWhen:          []string{"failed"},
+				ExpectedArtifacts: []string{"scan.log"},
+				RiskLevel:         "recon_readonly",
+				Budget: TaskBudget{
+					MaxSteps:     2,
+					MaxToolCalls: 2,
+					MaxRuntime:   time.Second,
+				},
+			},
+		},
+	}
+	if err := WriteJSONAtomic(planPath, plan); err != nil {
+		t.Fatalf("WriteJSONAtomic plan: %v", err)
+	}
+	if _, err := manager.Start(planPath, ""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := AppendEventJSONL(manager.eventPath(runID), EventEnvelope{
+		EventID:  "e-artifact",
+		RunID:    runID,
+		WorkerID: "worker-discovery",
+		TaskID:   "t1",
+		Seq:      1,
+		TS:       now,
+		Type:     EventTypeTaskArtifact,
+		Payload: mustJSONRaw(map[string]any{
+			"type":  "log",
+			"title": "scan log",
+			"path":  "sessions/run-report-validator-verdict/logs/scan.log",
+		}),
+	}); err != nil {
+		t.Fatalf("append artifact: %v", err)
+	}
+	if err := AppendEventJSONL(manager.eventPath(runID), EventEnvelope{
+		EventID:  "e-candidate-1",
+		RunID:    runID,
+		WorkerID: "worker-discovery",
+		TaskID:   "t1",
+		Seq:      2,
+		TS:       now.Add(time.Second),
+		Type:     EventTypeTaskFinding,
+		Payload: mustJSONRaw(map[string]any{
+			"target":       "127.0.0.1",
+			"finding_type": "service_exposure",
+			"title":        "HTTP service exposed",
+			"location":     "80/tcp",
+			"state":        FindingStateCandidate,
+			"severity":     "medium",
+			"confidence":   "medium",
+			"source":       "discoverer",
+		}),
+	}); err != nil {
+		t.Fatalf("append candidate finding: %v", err)
+	}
+	if err := AppendEventJSONL(manager.eventPath(runID), EventEnvelope{
+		EventID:  "e-validator-1",
+		RunID:    runID,
+		WorkerID: "worker-validator",
+		TaskID:   "validator-1",
+		Seq:      1,
+		TS:       now.Add(2 * time.Second),
+		Type:     EventTypeTaskFinding,
+		Payload: mustJSONRaw(map[string]any{
+			"target":       "127.0.0.1",
+			"finding_type": "service_exposure",
+			"title":        "HTTP service exposed",
+			"location":     "80/tcp",
+			"state":        FindingStateVerified,
+			"severity":     "medium",
+			"confidence":   "medium",
+			"source":       "validator_worker",
+			"metadata": map[string]any{
+				"validator_verdict": "verified",
+				"validator_basis":   "linked_artifact_or_log_evidence",
+			},
+		}),
+	}); err != nil {
+		t.Fatalf("append validator verified finding: %v", err)
+	}
+	if err := AppendEventJSONL(manager.eventPath(runID), EventEnvelope{
+		EventID:  "e-candidate-2",
+		RunID:    runID,
+		WorkerID: "worker-discovery",
+		TaskID:   "t-noartifact",
+		Seq:      3,
+		TS:       now.Add(3 * time.Second),
+		Type:     EventTypeTaskFinding,
+		Payload: mustJSONRaw(map[string]any{
+			"target":       "127.0.0.1",
+			"finding_type": "tls_issue",
+			"title":        "Potential weak TLS",
+			"location":     "443/tcp",
+			"state":        FindingStateCandidate,
+			"severity":     "low",
+			"confidence":   "low",
+			"source":       "discoverer",
+		}),
+	}); err != nil {
+		t.Fatalf("append second candidate finding: %v", err)
+	}
+	if err := AppendEventJSONL(manager.eventPath(runID), EventEnvelope{
+		EventID:  "e-validator-2",
+		RunID:    runID,
+		WorkerID: "worker-validator",
+		TaskID:   "validator-1",
+		Seq:      2,
+		TS:       now.Add(4 * time.Second),
+		Type:     EventTypeTaskFinding,
+		Payload: mustJSONRaw(map[string]any{
+			"target":       "127.0.0.1",
+			"finding_type": "tls_issue",
+			"title":        "Potential weak TLS",
+			"location":     "443/tcp",
+			"state":        FindingStateRejected,
+			"severity":     "low",
+			"confidence":   "low",
+			"source":       "validator_worker",
+			"metadata": map[string]any{
+				"validator_verdict": "rejected",
+				"validator_basis":   "missing_linked_artifact_or_log_evidence",
+			},
+		}),
+	}); err != nil {
+		t.Fatalf("append validator rejected finding: %v", err)
+	}
+	if _, err := manager.IngestEvidence(runID); err != nil {
+		t.Fatalf("IngestEvidence: %v", err)
+	}
+	reportPath, err := manager.AssembleRunReport(runID, "")
+	if err != nil {
+		t.Fatalf("AssembleRunReport: %v", err)
+	}
+	data, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "Validator verdict: `VERIFIED`") {
+		t.Fatalf("expected verified validator verdict in report:\n%s", content)
+	}
+	if !strings.Contains(content, "Validator verdict: `REJECTED`") {
+		t.Fatalf("expected rejected validator verdict in report:\n%s", content)
+	}
+	if !strings.Contains(content, "[UNVERIFIED] Potential weak TLS") {
+		t.Fatalf("expected rejected finding to remain unverified in report:\n%s", content)
+	}
+}
+
 func TestAssembleRunReportQualityNetworkAndWebArtifacts(t *testing.T) {
 	t.Parallel()
 

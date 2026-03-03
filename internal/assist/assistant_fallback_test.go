@@ -11,6 +11,15 @@ func TestExtractLikelyPathRecognizesRelativeArtifacts(t *testing.T) {
 	}
 }
 
+func TestExtractLikelyPathTrimsTrailingSentencePunctuation(t *testing.T) {
+	t.Parallel()
+
+	got := extractLikelyPath("Read /tmp/worker.log. Then summarize findings.")
+	if got != "/tmp/worker.log" {
+		t.Fatalf("unexpected extracted path: %q", got)
+	}
+}
+
 func TestIsReportGoalRequiresReportKeywordAndActionHint(t *testing.T) {
 	t.Parallel()
 

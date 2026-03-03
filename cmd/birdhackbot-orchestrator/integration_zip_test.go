@@ -301,6 +301,25 @@ func helperZipCrackScenario(solvable bool) error {
 			"location": extractedPath,
 		},
 	})
+	task, err := manager.ReadTask(runID, taskID)
+	if err != nil {
+		return err
+	}
+	requiredArtifacts := append([]string{}, task.ExpectedArtifacts...)
+	producedArtifacts := append([]string{}, requiredArtifacts...)
+	producedArtifacts = append(producedArtifacts, zipPath, wordlistPath, extractedPath)
+	_ = manager.EmitEvent(runID, signalWorker, taskID, orchestrator.EventTypeTaskCompleted, map[string]any{
+		"attempt":   1,
+		"worker_id": workerID,
+		"log_path":  filepath.ToSlash(filepath.Join("sessions", runID, "logs", taskID+".log")),
+		"completion_contract": map[string]any{
+			"verification_status": "reported_by_worker",
+			"required_artifacts":  requiredArtifacts,
+			"produced_artifacts":  producedArtifacts,
+			"required_findings":   []string{"zip_password_recovered"},
+			"produced_findings":   []string{"zip_password_recovered"},
+		},
+	})
 	return nil
 }
 

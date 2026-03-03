@@ -47,6 +47,10 @@ func ValidateRunPlan(plan RunPlan) error {
 	if strings.TrimSpace(plan.Metadata.RunPhase) != "" && phase == "" {
 		return fmt.Errorf("%w: metadata.run_phase is invalid", ErrInvalidPlan)
 	}
+	outcome := NormalizeRunOutcome(plan.Metadata.RunOutcome)
+	if strings.TrimSpace(plan.Metadata.RunOutcome) != "" && outcome == "" {
+		return fmt.Errorf("%w: metadata.run_outcome is invalid", ErrInvalidPlan)
+	}
 	if plan.MaxParallelism <= 0 {
 		return fmt.Errorf("%w: max_parallelism must be > 0", ErrInvalidPlan)
 	}
@@ -199,7 +203,11 @@ func ValidateTaskLease(lease TaskLease) error {
 	if strings.TrimSpace(lease.Status) == "" {
 		return fmt.Errorf("%w: status is required", ErrInvalidTask)
 	}
-	switch lease.Status {
+	status := strings.ToLower(strings.TrimSpace(lease.Status))
+	if _, err := TaskStateFromLeaseStatus(status); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidTask, err)
+	}
+	switch status {
 	case LeaseStatusQueued, LeaseStatusAwaitingApproval, LeaseStatusCompleted, LeaseStatusFailed, LeaseStatusBlocked, LeaseStatusCanceled:
 		// WorkerID may be empty for terminal/requeued states.
 	default:

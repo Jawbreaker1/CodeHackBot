@@ -265,3 +265,79 @@ func TestReclaimStaleLeases_SkipsWhenWorkerRunning(t *testing.T) {
 		t.Fatalf("expected no reclaim while worker running")
 	}
 }
+
+func TestLeaseStatusTaskStateRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	states := []TaskState{
+		TaskStateQueued,
+		TaskStateLeased,
+		TaskStateRunning,
+		TaskStateAwaitingApproval,
+		TaskStateCompleted,
+		TaskStateFailed,
+		TaskStateBlocked,
+		TaskStateCanceled,
+	}
+	for _, state := range states {
+		status, err := LeaseStatusFromTaskState(state)
+		if err != nil {
+			t.Fatalf("LeaseStatusFromTaskState(%q): %v", state, err)
+		}
+		roundTrip, err := TaskStateFromLeaseStatus(status)
+		if err != nil {
+			t.Fatalf("TaskStateFromLeaseStatus(%q): %v", status, err)
+		}
+		if roundTrip != state {
+			t.Fatalf("round-trip mismatch: state=%q status=%q roundTrip=%q", state, status, roundTrip)
+		}
+	}
+	if _, err := TaskStateFromLeaseStatus("not_a_status"); err == nil {
+		t.Fatalf("expected invalid lease status error")
+	}
+}
+
+func TestUpdateLeaseFromTaskState(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-lease-update-from-state"
+	now := time.Now().UTC()
+	m := NewManager(base)
+	m.Now = func() time.Time { return now }
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	lease := TaskLease{
+		TaskID:    "task-1",
+		LeaseID:   "lease-1",
+		WorkerID:  "worker-1",
+		Status:    LeaseStatusLeased,
+		Attempt:   1,
+		StartedAt: now,
+		Deadline:  now.Add(2 * time.Minute),
+	}
+	if err := m.WriteLease(runID, lease); err != nil {
+		t.Fatalf("WriteLease: %v", err)
+	}
+	if err := m.UpdateLeaseFromTaskState(runID, "task-1", TaskStateRunning, "worker-1"); err != nil {
+		t.Fatalf("UpdateLeaseFromTaskState running: %v", err)
+	}
+	updated, err := m.ReadLease(runID, "task-1")
+	if err != nil {
+		t.Fatalf("ReadLease: %v", err)
+	}
+	if updated.Status != LeaseStatusRunning {
+		t.Fatalf("expected running lease status, got %q", updated.Status)
+	}
+	if err := m.UpdateLeaseFromTaskState(runID, "task-1", TaskStateCompleted, ""); err != nil {
+		t.Fatalf("UpdateLeaseFromTaskState completed: %v", err)
+	}
+	updated, err = m.ReadLease(runID, "task-1")
+	if err != nil {
+		t.Fatalf("ReadLease: %v", err)
+	}
+	if updated.Status != LeaseStatusCompleted {
+		t.Fatalf("expected completed lease status, got %q", updated.Status)
+	}
+}

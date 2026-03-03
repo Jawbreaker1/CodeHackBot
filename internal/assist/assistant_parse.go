@@ -60,15 +60,19 @@ func parseSuggestionLoose(raw string) (Suggestion, error) {
 		return Suggestion{}, err
 	}
 	out := Suggestion{
-		Type:     coerceString(payload["type"]),
-		Command:  coerceString(payload["command"]),
-		Args:     coerceStringSlice(payload["args"]),
-		Question: coerceString(payload["question"]),
-		Summary:  coerceString(payload["summary"]),
-		Final:    coerceString(payload["final"]),
-		Risk:     coerceString(payload["risk"]),
-		Steps:    coerceSteps(payload["steps"]),
-		Plan:     coerceString(payload["plan"]),
+		Type:         coerceString(payload["type"]),
+		Decision:     coerceString(payload["decision"]),
+		Command:      coerceString(payload["command"]),
+		Args:         coerceStringSlice(payload["args"]),
+		Question:     coerceString(payload["question"]),
+		Summary:      coerceString(payload["summary"]),
+		Final:        coerceString(payload["final"]),
+		Risk:         coerceString(payload["risk"]),
+		Steps:        coerceSteps(payload["steps"]),
+		Plan:         coerceString(payload["plan"]),
+		ObjectiveMet: coerceBoolPtr(payload["objective_met"]),
+		EvidenceRefs: coerceSteps(payload["evidence_refs"]),
+		WhyMet:       coerceString(payload["why_met"]),
 	}
 	if tool, ok := coerceToolSpec(payload["tool"]); ok {
 		out.Tool = tool
@@ -154,6 +158,28 @@ func coerceSteps(v any) []string {
 			}
 		}
 		return out
+	default:
+		return nil
+	}
+}
+
+func coerceBoolPtr(v any) *bool {
+	switch t := v.(type) {
+	case bool:
+		b := t
+		return &b
+	case string:
+		lower := strings.TrimSpace(strings.ToLower(t))
+		switch lower {
+		case "true", "yes", "1":
+			b := true
+			return &b
+		case "false", "no", "0":
+			b := false
+			return &b
+		default:
+			return nil
+		}
 	default:
 		return nil
 	}

@@ -2,8 +2,10 @@ package orchestrator
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -98,6 +100,72 @@ func TestBuildRunStatusIgnoresApprovalEventsWithoutTaskID(t *testing.T) {
 	if status.QueuedTasks != 0 {
 		t.Fatalf("expected no queued tasks, got %d", status.QueuedTasks)
 	}
+}
+
+func TestBuildRunStatusMatchesCacheProjection(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	events := []EventEnvelope{
+		{EventID: "e1", RunID: "run-proj", WorkerID: orchestratorWorkerID, Seq: 1, TS: now, Type: EventTypeRunStarted},
+		{EventID: "e2", RunID: "run-proj", WorkerID: "worker-1", TaskID: "task-1", Seq: 1, TS: now.Add(time.Second), Type: EventTypeTaskLeased},
+		{EventID: "e3", RunID: "run-proj", WorkerID: "worker-1", TaskID: "task-1", Seq: 2, TS: now.Add(2 * time.Second), Type: EventTypeTaskStarted},
+		{EventID: "e4", RunID: "run-proj", WorkerID: "worker-1", Seq: 3, TS: now.Add(3 * time.Second), Type: EventTypeWorkerHeartbeat},
+		{EventID: "e5", RunID: "run-proj", WorkerID: "worker-1", TaskID: "task-1", Seq: 4, TS: now.Add(4 * time.Second), Type: EventTypeTaskCompleted},
+		{EventID: "e6", RunID: "run-proj", WorkerID: "worker-1", Seq: 5, TS: now.Add(5 * time.Second), Type: EventTypeWorkerStopped},
+		{EventID: "e7", RunID: "run-proj", WorkerID: orchestratorWorkerID, Seq: 2, TS: now.Add(6 * time.Second), Type: EventTypeRunStopped},
+	}
+
+	statusFromEvents := BuildRunStatus("run-proj", events)
+	cache := newRunEventCache()
+	for _, event := range events {
+		cache.applyEvent(event)
+	}
+	statusFromCache := buildRunStatusFromCache("run-proj", cache)
+
+	if !reflect.DeepEqual(statusFromEvents, statusFromCache) {
+		t.Fatalf("run projection mismatch:\nfrom_events=%+v\nfrom_cache=%+v", statusFromEvents, statusFromCache)
+	}
+}
+
+func TestBuildWorkerStatusMatchesCacheProjection(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	events := []EventEnvelope{
+		{EventID: "e1", RunID: "run-workers", WorkerID: "worker-1", Seq: 1, TS: now, Type: EventTypeWorkerStarted},
+		{EventID: "e2", RunID: "run-workers", WorkerID: "worker-1", TaskID: "task-1", Seq: 2, TS: now.Add(time.Second), Type: EventTypeTaskStarted},
+		{EventID: "e3", RunID: "run-workers", WorkerID: "worker-2", Seq: 1, TS: now.Add(2 * time.Second), Type: EventTypeWorkerStarted},
+		{EventID: "e4", RunID: "run-workers", WorkerID: "worker-2", Seq: 2, TS: now.Add(3 * time.Second), Type: EventTypeWorkerHeartbeat},
+		{EventID: "e5", RunID: "run-workers", WorkerID: "worker-1", TaskID: "task-1", Seq: 3, TS: now.Add(4 * time.Second), Type: EventTypeTaskCompleted},
+		{EventID: "e6", RunID: "run-workers", WorkerID: "worker-1", Seq: 4, TS: now.Add(5 * time.Second), Type: EventTypeWorkerStopped},
+	}
+
+	workersFromEvents := BuildWorkerStatus(events)
+	cache := newRunEventCache()
+	for _, event := range events {
+		cache.applyEvent(event)
+	}
+	workersFromCache := buildWorkerStatusFromCache(cache)
+
+	if len(workersFromEvents) != len(workersFromCache) {
+		t.Fatalf("worker projection size mismatch: events=%d cache=%d", len(workersFromEvents), len(workersFromCache))
+	}
+	for i := range workersFromEvents {
+		if workersFromEvents[i].WorkerID != workersFromCache[i].WorkerID {
+			t.Fatalf("worker order mismatch at %d: events=%q cache=%q", i, workersFromEvents[i].WorkerID, workersFromCache[i].WorkerID)
+		}
+		if workersFromEvents[i].State != workersFromCache[i].State ||
+			workersFromEvents[i].CurrentTask != workersFromCache[i].CurrentTask ||
+			workersFromEvents[i].LastSeq != workersFromCache[i].LastSeq ||
+			!workersFromEvents[i].LastEvent.Equal(workersFromCache[i].LastEvent) {
+			t.Fatalf("worker projection mismatch at %d (%s):\nfrom_events=%s\nfrom_cache=%s", i, workersFromEvents[i].WorkerID, formatWorkerStatus(workersFromEvents[i]), formatWorkerStatus(workersFromCache[i]))
+		}
+	}
+}
+
+func formatWorkerStatus(ws WorkerStatus) string {
+	return fmt.Sprintf("{id=%s state=%s current=%s seq=%d last=%s}", ws.WorkerID, ws.State, ws.CurrentTask, ws.LastSeq, ws.LastEvent.Format(time.RFC3339Nano))
 }
 
 func TestManagerStatusIgnoresApprovalEventsWithoutTaskID(t *testing.T) {
@@ -234,6 +302,51 @@ func TestValidatePlanForStartRequiresScopeAndConstraints(t *testing.T) {
 	}
 	if err := ValidatePlanForStart(plan); err == nil {
 		t.Fatalf("expected validation error")
+	}
+}
+
+func TestManagerSetRunOutcome(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	planPath := filepath.Join(base, "plan-outcome.json")
+	plan := RunPlan{
+		RunID:           "run-outcome",
+		Scope:           Scope{Targets: []string{"127.0.0.1"}},
+		Constraints:     []string{"local_only"},
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks: []TaskSpec{
+			{
+				TaskID:            "t1",
+				Goal:              "g",
+				DoneWhen:          []string{"d"},
+				FailWhen:          []string{"f"},
+				ExpectedArtifacts: []string{"a"},
+				RiskLevel:         string(RiskReconReadonly),
+				Budget:            TaskBudget{MaxSteps: 1, MaxToolCalls: 1, MaxRuntime: time.Second},
+			},
+		},
+	}
+	writePlan(t, planPath, plan)
+
+	m := NewManager(base)
+	if _, err := m.Start(planPath, ""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := m.SetRunOutcome("run-outcome", RunOutcomeFailed); err != nil {
+		t.Fatalf("SetRunOutcome failed: %v", err)
+	}
+	stored, err := m.LoadRunPlan("run-outcome")
+	if err != nil {
+		t.Fatalf("LoadRunPlan: %v", err)
+	}
+	if got := NormalizeRunOutcome(stored.Metadata.RunOutcome); got != RunOutcomeFailed {
+		t.Fatalf("expected run_outcome=failed, got %q", stored.Metadata.RunOutcome)
+	}
+	if err := m.SetRunOutcome("run-outcome", RunOutcome("invalid")); err == nil {
+		t.Fatalf("expected invalid run outcome error")
 	}
 }
 

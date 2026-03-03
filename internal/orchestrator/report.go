@@ -32,6 +32,8 @@ type reportFinding struct {
 	Verification        string
 	LinkedEvidence      []string
 	UnverifiedRationale string
+	ValidatorVerdict    string
+	ValidatorBasis      string
 }
 
 type ReportTruthGateSummary struct {
@@ -248,6 +250,12 @@ func (m *Manager) AssembleRunReport(runID, outPath string) (string, error) {
 			finding := findingView.Finding
 			fmt.Fprintf(&b, "### [%s] %s (%s / %s)\n\n", findingView.Verification, finding.Title, strings.ToUpper(finding.Severity), strings.ToUpper(finding.Confidence))
 			fmt.Fprintf(&b, "- Verification: `%s`\n", findingView.Verification)
+			if strings.TrimSpace(findingView.ValidatorVerdict) != "" {
+				fmt.Fprintf(&b, "- Validator verdict: `%s`\n", strings.ToUpper(strings.TrimSpace(findingView.ValidatorVerdict)))
+				if strings.TrimSpace(findingView.ValidatorBasis) != "" {
+					fmt.Fprintf(&b, "- Validator basis: `%s`\n", strings.TrimSpace(findingView.ValidatorBasis))
+				}
+			}
 			if findingView.Verification == reportFindingUnverified && strings.TrimSpace(findingView.UnverifiedRationale) != "" {
 				fmt.Fprintf(&b, "- Claim status: `%s` (%s)\n", reportFindingUnverified, findingView.UnverifiedRationale)
 			}
@@ -349,6 +357,25 @@ func buildReportFindings(findings []Finding, artifacts []artifactRecord) []repor
 			Finding:        finding,
 			Verification:   reportFindingVerified,
 			LinkedEvidence: links,
+			ValidatorBasis: strings.TrimSpace(finding.Metadata["validator_basis"]),
+		}
+		view.ValidatorVerdict = normalizeValidatorVerdict(finding.Metadata["validator_verdict"])
+		if view.ValidatorVerdict != "" {
+			switch view.ValidatorVerdict {
+			case "verified":
+				if len(links) == 0 {
+					view.Verification = reportFindingUnverified
+					view.UnverifiedRationale = "validator marked finding verified but no linked artifact/log evidence"
+				}
+			case "rejected":
+				view.Verification = reportFindingUnverified
+				view.UnverifiedRationale = "validator rejected finding"
+			default:
+				view.Verification = reportFindingUnverified
+				view.UnverifiedRationale = "validator left finding unverified"
+			}
+			out = append(out, view)
+			continue
 		}
 		switch normalizedState := normalizeFindingState(finding.State); normalizedState {
 		case FindingStateVerified:
@@ -370,6 +397,19 @@ func buildReportFindings(findings []Finding, artifacts []artifactRecord) []repor
 		out = append(out, view)
 	}
 	return out
+}
+
+func normalizeValidatorVerdict(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "verified", "confirm", "confirmed":
+		return "verified"
+	case "rejected", "reject", "false_positive", "false-positive":
+		return "rejected"
+	case "unverified", "unknown", "needs_review", "needs-review":
+		return "unverified"
+	default:
+		return ""
+	}
 }
 
 func evaluateReportTruthGate(findings []reportFinding) ReportTruthGateSummary {
@@ -522,7 +562,11 @@ func buildTaskNarratives(plan RunPlan, events []EventEnvelope, artifacts []artif
 			if worker := strings.TrimSpace(asString(payload["worker_id"])); worker != "" {
 				view.WorkerID = worker
 			}
-			view.FailureReason = strings.TrimSpace(asString(payload["reason"]))
+			failureReason := strings.TrimSpace(asString(payload["reason"]))
+			if normalized := NormalizeTaskFailureReason(failureReason); normalized != "" {
+				failureReason = normalized
+			}
+			view.FailureReason = failureReason
 			view.FailureError = strings.TrimSpace(asString(payload["error"]))
 		}
 	}

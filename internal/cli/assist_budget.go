@@ -56,6 +56,24 @@ func newAssistBudget(goal string, base int) *assistBudget {
 	}
 }
 
+func (b *assistBudget) enableLongHorizon() {
+	if b == nil {
+		return
+	}
+	if b.currentCap < 12 {
+		delta := 12 - b.currentCap
+		b.remaining += delta
+		b.currentCap = b.used + b.remaining
+	}
+	if b.hardCap < b.currentCap+18 {
+		b.hardCap = b.currentCap + 18
+	}
+	if b.hardCap > 72 {
+		b.hardCap = 72
+	}
+	b.lastReason = fmt.Sprintf("open-like long-horizon budget=%d (hard cap=%d)", b.currentCap, b.hardCap)
+}
+
 func estimateAssistBudgetExtra(goal string) int {
 	lower := strings.ToLower(strings.TrimSpace(goal))
 	if lower == "" {
@@ -138,39 +156,95 @@ func (b *assistBudget) onProgress(reason string) {
 	}
 }
 
+func (b *assistBudget) extendForPersistence(delta int, reason string) bool {
+	if b == nil || delta <= 0 {
+		return false
+	}
+	extended := false
+	for i := 0; i < delta; i++ {
+		if b.used+b.remaining >= b.hardCap {
+			break
+		}
+		b.remaining++
+		b.extensions++
+		extended = true
+	}
+	if !extended {
+		return false
+	}
+	b.currentCap = b.used + b.remaining
+	b.stalls = 0
+	if strings.TrimSpace(reason) != "" {
+		b.lastReason = reason
+	}
+	return true
+}
+
 func (b *assistBudget) trackProgress(actionKey string, beforeObsSig string, afterObsSig string) (bool, string) {
 	progress := false
 	reasons := []string{}
+	lowValueNoEvidence := false
 	actionKey = strings.TrimSpace(actionKey)
+	actionNovel := false
 	if actionKey != "" {
 		if _, exists := b.seenActions[actionKey]; !exists {
 			b.seenActions[actionKey] = struct{}{}
+			actionNovel = true
+		}
+	}
+	afterObsSig = strings.TrimSpace(afterObsSig)
+	evidenceNovel := false
+	if afterObsSig != "" && afterObsSig != strings.TrimSpace(beforeObsSig) {
+		if _, exists := b.seenEvidence[afterObsSig]; !exists {
+			b.seenEvidence[afterObsSig] = struct{}{}
+			evidenceNovel = true
+		}
+	}
+	if evidenceNovel {
+		progress = true
+		reasons = append(reasons, "new evidence")
+	}
+	if actionNovel {
+		if isLowValueActionKey(actionKey) && !evidenceNovel {
+			lowValueNoEvidence = true
+		} else {
 			progress = true
 			reasons = append(reasons, "new action")
 		}
 	}
-	afterObsSig = strings.TrimSpace(afterObsSig)
-	if afterObsSig != "" && afterObsSig != strings.TrimSpace(beforeObsSig) {
-		if _, exists := b.seenEvidence[afterObsSig]; !exists {
-			b.seenEvidence[afterObsSig] = struct{}{}
-			progress = true
-			reasons = append(reasons, "new evidence")
-		}
-	}
 	if !progress {
+		if lowValueNoEvidence {
+			return false, "low-value action without new evidence"
+		}
 		return false, "no new evidence"
 	}
 	return true, strings.Join(reasons, " + ")
 }
 
+func isLowValueActionKey(actionKey string) bool {
+	lower := strings.ToLower(strings.TrimSpace(actionKey))
+	switch {
+	case strings.HasPrefix(lower, "list_dir\x1f"),
+		strings.HasPrefix(lower, "read_file\x1f"):
+		return true
+	default:
+		return false
+	}
+}
+
 func (r *Runner) startAssistRuntime(goal string, mode string, budget *assistBudget) {
+	trimmedGoal := strings.TrimSpace(goal)
+	if !strings.EqualFold(strings.TrimSpace(r.assistExecGoal), trimmedGoal) {
+		r.assistExecApproved = false
+		r.assistExecGoal = trimmedGoal
+	}
 	if budget == nil {
 		r.assistRuntime = assistRuntimeStatus{}
 		return
 	}
 	r.assistRuntime = assistRuntimeStatus{
 		Active:      true,
-		Goal:        strings.TrimSpace(goal),
+		Goal:        trimmedGoal,
 		Step:        budget.used,
 		Remaining:   budget.remaining,
 		CurrentCap:  budget.currentCap,
@@ -199,6 +273,8 @@ func (r *Runner) updateAssistRuntime(mode string, budget *assistBudget) {
 
 func (r *Runner) clearAssistRuntime() {
 	r.assistRuntime = assistRuntimeStatus{}
+	r.assistExecApproved = false
+	r.assistExecGoal = ""
 }
 
 func (r *Runner) latestObservationSignature() string {

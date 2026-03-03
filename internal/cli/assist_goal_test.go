@@ -26,6 +26,22 @@ func TestEnrichAssistGoalSkipsExecuteStepMode(t *testing.T) {
 	}
 }
 
+func TestEnrichAssistGoalIncludesSessionObjectiveForExecuteStep(t *testing.T) {
+	cfg := config.Config{}
+	runner := NewRunner(cfg, "session-1", "", "")
+	runner.assistRuntime.Goal = "Detect the target iPhone and scan only that host non-intrusively."
+
+	step := "Identify the iPhone by MAC address or device name."
+	got := runner.enrichAssistGoal(step, "execute-step")
+
+	if !strings.Contains(got, "Session objective: Detect the target iPhone and scan only that host non-intrusively.") {
+		t.Fatalf("expected runtime objective in execute-step goal, got %q", got)
+	}
+	if !strings.Contains(got, "Do not lock onto a specific host/service identity without concrete evidence.") {
+		t.Fatalf("expected execute-step identity directive, got %q", got)
+	}
+}
+
 func TestEnrichAssistGoalIncludesArtifactForRecoveryModes(t *testing.T) {
 	cfg := config.Config{}
 	runner := NewRunner(cfg, "session-1", "", "")

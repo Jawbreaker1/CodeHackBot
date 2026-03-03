@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -24,6 +25,8 @@ const llmPlannerSystemPrompt = "You are the BirdHackBot Orchestrator planner. Re
 	"ground tasks in the operator goal: preserve goal-specific entities (for example router/gateway/firewall/webapp) and include at least one explicit task focused on that entity; " +
 	"never emit placeholder/demo/example-only commands that just print canned findings; command actions must run real tooling against in-scope targets or prior task artifacts; " +
 	"for action.type=command, set action.command to the executable and pass flags/inputs in action.args; use action.type=shell only for compound shell bodies; " +
+	"prefer leaving action.working_dir empty so execution uses the default workspace; when set, it must be a real concise filesystem path (never narrative text). " +
+	"Use input.default_working_dir as the preferred base path when a working directory is required, and never invent synthetic paths like /home/user/lab or /lab/...; " +
 	"when input.playbooks is provided, use it as bounded procedural guidance and adapt tasks to those playbooks without copying blindly; " +
 	"if the goal asks for vulnerabilities, include a dedicated vulnerability-mapping step tied to discovered versions/configuration."
 
@@ -150,6 +153,11 @@ func SynthesizeTaskGraphWithLLMWithOptions(
 		"constraints":     constraints,
 		"max_parallelism": maxParallelism,
 		"hypotheses":      hypotheses,
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		if trimmed := strings.TrimSpace(cwd); trimmed != "" {
+			payload["default_working_dir"] = trimmed
+		}
 	}
 	if trimmed := strings.TrimSpace(options.Playbooks); trimmed != "" {
 		payload["playbooks"] = trimmed

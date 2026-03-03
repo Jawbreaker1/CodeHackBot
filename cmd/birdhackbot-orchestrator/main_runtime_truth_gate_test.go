@@ -61,6 +61,20 @@ func TestEvaluateRunTerminalOutcomeFailsOnUnverifiedHighImpactClaim(t *testing.T
 	}); err != nil {
 		t.Fatalf("EmitEvent finding: %v", err)
 	}
+	if err := manager.EmitEvent(runID, "signal-worker-t1-a1", "t1", orchestrator.EventTypeTaskCompleted, map[string]any{
+		"attempt":   1,
+		"worker_id": "worker-t1-a1",
+		"log_path":  "log.txt",
+		"completion_contract": map[string]any{
+			"verification_status": "reported_by_worker",
+			"required_artifacts":  []string{"log.txt"},
+			"produced_artifacts":  []string{"log.txt"},
+			"required_findings":   []string{"web_vuln"},
+			"produced_findings":   []string{"web_vuln"},
+		},
+	}); err != nil {
+		t.Fatalf("EmitEvent completed: %v", err)
+	}
 	if _, err := manager.IngestEvidence(runID); err != nil {
 		t.Fatalf("IngestEvidence: %v", err)
 	}
@@ -68,7 +82,7 @@ func TestEvaluateRunTerminalOutcomeFailsOnUnverifiedHighImpactClaim(t *testing.T
 	if err != nil {
 		t.Fatalf("evaluateRunTerminalOutcome: %v", err)
 	}
-	if outcome != runOutcomeFailure {
+	if outcome != orchestrator.RunOutcomeFailed {
 		t.Fatalf("expected failure outcome, got %s (%s)", outcome, detail)
 	}
 	if !strings.Contains(detail, "report_truth_gate_failed") {
@@ -136,6 +150,20 @@ func TestEvaluateRunTerminalOutcomePassesWithVerifiedFindingEvidence(t *testing.
 	}); err != nil {
 		t.Fatalf("EmitEvent finding: %v", err)
 	}
+	if err := manager.EmitEvent(runID, "signal-worker-t1-a1", "t1", orchestrator.EventTypeTaskCompleted, map[string]any{
+		"attempt":   1,
+		"worker_id": "worker-t1-a1",
+		"log_path":  "scan.log",
+		"completion_contract": map[string]any{
+			"verification_status": "reported_by_worker",
+			"required_artifacts":  []string{"scan.log"},
+			"produced_artifacts":  []string{"scan.log"},
+			"required_findings":   []string{"open_port"},
+			"produced_findings":   []string{"open_port"},
+		},
+	}); err != nil {
+		t.Fatalf("EmitEvent completed: %v", err)
+	}
 	if _, err := manager.IngestEvidence(runID); err != nil {
 		t.Fatalf("IngestEvidence: %v", err)
 	}
@@ -143,10 +171,63 @@ func TestEvaluateRunTerminalOutcomePassesWithVerifiedFindingEvidence(t *testing.
 	if err != nil {
 		t.Fatalf("evaluateRunTerminalOutcome: %v", err)
 	}
-	if outcome != runOutcomeSuccess {
+	if outcome != orchestrator.RunOutcomeSuccess {
 		t.Fatalf("expected success outcome, got %s (%s)", outcome, detail)
 	}
 	if detail != "all_tasks_completed" {
 		t.Fatalf("unexpected success detail: %q", detail)
+	}
+}
+
+func TestEvaluateRunTerminalOutcomeFailsOnMissingCompletionContractVerification(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-terminal-completion-gate-fail"
+	manager := orchestrator.NewManager(base)
+	planPath := filepath.Join(base, "plan.json")
+	writePlanFile(t, planPath, orchestrator.RunPlan{
+		RunID:           runID,
+		Scope:           orchestrator.Scope{Targets: []string{"127.0.0.1"}},
+		Constraints:     []string{"local_only"},
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"manual_stop"},
+		MaxParallelism:  1,
+		Tasks: []orchestrator.TaskSpec{
+			{
+				TaskID:            "t1",
+				Goal:              "verify completion contract",
+				DoneWhen:          []string{"done"},
+				FailWhen:          []string{"failed"},
+				ExpectedArtifacts: []string{"output.txt"},
+				RiskLevel:         string(orchestrator.RiskReconReadonly),
+				Budget:            orchestrator.TaskBudget{MaxSteps: 2, MaxToolCalls: 2, MaxRuntime: time.Minute},
+			},
+		},
+	})
+	if _, err := manager.Start(planPath, runID); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := manager.WriteLease(runID, orchestrator.TaskLease{
+		TaskID:    "t1",
+		LeaseID:   "lease-t1-1",
+		WorkerID:  "worker-t1-a1",
+		Status:    orchestrator.LeaseStatusCompleted,
+		Attempt:   1,
+		StartedAt: now,
+		Deadline:  now.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("WriteLease: %v", err)
+	}
+	outcome, detail, err := evaluateRunTerminalOutcome(manager, runID)
+	if err != nil {
+		t.Fatalf("evaluateRunTerminalOutcome: %v", err)
+	}
+	if outcome != orchestrator.RunOutcomeFailed {
+		t.Fatalf("expected failure outcome, got %s (%s)", outcome, detail)
+	}
+	if !strings.Contains(detail, "completion_verification_gate_failed") {
+		t.Fatalf("expected completion verification gate failure detail, got %q", detail)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -93,6 +94,7 @@ func (r *Runner) handleRun(args []string) error {
 	}
 
 	result, err := runner.RunCommandWithContext(ctx, runCommand, runArgs...)
+	result = r.maybeAugmentJohnShowResult(runner, runCommand, runArgs, result, err)
 	wasCanceled := errors.Is(err, context.Canceled)
 	if stopInterrupt != nil {
 		stopInterrupt()
@@ -121,13 +123,106 @@ func (r *Runner) handleRun(args []string) error {
 	safePrint(renderExecSummary(r.currentTask, runCommand, runArgs, time.Since(start), result.LogPath, ledgerStatus, result.Output, err))
 	if err != nil {
 		if wasCanceled {
-			err = fmt.Errorf("command interrupted")
-			r.logger.Printf("Interrupted. What should I do differently?")
-			return err
+			r.logger.Printf("Interrupted by operator.")
+			return operatorInterruptedError()
 		}
 		return commandError{Result: result, Err: err}
 	}
 	return nil
+}
+
+func (r *Runner) maybeAugmentJohnShowResult(runner exec.Runner, runCommand string, runArgs []string, result exec.CommandResult, runErr error) exec.CommandResult {
+	if runErr != nil {
+		return result
+	}
+	hashPath, ok := detectJohnHashPath(runCommand, runArgs, result.Output)
+	if !ok {
+		return result
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	showResult, showErr := runner.RunCommandWithContext(ctx, "john", "--show", hashPath)
+	if showErr != nil || strings.TrimSpace(showResult.Output) == "" {
+		return result
+	}
+	section := fmt.Sprintf("\n\n[auto-check] john --show %s\n%s\n", hashPath, strings.TrimSpace(showResult.Output))
+	result.Output = strings.TrimSpace(result.Output) + section
+	if strings.TrimSpace(result.LogPath) != "" {
+		f, err := os.OpenFile(result.LogPath, os.O_APPEND|os.O_WRONLY, 0o644)
+		if err == nil {
+			_, _ = f.WriteString(section)
+			_ = f.Close()
+		}
+	}
+	if strings.TrimSpace(showResult.LogPath) != "" {
+		r.logger.Printf("Auto-check log: %s", showResult.LogPath)
+	}
+	return result
+}
+
+func detectJohnHashPath(command string, args []string, output string) (string, bool) {
+	lowerOutput := strings.ToLower(output)
+	if !strings.Contains(lowerOutput, "no password hashes left to crack") {
+		return "", false
+	}
+	cmdLower := strings.ToLower(strings.TrimSpace(command))
+	if cmdLower == "john" {
+		return firstJohnHashArgument(args)
+	}
+	if (cmdLower == "bash" || cmdLower == "sh" || cmdLower == "zsh") && len(args) >= 2 {
+		flag := strings.TrimSpace(args[0])
+		if flag != "-c" && flag != "-lc" {
+			return "", false
+		}
+		script := strings.TrimSpace(strings.Join(args[1:], " "))
+		return johnHashFromScript(script)
+	}
+	return "", false
+}
+
+func johnHashFromScript(script string) (string, bool) {
+	fields := strings.Fields(script)
+	for i := 0; i < len(fields); i++ {
+		token := normalizeCommandToken(fields[i])
+		if token == "" {
+			continue
+		}
+		base := strings.ToLower(filepath.Base(token))
+		if base != "john" {
+			continue
+		}
+		return firstJohnHashArgument(fields[i+1:])
+	}
+	return "", false
+}
+
+func firstJohnHashArgument(args []string) (string, bool) {
+	for i := 0; i < len(args); i++ {
+		token := normalizeCommandToken(args[i])
+		if token == "" {
+			continue
+		}
+		if token == ";" || token == "&&" || token == "||" || token == "|" {
+			break
+		}
+		if strings.HasPrefix(token, "-") {
+			if token == "--wordlist" || token == "--format" || token == "--pot" || token == "--session" || token == "--mask" {
+				i++
+			}
+			continue
+		}
+		if token == "john" {
+			continue
+		}
+		return token, true
+	}
+	return "", false
+}
+
+func normalizeCommandToken(token string) string {
+	token = strings.TrimSpace(token)
+	token = strings.Trim(token, "\"'`")
+	return token
 }
 
 func (r *Runner) handleMSF(args []string) error {
@@ -238,8 +333,8 @@ func (r *Runner) handleMSF(args []string) error {
 	safePrint(renderExecSummary(r.currentTask, "msfconsole", cmdArgs, time.Since(start), result.LogPath, "disabled", result.Output, err))
 	if err != nil {
 		if wasCanceled {
-			r.logger.Printf("Interrupted. What should I do differently?")
-			return fmt.Errorf("command interrupted")
+			r.logger.Printf("Interrupted by operator.")
+			return operatorInterruptedError()
 		}
 		return err
 	}

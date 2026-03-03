@@ -21,22 +21,20 @@ func (r *Runner) handleAssistCommandFailure(goal string, suggestion assist.Sugge
 	if err == nil {
 		return false
 	}
+	if isOperatorInterrupted(err) {
+		r.handleOperatorInterrupt(strings.TrimSpace(goal))
+		return true
+	}
+	if isExecutionApprovalRequired(err) {
+		return true
+	}
 	// If the user denied an approval prompt, don't try to "recover" automatically.
 	lowerErr := strings.ToLower(err.Error())
 	if strings.Contains(lowerErr, "not approved") || strings.Contains(lowerErr, "fetch not approved") || strings.Contains(lowerErr, "network access not approved") {
 		r.logger.Printf("Aborted by user.")
 		return true
 	}
-	var cmdErr commandError
-	if !errors.As(err, &cmdErr) {
-		cmdErr = commandError{
-			Result: exec.CommandResult{
-				Command: suggestion.Command,
-				Args:    suggestion.Args,
-			},
-			Err: err,
-		}
-	}
+	cmdErr := asCommandError(err, suggestion)
 	summary := summarizeCommandFailure(cmdErr)
 	if summary != "" {
 		r.logger.Printf("Command failed: %s", summary)
@@ -50,6 +48,74 @@ func (r *Runner) handleAssistCommandFailure(goal string, suggestion assist.Sugge
 		return true
 	}
 	return r.suggestAssistRecovery(goal, suggestion, cmdErr)
+}
+
+func asCommandError(err error, suggestion assist.Suggestion) commandError {
+	var cmdErr commandError
+	if errors.As(err, &cmdErr) {
+		return cmdErr
+	}
+	return commandError{
+		Result: exec.CommandResult{
+			Command: suggestion.Command,
+			Args:    suggestion.Args,
+		},
+		Err: err,
+	}
+}
+
+func (r *Runner) tryImmediateAssistRepair(goal string, suggestion assist.Suggestion, err error) bool {
+	if err == nil || !r.llmAllowed() {
+		return false
+	}
+	if isOperatorInterrupted(err) {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(suggestion.Type)) {
+	case "command", "tool":
+	default:
+		return false
+	}
+	currentSuggestion := suggestion
+	currentErr := asCommandError(err, suggestion)
+	attempts := r.assistRepairAttempts()
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if !r.llmAllowed() {
+			return false
+		}
+		recoveryGoal := buildImmediateRepairGoal(goal, currentSuggestion, currentErr)
+		stopIndicator := r.startLLMIndicatorIfAllowed("repair")
+		recovery, recErr := r.getAssistSuggestion(recoveryGoal, "recover")
+		stopIndicator()
+		if recErr != nil {
+			return false
+		}
+		// Keep this phase focused on immediate command correction, not report pivoting.
+		if strings.EqualFold(strings.TrimSpace(recovery.Command), "report") && (r.isActionGoal(goal) && !r.assistObjectiveMet) {
+			if r.cfg.UI.Verbose {
+				r.logger.Printf("Immediate repair attempt %d/%d skipped report pivot while objective remains unmet.", attempt, attempts)
+			}
+			continue
+		}
+		switch recovery.Type {
+		case "command", "tool", "question":
+		default:
+			continue
+		}
+		if r.cfg.UI.Verbose {
+			r.logger.Printf("Immediate repair attempt %d/%d: type=%s cmd=%s", attempt, attempts, recovery.Type, strings.TrimSpace(recovery.Command))
+		}
+		if execErr := r.executeAssistSuggestion(recovery, false); execErr != nil {
+			currentSuggestion = recovery
+			currentErr = asCommandError(execErr, recovery)
+			if r.cfg.UI.Verbose {
+				r.logger.Printf("Immediate repair attempt %d/%d failed: %v", attempt, attempts, execErr)
+			}
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func summarizeCommandFailure(cmdErr commandError) string {
@@ -91,6 +157,14 @@ func (r *Runner) suggestAssistRecovery(goal string, suggestion assist.Suggestion
 	}
 	if recovery.Type == "plan" {
 		_ = r.handlePlanSuggestion(recovery, true)
+		return true
+	}
+	if recovery.Type == "complete" {
+		final := normalizeAssistantOutput(strings.TrimSpace(firstNonEmpty(recovery.Final, recovery.Summary)))
+		if final != "" {
+			safePrintln(final)
+			r.appendConversation("Assistant", final)
+		}
 		return true
 	}
 	if recovery.Type == "tool" && recovery.Tool != nil {
@@ -274,6 +348,13 @@ func assistFailureHint(suggestion assist.Suggestion, cmdErr commandError) string
 	if cmdErr.Err != nil {
 		errLower = strings.ToLower(cmdErr.Err.Error())
 	}
+	if strings.Contains(errLower, "scope violation") {
+		target := extractOutOfScopeTarget(cmdErr.Err.Error())
+		if target != "" {
+			return fmt.Sprintf("Target %s is outside current scope. If authorized, run `/scope add-target %s` and retry.", target, target)
+		}
+		return "Command blocked by scope policy. If authorized, run `/scope add-target <host|ip|cidr|url>` and retry."
+	}
 	if command == "whois" {
 		if strings.Contains(outputLower, "no match") || strings.Contains(outputLower, "not found") {
 			return "WHOIS typically only supports root domains (e.g., systemverification.com), not subdomains."
@@ -288,6 +369,26 @@ func assistFailureHint(suggestion assist.Suggestion, cmdErr commandError) string
 		return "Tool not available in PATH. Install it or update your tool inventory."
 	}
 	return ""
+}
+
+func extractOutOfScopeTarget(message string) string {
+	lower := strings.ToLower(strings.TrimSpace(message))
+	if lower == "" {
+		return ""
+	}
+	idx := strings.Index(lower, "out of scope target ")
+	if idx == -1 {
+		return ""
+	}
+	value := strings.TrimSpace(lower[idx+len("out of scope target "):])
+	if cut := strings.Index(value, ";"); cut >= 0 {
+		value = strings.TrimSpace(value[:cut])
+	}
+	fields := strings.Fields(value)
+	if len(fields) == 0 {
+		return ""
+	}
+	return strings.Trim(fields[0], `"'`)
 }
 
 func (r *Runner) tryAssistRecovery(suggestion assist.Suggestion, cmdErr commandError) bool {
@@ -460,7 +561,39 @@ func buildRecoveryGoal(goal string, suggestion assist.Suggestion, cmdErr command
 	if output := firstLines(cmdErr.Result.Output, 3); output != "" {
 		builder.WriteString("Output: " + output + "\n")
 	}
+	if checklist := objectiveChecklist(goal); len(checklist) > 0 {
+		builder.WriteString("Objective completion checklist:\n")
+		for _, item := range checklist {
+			builder.WriteString("- " + item + "\n")
+		}
+	}
 	builder.WriteString("Provide a recovery suggestion or alternative next step.")
+	return builder.String()
+}
+
+func buildImmediateRepairGoal(goal string, suggestion assist.Suggestion, cmdErr commandError) string {
+	builder := strings.Builder{}
+	if strings.TrimSpace(goal) != "" {
+		builder.WriteString("Goal: " + strings.TrimSpace(goal) + "\n")
+	}
+	builder.WriteString("The last step failed. Produce one corrected immediate next step.\n")
+	if cmdLine := strings.TrimSpace(strings.Join(append([]string{suggestion.Command}, suggestion.Args...), " ")); cmdLine != "" {
+		builder.WriteString("Failed command: " + cmdLine + "\n")
+	}
+	if cmdErr.Err != nil {
+		builder.WriteString("Error: " + cmdErr.Err.Error() + "\n")
+	}
+	if out := firstLines(cmdErr.Result.Output, 4); out != "" {
+		builder.WriteString("Output:\n" + out + "\n")
+	}
+	if checklist := objectiveChecklist(goal); len(checklist) > 0 {
+		builder.WriteString("Objective completion checklist:\n")
+		for _, item := range checklist {
+			builder.WriteString("- " + item + "\n")
+		}
+	}
+	builder.WriteString("Return exactly one JSON suggestion of type=command, type=tool, or type=question focused on fixing this failure now. ")
+	builder.WriteString("Do not return type=plan. Do not return type=complete unless objective is already proven by evidence.")
 	return builder.String()
 }
 
@@ -475,6 +608,12 @@ func buildNextStepsGoal(goal string, suggestion assist.Suggestion) string {
 	cmdLine := strings.TrimSpace(strings.Join(append([]string{suggestion.Command}, suggestion.Args...), " "))
 	if cmdLine != "" {
 		builder.WriteString("Last command: " + cmdLine + "\n")
+	}
+	if checklist := objectiveChecklist(goal); len(checklist) > 0 {
+		builder.WriteString("Objective completion checklist:\n")
+		for _, item := range checklist {
+			builder.WriteString("- " + item + "\n")
+		}
 	}
 	builder.WriteString("Suggest 1-3 concise next steps or a clarifying question.")
 	return builder.String()

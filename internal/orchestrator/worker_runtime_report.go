@@ -7,6 +7,10 @@ import (
 )
 
 func adaptWeakReportAction(cfg WorkerRunConfig, task TaskSpec, scopePolicy *ScopePolicy, command string, args []string, attribution targetAttribution) (string, []string, string, bool) {
+	decision := decideHardSupportException(task, hardSupportReportSynthesis)
+	if !decision.Allowed {
+		return command, args, "", false
+	}
 	if !taskRequiresReportSynthesis(task) {
 		return command, args, "", false
 	}
@@ -36,6 +40,7 @@ func adaptWeakReportAction(cfg WorkerRunConfig, task TaskSpec, scopePolicy *Scop
 	nextCommand := "python3"
 	nextArgs := buildReportSynthesisActionArgs(cfg, task, target, confidence, source)
 	note := fmt.Sprintf("rewrote weak report command (%s) to local OWASP report synthesis using dependency artifacts", strings.TrimSpace(command))
+	note = annotateHardSupportNote(note, decision)
 	return nextCommand, nextArgs, note, true
 }
 

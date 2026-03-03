@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -39,7 +40,7 @@ func TestInitializeMemoryBankCreatesScaffold(t *testing.T) {
 		t.Fatalf("StartFromPlan: %v", err)
 	}
 	memoryDir := BuildRunPaths(base, runID).MemoryDir
-	for _, file := range []string{"hypotheses.md", "plan_summary.md", "known_facts.md", "open_questions.md", "context.json"} {
+	for _, file := range []string{"hypotheses.md", "plan_summary.md", "known_facts.md", "open_questions.md", "context.json", memoryProvenanceFile, memoryContractFile} {
 		if _, err := os.Stat(filepath.Join(memoryDir, file)); err != nil {
 			t.Fatalf("expected memory file %s: %v", file, err)
 		}
@@ -204,6 +205,176 @@ func TestRefreshMemoryBankCompactsLargeFindingSet(t *testing.T) {
 	}
 	if !ctx.Compacted {
 		t.Fatalf("expected compacted memory context")
+	}
+}
+
+func TestRefreshMemoryBankWritesFindingProvenance(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-memory-provenance"
+	manager := NewManager(base)
+	plan := RunPlan{
+		RunID:           runID,
+		Scope:           Scope{Targets: []string{"127.0.0.1"}},
+		Constraints:     []string{"local_only"},
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks: []TaskSpec{
+			task("t1", nil, 1),
+		},
+		Metadata: PlanMetadata{
+			Goal:           "inspect localhost",
+			NormalizedGoal: "inspect localhost",
+		},
+	}
+	if _, err := manager.StartFromPlan(plan, ""); err != nil {
+		t.Fatalf("StartFromPlan: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := AppendEventJSONL(manager.eventPath(runID), EventEnvelope{
+		EventID:  "e-candidate",
+		RunID:    runID,
+		WorkerID: "signal-worker-t1-a1",
+		TaskID:   "t1",
+		Seq:      1,
+		TS:       now,
+		Type:     EventTypeTaskFinding,
+		Payload: mustJSONRaw(map[string]any{
+			"target":       "127.0.0.1",
+			"finding_type": "service",
+			"title":        "SSH open",
+			"state":        FindingStateCandidate,
+			"severity":     "low",
+			"confidence":   "medium",
+		}),
+	}); err != nil {
+		t.Fatalf("append candidate finding: %v", err)
+	}
+	if err := AppendEventJSONL(manager.eventPath(runID), EventEnvelope{
+		EventID:  "e-verified",
+		RunID:    runID,
+		WorkerID: "signal-worker-t1-a1",
+		TaskID:   "t1",
+		Seq:      2,
+		TS:       now.Add(time.Second),
+		Type:     EventTypeTaskFinding,
+		Payload: mustJSONRaw(map[string]any{
+			"target":       "127.0.0.1",
+			"finding_type": "service",
+			"title":        "SSH open",
+			"state":        FindingStateVerified,
+			"severity":     "low",
+			"confidence":   "high",
+		}),
+	}); err != nil {
+		t.Fatalf("append verified finding: %v", err)
+	}
+	if _, err := manager.IngestEvidence(runID); err != nil {
+		t.Fatalf("IngestEvidence: %v", err)
+	}
+	if err := manager.RefreshMemoryBank(runID); err != nil {
+		t.Fatalf("RefreshMemoryBank: %v", err)
+	}
+	provenancePath := filepath.Join(BuildRunPaths(base, runID).MemoryDir, memoryProvenanceFile)
+	data, err := os.ReadFile(provenancePath)
+	if err != nil {
+		t.Fatalf("ReadFile provenance: %v", err)
+	}
+	var envelope memoryProvenanceEnvelope
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		t.Fatalf("Unmarshal provenance: %v", err)
+	}
+	var sshRecord MemoryFactProvenance
+	found := false
+	for _, record := range envelope.Records {
+		if record.Title != "SSH open" {
+			continue
+		}
+		sshRecord = record
+		found = true
+		break
+	}
+	if !found {
+		t.Fatalf("expected SSH open provenance record")
+	}
+	if !sshRecord.PromotedToKnownFacts {
+		t.Fatalf("expected promoted known fact record")
+	}
+	if sshRecord.CurrentState != FindingStateVerified {
+		t.Fatalf("expected current state %s, got %s", FindingStateVerified, sshRecord.CurrentState)
+	}
+	if len(sshRecord.SourceEventIDs) < 2 {
+		t.Fatalf("expected source event IDs in provenance, got %#v", sshRecord.SourceEventIDs)
+	}
+	if len(sshRecord.StateTransitions) == 0 {
+		t.Fatalf("expected state transition lineage in provenance")
+	}
+}
+
+func TestRefreshMemoryBankWarnsOnSharedMemoryDrift(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-memory-drift-warning"
+	manager := NewManager(base)
+	plan := RunPlan{
+		RunID:           runID,
+		Scope:           Scope{Targets: []string{"127.0.0.1"}},
+		Constraints:     []string{"local_only"},
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks: []TaskSpec{
+			task("t1", nil, 1),
+		},
+		Metadata: PlanMetadata{
+			Goal:           "inspect localhost",
+			NormalizedGoal: "inspect localhost",
+		},
+	}
+	if _, err := manager.StartFromPlan(plan, ""); err != nil {
+		t.Fatalf("StartFromPlan: %v", err)
+	}
+	knownFactsPath := filepath.Join(BuildRunPaths(base, runID).MemoryDir, "known_facts.md")
+	if err := os.WriteFile(knownFactsPath, []byte("# Known Facts\n\n- tampered by worker\n"), 0o644); err != nil {
+		t.Fatalf("tamper known_facts.md: %v", err)
+	}
+	if err := manager.RefreshMemoryBank(runID); err != nil {
+		t.Fatalf("RefreshMemoryBank: %v", err)
+	}
+	events, err := manager.Events(runID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	foundWarning := false
+	for _, event := range events {
+		if event.Type != EventTypeRunWarning {
+			continue
+		}
+		payload := map[string]any{}
+		if len(event.Payload) > 0 {
+			_ = json.Unmarshal(event.Payload, &payload)
+		}
+		if strings.TrimSpace(toString(payload["reason"])) != "shared_memory_contract_violation" {
+			continue
+		}
+		if !strings.Contains(strings.Join(sliceFromAny(payload["files"]), ","), "known_facts.md") {
+			t.Fatalf("expected known_facts.md drift detail, got %#v", payload["files"])
+		}
+		foundWarning = true
+		break
+	}
+	if !foundWarning {
+		t.Fatalf("expected shared memory contract violation warning event")
+	}
+	knownFactsData, err := os.ReadFile(knownFactsPath)
+	if err != nil {
+		t.Fatalf("read known_facts.md: %v", err)
+	}
+	if strings.Contains(string(knownFactsData), "tampered by worker") {
+		t.Fatalf("expected refresh to reconcile tampered known facts")
 	}
 }
 

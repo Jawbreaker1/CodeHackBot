@@ -1,6 +1,7 @@
 package assist
 
 import (
+	"regexp"
 	"strings"
 	"unicode"
 )
@@ -89,6 +90,9 @@ func parseSimpleCommand(content string) string {
 		if strings.HasPrefix(line, "<") || strings.Contains(strings.ToLower(line), "<channel") || strings.Contains(strings.ToLower(line), "<message") {
 			continue
 		}
+		if numberedLinePattern.MatchString(line) {
+			continue
+		}
 		if strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* ") {
 			line = strings.TrimSpace(line[2:])
 		}
@@ -109,6 +113,15 @@ func looksLikeShellCommand(line string) bool {
 		first = line[:idx]
 	}
 	if first == "" || strings.HasPrefix(first, "<") {
+		return false
+	}
+	if numberedTokenPattern.MatchString(first) {
+		return false
+	}
+	if !tokenHasLetter(first) {
+		return false
+	}
+	if strings.HasSuffix(first, ":") {
 		return false
 	}
 	for _, r := range first {
@@ -136,6 +149,18 @@ func looksLikeShellCommand(line string) bool {
 	}
 	if _, ok := common[line]; ok {
 		return true
+	}
+	return false
+}
+
+var numberedLinePattern = regexp.MustCompile(`^\d+[.)]\s+`)
+var numberedTokenPattern = regexp.MustCompile(`^\d+[.)]?$`)
+
+func tokenHasLetter(token string) bool {
+	for _, r := range token {
+		if unicode.IsLetter(r) {
+			return true
+		}
 	}
 	return false
 }

@@ -727,6 +727,91 @@ func TestRunWorkerTaskAssistConsecutiveToolChurnFallsBackToNoNewEvidence(t *test
 	}
 }
 
+func TestRunWorkerTaskAssistNoNewEvidenceFailsReconValidationTask(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-worker-task-assist-recon-no-new-evidence-fails"
+	taskID := "task-recon-seed"
+	workerID := "worker-task-recon-seed-a1"
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	writeWorkerPlan(t, base, runID, Scope{Targets: []string{"127.0.0.1"}})
+	writeAssistTask(t, base, runID, TaskSpec{
+		TaskID:            taskID,
+		Title:             "Recon seed",
+		Strategy:          "recon_seed",
+		Goal:              "Collect recon evidence",
+		Targets:           []string{"127.0.0.1"},
+		DoneWhen:          []string{"task complete"},
+		FailWhen:          []string{"task failed"},
+		ExpectedArtifacts: []string{"recon-seed.log"},
+		RiskLevel:         string(RiskReconReadonly),
+		Action: TaskAction{
+			Type:   "assist",
+			Prompt: "Run deterministic checks and summarize.",
+		},
+		Budget: TaskBudget{
+			MaxSteps:     20,
+			MaxToolCalls: 20,
+			MaxRuntime:   20 * time.Second,
+		},
+	})
+
+	workerToolsDir := filepath.Join(BuildRunPaths(base, runID).Root, "workers", workerID, "tools")
+	if err := os.MkdirAll(workerToolsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll worker tools dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workerToolsDir, "probe.sh"), []byte("#!/usr/bin/env bash\necho probe\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile probe.sh: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"command\",\"summary\":\"repeat probe\",\"command\":\"bash\",\"args\":[\"tools/probe.sh\"]}"}}]}`))
+	}))
+	defer server.Close()
+
+	t.Setenv(workerConfigPathEnv, "")
+	t.Setenv(workerLLMBaseURLEnv, server.URL)
+	t.Setenv(workerLLMModelEnv, "test-model")
+	t.Setenv(workerLLMTimeoutSeconds, "10")
+	t.Setenv(workerAssistModeEnv, "strict")
+
+	err := RunWorkerTask(WorkerRunConfig{
+		SessionsDir: base,
+		RunID:       runID,
+		TaskID:      taskID,
+		WorkerID:    workerID,
+		Attempt:     1,
+	})
+	if err == nil {
+		t.Fatalf("expected no-progress failure for recon no-new-evidence fallback")
+	}
+
+	events, evErr := NewManager(base).Events(runID, 0)
+	if evErr != nil {
+		t.Fatalf("Events: %v", evErr)
+	}
+	if hasEventType(events, EventTypeTaskCompleted) {
+		t.Fatalf("did not expect task_completed for recon no-new-evidence path")
+	}
+	failed, ok := firstEventByType(events, EventTypeTaskFailed)
+	if !ok {
+		t.Fatalf("expected task_failed event")
+	}
+	payload := map[string]any{}
+	if len(failed.Payload) > 0 {
+		_ = json.Unmarshal(failed.Payload, &payload)
+	}
+	if got := strings.TrimSpace(toString(payload["reason"])); got != WorkerFailureNoProgress {
+		t.Fatalf("expected reason %q, got %q", WorkerFailureNoProgress, got)
+	}
+}
+
 func TestRunWorkerTaskAssistToolChurnCanRecoverWithCommand(t *testing.T) {
 	base := t.TempDir()
 	runID := "run-worker-task-assist-tool-churn-recover"
@@ -885,8 +970,24 @@ func TestRunWorkerTaskAssistRecoverToolChurnCanPivotToCommand(t *testing.T) {
 	if !hasEventType(events, EventTypeTaskCompleted) {
 		t.Fatalf("expected task_completed event")
 	}
+	foundPivotCitation := false
 	for _, event := range events {
 		if event.Type != EventTypeTaskFailed {
+			if event.Type == EventTypeTaskProgress {
+				payload := map[string]any{}
+				if len(event.Payload) > 0 {
+					_ = json.Unmarshal(event.Payload, &payload)
+				}
+				if source := strings.TrimSpace(toString(payload["pivot_basis_source"])); source != "" {
+					foundPivotCitation = true
+					if strings.TrimSpace(toString(payload["pivot_basis"])) == "" {
+						t.Fatalf("expected non-empty pivot_basis when pivot citation is emitted")
+					}
+					if kind := strings.TrimSpace(toString(payload["pivot_basis_kind"])); kind != "evidence" && kind != "unknown" {
+						t.Fatalf("unexpected pivot_basis_kind %q", kind)
+					}
+				}
+			}
 			continue
 		}
 		payload := map[string]any{}
@@ -896,6 +997,9 @@ func TestRunWorkerTaskAssistRecoverToolChurnCanPivotToCommand(t *testing.T) {
 		if got, _ := payload["reason"].(string); got == WorkerFailureAssistLoopDetected {
 			t.Fatalf("did not expect loop detection failure before recover pivot: %#v", payload)
 		}
+	}
+	if !foundPivotCitation {
+		t.Fatalf("expected at least one recover pivot citation progress event")
 	}
 }
 
@@ -1996,7 +2100,7 @@ func TestRunWorkerTaskAssistRecoverPlanLoopClassifiedAsLoopDetected(t *testing.T
 	}
 }
 
-func TestRunWorkerTaskAssistMissingToolInRecoverModeFallsBackToReplan(t *testing.T) {
+func TestRunWorkerTaskAssistMissingToolInRecoverModeCanPivotToAvailableTool(t *testing.T) {
 	base := t.TempDir()
 	runID := "run-worker-task-assist-missing-tool-recover"
 	taskID := "t1"
@@ -2035,7 +2139,7 @@ func TestRunWorkerTaskAssistMissingToolInRecoverModeFallsBackToReplan(t *testing
 		case 1:
 			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"command\",\"command\":\"definitelymissingtool\",\"args\":[],\"summary\":\"run missing tool\"}"}}]}`))
 		case 2:
-			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"command\",\"command\":\"definitelymissingtool\",\"args\":[],\"summary\":\"retry missing tool\"}"}}]}`))
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"command\",\"command\":\"list_dir\",\"args\":[\".\"],\"summary\":\"pivot to available builtin after missing tool\"}"}}]}`))
 		default:
 			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"complete\",\"final\":\"done\"}"}}]}`))
 		}
@@ -2068,6 +2172,247 @@ func TestRunWorkerTaskAssistMissingToolInRecoverModeFallsBackToReplan(t *testing
 	}
 	if hasEventType(events, EventTypeTaskFailed) {
 		t.Fatalf("did not expect task_failed event")
+	}
+}
+
+func TestRunWorkerTaskAssistPseudoWorkflowCommandSkipsInstallApproval(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-worker-task-assist-pseudo-workflow-tool"
+	taskID := "t1"
+	workerID := "worker-t1-a1"
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	writeWorkerPlan(t, base, runID, Scope{Targets: []string{"127.0.0.1"}})
+	writeAssistTask(t, base, runID, TaskSpec{
+		TaskID:            taskID,
+		Goal:              "skip install for pseudo workflow commands",
+		Targets:           []string{"127.0.0.1"},
+		DoneWhen:          []string{"task complete"},
+		FailWhen:          []string{"task failed"},
+		ExpectedArtifacts: []string{"assist logs"},
+		RiskLevel:         string(RiskReconReadonly),
+		Action: TaskAction{
+			Type:   "assist",
+			Prompt: "Try summary command, then pivot and complete.",
+		},
+		Budget: TaskBudget{
+			MaxSteps:     6,
+			MaxToolCalls: 6,
+			MaxRuntime:   20 * time.Second,
+		},
+	})
+
+	var calls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch atomic.AddInt32(&calls, 1) {
+		case 1:
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"command\",\"command\":\"summary\",\"args\":[],\"summary\":\"generate summary\"}"}}]}`))
+		case 2:
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"command\",\"command\":\"list_dir\",\"args\":[\".\"],\"summary\":\"pivot to builtin\"}"}}]}`))
+		default:
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"complete\",\"final\":\"done\"}"}}]}`))
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv(workerConfigPathEnv, "")
+	t.Setenv(workerLLMBaseURLEnv, server.URL)
+	t.Setenv(workerLLMModelEnv, "test-model")
+	t.Setenv(workerLLMTimeoutSeconds, "10")
+	t.Setenv(workerAssistModeEnv, "strict")
+
+	if err := RunWorkerTask(WorkerRunConfig{
+		SessionsDir:       base,
+		RunID:             runID,
+		TaskID:            taskID,
+		WorkerID:          workerID,
+		Attempt:           1,
+		ToolInstallPolicy: ToolInstallPolicyAsk,
+	}); err != nil {
+		t.Fatalf("RunWorkerTask pseudo-workflow missing-tool behavior: %v", err)
+	}
+
+	events, err := NewManager(base).Events(runID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if !hasEventType(events, EventTypeTaskCompleted) {
+		t.Fatalf("expected task_completed event")
+	}
+	if hasEventType(events, EventTypeApprovalRequested) {
+		t.Fatalf("did not expect approval request for pseudo workflow command")
+	}
+}
+
+func TestRunWorkerTaskAssistRepeatedPseudoWorkflowCommandFailsNoProgressWithoutApproval(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-worker-task-assist-pseudo-workflow-repeat"
+	taskID := "t1"
+	workerID := "worker-t1-a1"
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	writeWorkerPlan(t, base, runID, Scope{Targets: []string{"127.0.0.1"}})
+	writeAssistTask(t, base, runID, TaskSpec{
+		TaskID:            taskID,
+		Goal:              "fail repeated pseudo workflow command",
+		Targets:           []string{"127.0.0.1"},
+		DoneWhen:          []string{"task complete"},
+		FailWhen:          []string{"task failed"},
+		ExpectedArtifacts: []string{"assist logs"},
+		RiskLevel:         string(RiskReconReadonly),
+		Action: TaskAction{
+			Type:   "assist",
+			Prompt: "Repeat summary command.",
+		},
+		Budget: TaskBudget{
+			MaxSteps:     8,
+			MaxToolCalls: 8,
+			MaxRuntime:   20 * time.Second,
+		},
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"command\",\"command\":\"summary\",\"args\":[],\"summary\":\"generate summary\"}"}}]}`))
+	}))
+	defer server.Close()
+
+	t.Setenv(workerConfigPathEnv, "")
+	t.Setenv(workerLLMBaseURLEnv, server.URL)
+	t.Setenv(workerLLMModelEnv, "test-model")
+	t.Setenv(workerLLMTimeoutSeconds, "10")
+	t.Setenv(workerAssistModeEnv, "strict")
+
+	err := RunWorkerTask(WorkerRunConfig{
+		SessionsDir:       base,
+		RunID:             runID,
+		TaskID:            taskID,
+		WorkerID:          workerID,
+		Attempt:           1,
+		ToolInstallPolicy: ToolInstallPolicyAsk,
+	})
+	if err == nil {
+		t.Fatalf("expected repeated pseudo workflow command to fail")
+	}
+
+	events, evErr := NewManager(base).Events(runID, 0)
+	if evErr != nil {
+		t.Fatalf("Events: %v", evErr)
+	}
+	if hasEventType(events, EventTypeApprovalRequested) {
+		t.Fatalf("did not expect approval request for pseudo workflow command")
+	}
+	failEvent, ok := firstEventByType(events, EventTypeTaskFailed)
+	if !ok {
+		t.Fatalf("expected task_failed event")
+	}
+	payload := map[string]any{}
+	if len(failEvent.Payload) > 0 {
+		_ = json.Unmarshal(failEvent.Payload, &payload)
+	}
+	if got, _ := payload["reason"].(string); got != WorkerFailureNoProgress {
+		t.Fatalf("expected %s reason, got %q", WorkerFailureNoProgress, got)
+	}
+	if !strings.Contains(strings.ToLower(toString(payload["fallback_reason"])), "non-executable workflow command") {
+		t.Fatalf("expected pseudo-workflow fallback reason, got %#v", payload["fallback_reason"])
+	}
+}
+
+func TestRunWorkerTaskAssistMissingToolRepeatedRetryFailsFast(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-worker-task-assist-missing-tool-repeat"
+	taskID := "t1"
+	workerID := "worker-t1-a1"
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	writeWorkerPlan(t, base, runID, Scope{Targets: []string{"127.0.0.1"}})
+	writeAssistTask(t, base, runID, TaskSpec{
+		TaskID:            taskID,
+		Goal:              "fail fast on repeated missing tool retries",
+		Targets:           []string{"127.0.0.1"},
+		DoneWhen:          []string{"task complete"},
+		FailWhen:          []string{"task failed"},
+		ExpectedArtifacts: []string{"assist logs"},
+		RiskLevel:         string(RiskReconReadonly),
+		Action: TaskAction{
+			Type:   "assist",
+			Prompt: "Retry the same missing tool repeatedly.",
+		},
+		Budget: TaskBudget{
+			MaxSteps:     6,
+			MaxToolCalls: 6,
+			MaxRuntime:   20 * time.Second,
+		},
+	})
+
+	var calls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch atomic.AddInt32(&calls, 1) {
+		case 1:
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"command\",\"command\":\"definitelymissingtool\",\"args\":[],\"summary\":\"run missing tool\"}"}}]}`))
+		case 2:
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"command\",\"command\":\"definitelymissingtool\",\"args\":[],\"summary\":\"retry missing tool again\"}"}}]}`))
+		default:
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"complete\",\"final\":\"done\"}"}}]}`))
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv(workerConfigPathEnv, "")
+	t.Setenv(workerLLMBaseURLEnv, server.URL)
+	t.Setenv(workerLLMModelEnv, "test-model")
+	t.Setenv(workerLLMTimeoutSeconds, "10")
+	t.Setenv(workerAssistModeEnv, "strict")
+
+	err := RunWorkerTask(WorkerRunConfig{
+		SessionsDir:       base,
+		RunID:             runID,
+		TaskID:            taskID,
+		WorkerID:          workerID,
+		Attempt:           1,
+		ToolInstallPolicy: ToolInstallPolicyNever,
+	})
+	if err == nil {
+		t.Fatalf("expected repeated missing-tool retry to fail")
+	}
+
+	events, evErr := NewManager(base).Events(runID, 0)
+	if evErr != nil {
+		t.Fatalf("Events: %v", evErr)
+	}
+	if hasEventType(events, EventTypeTaskCompleted) {
+		t.Fatalf("did not expect task_completed event")
+	}
+	failEvent, ok := firstEventByType(events, EventTypeTaskFailed)
+	if !ok {
+		t.Fatalf("expected task_failed event")
+	}
+	payload := map[string]any{}
+	if len(failEvent.Payload) > 0 {
+		_ = json.Unmarshal(failEvent.Payload, &payload)
+	}
+	if got, _ := payload["reason"].(string); got != WorkerFailureNoProgress {
+		t.Fatalf("expected %s reason, got %q", WorkerFailureNoProgress, got)
+	}
+	if !strings.Contains(strings.ToLower(toString(payload["fallback_reason"])), "missing-tool") {
+		t.Fatalf("expected missing-tool context in fallback reason, got %#v", payload["fallback_reason"])
 	}
 }
 

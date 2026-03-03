@@ -262,70 +262,14 @@ func appendJSONL(path string, v any) error {
 }
 
 func (c *runEventCache) applyEvent(event EventEnvelope) {
-	taskID := strings.TrimSpace(event.TaskID)
-	switch event.Type {
-	case EventTypeRunStarted:
-		c.hasRunStarted = true
-	case EventTypeRunStopped:
-		c.runState = "stopped"
-	case EventTypeRunCompleted:
-		c.runState = "completed"
-	case EventTypeWorkerStarted:
-		c.workerActive[event.WorkerID] = true
-	case EventTypeWorkerStopped:
-		c.workerActive[event.WorkerID] = false
-	case EventTypeTaskLeased:
-		if taskID != "" {
-			c.taskState[taskID] = "queued"
-		}
-	case EventTypeTaskStarted, EventTypeTaskProgress, EventTypeTaskArtifact, EventTypeTaskFinding:
-		if taskID != "" {
-			c.taskState[taskID] = "running"
-		}
-	case EventTypeTaskCompleted, EventTypeTaskFailed:
-		if taskID != "" {
-			c.taskState[taskID] = "done"
-		}
-	}
-
-	if strings.TrimSpace(event.WorkerID) == "" {
-		return
-	}
-	ws := c.workerByID[event.WorkerID]
-	if ws.WorkerID == "" {
-		ws.WorkerID = event.WorkerID
-		ws.State = "seen"
-	}
-	ws.LastSeq = maxI64(ws.LastSeq, event.Seq)
-	if event.TS.After(ws.LastEvent) {
-		ws.LastEvent = event.TS
-	}
-	switch event.Type {
-	case EventTypeWorkerStarted:
-		ws.State = "active"
-	case EventTypeWorkerHeartbeat:
-		if ws.State != "stopped" {
-			ws.State = "active"
-		}
-	case EventTypeWorkerStopped:
-		ws.State = "stopped"
-	case EventTypeTaskStarted, EventTypeTaskProgress, EventTypeTaskArtifact, EventTypeTaskFinding:
-		if ws.State != "stopped" {
-			ws.State = "active"
-		}
-		ws.CurrentTask = event.TaskID
-	case EventTypeTaskCompleted, EventTypeTaskFailed:
-		if ws.CurrentTask == event.TaskID {
-			ws.CurrentTask = ""
-		}
-	}
-	c.workerByID[event.WorkerID] = ws
+	applyEventToRunTaskWorkerProjection(&c.hasRunStarted, &c.runState, c.workerActive, c.taskState, event)
+	applyEventToWorkerStatusMap(c.workerByID, event)
 }
 
 func buildRunStatusFromCache(runID string, cache *runEventCache) RunStatus {
 	status := RunStatus{
 		RunID: runID,
-		State: "unknown",
+		State: runProjectionStateUnknown,
 	}
 	if cache == nil {
 		return status
@@ -333,7 +277,7 @@ func buildRunStatusFromCache(runID string, cache *runEventCache) RunStatus {
 	if strings.TrimSpace(cache.runState) != "" {
 		status.State = cache.runState
 	} else if cache.hasRunStarted {
-		status.State = "running"
+		status.State = runProjectionStateRunning
 	}
 	for _, active := range cache.workerActive {
 		if active {
@@ -342,9 +286,9 @@ func buildRunStatusFromCache(runID string, cache *runEventCache) RunStatus {
 	}
 	for _, task := range cache.taskState {
 		switch task {
-		case "queued":
+		case taskProjectionStateQueued:
 			status.QueuedTasks++
-		case "running":
+		case taskProjectionStateRunning:
 			status.RunningTasks++
 		}
 	}

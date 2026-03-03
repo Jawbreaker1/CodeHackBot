@@ -72,9 +72,9 @@ func adaptCommandForRuntime(scopePolicy *ScopePolicy, command string, args []str
 			}
 		}
 	}
-	if scopePolicy != nil && hasNmapFlag(args, "-sn") {
+	if scopePolicy != nil {
 		targets := scopePolicy.extractTargets(command, args)
-		if nextArgs, note, ok := capBroadLoopbackDiscoveryTarget(args, targets); ok {
+		if nextArgs, note, ok := capBroadLoopbackTarget(args, targets); ok {
 			args = nextArgs
 			adapted = true
 			if note != "" {
@@ -184,20 +184,58 @@ func firstBroadCIDRTarget(targets []string) (string, bool) {
 	return "", false
 }
 
-func capBroadLoopbackDiscoveryTarget(args, targets []string) ([]string, string, bool) {
+func capBroadLoopbackTarget(args, targets []string) ([]string, string, bool) {
 	for _, target := range targets {
 		cappedTarget, ok := cappedLoopbackDiscoveryTarget(target)
 		if !ok {
 			continue
 		}
-		nextArgs := buildNmapDiscoveryArgs(args, cappedTarget)
-		if stringSlicesEqual(args, nextArgs) {
+		nextArgs, replaced := replaceNmapTargetArg(args, target, cappedTarget)
+		if !replaced || stringSlicesEqual(args, nextArgs) {
 			continue
 		}
-		note := fmt.Sprintf("capped broad loopback host discovery target %s to %s to limit output volume", target, cappedTarget)
+		note := fmt.Sprintf("capped broad loopback target %s to %s for bounded scan runtime", target, cappedTarget)
 		return nextArgs, note, true
 	}
 	return args, "", false
+}
+
+func replaceNmapTargetArg(args []string, from, to string) ([]string, bool) {
+	from = strings.TrimSpace(from)
+	to = strings.TrimSpace(to)
+	if from == "" || to == "" || from == to {
+		return append([]string{}, args...), false
+	}
+	next := append([]string{}, args...)
+	changed := false
+	for i, raw := range next {
+		token := strings.TrimSpace(raw)
+		if token == "" {
+			continue
+		}
+		if token == from {
+			next[i] = to
+			changed = true
+			continue
+		}
+		if !strings.Contains(token, ",") {
+			continue
+		}
+		parts := strings.Split(token, ",")
+		partChanged := false
+		for idx, part := range parts {
+			if strings.TrimSpace(part) != from {
+				continue
+			}
+			parts[idx] = to
+			partChanged = true
+		}
+		if partChanged {
+			next[i] = strings.Join(parts, ",")
+			changed = true
+		}
+	}
+	return next, changed
 }
 
 func cappedLoopbackDiscoveryTarget(target string) (string, bool) {

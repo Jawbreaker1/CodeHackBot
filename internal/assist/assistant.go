@@ -27,16 +27,20 @@ type Input struct {
 }
 
 type Suggestion struct {
-	Type     string    `json:"type"`
-	Command  string    `json:"command,omitempty"`
-	Args     []string  `json:"args,omitempty"`
-	Question string    `json:"question,omitempty"`
-	Summary  string    `json:"summary,omitempty"`
-	Final    string    `json:"final,omitempty"`
-	Risk     string    `json:"risk,omitempty"`
-	Steps    []string  `json:"steps,omitempty"`
-	Plan     string    `json:"plan,omitempty"`
-	Tool     *ToolSpec `json:"tool,omitempty"`
+	Type         string    `json:"type"`
+	Decision     string    `json:"decision,omitempty"`
+	Command      string    `json:"command,omitempty"`
+	Args         []string  `json:"args,omitempty"`
+	Question     string    `json:"question,omitempty"`
+	Summary      string    `json:"summary,omitempty"`
+	Final        string    `json:"final,omitempty"`
+	Risk         string    `json:"risk,omitempty"`
+	Steps        []string  `json:"steps,omitempty"`
+	Plan         string    `json:"plan,omitempty"`
+	ObjectiveMet *bool     `json:"objective_met,omitempty"`
+	EvidenceRefs []string  `json:"evidence_refs,omitempty"`
+	WhyMet       string    `json:"why_met,omitempty"`
+	Tool         *ToolSpec `json:"tool,omitempty"`
 }
 
 type Assistant interface {
@@ -137,7 +141,7 @@ func (a LLMAssistant) Suggest(ctx context.Context, input Input) (Suggestion, err
 			{
 				Role: "system",
 				Content: "Return a single JSON object only, no prose, no markdown fences, no extra keys. " +
-					"Allowed schema keys: type,command,args,question,summary,final,risk,steps,plan,tool.",
+					"Allowed schema keys: type,decision,command,args,question,summary,final,risk,steps,plan,objective_met,evidence_refs,why_met,tool.",
 			},
 			{
 				Role:    "user",

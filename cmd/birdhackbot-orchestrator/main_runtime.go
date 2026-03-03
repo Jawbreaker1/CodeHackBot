@@ -36,6 +36,7 @@ func executeCoordinatorLoop(
 			if status, err := manager.Status(runID); err == nil && status.State != "completed" && status.State != "stopped" {
 				_ = manager.Stop(runID)
 			}
+			_ = manager.SetRunOutcome(runID, orchestrator.RunOutcomeAborted)
 			_ = manager.SetRunPhase(runID, orchestrator.RunPhaseCompleted)
 			if announce {
 				fmt.Fprintf(stdout, "run interrupted: %s\n", runID)
@@ -49,6 +50,7 @@ func executeCoordinatorLoop(
 			}
 			if status.State == "stopped" {
 				_ = coord.StopAll(stopGrace)
+				_ = manager.SetRunOutcome(runID, orchestrator.RunOutcomeAborted)
 				emitRunReport(manager, runID, stdout, stderr, announce)
 				_ = manager.SetRunPhase(runID, orchestrator.RunPhaseCompleted)
 				if announce {
@@ -71,8 +73,11 @@ func executeCoordinatorLoop(
 					return 1
 				}
 				if outcome == runOutcomeSuccess {
+					_ = manager.SetRunOutcome(runID, outcome)
 					if err := manager.EmitEvent(runID, "orchestrator", "", orchestrator.EventTypeRunCompleted, map[string]any{
-						"source": "run",
+						"source":      "run",
+						"run_outcome": string(outcome),
+						"detail":      outcomeDetail,
 					}); err != nil {
 						fmt.Fprintf(stderr, "run completion event failed: %v\n", err)
 						return 1
@@ -84,9 +89,11 @@ func executeCoordinatorLoop(
 					}
 					return 0
 				}
+				_ = manager.SetRunOutcome(runID, outcome)
 				if err := manager.EmitEvent(runID, "orchestrator", "", orchestrator.EventTypeRunStopped, map[string]any{
-					"source": "run_terminal_failure",
-					"detail": outcomeDetail,
+					"source":      "run_terminal_failure",
+					"detail":      outcomeDetail,
+					"run_outcome": string(outcome),
 				}); err != nil {
 					fmt.Fprintf(stderr, "run failure event failed: %v\n", err)
 					return 1
@@ -121,21 +128,16 @@ func emitRunReport(manager *orchestrator.Manager, runID string, stdout, stderr i
 	}
 }
 
-type runOutcome string
+const runOutcomeSuccess = orchestrator.RunOutcomeSuccess
 
-const (
-	runOutcomeSuccess runOutcome = "success"
-	runOutcomeFailure runOutcome = "failure"
-)
-
-func evaluateRunTerminalOutcome(manager *orchestrator.Manager, runID string) (runOutcome, string, error) {
+func evaluateRunTerminalOutcome(manager *orchestrator.Manager, runID string) (orchestrator.RunOutcome, string, error) {
 	plan, err := manager.LoadRunPlan(runID)
 	if err != nil {
-		return runOutcomeFailure, "", err
+		return orchestrator.RunOutcomeFailed, "", err
 	}
 	leases, err := manager.ReadLeases(runID)
 	if err != nil {
-		return runOutcomeFailure, "", err
+		return orchestrator.RunOutcomeFailed, "", err
 	}
 	leaseStateByTask := map[string]string{}
 	for _, lease := range leases {
@@ -158,16 +160,27 @@ func evaluateRunTerminalOutcome(manager *orchestrator.Manager, runID string) (ru
 		}
 	}
 	if len(failed) == 0 && len(incomplete) == 0 {
+		completionGate, err := manager.EvaluateCompletionVerificationGate(runID)
+		if err != nil {
+			return orchestrator.RunOutcomeFailed, "", err
+		}
+		if strings.EqualFold(strings.TrimSpace(completionGate.VerificationGate), "fail") {
+			detail := strings.TrimSpace(completionGate.VerificationGateReason)
+			if detail == "" {
+				detail = fmt.Sprintf("unverified completed tasks: %d", completionGate.UnverifiedTasks)
+			}
+			return orchestrator.RunOutcomeFailed, "completion_verification_gate_failed:" + detail, nil
+		}
 		truthGate, err := manager.EvaluateReportTruthGate(runID)
 		if err != nil {
-			return runOutcomeFailure, "", err
+			return orchestrator.RunOutcomeFailed, "", err
 		}
 		if strings.EqualFold(strings.TrimSpace(truthGate.VerificationGate), "fail") {
 			detail := strings.TrimSpace(truthGate.VerificationGateReason)
 			if detail == "" {
 				detail = fmt.Sprintf("unverified high-impact claims: %d", truthGate.HighImpactUnverified)
 			}
-			return runOutcomeFailure, "report_truth_gate_failed:" + detail, nil
+			return orchestrator.RunOutcomeFailed, "report_truth_gate_failed:" + detail, nil
 		}
 		return runOutcomeSuccess, "all_tasks_completed", nil
 	}
@@ -178,5 +191,5 @@ func evaluateRunTerminalOutcome(manager *orchestrator.Manager, runID string) (ru
 	if len(incomplete) > 0 {
 		detailParts = append(detailParts, "incomplete="+strings.Join(incomplete, ","))
 	}
-	return runOutcomeFailure, strings.Join(detailParts, " | "), nil
+	return orchestrator.RunOutcomeFailed, strings.Join(detailParts, " | "), nil
 }

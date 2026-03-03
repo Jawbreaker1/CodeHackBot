@@ -95,7 +95,7 @@ func (r *Runner) finalizePlanWizard() error {
 		return err
 	}
 	input.Goal = strings.TrimSpace(strings.Join([]string{goal, scope, constraints, outputs}, " "))
-	input.Playbooks = r.playbookHints(input.Goal)
+	input.Playbooks = r.playbookHints(input.Goal, "next-steps", "")
 	input.Plan = strings.TrimSpace(readFileTrimmed(filepath.Join(sessionDir, r.cfg.Session.PlanFilename)))
 
 	builder := strings.Builder{}

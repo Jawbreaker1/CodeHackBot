@@ -2,8 +2,10 @@ package cli
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -58,6 +60,14 @@ func (r *Runner) handleReport(args []string) error {
 		}
 	}
 	findings := reportFindingsFromFacts(artifacts.FactsPath, 6)
+	runtimeGoal := strings.TrimSpace(r.assistRuntime.Goal)
+	goal := runtimeGoal
+	if goal == "" {
+		goal = strings.TrimSpace(focus)
+	}
+	primaryTarget := reportPrimaryTarget(goal, r.bestKnownTarget())
+	objectiveStatus, objectiveReason := reportObjectiveStatus(runtimeGoal, r.assistObjectiveMet)
+	targetStatus, targetReason := reportTargetStatus(obsText, primaryTarget)
 
 	ledger := ""
 	if r.cfg.Session.LedgerEnabled {
@@ -65,17 +75,23 @@ func (r *Runner) handleReport(args []string) error {
 	}
 
 	info := report.Info{
-		Date:         time.Now().UTC().Format("2006-01-02"),
-		Scope:        scope,
-		Findings:     findings,
-		SessionID:    r.sessionID,
-		Ledger:       ledger,
-		Summary:      summary,
-		KnownFacts:   factsText,
-		Focus:        focus,
-		Plan:         planText,
-		Inventory:    inventoryText,
-		Observations: obsText,
+		Date:            time.Now().UTC().Format("2006-01-02"),
+		Scope:           scope,
+		Findings:        findings,
+		SessionID:       r.sessionID,
+		Goal:            goal,
+		Ledger:          ledger,
+		Summary:         summary,
+		KnownFacts:      factsText,
+		Focus:           focus,
+		Plan:            planText,
+		Inventory:       inventoryText,
+		Observations:    obsText,
+		PrimaryTarget:   primaryTarget,
+		ObjectiveStatus: objectiveStatus,
+		ObjectiveReason: objectiveReason,
+		TargetStatus:    targetStatus,
+		TargetReason:    targetReason,
 	}
 	if err := report.GenerateWithProfile(profile, "", outPath, info); err != nil {
 		return err
@@ -131,6 +147,12 @@ func (r *Runner) maybeFinalizeReport(goal string, dryRun bool) {
 	if !isReportIntent(goal) {
 		return
 	}
+	if r.openLikeAssistLoopEnabled() && r.isActionGoal(goal) && !r.assistObjectiveMet {
+		if r.cfg.UI.Verbose {
+			r.logger.Printf("Skipping report finalize: objective not yet met for action goal.")
+		}
+		return
+	}
 	path, err := r.finalizeReport(goal)
 	if err != nil {
 		r.logger.Printf("Report finalize failed: %v", err)
@@ -168,6 +190,9 @@ func (r *Runner) finalizeReport(goal string) (string, error) {
 		}
 	}
 	findings := reportFindingsFromFacts(artifacts.FactsPath, 6)
+	primaryTarget := reportPrimaryTarget(goal, r.bestKnownTarget())
+	objectiveStatus, objectiveReason := reportObjectiveStatus(goal, r.assistObjectiveMet)
+	targetStatus, targetReason := reportTargetStatus(obsText, primaryTarget)
 
 	ledger := ""
 	if r.cfg.Session.LedgerEnabled {
@@ -189,23 +214,92 @@ func (r *Runner) finalizeReport(goal string) (string, error) {
 	}
 
 	info := report.Info{
-		Date:         time.Now().UTC().Format("2006-01-02"),
-		Scope:        scope,
-		Findings:     findings,
-		SessionID:    r.sessionID,
-		Ledger:       ledger,
-		Summary:      summary,
-		KnownFacts:   factsText,
-		Focus:        focus,
-		Plan:         planText,
-		Inventory:    inventoryText,
-		Observations: obsText,
+		Date:            time.Now().UTC().Format("2006-01-02"),
+		Scope:           scope,
+		Findings:        findings,
+		SessionID:       r.sessionID,
+		Goal:            goal,
+		Ledger:          ledger,
+		Summary:         summary,
+		KnownFacts:      factsText,
+		Focus:           focus,
+		Plan:            planText,
+		Inventory:       inventoryText,
+		Observations:    obsText,
+		PrimaryTarget:   primaryTarget,
+		ObjectiveStatus: objectiveStatus,
+		ObjectiveReason: objectiveReason,
+		TargetStatus:    targetStatus,
+		TargetReason:    targetReason,
 	}
 	if err := report.GenerateWithProfile(profile, "", outPath, info); err != nil {
 		return "", err
 	}
 	_ = report.GenerateWithProfile(profile, "", archivePath, info)
 	return outPath, nil
+}
+
+var expectedAtGoalTargetPattern = regexp.MustCompile(`(?i)\bexpected\s+at\s+([^\s,;:()]+)`)
+
+func reportPrimaryTarget(goal, fallback string) string {
+	goal = strings.TrimSpace(goal)
+	if goal != "" {
+		if match := expectedAtGoalTargetPattern.FindStringSubmatch(goal); len(match) == 2 {
+			if token := normalizeGoalTargetToken(match[1]); token != "" {
+				return token
+			}
+		}
+		if token := normalizeGoalTargetToken(extractHostLikeToken(goal)); token != "" {
+			return token
+		}
+	}
+	return normalizeGoalTargetToken(fallback)
+}
+
+func normalizeGoalTargetToken(token string) string {
+	token = strings.TrimSpace(strings.Trim(token, "\"'`(),;[]{}<>"))
+	if token == "" {
+		return ""
+	}
+	if strings.Contains(token, "/") || strings.Contains(token, "\\") {
+		return ""
+	}
+	if ip := net.ParseIP(token); ip != nil {
+		return ip.String()
+	}
+	if strings.Count(token, ".") >= 1 && !strings.HasPrefix(token, ".") && !strings.HasSuffix(token, ".") {
+		return strings.ToLower(token)
+	}
+	return ""
+}
+
+func reportObjectiveStatus(goal string, objectiveMet bool) (string, string) {
+	goal = strings.TrimSpace(goal)
+	if goal == "" || !looksLikeAction(goal) {
+		return "unknown", "Report generated without an active action-goal completion contract."
+	}
+	if objectiveMet {
+		return "met", "Assistant completion contract reported objective_met=true with evidence refs."
+	}
+	return "not_met", "Objective was not verified by completion contract before report synthesis."
+}
+
+func reportTargetStatus(observations, target string) (string, string) {
+	target = strings.ToLower(strings.TrimSpace(target))
+	if target == "" {
+		return "unknown", "No primary target could be derived from goal or session context."
+	}
+	lower := strings.ToLower(observations)
+	if !strings.Contains(lower, target) {
+		return "not_verified", fmt.Sprintf("No captured observation references target %s.", target)
+	}
+	if strings.Contains(lower, target) && strings.Contains(lower, "host seems down") {
+		return "not_verified", fmt.Sprintf("Target %s was observed as down/non-responsive in scan output.", target)
+	}
+	if strings.Contains(lower, "nmap scan report for") && strings.Contains(lower, "("+target+")") && strings.Contains(lower, "host is up") {
+		return "verified", fmt.Sprintf("Nmap evidence confirms target %s responded as a live host.", target)
+	}
+	return "unknown", fmt.Sprintf("Target %s appears in observations, but verification evidence is inconclusive.", target)
 }
 
 func extractRequestedReportPath(goal string) (string, bool) {
@@ -244,9 +338,38 @@ func extractRequestedReportProfile(goal string) string {
 
 func parseReportArgs(args []string) (profile string, outArg string, err error) {
 	profile = string(report.ProfileStandard)
-	for _, arg := range args {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
 		trimmed := strings.TrimSpace(arg)
 		if trimmed == "" {
+			continue
+		}
+		lower := strings.ToLower(trimmed)
+		switch {
+		case strings.HasPrefix(lower, "--output="):
+			value := strings.TrimSpace(trimmed[len("--output="):])
+			if value == "" || outArg != "" {
+				return "", "", fmt.Errorf("usage: /report [profile] [output_path]")
+			}
+			outArg = value
+			continue
+		case strings.HasPrefix(lower, "output="):
+			value := strings.TrimSpace(trimmed[len("output="):])
+			if value == "" || outArg != "" {
+				return "", "", fmt.Errorf("usage: /report [profile] [output_path]")
+			}
+			outArg = value
+			continue
+		case lower == "--output":
+			if i+1 >= len(args) || outArg != "" {
+				return "", "", fmt.Errorf("usage: /report [profile] [output_path]")
+			}
+			next := strings.TrimSpace(args[i+1])
+			if next == "" {
+				return "", "", fmt.Errorf("usage: /report [profile] [output_path]")
+			}
+			outArg = next
+			i++
 			continue
 		}
 		if looksLikePathArg(trimmed) {

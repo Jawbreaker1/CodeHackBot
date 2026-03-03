@@ -113,7 +113,7 @@ func TestAssistCompleteFinalizesReportArtifact(t *testing.T) {
 				{
 					"message": map[string]any{
 						"role":    "assistant",
-						"content": `{"type":"complete","final":"done"}`,
+						"content": `{"type":"complete","decision":"step_complete","final":"done","objective_met":true,"evidence_refs":["sessions/test/logs/demo.log"],"why_met":"objective verified from prior step output"}`,
 					},
 				},
 			},
@@ -188,12 +188,12 @@ func TestAssistRepeatedCommandGuardRequestsAlternativeAndContinues(t *testing.T)
 			return
 		}
 		n := atomic.AddInt32(&calls, 1)
-		content := `{"type":"complete","final":"done"}`
+		content := `{"type":"complete","decision":"step_complete","final":"done","objective_met":true,"evidence_refs":["sessions/test/logs/demo.log"],"why_met":"objective verified from prior step output"}`
 		switch n {
 		case 1, 2, 3:
-			content = `{"type":"command","command":"ls","args":["-la"],"summary":"list files"}`
+			content = `{"type":"command","decision":"pivot_strategy","command":"ls","args":["-la"],"summary":"list files"}`
 		case 4:
-			content = `{"type":"complete","final":"done"}`
+			content = `{"type":"complete","decision":"step_complete","final":"done","objective_met":true,"evidence_refs":["sessions/test/logs/demo.log"],"why_met":"objective verified from prior step output"}`
 		}
 		resp := map[string]any{
 			"choices": []map[string]any{
@@ -252,9 +252,9 @@ func TestAssistFollowUpCarriesPreviousQuestionAndAnswer(t *testing.T) {
 		if n == 2 {
 			secondBody = string(body)
 		}
-		content := `{"type":"complete","final":"done"}`
+		content := `{"type":"complete","decision":"step_complete","final":"done","objective_met":true,"evidence_refs":["sessions/test/logs/demo.log"],"why_met":"objective verified from prior step output"}`
 		if n == 1 {
-			content = `{"type":"question","question":"` + question + `"}`
+			content = `{"type":"question","decision":"ask_user","question":"` + question + `"}`
 		}
 		resp := map[string]any{
 			"choices": []map[string]any{
@@ -308,9 +308,9 @@ func TestAssistAutoContinuesDefaultQuestionWithoutUserInput(t *testing.T) {
 		if n == 2 {
 			secondBody = string(body)
 		}
-		content := `{"type":"complete","final":"done"}`
+		content := `{"type":"complete","decision":"step_complete","final":"done","objective_met":true,"evidence_refs":["sessions/test/logs/demo.log"],"why_met":"objective verified from prior step output"}`
 		if n == 1 {
-			content = `{"type":"question","question":"` + question + `"}`
+			content = `{"type":"question","decision":"ask_user","question":"` + question + `"}`
 		}
 		resp := map[string]any{
 			"choices": []map[string]any{
@@ -374,7 +374,7 @@ func TestAssistQuestionPausesWhenSpecificInputRequired(t *testing.T) {
 				{
 					"message": map[string]any{
 						"role":    "assistant",
-						"content": `{"type":"question","question":"` + question + `"}`,
+						"content": `{"type":"question","decision":"ask_user","question":"` + question + `"}`,
 					},
 				},
 			},
@@ -409,12 +409,12 @@ func TestAssistRepeatedQuestionGuardRequestsAlternativeAndContinues(t *testing.T
 			return
 		}
 		n := atomic.AddInt32(&calls, 1)
-		content := `{"type":"complete","final":"done"}`
+		content := `{"type":"complete","decision":"step_complete","final":"done","objective_met":true,"evidence_refs":["sessions/test/logs/demo.log"],"why_met":"objective verified from prior step output"}`
 		switch n {
 		case 1, 2:
-			content = `{"type":"question","question":"` + question + `"}`
+			content = `{"type":"question","decision":"ask_user","question":"` + question + `"}`
 		case 3:
-			content = `{"type":"complete","final":"done"}`
+			content = `{"type":"complete","decision":"step_complete","final":"done","objective_met":true,"evidence_refs":["sessions/test/logs/demo.log"],"why_met":"objective verified from prior step output"}`
 		}
 		resp := map[string]any{
 			"choices": []map[string]any{
@@ -475,7 +475,7 @@ func TestAssistConcludesZipPresenceFromArtifactImmediately(t *testing.T) {
 		n := atomic.AddInt32(&calls, 1)
 		content := `{"done":true,"answer":"Yes, secret.zip exists in the directory.","confidence":"high"}`
 		if n == 1 {
-			content = `{"type":"command","command":"ls","args":["-la"],"summary":"check files"}`
+			content = `{"type":"command","decision":"pivot_strategy","command":"ls","args":["-la"],"summary":"check files"}`
 		}
 		resp := map[string]any{
 			"choices": []map[string]any{
@@ -540,12 +540,12 @@ func TestAssistRepeatedCommandLoopAttemptsRecoveryThenContinues(t *testing.T) {
 			return
 		}
 		n := atomic.AddInt32(&calls, 1)
-		content := `{"type":"complete","final":"done"}`
+		content := `{"type":"complete","decision":"step_complete","final":"done","objective_met":true,"evidence_refs":["sessions/test/logs/demo.log"],"why_met":"objective verified from prior step output"}`
 		switch n {
 		case 1, 2, 3, 4:
-			content = `{"type":"command","command":"ls","args":["-la"],"summary":"check files"}`
+			content = `{"type":"command","decision":"pivot_strategy","command":"ls","args":["-la"],"summary":"check files"}`
 		case 5:
-			content = `{"type":"command","command":"pwd","args":[],"summary":"try a different local action"}`
+			content = `{"type":"command","decision":"pivot_strategy","command":"pwd","args":[],"summary":"try a different local action"}`
 		}
 		resp := map[string]any{
 			"choices": []map[string]any{
@@ -599,6 +599,65 @@ func TestAssistRepeatedCommandLoopAttemptsRecoveryThenContinues(t *testing.T) {
 	}
 }
 
+func TestAssistOpenLikeLoopUsesImmediateRepairBeforeBroadRecovery(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+		n := atomic.AddInt32(&calls, 1)
+		content := `{"type":"complete","decision":"step_complete","final":"done","objective_met":true,"evidence_refs":["sessions/test/logs/demo.log"],"why_met":"objective verified from prior step output"}`
+		switch n {
+		case 1:
+			content = `{"type":"command","command":"definitely_missing_command"}`
+		case 2:
+			content = `{"type":"command","command":"pwd"}`
+		}
+		resp := map[string]any{
+			"choices": []map[string]any{
+				{
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": content,
+					},
+				},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := config.Config{}
+	cfg.Session.LogDir = t.TempDir()
+	cfg.LLM.BaseURL = srv.URL
+	cfg.Permissions.Level = "all"
+	cfg.Tools.Shell.Enabled = true
+	cfg.Agent.AssistLoopMode = "open_like"
+	r := NewRunner(cfg, "session-open-like-repair", "", "")
+
+	orig := os.Stdout
+	rOut, wOut, _ := os.Pipe()
+	os.Stdout = wOut
+	t.Cleanup(func() {
+		os.Stdout = orig
+	})
+
+	if err := r.handleAssistAgentic("perform local recon task", false, ""); err != nil {
+		t.Fatalf("handleAssistAgentic: %v", err)
+	}
+	_ = wOut.Close()
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, rOut)
+	out := buf.String()
+	if !strings.Contains(out, "done") {
+		t.Fatalf("expected completion output, got:\n%s", out)
+	}
+	if got := atomic.LoadInt32(&calls); got != 3 {
+		t.Fatalf("expected 3 llm calls (step, immediate repair, complete), got %d", got)
+	}
+}
+
 func TestAssistRepeatedLoopFallsBackToBudgetWithoutPause(t *testing.T) {
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -612,7 +671,7 @@ func TestAssistRepeatedLoopFallsBackToBudgetWithoutPause(t *testing.T) {
 				{
 					"message": map[string]any{
 						"role":    "assistant",
-						"content": `{"type":"command","command":"ls","args":["-la"],"summary":"check files"}`,
+						"content": `{"type":"command","decision":"pivot_strategy","command":"ls","args":["-la"],"summary":"check files"}`,
 					},
 				},
 			},
@@ -661,9 +720,9 @@ func TestAssistNoProgressSwitchesToRecoverMode(t *testing.T) {
 		body, _ := io.ReadAll(r.Body)
 		requestBodies = append(requestBodies, string(body))
 		n := atomic.AddInt32(&calls, 1)
-		content := `{"type":"complete","final":"done"}`
+		content := `{"type":"complete","decision":"step_complete","final":"done","objective_met":true,"evidence_refs":["sessions/test/logs/demo.log"],"why_met":"objective verified from prior step output"}`
 		if n <= 2 {
-			content = `{"type":"command","command":"ls","args":["-la"],"summary":"check files"}`
+			content = `{"type":"command","decision":"pivot_strategy","command":"ls","args":["-la"],"summary":"check files"}`
 		}
 		resp := map[string]any{
 			"choices": []map[string]any{

@@ -36,6 +36,34 @@ const (
 	FindingStateRejected   = "rejected_finding"
 )
 
+func CanonicalEventTypes() []string {
+	return []string{
+		EventTypeRunStarted,
+		EventTypeTaskLeased,
+		EventTypeTaskStarted,
+		EventTypeTaskProgress,
+		EventTypeTaskArtifact,
+		EventTypeTaskFinding,
+		EventTypeTaskFailed,
+		EventTypeTaskCompleted,
+		EventTypeWorkerStarted,
+		EventTypeWorkerHeartbeat,
+		EventTypeWorkerStopped,
+		EventTypeRunStopped,
+		EventTypeRunCompleted,
+		EventTypeRunReportGenerated,
+		EventTypeRunWarning,
+		EventTypeRunStateUpdated,
+		EventTypeRunReplanRequested,
+		EventTypeApprovalRequested,
+		EventTypeApprovalGranted,
+		EventTypeApprovalDenied,
+		EventTypeApprovalExpired,
+		EventTypeWorkerStopRequested,
+		EventTypeOperatorInstruction,
+	}
+}
+
 type RunPlan struct {
 	RunID           string       `json:"run_id"`
 	Scope           Scope        `json:"scope"`
@@ -50,6 +78,7 @@ type RunPlan struct {
 type PlanMetadata struct {
 	CreatedAt         time.Time    `json:"created_at,omitempty"`
 	RunPhase          string       `json:"run_phase,omitempty"`
+	RunOutcome        string       `json:"run_outcome,omitempty"`
 	Goal              string       `json:"goal,omitempty"`
 	NormalizedGoal    string       `json:"normalized_goal,omitempty"`
 	PlannerMode       string       `json:"planner_mode,omitempty"`

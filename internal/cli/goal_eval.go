@@ -64,6 +64,7 @@ func (r *Runner) tryConcludeGoalFromArtifacts(goal string) bool {
 	answer = normalizeAssistantOutput(answer)
 	safePrintln(answer)
 	r.appendConversation("Assistant", answer)
+	r.assistObjectiveMet = true
 	r.pendingAssistGoal = ""
 	r.pendingAssistQ = ""
 	return true

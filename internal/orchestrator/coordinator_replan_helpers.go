@@ -106,7 +106,7 @@ func (c *Coordinator) buildReplanTask(trigger string, source EventEnvelope, payl
 
 func buildAdaptiveRecoveryGoal(trigger, evidenceTarget string, payload map[string]any) string {
 	base := fmt.Sprintf("Recover from %s on task %s and continue the run with actionable evidence.", trigger, evidenceTarget)
-	reason := strings.TrimSpace(toString(payload["reason"]))
+	reason := CanonicalTaskFailureReason(toString(payload["reason"]))
 	errText := strings.TrimSpace(toString(payload["error"]))
 	cmd := strings.TrimSpace(toString(payload["command"]))
 	args := payloadStringSlice(payload["args"])
@@ -185,7 +185,7 @@ func (c *Coordinator) shouldPromoteAssistLoopExecutionFailure(taskID, eventID st
 
 func hasLaterTaskFailureReasonEvent(events []EventEnvelope, taskID, reason string, idx int) bool {
 	taskID = strings.TrimSpace(taskID)
-	reason = strings.TrimSpace(reason)
+	reason = CanonicalTaskFailureReason(reason)
 	if taskID == "" || reason == "" {
 		return false
 	}
@@ -201,7 +201,7 @@ func hasLaterTaskFailureReasonEvent(events []EventEnvelope, taskID, reason strin
 		if len(event.Payload) > 0 {
 			_ = json.Unmarshal(event.Payload, &payload)
 		}
-		if strings.TrimSpace(toString(payload["reason"])) == reason {
+		if CanonicalTaskFailureReason(toString(payload["reason"])) == reason {
 			return true
 		}
 	}
@@ -220,7 +220,7 @@ func (c *Coordinator) shouldRewireAssistLoopSeedDependencies(trigger string, sou
 	if len(source.Payload) > 0 {
 		_ = json.Unmarshal(source.Payload, &payload)
 	}
-	if strings.TrimSpace(toString(payload["reason"])) != WorkerFailureAssistLoopDetected {
+	if CanonicalTaskFailureReason(toString(payload["reason"])) != WorkerFailureAssistLoopDetected {
 		return false
 	}
 	task, ok := c.scheduler.Task(taskID)
@@ -259,7 +259,7 @@ func (c *Coordinator) executionFailureMutationKeyBase(source EventEnvelope) stri
 	if len(source.Payload) > 0 {
 		_ = json.Unmarshal(source.Payload, &payload)
 	}
-	reason := strings.TrimSpace(toString(payload["reason"]))
+	reason := CanonicalTaskFailureReason(toString(payload["reason"]))
 	if reason != WorkerFailureCommandFailed {
 		return ""
 	}
@@ -458,9 +458,9 @@ func latestWorkerFailureReason(events []EventEnvelope, taskID, workerID string) 
 		if len(event.Payload) > 0 {
 			_ = json.Unmarshal(event.Payload, &payload)
 		}
-		reason := toString(payload["reason"])
+		reason := CanonicalTaskFailureReason(toString(payload["reason"]))
 		if reason == "" {
-			reason = "worker_exit"
+			reason = TaskFailureReasonWorkerExit
 		}
 		return reason, true
 	}
@@ -478,6 +478,7 @@ func hasWorkerTaskCompleted(events []EventEnvelope, taskID, workerID string) boo
 }
 
 func retryableWorkerFailureReason(reason string) bool {
+	reason = CanonicalTaskFailureReason(reason)
 	switch reason {
 	case WorkerFailureScopeDenied,
 		WorkerFailurePolicyDenied,
@@ -492,7 +493,7 @@ func retryableWorkerFailureReason(reason string) bool {
 
 func hasRepeatedTaskFailureReason(events []EventEnvelope, taskID, reason string) bool {
 	taskID = strings.TrimSpace(taskID)
-	reason = strings.TrimSpace(reason)
+	reason = CanonicalTaskFailureReason(reason)
 	if taskID == "" || reason == "" {
 		return false
 	}
@@ -505,9 +506,9 @@ func hasRepeatedTaskFailureReason(events []EventEnvelope, taskID, reason string)
 		if len(event.Payload) > 0 {
 			_ = json.Unmarshal(event.Payload, &payload)
 		}
-		eventReason := strings.TrimSpace(toString(payload["reason"]))
+		eventReason := CanonicalTaskFailureReason(toString(payload["reason"]))
 		if eventReason == "" {
-			eventReason = "worker_exit"
+			eventReason = TaskFailureReasonWorkerExit
 		}
 		if eventReason != reason {
 			continue

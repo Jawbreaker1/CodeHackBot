@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -86,6 +87,9 @@ func (r *Runner) executeToolSuggestion(tool assist.ToolSpec, dryRun bool) error 
 		if runErr == nil {
 			return nil
 		}
+		if isOperatorInterrupted(runErr) {
+			return runErr
+		}
 		lastErr = runErr
 		if dryRun || attempt >= maxFixes || !r.llmAllowed() {
 			return lastErr
@@ -133,23 +137,31 @@ func (r *Runner) buildAndRunTool(sessionDir, toolsRoot string, tool assist.ToolS
 		return fmt.Errorf("tool forge: missing run.command")
 	}
 
+	normalizedFiles := make([]assist.ToolFile, 0, len(tool.Files))
 	plannedFiles := make([]string, 0, len(tool.Files))
 	hashes := map[string]string{}
 	for _, f := range tool.Files {
 		if strings.TrimSpace(f.Path) == "" {
 			continue
 		}
-		outPath, err := r.resolveToolWritePath(sessionDir, f.Path)
+		normalizedPath, err := normalizeToolFilePath(r.sessionID, f.Path)
 		if err != nil {
 			return err
 		}
+		outPath := filepath.Clean(filepath.Join(toolsRoot, normalizedPath))
+		if !pathWithinRoot(outPath, toolsRoot) {
+			return fmt.Errorf("tool forge path out of bounds: %s (allowed under %s)", f.Path, toolsRoot)
+		}
+		f.Path = normalizedPath
+		normalizedFiles = append(normalizedFiles, f)
 		plannedFiles = append(plannedFiles, outPath)
 		sum := sha256.Sum256([]byte(f.Content))
 		hashes[outPath] = hex.EncodeToString(sum[:])
 	}
-	if len(plannedFiles) == 0 {
+	if len(normalizedFiles) == 0 {
 		return fmt.Errorf("tool forge: no valid file paths")
 	}
+	tool.Files = normalizedFiles
 
 	requireApproval := r.cfg.Permissions.Level == "default" && r.cfg.Permissions.RequireApproval
 	upToDate, upToDateReason := r.toolFilesUpToDate(sessionDir, tool.Files, hashes)
@@ -175,9 +187,9 @@ func (r *Runner) buildAndRunTool(sessionDir, toolsRoot string, tool assist.ToolS
 				if strings.TrimSpace(f.Path) == "" {
 					continue
 				}
-				outPath, err := r.resolveToolWritePath(sessionDir, f.Path)
-				if err != nil {
-					return err
+				outPath := filepath.Clean(filepath.Join(toolsRoot, f.Path))
+				if !pathWithinRoot(outPath, toolsRoot) {
+					return fmt.Errorf("tool forge path out of bounds: %s (allowed under %s)", f.Path, toolsRoot)
 				}
 				if len(f.Content) > writeFileMaxBytes {
 					return fmt.Errorf("tool forge: file too large: %s (%d bytes > %d)", f.Path, len(f.Content), writeFileMaxBytes)
@@ -246,13 +258,49 @@ func (r *Runner) normalizeToolRun(command string, args []string) (string, []stri
 	outArgs := make([]string, 0, len(args))
 	sessionDir := filepath.Join(r.cfg.Session.LogDir, r.sessionID)
 	toolsRoot := filepath.Join(sessionDir, "artifacts", "tools")
-	for _, a := range args {
-		a = strings.TrimSpace(a)
+	shellExec := isShellExec(command)
+	if rel, ok := mapToolPathToToolsRoot(r.sessionID, command); ok {
+		candidate := filepath.Clean(filepath.Join(toolsRoot, rel))
+		if pathWithinRoot(candidate, toolsRoot) {
+			if _, err := os.Stat(candidate); err == nil {
+				command = candidate
+			}
+		}
+	}
+	if candidate, ok := remapAbsoluteSessionPathToToolsRoot(command, sessionDir, toolsRoot); ok {
+		if _, err := os.Stat(candidate); err == nil {
+			command = candidate
+		}
+	}
+	for i := 0; i < len(args); i++ {
+		a := strings.TrimSpace(args[i])
 		if a == "" {
+			continue
+		}
+		if shellExec && a == "-c" && i+1 < len(args) {
+			script := args[i+1]
+			script = strings.ReplaceAll(script, "{{TOOLS_DIR}}", toolsRoot)
+			script = strings.ReplaceAll(script, "$TOOLS_DIR", toolsRoot)
+			script = rewriteToolPathsInShellSnippet(script, r.sessionID, toolsRoot)
+			outArgs = append(outArgs, a, script)
+			i++
 			continue
 		}
 		a = strings.ReplaceAll(a, "{{TOOLS_DIR}}", toolsRoot)
 		a = strings.ReplaceAll(a, "$TOOLS_DIR", toolsRoot)
+		if rel, ok := mapToolPathToToolsRoot(r.sessionID, a); ok {
+			candidate := filepath.Clean(filepath.Join(toolsRoot, rel))
+			if pathWithinRoot(candidate, toolsRoot) {
+				if _, err := os.Stat(candidate); err == nil {
+					a = candidate
+				}
+			}
+		}
+		if candidate, ok := remapAbsoluteSessionPathToToolsRoot(a, sessionDir, toolsRoot); ok {
+			if _, err := os.Stat(candidate); err == nil {
+				a = candidate
+			}
+		}
 		// If the argument is a relative path that exists under toolsRoot, make it absolute.
 		if !filepath.IsAbs(a) {
 			candidate := filepath.Join(toolsRoot, filepath.Clean(a))
@@ -268,6 +316,158 @@ func (r *Runner) normalizeToolRun(command string, args []string) (string, []stri
 		outArgs = append([]string{"-u"}, outArgs...)
 	}
 	return command, outArgs
+}
+
+var shellSnippetTokenPattern = regexp.MustCompile(`[^\s;|&()]+|[\s]+|[;|&()]`)
+
+func rewriteToolPathsInShellSnippet(snippet, sessionID, toolsRoot string) string {
+	if strings.TrimSpace(snippet) == "" {
+		return snippet
+	}
+	parts := shellSnippetTokenPattern.FindAllString(snippet, -1)
+	if len(parts) == 0 {
+		return snippet
+	}
+	rewritten := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" || strings.ContainsAny(trimmed, ";|&()") {
+			rewritten = append(rewritten, part)
+			continue
+		}
+		rewritten = append(rewritten, rewriteToolPathToken(part, sessionID, toolsRoot))
+	}
+	return strings.Join(rewritten, "")
+}
+
+func rewriteToolPathToken(token, sessionID, toolsRoot string) string {
+	if token == "" {
+		return token
+	}
+	quote := ""
+	core := token
+	if len(core) >= 2 {
+		first := core[0]
+		last := core[len(core)-1]
+		if (first == '\'' || first == '"') && first == last {
+			quote = string(first)
+			core = core[1 : len(core)-1]
+		}
+	}
+	rel, ok := mapToolPathToToolsRoot(sessionID, core)
+	if !ok {
+		return token
+	}
+	candidate := filepath.Clean(filepath.Join(toolsRoot, rel))
+	if !pathWithinRoot(candidate, toolsRoot) {
+		return token
+	}
+	return quote + candidate + quote
+}
+
+func isShellExec(command string) bool {
+	switch strings.ToLower(strings.TrimSpace(filepath.Base(command))) {
+	case "sh", "bash", "zsh", "dash", "ksh":
+		return true
+	default:
+		return false
+	}
+}
+
+func remapAbsoluteSessionPathToToolsRoot(raw, sessionDir, toolsRoot string) (string, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || !filepath.IsAbs(raw) {
+		return "", false
+	}
+	abs := filepath.Clean(raw)
+	if !pathWithinRoot(abs, sessionDir) || pathWithinRoot(abs, toolsRoot) {
+		return "", false
+	}
+	rel, err := filepath.Rel(sessionDir, abs)
+	if err != nil {
+		return "", false
+	}
+	rel = filepath.Clean(rel)
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	candidate := filepath.Clean(filepath.Join(toolsRoot, rel))
+	if !pathWithinRoot(candidate, toolsRoot) {
+		return "", false
+	}
+	return candidate, true
+}
+
+func normalizeToolFilePath(sessionID, raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", fmt.Errorf("tool forge: file path is empty")
+	}
+	if rel, ok := mapToolPathToToolsRoot(sessionID, raw); ok {
+		return rel, nil
+	}
+	if filepath.IsAbs(raw) {
+		return "", fmt.Errorf("tool forge: file path must be relative to the session tools directory (got absolute path)")
+	}
+	rel := filepath.Clean(raw)
+	if rel == "." || rel == "" || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("tool forge: file path out of bounds: %s", raw)
+	}
+	return rel, nil
+}
+
+func mapToolPathToToolsRoot(sessionID, raw string) (string, bool) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", false
+	}
+	value = strings.Trim(value, "\"'")
+	if value == "" {
+		return "", false
+	}
+	value = filepath.ToSlash(filepath.Clean(value))
+	original := value
+	changed := false
+
+	if idx := strings.LastIndex(value, "/artifacts/tools/"); idx >= 0 {
+		value = value[idx+len("/artifacts/tools/"):]
+		changed = true
+	}
+	if strings.HasPrefix(value, "artifacts/tools/") {
+		value = strings.TrimPrefix(value, "artifacts/tools/")
+		changed = true
+	}
+	if sessionID != "" {
+		sessionRoot := "sessions/" + sessionID + "/"
+		sessionTools := sessionRoot + "artifacts/tools/"
+		if strings.HasPrefix(value, sessionTools) {
+			value = strings.TrimPrefix(value, sessionTools)
+			changed = true
+		}
+		if strings.HasPrefix(value, sessionRoot) {
+			value = strings.TrimPrefix(value, sessionRoot)
+			changed = true
+		}
+		if idx := strings.LastIndex(value, "/"+sessionRoot); idx >= 0 {
+			value = value[idx+len("/"+sessionRoot):]
+			changed = true
+		}
+	}
+
+	value = strings.TrimPrefix(value, "./")
+	value = strings.TrimPrefix(value, "/")
+	rel := filepath.Clean(filepath.FromSlash(value))
+	if rel == "." || rel == "" || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	if changed {
+		return rel, true
+	}
+	// Keep relative canonical path-like values; caller decides whether to use.
+	if !filepath.IsAbs(original) && strings.ContainsAny(original, `/\`) {
+		return rel, true
+	}
+	return "", false
 }
 
 func isPythonExec(command string) bool {
@@ -329,6 +529,7 @@ func (r *Runner) buildToolRecoveryGoal(tool assist.ToolSpec, runErr error) strin
 	builder := strings.Builder{}
 	builder.WriteString("The previous tool run failed. Provide a corrected tool spec (type=tool) that fixes the issue.\n")
 	builder.WriteString("If using Metasploit, prefer `msfconsole -x` (or a bash wrapper). Avoid running Ruby scripts that require msf/* directly with plain `ruby`.\n")
+	builder.WriteString("All tool file paths and runnable script paths must be relative to the session tools directory (`artifacts/tools/`). Do not use `sessions/<id>/scripts/...` paths.\n")
 	if tool.Name != "" {
 		builder.WriteString("Tool name: " + tool.Name + "\n")
 	}
@@ -532,8 +733,8 @@ func (r *Runner) executeToolRun(command string, args []string) error {
 	safePrint(renderExecSummary(r.currentTask, command, args, time.Since(start), result.LogPath, "disabled", result.Output, err))
 	if err != nil {
 		if wasCanceled {
-			r.logger.Printf("Interrupted. What should I do differently?")
-			return fmt.Errorf("command interrupted")
+			r.logger.Printf("Interrupted by operator.")
+			return operatorInterruptedError()
 		}
 		return commandError{Result: result, Err: err}
 	}

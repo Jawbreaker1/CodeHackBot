@@ -66,11 +66,49 @@ def collect_completed_reasons(event_path):
                 continue
             if evt.get("type") != "task_completed":
                 continue
+            task_id = str(evt.get("task_id", "")).strip()
             payload = evt.get("payload", {})
             reason = str(payload.get("reason", "")).strip()
             if reason:
-                reasons.append(reason)
+                reasons.append((task_id, reason))
     return reasons
+
+
+def load_task_strategy_map(sessions_dir, run_id):
+    plan_path = os.path.join(sessions_dir, run_id, "orchestrator", "plan", "plan.json")
+    if not os.path.exists(plan_path):
+        return {}
+    plan = load_json(plan_path)
+    out = {}
+    for task in plan.get("tasks", []):
+        task_id = str(task.get("task_id", "")).strip()
+        if not task_id:
+            continue
+        out[task_id] = str(task.get("strategy", "")).strip().lower()
+    return out
+
+
+def is_summary_strategy(task_id, strategy):
+    strategy = (strategy or "").strip().lower()
+    if strategy in ("summarize_and_replan", "summary", "report_summary"):
+        return True
+    return (task_id or "").strip().lower() == "task-plan-summary"
+
+
+def is_recon_validation_strategy(strategy):
+    strategy = (strategy or "").strip().lower()
+    if not strategy:
+        return False
+    keywords = (
+        "recon",
+        "hypothesis_validate",
+        "validate",
+        "inventory",
+        "discovery",
+        "service_enum",
+        "vuln_mapping",
+    )
+    return any(keyword in strategy for keyword in keywords)
 
 
 def check_summary(summary, sessions_dir, max_low_value_streak):
@@ -102,10 +140,18 @@ def check_summary(summary, sessions_dir, max_low_value_streak):
             failures.extend(
                 [f"{scenario_id}/{run_id}: {msg}" for msg in detect_low_value_streak(event_path, max_low_value_streak)]
             )
+            strategy_by_task = load_task_strategy_map(sessions_dir, run_id)
             completed_reasons = collect_completed_reasons(event_path)
-            if any(reason == "assist_no_new_evidence" for reason in completed_reasons):
+            for task_id, reason in completed_reasons:
+                if reason != "assist_no_new_evidence":
+                    continue
+                strategy = strategy_by_task.get(task_id, "")
+                if is_summary_strategy(task_id, strategy):
+                    continue
+                if not is_recon_validation_strategy(strategy):
+                    continue
                 failures.append(
-                    f"{scenario_id}/{run_id}: task_completed reason assist_no_new_evidence observed"
+                    f"{scenario_id}/{run_id}: non-summary recon/validation task {task_id} completed with reason assist_no_new_evidence (strategy={strategy or 'unknown'})"
                 )
     return failures
 

@@ -92,6 +92,71 @@ func (c *Coordinator) SetRunPhase(phase string) {
 	}
 }
 
+func (c *Coordinator) syncLeaseWithSchedulerState(taskID, workerID string) error {
+	state, ok := c.scheduler.State(taskID)
+	if !ok {
+		return fmt.Errorf("unknown task state for lease sync: %s", taskID)
+	}
+	return c.manager.UpdateLeaseFromTaskState(c.runID, taskID, state, workerID)
+}
+
+func (c *Coordinator) writeLeaseForState(taskID string, attempt int, workerID string, state TaskState, now time.Time) error {
+	status, err := LeaseStatusFromTaskState(state)
+	if err != nil {
+		return err
+	}
+	lease := TaskLease{
+		TaskID:    taskID,
+		LeaseID:   fmt.Sprintf("lease-%s-%d", taskID, now.UnixNano()),
+		WorkerID:  workerID,
+		Status:    status,
+		Attempt:   attempt,
+		StartedAt: now,
+		Deadline:  now.Add(c.startupTimeout),
+	}
+	return c.manager.WriteLease(c.runID, lease)
+}
+
+func (c *Coordinator) writeLeaseFromSchedulerState(taskID string, attempt int, workerID string, now time.Time) error {
+	state, ok := c.scheduler.State(taskID)
+	if !ok {
+		return fmt.Errorf("unknown task state: %s", taskID)
+	}
+	return c.writeLeaseForState(taskID, attempt, workerID, state, now)
+}
+
+func (c *Coordinator) failTaskFromGuard(taskID, workerID, reason string, eventPayload, replanContext map[string]any) error {
+	if workerID != "" && c.workers.IsRunning(c.runID, workerID) {
+		_ = c.workers.Stop(c.runID, workerID, 2*time.Second)
+	}
+	delete(c.workerToTask, workerID)
+
+	failurePayload := map[string]any{}
+	for key, value := range eventPayload {
+		failurePayload[key] = value
+	}
+	if _, ok := failurePayload["reason"]; !ok {
+		failurePayload["reason"] = reason
+	}
+	if _, ok := failurePayload["worker_id"]; !ok && workerID != "" {
+		failurePayload["worker_id"] = workerID
+	}
+	_ = c.manager.EmitEvent(c.runID, orchestratorWorkerID, taskID, EventTypeTaskFailed, failurePayload)
+
+	context := map[string]any{}
+	for key, value := range replanContext {
+		context[key] = value
+	}
+	if _, ok := context["reason"]; !ok {
+		context["reason"] = reason
+	}
+	if err := c.markFailedWithReplan(taskID, reason, false, context); err != nil {
+		return err
+	}
+	_ = c.syncLeaseWithSchedulerState(taskID, "")
+	return nil
+}
+
 func (c *Coordinator) Tick() error {
 	c.ensureReplanBudget()
 	if _, err := c.manager.IngestEvidence(c.runID); err != nil {
@@ -148,39 +213,26 @@ func (c *Coordinator) Reconcile() error {
 	}
 	c.workerToTask = map[string]string{}
 	for _, lease := range leases {
-		state := TaskStateQueued
-		switch lease.Status {
-		case LeaseStatusQueued:
+		state, stateErr := TaskStateFromLeaseStatus(lease.Status)
+		if stateErr != nil {
 			state = TaskStateQueued
-		case LeaseStatusAwaitingApproval:
-			state = TaskStateAwaitingApproval
-		case LeaseStatusLeased:
-			state = TaskStateLeased
-		case LeaseStatusRunning:
+		}
+		switch state {
+		case TaskStateRunning:
 			if lease.WorkerID != "" && c.workers.IsRunning(c.runID, lease.WorkerID) {
 				state = TaskStateRunning
 				c.workerToTask[lease.WorkerID] = lease.TaskID
 			} else {
 				// stale running lease on restart is treated as retryable failure.
-				if err := c.markFailedWithReplan(lease.TaskID, "worker_reconcile_stale", true, map[string]any{
-					"reason":    "worker_reconcile_stale",
+				if err := c.markFailedWithReplan(lease.TaskID, TaskFailureReasonWorkerReconcileStale, true, map[string]any{
+					"reason":    TaskFailureReasonWorkerReconcileStale,
 					"worker_id": lease.WorkerID,
 				}); err != nil {
 					return err
 				}
-				_ = c.manager.UpdateLeaseStatus(c.runID, lease.TaskID, LeaseStatusQueued, "")
+				_ = c.syncLeaseWithSchedulerState(lease.TaskID, "")
 				continue
 			}
-		case LeaseStatusCompleted:
-			state = TaskStateCompleted
-		case LeaseStatusFailed:
-			state = TaskStateFailed
-		case LeaseStatusBlocked:
-			state = TaskStateBlocked
-		case LeaseStatusCanceled:
-			state = TaskStateCanceled
-		default:
-			state = TaskStateQueued
 		}
 		if err := c.scheduler.ForceState(lease.TaskID, state); err != nil {
 			return err
@@ -218,7 +270,7 @@ func (c *Coordinator) handleWorkerExits() error {
 		delete(c.workerToTask, exit.WorkerID)
 
 		if exit.Failed {
-			reason := "worker_exit"
+			reason := TaskFailureReasonWorkerExit
 			retryable := true
 			if workerReason, ok := latestWorkerFailureReason(events, taskID, WorkerSignalID(exit.WorkerID)); ok {
 				reason = workerReason
@@ -256,13 +308,7 @@ func (c *Coordinator) handleWorkerExits() error {
 			}); err != nil {
 				return err
 			}
-			if st, ok := c.scheduler.State(taskID); ok {
-				leaseStatus := LeaseStatusFailed
-				if st == TaskStateQueued {
-					leaseStatus = LeaseStatusQueued
-				}
-				_ = c.manager.UpdateLeaseStatus(c.runID, taskID, leaseStatus, "")
-			}
+			_ = c.syncLeaseWithSchedulerState(taskID, "")
 			continue
 		}
 
@@ -291,7 +337,7 @@ func (c *Coordinator) handleWorkerExits() error {
 			}
 			if check.Status != "satisfied" {
 				failurePayload := map[string]any{
-					"reason":              "missing_required_artifacts",
+					"reason":              TaskFailureReasonMissingRequiredArtifacts,
 					"error":               "completion contract verification failed",
 					"worker_id":           exit.WorkerID,
 					"log_path":            exit.LogPath,
@@ -307,23 +353,17 @@ func (c *Coordinator) handleWorkerExits() error {
 				if err := c.manager.EmitEvent(c.runID, orchestratorWorkerID, taskID, EventTypeTaskFailed, failurePayload); err != nil {
 					return err
 				}
-				if err := c.markFailedWithReplan(taskID, "missing_required_artifacts", true, failurePayload); err != nil {
+				if err := c.markFailedWithReplan(taskID, TaskFailureReasonMissingRequiredArtifacts, true, failurePayload); err != nil {
 					return err
 				}
-				if st, ok := c.scheduler.State(taskID); ok {
-					leaseStatus := LeaseStatusFailed
-					if st == TaskStateQueued {
-						leaseStatus = LeaseStatusQueued
-					}
-					_ = c.manager.UpdateLeaseStatus(c.runID, taskID, leaseStatus, "")
-				}
+				_ = c.syncLeaseWithSchedulerState(taskID, "")
 				continue
 			}
 		}
 		if err := c.scheduler.MarkCompleted(taskID); err != nil {
 			return err
 		}
-		_ = c.manager.UpdateLeaseStatus(c.runID, taskID, LeaseStatusCompleted, "")
+		_ = c.syncLeaseWithSchedulerState(taskID, "")
 	}
 	return nil
 }
@@ -334,8 +374,8 @@ func (c *Coordinator) handleStartupReclaims() error {
 		return err
 	}
 	for _, lease := range reclaimed {
-		if err := c.markFailedWithReplan(lease.TaskID, "startup_sla_missed", true, map[string]any{
-			"reason": "startup_sla_missed",
+		if err := c.markFailedWithReplan(lease.TaskID, TaskFailureReasonStartupSLAMissed, true, map[string]any{
+			"reason": TaskFailureReasonStartupSLAMissed,
 		}); err != nil {
 			return err
 		}
@@ -351,8 +391,8 @@ func (c *Coordinator) handleStaleReclaims() error {
 		return err
 	}
 	for _, lease := range reclaimed {
-		if err := c.markFailedWithReplan(lease.TaskID, "stale_lease", true, map[string]any{
-			"reason": "stale_lease",
+		if err := c.markFailedWithReplan(lease.TaskID, TaskFailureReasonStaleLease, true, map[string]any{
+			"reason": TaskFailureReasonStaleLease,
 		}); err != nil {
 			return err
 		}
@@ -371,7 +411,8 @@ func (c *Coordinator) handleSoftStall() error {
 	}
 	now := c.manager.Now()
 	for _, lease := range leases {
-		if lease.Status != LeaseStatusRunning {
+		state, ok := c.scheduler.State(lease.TaskID)
+		if !ok || state != TaskStateRunning {
 			continue
 		}
 		if !c.workers.IsRunning(c.runID, lease.WorkerID) {
@@ -409,25 +450,16 @@ func (c *Coordinator) dispatchTask(task TaskSpec) error {
 	now := c.manager.Now()
 	if err := c.scopePolicy.ValidateTaskTargets(task); err != nil {
 		_ = c.manager.EmitEvent(c.runID, orchestratorWorkerID, task.TaskID, EventTypeTaskFailed, map[string]any{
-			"reason":  "scope_denied",
+			"reason":  WorkerFailureScopeDenied,
 			"error":   err.Error(),
 			"attempt": attempt,
 		})
-		if err := c.markFailedWithReplan(task.TaskID, "scope_denied", false, map[string]any{
-			"reason": "scope_denied",
+		if err := c.markFailedWithReplan(task.TaskID, WorkerFailureScopeDenied, false, map[string]any{
+			"reason": WorkerFailureScopeDenied,
 		}); err != nil {
 			return err
 		}
-		lease := TaskLease{
-			TaskID:    task.TaskID,
-			LeaseID:   fmt.Sprintf("lease-%s-%d", task.TaskID, now.UnixNano()),
-			WorkerID:  "",
-			Status:    LeaseStatusBlocked,
-			Attempt:   attempt,
-			StartedAt: now,
-			Deadline:  now.Add(c.startupTimeout),
-		}
-		return c.manager.WriteLease(c.runID, lease)
+		return c.writeLeaseFromSchedulerState(task.TaskID, attempt, "", now)
 	}
 
 	if c.broker != nil {
@@ -442,26 +474,17 @@ func (c *Coordinator) dispatchTask(task TaskSpec) error {
 				"tier":   string(tier),
 				"actor":  "policy",
 			})
-			if err := c.markFailedWithReplan(task.TaskID, "scope_denied", false, map[string]any{
-				"reason": "scope_denied",
+			if err := c.markFailedWithReplan(task.TaskID, WorkerFailureScopeDenied, false, map[string]any{
+				"reason": WorkerFailureScopeDenied,
 			}); err != nil {
 				return err
 			}
-			return c.manager.UpdateLeaseStatus(c.runID, task.TaskID, LeaseStatusBlocked, "")
+			return c.writeLeaseFromSchedulerState(task.TaskID, attempt, "", now)
 		case ApprovalNeedsRequest:
-			lease := TaskLease{
-				TaskID:    task.TaskID,
-				LeaseID:   fmt.Sprintf("lease-%s-%d", task.TaskID, now.UnixNano()),
-				WorkerID:  "",
-				Status:    LeaseStatusAwaitingApproval,
-				Attempt:   attempt,
-				StartedAt: now,
-				Deadline:  now.Add(c.startupTimeout),
-			}
-			if err := c.manager.WriteLease(c.runID, lease); err != nil {
+			if err := c.scheduler.MarkAwaitingApproval(task.TaskID); err != nil {
 				return err
 			}
-			if err := c.scheduler.MarkAwaitingApproval(task.TaskID); err != nil {
+			if err := c.writeLeaseForState(task.TaskID, attempt, "", TaskStateAwaitingApproval, now); err != nil {
 				return err
 			}
 			req := c.broker.EnsureRequest(c.runID, task, tier, reason, now)
@@ -474,16 +497,7 @@ func (c *Coordinator) dispatchTask(task TaskSpec) error {
 		}
 	}
 
-	lease := TaskLease{
-		TaskID:    task.TaskID,
-		LeaseID:   fmt.Sprintf("lease-%s-%d", task.TaskID, now.UnixNano()),
-		WorkerID:  workerID,
-		Status:    LeaseStatusLeased,
-		Attempt:   attempt,
-		StartedAt: now,
-		Deadline:  now.Add(c.startupTimeout),
-	}
-	if err := c.manager.WriteLease(c.runID, lease); err != nil {
+	if err := c.writeLeaseForState(task.TaskID, attempt, workerID, TaskStateLeased, now); err != nil {
 		return err
 	}
 
@@ -491,20 +505,20 @@ func (c *Coordinator) dispatchTask(task TaskSpec) error {
 	spec.WorkerID = workerID
 	if err := c.workers.Launch(c.runID, spec); err != nil {
 		_ = c.manager.EmitEvent(c.runID, orchestratorWorkerID, task.TaskID, EventTypeTaskFailed, map[string]any{
-			"reason":    "launch_failed",
+			"reason":    TaskFailureReasonLaunchFailed,
 			"error":     err.Error(),
 			"attempt":   attempt,
 			"worker_id": workerID,
 		})
-		return c.markFailedWithReplan(task.TaskID, "launch_failed", true, map[string]any{
-			"reason":    "launch_failed",
+		return c.markFailedWithReplan(task.TaskID, TaskFailureReasonLaunchFailed, true, map[string]any{
+			"reason":    TaskFailureReasonLaunchFailed,
 			"worker_id": workerID,
 		})
 	}
 	if err := c.scheduler.MarkRunning(task.TaskID); err != nil {
 		return err
 	}
-	_ = c.manager.UpdateLeaseStatus(c.runID, task.TaskID, LeaseStatusRunning, workerID)
+	_ = c.syncLeaseWithSchedulerState(task.TaskID, workerID)
 	c.workerToTask[workerID] = task.TaskID
 
 	return c.manager.EmitEvent(c.runID, orchestratorWorkerID, task.TaskID, EventTypeTaskStarted, map[string]any{
@@ -526,16 +540,16 @@ func (c *Coordinator) handleApprovals() error {
 		if err := c.manager.EmitEvent(c.runID, orchestratorWorkerID, req.TaskID, EventTypeApprovalExpired, map[string]any{
 			"approval_id": req.ID,
 			"tier":        string(req.RiskTier),
-			"reason":      "approval_timeout",
+			"reason":      TaskFailureReasonApprovalTimeout,
 		}); err != nil {
 			return err
 		}
-		if err := c.markFailedWithReplan(req.TaskID, "approval_timeout", false, map[string]any{
-			"reason": "approval_timeout",
+		if err := c.markFailedWithReplan(req.TaskID, TaskFailureReasonApprovalTimeout, false, map[string]any{
+			"reason": TaskFailureReasonApprovalTimeout,
 		}); err != nil {
 			return err
 		}
-		_ = c.manager.UpdateLeaseStatus(c.runID, req.TaskID, LeaseStatusBlocked, "")
+		_ = c.syncLeaseWithSchedulerState(req.TaskID, "")
 	}
 	for _, req := range c.broker.DrainDenied() {
 		if err := c.manager.EmitEvent(c.runID, orchestratorWorkerID, req.TaskID, EventTypeApprovalDenied, map[string]any{
@@ -546,12 +560,12 @@ func (c *Coordinator) handleApprovals() error {
 		}); err != nil {
 			return err
 		}
-		if err := c.markFailedWithReplan(req.TaskID, "approval_denied", false, map[string]any{
-			"reason": "approval_denied",
+		if err := c.markFailedWithReplan(req.TaskID, TaskFailureReasonApprovalDenied, false, map[string]any{
+			"reason": TaskFailureReasonApprovalDenied,
 		}); err != nil {
 			return err
 		}
-		_ = c.manager.UpdateLeaseStatus(c.runID, req.TaskID, LeaseStatusBlocked, "")
+		_ = c.syncLeaseWithSchedulerState(req.TaskID, "")
 	}
 	for _, req := range c.broker.DrainGranted() {
 		if err := c.manager.EmitEvent(c.runID, orchestratorWorkerID, req.TaskID, EventTypeApprovalGranted, map[string]any{
@@ -565,7 +579,7 @@ func (c *Coordinator) handleApprovals() error {
 		if err := c.scheduler.MarkApprovalResumed(req.TaskID); err != nil {
 			return err
 		}
-		_ = c.manager.UpdateLeaseStatus(c.runID, req.TaskID, LeaseStatusQueued, "")
+		_ = c.syncLeaseWithSchedulerState(req.TaskID, "")
 	}
 	return nil
 }
@@ -605,12 +619,18 @@ func (c *Coordinator) ingestExternalApprovalDecisions() error {
 		}
 		switch event.Type {
 		case EventTypeApprovalGranted:
+			if err := RequireEventMutationDomain(EventTypeApprovalGranted, MutationDomainApprovalStatus); err != nil {
+				return err
+			}
 			expiresIn := 0 * time.Second
 			if raw, ok := payload["expires_in_seconds"].(float64); ok && raw > 0 {
 				expiresIn = time.Duration(raw) * time.Second
 			}
 			_ = c.broker.Approve(approvalID, scope, actor, reason, now, expiresIn)
 		case EventTypeApprovalDenied:
+			if err := RequireEventMutationDomain(EventTypeApprovalDenied, MutationDomainApprovalStatus); err != nil {
+				return err
+			}
 			_ = c.broker.Deny(approvalID, actor, reason)
 		}
 		c.seenApprovalDecisionEvents[event.EventID] = struct{}{}
@@ -651,8 +671,11 @@ func (c *Coordinator) handleWorkerStopRequests() error {
 			return err
 		}
 		if taskID != "" {
+			if err := RequireEventMutationDomain(EventTypeWorkerStopRequested, MutationDomainTaskLifecycle); err != nil {
+				return err
+			}
 			if err := c.scheduler.MarkCanceled(taskID); err == nil {
-				_ = c.manager.UpdateLeaseStatus(c.runID, taskID, LeaseStatusCanceled, "")
+				_ = c.syncLeaseWithSchedulerState(taskID, "")
 			}
 			delete(c.workerToTask, workerID)
 			_ = c.manager.EmitEvent(c.runID, orchestratorWorkerID, taskID, EventTypeTaskProgress, map[string]any{
@@ -676,11 +699,12 @@ func (c *Coordinator) handleExecutionTimeouts() error {
 	}
 	now := c.manager.Now()
 	for _, lease := range leases {
-		if lease.Status != LeaseStatusRunning && lease.Status != LeaseStatusAwaitingApproval {
+		state, ok := c.scheduler.State(lease.TaskID)
+		if !ok || (state != TaskStateRunning && state != TaskStateAwaitingApproval) {
 			continue
 		}
-		task, ok := c.scheduler.Task(lease.TaskID)
-		if !ok || task.Budget.MaxRuntime <= 0 {
+		task, hasTask := c.scheduler.Task(lease.TaskID)
+		if !hasTask || task.Budget.MaxRuntime <= 0 {
 			continue
 		}
 		paused := approvalPauseDuration(events, lease.TaskID, lease.StartedAt, now)
@@ -688,7 +712,7 @@ func (c *Coordinator) handleExecutionTimeouts() error {
 		if elapsed < 0 {
 			elapsed = 0
 		}
-		if lease.Status == LeaseStatusAwaitingApproval {
+		if state == TaskStateAwaitingApproval {
 			// Execution timeout is paused while waiting for approvals.
 			continue
 		}
@@ -696,23 +720,14 @@ func (c *Coordinator) handleExecutionTimeouts() error {
 			continue
 		}
 
-		if lease.WorkerID != "" && c.workers.IsRunning(c.runID, lease.WorkerID) {
-			_ = c.workers.Stop(c.runID, lease.WorkerID, 2*time.Second)
-		}
-		delete(c.workerToTask, lease.WorkerID)
-		_ = c.manager.EmitEvent(c.runID, orchestratorWorkerID, lease.TaskID, EventTypeTaskFailed, map[string]any{
-			"reason":          "execution_timeout",
+		if err := c.failTaskFromGuard(lease.TaskID, lease.WorkerID, TaskFailureReasonExecutionTimeout, map[string]any{
 			"elapsed_seconds": int(elapsed.Seconds()),
 			"budget_seconds":  int(task.Budget.MaxRuntime.Seconds()),
-			"worker_id":       lease.WorkerID,
-		})
-		if err := c.markFailedWithReplan(lease.TaskID, "execution_timeout", false, map[string]any{
-			"reason":          "execution_timeout",
+		}, map[string]any{
 			"elapsed_seconds": int(elapsed.Seconds()),
 		}); err != nil {
 			return err
 		}
-		_ = c.manager.UpdateLeaseStatus(c.runID, lease.TaskID, LeaseStatusFailed, "")
 	}
 	return nil
 }
@@ -727,11 +742,12 @@ func (c *Coordinator) handleBudgetGuards() error {
 		return err
 	}
 	for _, lease := range leases {
-		if lease.Status != LeaseStatusRunning {
+		state, ok := c.scheduler.State(lease.TaskID)
+		if !ok || state != TaskStateRunning {
 			continue
 		}
-		task, ok := c.scheduler.Task(lease.TaskID)
-		if !ok {
+		task, hasTask := c.scheduler.Task(lease.TaskID)
+		if !hasTask {
 			continue
 		}
 		steps, toolCalls := latestProgressCounters(events, lease.TaskID, lease.StartedAt)
@@ -756,27 +772,18 @@ func (c *Coordinator) handleBudgetGuards() error {
 			continue
 		}
 
-		if lease.WorkerID != "" && c.workers.IsRunning(c.runID, lease.WorkerID) {
-			_ = c.workers.Stop(c.runID, lease.WorkerID, 2*time.Second)
-		}
-		delete(c.workerToTask, lease.WorkerID)
-		_ = c.manager.EmitEvent(c.runID, orchestratorWorkerID, lease.TaskID, EventTypeTaskFailed, map[string]any{
-			"reason":      "budget_exhausted",
+		if err := c.failTaskFromGuard(lease.TaskID, lease.WorkerID, TaskFailureReasonBudgetExhausted, map[string]any{
 			"dimension":   dimension,
 			"limit":       limit,
 			"value":       value,
-			"worker_id":   lease.WorkerID,
 			"budget_type": dimension,
-		})
-		if err := c.markFailedWithReplan(lease.TaskID, "budget_exhausted", false, map[string]any{
-			"reason":    "budget_exhausted",
+		}, map[string]any{
 			"dimension": dimension,
 			"limit":     limit,
 			"value":     value,
 		}); err != nil {
 			return err
 		}
-		_ = c.manager.UpdateLeaseStatus(c.runID, lease.TaskID, LeaseStatusFailed, "")
 	}
 	return nil
 }

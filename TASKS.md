@@ -571,7 +571,7 @@ Sprint header convention (all new planned sprints): first checklist item must be
 - [x] Exit criteria deferred to Sprint 37 (full-suite rerun postponed by operator request).
 
 ## Sprint 36 — Project Salvage Attack Plan (planned, blocking)
-- [ ] Phase 1 — Stabilize and instrument before more fixes:
+- [x] Phase 1 — Stabilize and instrument before more fixes:
   - [x] freeze non-salvage feature work and treat Sprint 37+ as provisional.
     - codified freeze policy in `docs/runbooks/salvage-experiment-ops.md` (`Sprint Freeze Policy`): Sprint 36 allows salvage-phase changes only; Sprint 37+ stays provisional until Sprint 36 exit gate passes.
   - [x] add a diagnostic run mode that minimizes adaptive rewrites so traces show root behavior.
@@ -587,7 +587,7 @@ Sprint header convention (all new planned sprints): first checklist item must be
   - [x] create `docs/runbooks/problem-register.md` with severity, reproducibility, owner, and component mapping.
   - [x] log current known failures: zip discovery loops, repeated no-op commands, planner intermittency, report truth gaps, approval UX ambiguity.
   - [x] require a concrete repro recipe and acceptance signal for every registered problem.
-- [ ] Phase 3 — Deterministic repro harness:
+- [x] Phase 3 — Deterministic repro harness:
   - [x] add minimal reproducible scenarios for top failures (zip-local, OWASP report synthesis, approval stalls, planner truncation).
     - added `docs/runbooks/sprint36-repro-scenarios.json` with command templates and scenario mapping to problem-register IDs.
     - added deterministic active-probe approval template plan: `docs/runbooks/repro/approval-stall-plan.template.json`.
@@ -605,10 +605,17 @@ Sprint header convention (all new planned sprints): first checklist item must be
     - quick-gate checker rejects runs that complete tasks via `assist_no_new_evidence`.
   - [x] add a "full gate" benchmark pack (`repeat=5`) marked manual/periodic so it is not run on every change.
     - added `docs/runbooks/sprint36-full-gate-scenarios.json` and manual runner `scripts/run_sprint36_full_gate.sh`.
-- [ ] Phase 4 — Root-cause telemetry and context integrity:
-  - [ ] instrument observation truncation, memory-window eviction, retry-attempt resets, and repeated-command fingerprints.
-  - [ ] emit per-attempt "what changed since prior attempt" summaries to detect blind repeats early.
-  - [ ] classify each failure as context-loss, strategy-failure, or contract-failure before patching behavior.
+- [x] Phase 4 — Root-cause telemetry and context integrity:
+  - [x] Remaining implementation order (controlled):
+    - [x] 4.1 instrument truncation/eviction/retry-reset/repeated-command fingerprints.
+    - [x] 4.2 emit per-attempt "what changed since prior attempt" summaries.
+    - [x] 4.3 classify each failure as `context-loss|strategy-failure|contract-failure` and surface in run artifacts/events.
+  - [x] instrument observation truncation, memory-window eviction, retry-attempt resets, and repeated-command fingerprints.
+    - `context_envelope` now tracks append/eviction/token-compaction/compaction-summary counters, retry carryover/reset signals, and repeated action/result fingerprint telemetry.
+  - [x] emit per-attempt "what changed since prior attempt" summaries to detect blind repeats early.
+    - assist runtime now emits `attempt_delta_summary` progress event and persists attempt delta summary in `context_envelope`.
+  - [x] classify each failure as context-loss, strategy-failure, or contract-failure before patching behavior.
+    - worker failure emitters now stamp `failure_class` in `task_failed` payloads and failure findings metadata.
   - [x] add context diagnostics artifact per task attempt (`context_envelope.json`) capturing: prompt payload sizes, observation counts, truncation counters, and retained anchors.
   - [x] persist critical execution anchors across retries (last successful target path(s), last command/result fingerprint, last concrete failure cause).
   - [x] stop resetting effective context on retry: carry forward bounded prior-attempt observations into next attempt.
@@ -617,28 +624,172 @@ Sprint header convention (all new planned sprints): first checklist item must be
   - [x] enforce context compaction retention policy: always keep anchors (`Goal`, `Planner decision`), keep newest dynamic facts/questions/actions/artifacts, and inject explicit `compaction_summary` lines into assist context.
   - [x] raise minimum retained observation budget and enforce token-aware compaction that preserves file paths/errors/targets first.
   - [x] add regression test: repeated `list_dir`/`ls -la` without new evidence must trigger alternate strategy or `no_progress`, never silent completion.
-  - [ ] enforce orchestrator-owned shared-memory contract for parallel workers (single writer orchestrator; workers append-only via events/artifacts).
-  - [ ] attach event-id provenance for promoted shared-memory facts (candidate -> verified/rejected auditability).
-  - [ ] checkpoint protocol: after each Phase 4 implementation slice, run targeted tests + quick gate and log outcome in `docs/runbooks/problem-register.md`.
-- [ ] Phase 5 — Contract corrections (minimal behavior changes first):
-  - [ ] enforce run success semantics: `completed` requires goal-truth checks, not only task lease completion.
+  - [x] enforce orchestrator-owned shared-memory contract for parallel workers (single writer orchestrator; workers append-only via events/artifacts).
+    - memory refresh now validates `memory/shared_memory_contract.json` hashes for orchestrator-managed shared-memory files and emits `run_warning` on drift before reconciliation.
+    - orchestrator rewrites shared-memory files from event/artifact-derived evidence on every refresh and re-seals contract hashes.
+  - [x] attach event-id provenance for promoted shared-memory facts (candidate -> verified/rejected auditability).
+    - added `memory/known_facts_provenance.json` with per-finding provenance (`source_event_ids`, state transitions, promoted-to-known-facts marker).
+    - memory context now records provenance counts and shared-memory policy metadata for audit traceability.
+  - [x] checkpoint protocol: after each Phase 4 implementation slice, run targeted tests + quick gate and log outcome in `docs/runbooks/problem-register.md`.
+    - logged latest checkpoint in `docs/runbooks/problem-register.md` (`2026-02-26 - Phase 4 slice: shared-memory contract + fact provenance`) with targeted test/build pass and quick-gate outcome details.
+  - [x] add opt-in live LLM test coverage for non-deterministic validation paths.
+    - added `internal/assist/assistant_live_test.go` (`BIRDHACKBOT_LIVE_LLM_TEST=1`) to validate real LMStudio Suggest calls.
+- [x] Phase 5 — Contract corrections (minimal behavior changes first):
+  - [x] enforce run success semantics: `completed` requires goal-truth checks, not only task lease completion.
+    - run terminal outcome now requires both completion-contract verification gate and report-claim truth gate before emitting `run_completed`.
   - [x] enforce report truth gates: findings/claims must map to verifier-backed evidence.
-  - [ ] block terminal success when required artifacts/verifications are unresolved.
-  - [ ] require every exploratory pivot to cite either a new evidence anchor or explicit unknown under test.
-  - [ ] adopt and enforce "hard support exception policy" from `docs/runbooks/architecture-recovery-plan.md` (generic-first, capability-scoped exceptions only).
-  - [ ] missing-tool recovery contract: if a recommended tool is unavailable, request operator approval for install (when policy allows); otherwise force LLM replan against available tools without repeated missing-tool retries.
-- [ ] Phase 6 — Early role deployment (thin slice):
-  - [ ] introduce a read-only validator role/worker that independently confirms or rejects candidate findings.
-  - [ ] route report synthesis through validator verdict states (`verified`/`rejected`/`unverified`).
-  - [ ] defer full multi-role expansion until execution/context reliability is stable.
-- [ ] Phase 7 — Cleanup sweep to reduce accidental complexity:
-  - [ ] split oversized runtime/planner files by responsibility with no behavior change.
-  - [ ] remove overlapping adapters/fallbacks after contracts are enforced.
-  - [ ] document ownership boundaries for planner, executor, verifier, and reporter.
+  - [x] block terminal success when required artifacts/verifications are unresolved.
+    - added run-terminal completion verification gate (`EvaluateCompletionVerificationGate`) that fails terminal success when completed tasks lack completion-contract evidence or have unresolved required artifacts/findings.
+    - wired terminal outcome to emit explicit `completion_verification_gate_failed:<reason>` detail for postmortem traceability.
+  - [x] require every exploratory pivot to cite either a new evidence anchor or explicit unknown under test.
+    - recover-mode command/tool pivots now enforce citation contract (`unknown` marker or evidence anchor from summary/recover hint/recent observations).
+    - runtime emits explicit pivot-citation progress metadata (`pivot_basis`, `pivot_basis_source`, `pivot_basis_kind`) for auditability.
+  - [x] adopt and enforce "hard support exception policy" from `docs/runbooks/architecture-recovery-plan.md` (generic-first, capability-scoped exceptions only).
+    - added capability-scoped hard-support policy gate (`report_synthesis`, `vulnerability_evidence`, `archive_workflow`) with explicit env override `BIRDHACKBOT_HARD_SUPPORT=none|all|report,vuln,archive`.
+    - exception-path rewrite notes now carry policy provenance (`capability`, `gate`, `reason`, policy ref) for runtime auditability.
+  - [x] missing-tool recovery contract: if a recommended tool is unavailable, request operator approval for install (when policy allows); otherwise force LLM replan against available tools without repeated missing-tool retries.
+    - remediation messaging now explicitly marks unavailable tools as non-retryable and enumerates fallback available tools.
+    - repeated retries of the same missing tool now fail fast as `no_progress` (contract-enforced) instead of allowing prolonged recover churn.
+    - pseudo workflow commands (`summary`/`plan` family) are treated as non-installable directives: runtime skips install approvals for these tokens and explicitly pivots to available tools or tool-forge (`type=tool`) helper generation.
+    - added worker builtin `report` command support so fallback/LLM `command=report` executes locally instead of entering missing-tool remediation.
+    - hardened fallback token extraction to trim trailing sentence punctuation from artifact paths (prevents `read_file path.log....` drift across recover retries).
+- [x] Phase 6 — Early role deployment (thin slice):
+  - [x] introduce a read-only validator role/worker that independently confirms or rejects candidate findings.
+    - added validator worker thin-slice runtime (`internal/orchestrator/worker_runtime_validator.go`) routed by task strategy/id (`validator*`) and gated to `recon_readonly` risk only.
+    - validator emits explicit verdict findings (`verified`/`rejected`) plus `validator_verdicts.json` artifact and completion contract.
+    - added unit coverage: `TestRunWorkerTaskValidatorRoleEmitsVerdicts`, `TestRunWorkerTaskValidatorRoleRequiresReadOnlyRisk`.
+  - [x] route report synthesis through validator verdict states (`verified`/`rejected`/`unverified`).
+    - report finding synthesis now prioritizes `metadata.validator_verdict` and records validator basis in report output.
+    - added report regression: `TestAssembleRunReportUsesValidatorVerdictStates`.
+  - [x] defer full multi-role expansion until execution/context reliability is stable.
+    - scope intentionally limited to validator thin slice only; discoverer/verifier/skeptic expansion remains deferred to later sprints.
+- [x] Phase 7 — Cleanup sweep to reduce accidental complexity:
+  - [x] Implementation order (low-risk, one slice at a time, no concurrent behavior changes):
+    - [x] Slice 7.1 (docs/contracts only): lock canonical model in `docs/runbooks/state-inventory.md` (`TaskState` authority, `RunPhase` + `RunOutcome`, derived projections, glossary).
+      - added locked target-model contract, semantic glossary, and migration guardrails in `docs/runbooks/state-inventory.md`.
+    - [x] Slice 7.2 (tests only): add/extend guard tests for invariants and transition contracts before runtime edits.
+      - added context-content carryover regression `TestRunWorkerTaskAssistContextEnvelopeCapturesCarryoverAndDelta` to validate real attempt-2 context retention (`carryover` entries, attempt delta summary event/artifact, retry telemetry).
+      - extended state inventory guards to enforce transition semantics and domain separation (`terminal task states no outgoing transitions`, `LeaseStatus mirror contract`, `approval decision/status disjoint`, `worker failure reason classification coverage`).
+    - [x] Slice 7.3 (introduce types): add `RunOutcome` enum + parse/validate helpers with no behavior switch.
+      - added `internal/orchestrator/run_outcome.go` + `internal/orchestrator/run_outcome_test.go` (`success|failed|aborted|partial`) and inventory guards.
+    - [x] Slice 7.4 (wiring): emit/store `RunOutcome` at terminalization while keeping legacy fields for compatibility.
+      - terminal runtime now persists `plan.metadata.run_outcome` and emits `run_outcome` in terminal run events while retaining existing `detail`/status behavior.
+    - [x] Slice 7.5 (ownership collapse): make `LeaseStatus` derived from `TaskState`; remove independent lifecycle writes.
+      - added canonical `TaskState <-> LeaseStatus` mapping helpers and coordinator lease-sync via scheduler state (`UpdateLeaseFromTaskState`/`syncLeaseWithSchedulerState`).
+      - coordinator run-state blocked detection now reads scheduler `TaskState` (authoritative) instead of lease status snapshots.
+    - [x] Slice 7.6 (reason model): add typed reason registry and migrate worker/coordinator/report emitters.
+      - added canonical reason registry helpers in `internal/orchestrator/reason_registry.go` (`NormalizeTaskFailureReason`, `CanonicalTaskFailureReason`) covering worker + coordinator failure reasons.
+      - migrated coordinator/lease/worker/report reason read/write paths to typed constants + canonical normalization (no free-form drift in `task_failed.reason` emitters).
+      - aligned scheduler blocked-reason mapping with typed reason constants and added state-inventory regression coverage for reason registry invariants.
+    - [x] Slice 7.7 (event ownership): add central event->state mutation table and assert usage in runtime/tests.
+      - added central mutation ownership table in `internal/orchestrator/event_mutation_ownership.go` covering all canonical event types and mutation domains.
+      - wired runtime projection updates in `runEventCache.applyEvent` to gate mutations through the ownership table.
+      - added coordinator guard checks (`RequireEventMutationDomain`) for event-driven approval/task-cancel/replan mutation paths.
+      - added guard tests for mutation-table coverage/domain invariants and runtime gating behavior.
+    - [x] Slice 7.8 (cleanup): remove dead adapters/overlaps created by legacy dual-state handling.
+      - [x] 7.8a (projection dedupe): extracted shared event projection helpers (`internal/orchestrator/event_projection.go`) and removed duplicate run/task/worker projection switch logic from `run.go` and `event_cache.go` (no behavior change target, equivalence tests added).
+      - [x] 7.8b (coordinator lease-write dedupe): extracted shared lease-write helpers in coordinator (`writeLeaseForState`, `writeLeaseFromSchedulerState`) and removed repeated inline lease construction branches in dispatch/approval-deny/scope-deny paths.
+      - [x] 7.8c (guard-failure dedupe): extracted shared non-retryable guard-failure path in coordinator (`failTaskFromGuard`) and removed duplicate worker-stop + task_failed + markFailed + lease-sync blocks in execution-timeout and budget-exhaustion handlers.
+      - [x] 7.8d (event enum dedupe): consolidated canonical event-type list in `types.go` (`CanonicalEventTypes`) and removed duplicated event-type inventories from mutation-table/state-inventory test paths.
+      - [x] 7.8e (assist scope arg-sync fix): removed inner-scope arg shadowing in assist command adaptation path so scope validation uses final adapted/injected args; added regression `TestRunWorkerTaskAssistCommandScopeValidationUsesAdaptedArgs`.
+      - [x] 7.8f (runtime prep dedupe): extracted shared runtime command preparation helper (`prepareRuntimeCommand`) and replaced duplicated `fallback -> adapt -> fallback` flows in worker runtime, assist loop, and assist tool execution paths.
+      - [x] 7.8g (repair-path dedupe): switched command-contract repair runtime prep to shared `prepareRuntimeCommand` helper to keep repair retries aligned with primary execution scope/adaptation flow.
+      - [x] 7.8h (prep-note dedupe): extracted shared runtime-prep message builder (`runtimePreparationMessages`) and removed duplicated prep-note emit branches in worker runtime and assist loop command path.
+      - [x] 7.8i (prep-event dedupe): extracted shared runtime prep progress emitter (`emitRuntimePreparationProgress`) and removed duplicated event payload assembly in worker runtime and assist-loop command path.
+      - [x] 7.8j (command util extraction): moved shared runtime command helpers (`applyCommandTargetFallback`, `nmapHasInputListArg`, `firstTaskTarget`, `normalizeArgs`) into dedicated utility module to remove cross-file coupling in assist execution file.
+      - [x] 7.8k (assist exec split): split assist execution support into focused modules (`worker_runtime_assist_observation.go`, `worker_runtime_assist_action_key.go`, `runtime_bytes.go`) and removed large utility blocks from `worker_runtime_assist_exec.go`.
+      - [x] 7.8l (runtime helper extraction): moved shared scope-validation/shell-token parsing and worker signal/path-id helpers into dedicated runtime utility modules (`runtime_scope_validation.go`, `runtime_worker_ids.go`) to reduce `worker_runtime.go` overlap.
+      - [x] 7.8m (failure helper extraction): moved worker failure emission/classification helpers (`emitWorkerFailure`, failure class constants, `classifyWorkerFailureReason`, `runErrString`) into dedicated `runtime_failure.go` module.
+      - [x] 7.8n (command exec extraction): moved worker command execution/output-capping helpers (`runWorkerCommand`, `cappedOutputBuffer`) into `runtime_command_exec.go` to reduce worker runtime file density.
+      - [x] 7.8o (worker task helper extraction): moved worker completion/failure dedupe helpers (`workerAttemptAlreadyCompleted`, `workerFailureAlreadyRecorded`, `primaryTaskTarget`) into `runtime_worker_task_helpers.go`.
+      - [x] 7.8p (assist-loop helper extraction): moved non-loop helper functions out of `worker_runtime_assist_loop.go` into `worker_runtime_assist_loop_helpers.go` (streak tracking, recover pivot basis, prompt scope build, artifact materialization, question answering, shell script path resolve).
+      - [x] 7.8q (archive workflow extraction): moved archive/local-file workflow adaptation helpers out of `worker_runtime.go` into `runtime_archive_workflow.go` (input discovery, arg adaptation, supplemental artifact synthesis, password parsing helpers).
+      - [x] 7.8r (vulnerability evidence extraction): moved nmap vulnerability-evidence validation/rewrite helpers out of `worker_runtime.go` into `runtime_vulnerability_evidence.go` (nmap evidence detectors, weak vuln-action rewrites, wrapped-shell nmap enforcement, placeholder output guards).
+      - [x] 7.8s (nmap retry/evidence extraction): moved nmap host-timeout retry + output evidence validation helpers out of `worker_runtime.go` into `runtime_nmap_evidence_retry.go` (retry profile args, timeout fitting, option setters, retry output merge, command-output evidence checks).
+      - [x] 7.8t (assist timeout cap wiring): wired assist call-timeout cap to `BIRDHACKBOT_LLM_TIMEOUT_SECONDS` in worker runtime and added focused tests to keep fast-smoke timeout overrides reliable.
+      - [x] 7.8u (worker policy extraction): moved worker risk-policy enforcement/bootstrap failure emit helpers out of `worker_runtime.go` into `runtime_worker_policy.go` to keep runtime ownership boundaries cleaner.
+      - [x] 7.8v (input-repair extraction): moved local input-path/wordlist/artifact candidate repair helpers out of `worker_runtime.go` into `runtime_input_repair.go` (shell-wrapper path repair, workspace candidate selection, dependency artifact path extraction, token/similarity scoring helpers).
+      - [x] 7.8w (assist emit-path extraction): moved assist completion/no-progress/no-new-evidence/summary/adaptive-budget emit helpers out of `worker_runtime_assist_loop.go` into `worker_runtime_assist_loop_emit.go` to reduce loop-body density without changing behavior.
+      - [x] 7.8x (planner archive normalization extraction): moved archive-workflow task-dependency normalization helpers out of `main_planner.go` into `main_planner_archive.go` (goal/task archive detection, crack/hash/extract classifiers, archive dependency normalization helpers).
+      - [x] 7.8y (planner helper extraction): moved playbook hint/query/bounds helpers and shared `compactStrings`/`detectWorkerConfigPath` utilities out of `main_planner.go` into `main_planner_helpers.go` to reduce planner file density and utility overlap.
+      - [x] 7.8z (planner review/prompt utilities extraction): moved planner prompt-hash, plan-summary/review persistence, and shared min/max helpers out of `main_planner.go` into `main_planner_review.go` to further reduce planner core-file density.
+      - [x] 7.8aa (planner retry/attempt extraction): moved planner attempt diagnostics type + adaptive retry helpers (`adaptivePlanner*`, `persistPlannerAttemptDiagnostics`) out of `main_planner.go` into `main_planner_attempts.go` to keep planner orchestration logic focused.
+      - [x] 7.8ab (assist result handling dedupe): extracted shared assist runtime-result streak/no-new-evidence gate handling into `worker_runtime_assist_loop_result.go` to remove duplicated command/tool success-path logic in `worker_runtime_assist_loop.go` without behavior-target changes.
+      - [x] 7.8ac (assist missing-tool recovery dedupe): extracted shared missing-tool remediation/retry-contract handling into `worker_runtime_assist_loop_missing_tool.go` and removed duplicated command/tool failure-path blocks from `worker_runtime_assist_loop.go` without behavior-target changes.
+      - [x] 7.8ad (assist post-success mode dedupe): extracted shared post-success mode settlement (`execute-step` vs `recover`) into `worker_runtime_assist_loop_mode.go` and removed duplicated command/tool mode-reset blocks in `worker_runtime_assist_loop.go`.
+      - [x] 7.8ae (assist execution-failure dedupe): extracted shared command/tool execution-failure handling into `worker_runtime_assist_loop_failure.go` (missing-tool remediation, recover-mode failure emit, transition-to-recover) and removed duplicated failure blocks from `worker_runtime_assist_loop.go`.
+    - [x] After each slice: run targeted tests + smoke benchmark, then log checkpoint in `docs/runbooks/problem-register.md` before next slice.
+  - [x] create canonical state/status inventory and guard tests to prevent enum drift/duplication.
+    - added runbook `docs/runbooks/state-inventory.md` covering lifecycle/status domains, event types, and field conventions.
+    - added regression guards in `internal/orchestrator/state_inventory_test.go` to enforce uniqueness/validation across core enums.
+  - [x] collapse redundant lifecycle domains (execute via slices 7.3-7.5):
+    - make `TaskState` authoritative for task lifecycle; reduce `LeaseStatus` to persisted lease metadata derived from task transitions.
+    - keep `RunPhase` as workflow progress only; add explicit `RunOutcome` (`success|failed|aborted|partial`) for terminal truth.
+    - keep `RunStatus.State`/`WorkerStatus.State` as derived projections (not decision sources).
+  - [x] add a typed reason registry and enforce usage across coordinator/worker/report payloads (slice 7.6).
+  - [x] add central event-to-state mutation table and tests (single source of truth for lifecycle mutation ownership, slice 7.7).
+  - [x] tighten semantic glossary and transition contracts (slice 7.1 + enforcement in 7.2/7.7):
+    - `failed` vs `blocked`
+    - `canceled` vs `stopped`
+    - approval policy decision vs approval request lifecycle
+  - [x] split oversized runtime/planner files by responsibility with no behavior change (starts after slice 7.5 stabilization).
+  - [x] remove overlapping adapters/fallbacks after contracts are enforced (slice 7.8).
+  - [x] document ownership boundaries for planner, executor, verifier, and reporter (final step after slices 7.1-7.8).
+    - added `docs/runbooks/ownership-boundaries.md`.
 - [ ] Phase 8 — Exit gate (must pass before Sprint 37 starts):
+  - [x] Ensure benchmark worker env passthrough is effective for assist timeout overrides (`--worker-env BIRDHACKBOT_LLM_TIMEOUT_SECONDS=<n>`); validated with bounded smoke `benchmark-20260301-115719` showing `llm_timeout_seconds=15` in worker task-progress events after explicit binary rebuild.
+  - [x] Resolve PR-009 (`scope_denied` false positive on adapted nmap target-injection path) and prove via smoke that validation/execution use the same final command args.
+    - completed: shadowing + prep-flow dedupe landed with regressions (`TestRunWorkerTaskAssistCommandScopeValidationUsesAdaptedArgs`, `TestPrepareRuntimeCommand*`) and unattended smoke completion evidence (`benchmark-20260227-161948`) with no `scope_denied`.
+  - [x] Tighten `assist_no_new_evidence` terminalization policy:
+    - non-summary recon/validation tasks must not end `task_completed reason=assist_no_new_evidence`; treat as `no_progress` and force bounded replan/failure path.
+    - do not allow `assist_no_new_evidence` fallback findings to satisfy required-finding completion contracts for evidence-producing tasks.
+    - add regression on `host_discovery_inventory` quick gate to assert zero non-summary `task_completed` events with `reason=assist_no_new_evidence`.
+    - completed:
+      - recon/validation no-new-evidence paths now hard-fail as `no_progress` (`fallback_rejected`) instead of emitting `task_completed`.
+      - assist fallback completion contracts now set `allow_fallback_without_findings=true` and do not emit synthetic `task_execution_result` findings for `assist_no_new_evidence`.
+      - benchmark gate checker now enforces only non-summary recon/validation `assist_no_new_evidence` completions as violations (summary/adaptive fallbacks excluded).
+      - validated with `benchmark-20260301-135622` and `benchmark-20260301-135739` plus gate pass on `sessions/benchmarks/benchmark-20260301-135739/summary.json`.
   - [ ] zip regression passes `>=5/5` under LLM planner without repeated no-op loop signatures.
   - [ ] planner success/retry metrics meet agreed thresholds on the salvage smoke matrix.
   - [ ] reports include concise human-readable method/results and zero unverified critical claims.
+  - [ ] enforce objective-level completion contracts for ZIP/local-file recovery goals:
+    - terminal success must require evidence of `password_recovered` plus real decrypt proof (not archive listing only).
+    - run/report must explicitly surface objective status as `met`/`not_met` with reason when unmet.
+  - [ ] disable synthetic stdout fallback for critical goal artifacts in ZIP/local-file recovery flows:
+    - artifacts like `password_found*`, decrypted proof tokens, and objective markers must come from concrete files/evidence, not copied command output.
+    - completion gate must fail when critical artifacts are absent, even if task command exits `0`.
+  - [ ] CLI-first closed-loop self-correction pilot (qwen3.5, real-LLM required):
+    - [x] define per-step CLI assist micro-loop contract: `execute -> observe -> interpret -> decide -> memory_update`.
+    - [x] publish CLI loop contract/design note: `docs/runbooks/cli-loop-recovery-plan.md`.
+    - [x] add flag-gated open-interpreter-like CLI loop mode (`agent.assist_loop_mode=open_like`) that relaxes command/question decision strictness while keeping completion truth gate strict.
+    - [x] enforce explicit decision states in CLI assist flow: `retry_modified | pivot_strategy | ask_user | step_complete`.
+    - [x] require `step_complete` payload contract with `objective_met` (`true|false`), `evidence_refs`, and `why_met`; reject completion without evidence refs.
+    - [x] reject non-executable prose-as-command outputs before `/run` dispatch and force bounded repair/regeneration.
+    - [x] add repeated low-value action guard (`ls`/`list_dir` churn without evidence delta) that forces pivot or `no_progress`.
+    - [x] add deterministic CLI tests for command-shape validation and anti-loop behavior.
+    - [x] add failure-first immediate repair retries in `open_like` mode before broad recovery (`assist_repair_attempts`, bounded).
+    - [x] enforce objective-locked report finalization in `open_like` mode (skip final report synthesis when action objective is unmet).
+    - [x] canonicalize tool-forge file/run paths to `artifacts/tools` and repair session-prefixed/duplicated script paths before execution.
+    - [ ] add live qwen3.5 CLI validation gate (required for completion): run `secret.zip` and `192.168.50.1` smoke scenarios and archive transcripts + reports under `sessions/<id>/`.
+    - [x] fix CLI `report` argument parsing so `output=<path>` is interpreted as flag/value, not a literal filename prefix.
+    - [x] block reasoning-style leakage in final/user report text (summary/report output must be concise findings/method/results only).
+    - [ ] acceptance gate: `secret.zip` CLI run succeeds `>=5/5` without prose-command exec failures; router CLI run yields evidence-backed findings or explicit `objective_not_met` (no false-success report).
+  - [ ] LLM-freedom guardrail audit (anti-hardcoding, required before Sprint 36 exit):
+    - [ ] inventory every non-LLM command adaptation/rewrite path in CLI + orchestrator (`adapt`, `repair`, fallback command synthesis) with owner + policy rationale.
+    - [ ] classify each adaptation path as `generic_capability` vs `scenario_literal`; remove/disable `scenario_literal` behavior from production runtime paths.
+    - [ ] add regression check that production (non-test) adaptation paths do not embed scenario literals (`secret.zip`, fixed lab IPs/domains) outside examples/docs.
+    - [ ] emit decision-source mix per run (`llm_direct`, `llm_repair`, `runtime_adapt`, `static_fallback`) and surface in run summary/report.
+    - [ ] set and enforce a salvage acceptance threshold where LLM-led decisions are the majority for successful CLI smoke runs.
+  - [ ] LLM autonomy contract verification (CLI-first, then worker adoption plan):
+    - [ ] verify prompts explicitly require bounded self-correction (`retry_modified|pivot_strategy|ask_user|step_complete`) before `no_progress`.
+    - [ ] verify runtime guards are safety/contract-only and do not force scenario-specific tool/flag sequences.
+    - [ ] add a live-run checklist artifact that maps each major step to the decision reason + evidence delta used by the model.
+  - [x] CLI context-transparency slice (memory add/retrieve visibility, no heavy redesign):
+    - [x] persist latest per-turn assist context packet artifact (`artifacts/assist/context_packet.json`) with exact sections/sizes sent to the model.
+    - [x] append memory operation trace (`artifacts/assist/memory_ops.jsonl`) for read/write actions over summary/facts/focus/chat/observations/plan/inventory during the session.
+    - [x] add `/context packet` operator command to show latest packet + recent memory ops directly in CLI.
+    - [x] add focused tests for packet/trace persistence and `/context packet` output contract.
+  - [ ] prepare orchestrator-worker adoption plan for the same closed-loop contract after CLI gate is green (planning only; no worker implementation before CLI pass).
   - [ ] quick-gate benchmark trend is non-regressing across salvage commits (token/time budget respected).
   - [ ] hold sprint replanning review to rewrite Sprint 37-43 scope based on measured outcomes.
 

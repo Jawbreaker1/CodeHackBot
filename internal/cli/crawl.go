@@ -63,6 +63,9 @@ func (r *Runner) handleCrawl(args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := r.validateCommandScope("crawl", []string{startURL}); err != nil {
+		return err
+	}
 	maxPages, maxDepth, sameHost, err := parseCrawlOptions(args[1:])
 	if err != nil {
 		return err
