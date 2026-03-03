@@ -86,12 +86,7 @@ func (r *Runner) handleRun(args []string) error {
 	} else if r.isTTY() {
 		r.logger.Printf("Ctrl-C to interrupt (ESC unavailable: %v)", keyErr)
 	}
-	if interruptCh != nil {
-		go func() {
-			<-interruptCh
-			cancel()
-		}()
-	}
+	wasInterrupted := bindInterruptCancel(cancel, interruptCh)
 
 	result, err := runner.RunCommandWithContext(ctx, runCommand, runArgs...)
 	result = r.maybeAugmentJohnShowResult(runner, runCommand, runArgs, result, err)
@@ -122,11 +117,15 @@ func (r *Runner) handleRun(args []string) error {
 	}
 	safePrint(renderExecSummary(r.currentTask, runCommand, runArgs, time.Since(start), result.LogPath, ledgerStatus, result.Output, err))
 	if err != nil {
-		if wasCanceled {
+		if wasCanceled || wasInterrupted() {
 			r.logger.Printf("Interrupted by operator.")
 			return operatorInterruptedError()
 		}
 		return commandError{Result: result, Err: err}
+	}
+	if wasInterrupted() {
+		r.logger.Printf("Interrupted by operator.")
+		return operatorInterruptedError()
 	}
 	return nil
 }
@@ -290,12 +289,7 @@ func (r *Runner) handleMSF(args []string) error {
 	} else if r.isTTY() {
 		r.logger.Printf("Ctrl-C to interrupt (ESC unavailable: %v)", keyErr)
 	}
-	if interruptCh != nil {
-		go func() {
-			<-interruptCh
-			cancel()
-		}()
-	}
+	wasInterrupted := bindInterruptCancel(cancel, interruptCh)
 
 	liveWriter := r.liveWriter()
 	activityWriter := newActivityWriter(liveWriter)
@@ -332,11 +326,15 @@ func (r *Runner) handleMSF(args []string) error {
 
 	safePrint(renderExecSummary(r.currentTask, "msfconsole", cmdArgs, time.Since(start), result.LogPath, "disabled", result.Output, err))
 	if err != nil {
-		if wasCanceled {
+		if wasCanceled || wasInterrupted() {
 			r.logger.Printf("Interrupted by operator.")
 			return operatorInterruptedError()
 		}
 		return err
+	}
+	if wasInterrupted() {
+		r.logger.Printf("Interrupted by operator.")
+		return operatorInterruptedError()
 	}
 
 	lines := msf.ParseSearchOutput(result.Output)

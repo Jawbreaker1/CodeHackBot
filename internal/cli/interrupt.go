@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -109,4 +110,17 @@ func notifyInterrupt(cancelCh chan<- struct{}) {
 	case cancelCh <- struct{}{}:
 	default:
 	}
+}
+
+func bindInterruptCancel(cancel func(), interruptCh <-chan struct{}) func() bool {
+	var interrupted atomic.Bool
+	if interruptCh == nil {
+		return interrupted.Load
+	}
+	go func() {
+		<-interruptCh
+		interrupted.Store(true)
+		cancel()
+	}()
+	return interrupted.Load
 }

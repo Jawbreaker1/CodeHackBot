@@ -686,12 +686,7 @@ func (r *Runner) executeToolRun(command string, args []string) error {
 	} else if r.isTTY() {
 		r.logger.Printf("Ctrl-C to interrupt (ESC unavailable: %v)", keyErr)
 	}
-	if interruptCh != nil {
-		go func() {
-			<-interruptCh
-			cancel()
-		}()
-	}
+	wasInterrupted := bindInterruptCancel(cancel, interruptCh)
 
 	liveWriter := r.liveWriter()
 	activityWriter := newActivityWriter(liveWriter)
@@ -732,11 +727,15 @@ func (r *Runner) executeToolRun(command string, args []string) error {
 
 	safePrint(renderExecSummary(r.currentTask, command, args, time.Since(start), result.LogPath, "disabled", result.Output, err))
 	if err != nil {
-		if wasCanceled {
+		if wasCanceled || wasInterrupted() {
 			r.logger.Printf("Interrupted by operator.")
 			return operatorInterruptedError()
 		}
 		return commandError{Result: result, Err: err}
+	}
+	if wasInterrupted() {
+		r.logger.Printf("Interrupted by operator.")
+		return operatorInterruptedError()
 	}
 	return nil
 }
