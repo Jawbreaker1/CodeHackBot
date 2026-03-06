@@ -16,6 +16,8 @@ All authorization/scope constraints in `AGENTS.md` are mandatory.
 - `internal/report/`, `internal/msf/`, `internal/plan/`, `internal/replay/`, `internal/session/`: reporting, metasploit search parsing, planning, replay, session scaffolding.
 - `config/default.json` (+ optional `config/profiles/*.json`): runtime behavior and thresholds.
 - `docs/playbooks/`, `docs/tooling/`, `docs/runbooks/`: playbooks, tool references, and operator runbooks.
+  - key control docs: `docs/runbooks/state-inventory.md`, `docs/runbooks/workflow-state-contract.md`, `docs/runbooks/runtime-mutation-stage-map.md`, `docs/runbooks/execution-contract-matrix.md`, `docs/runbooks/failure-taxonomy.md`, `docs/runbooks/acceptance-gates.md`.
+- `docs/sprints/`: sprint continuity artifacts (planning/discovery logs to preserve focus across context compaction), including `docs/sprints/salvage2_discoveries.md` and `docs/sprints/sprint37_phase0_diagnostic.md`.
 - `sessions/<id>/`: per-session evidence and memory artifacts.
 
 ## Build, Test, and Local Run

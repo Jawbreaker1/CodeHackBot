@@ -3,6 +3,13 @@
 This plan is a living document. Keep tasks small, testable, and tied to artifacts under `sessions/`.
 Sprint flow rule: do not start a new sprint while the previous sprint has open tasks. Move unfinished items forward explicitly so each closed sprint has zero open tasks.
 Sprint header convention (all new planned sprints): first checklist item must be `Prerequisite: previous sprint completed or unfinished tasks explicitly moved`.
+Control-doc sync checklist (required at sprint checkpoints and before sprint close):
+- `docs/runbooks/state-inventory.md`
+- `docs/runbooks/workflow-state-contract.md`
+- `docs/runbooks/runtime-mutation-stage-map.md`
+- `docs/runbooks/execution-contract-matrix.md`
+- `docs/runbooks/failure-taxonomy.md`
+- `docs/runbooks/acceptance-gates.md`
 
 ## Sprint 0 — Foundations (done)
 - [x] Repo scaffolding: `AGENTS.md`, `PROJECT.md`, `README.md`
@@ -570,10 +577,10 @@ Sprint header convention (all new planned sprints): first checklist item must be
 - [x] Re-run 5x baseline on current commit and refresh locked baseline after smoke is healthy (`benchmark-20260223-092006` locked to `docs/runbooks/autonomy-benchmark-baseline.json`).
 - [x] Exit criteria deferred to Sprint 37 (full-suite rerun postponed by operator request).
 
-## Sprint 36 — Project Salvage Attack Plan (planned, blocking)
+## Sprint 36 — Project Salvage Attack Plan (closed, carryover moved to Sprint 37)
 - [x] Phase 1 — Stabilize and instrument before more fixes:
-  - [x] freeze non-salvage feature work and treat Sprint 37+ as provisional.
-    - codified freeze policy in `docs/runbooks/salvage-experiment-ops.md` (`Sprint Freeze Policy`): Sprint 36 allows salvage-phase changes only; Sprint 37+ stays provisional until Sprint 36 exit gate passes.
+  - [x] freeze non-salvage feature work and treat Sprint 38+ as provisional.
+    - codified freeze policy in `docs/runbooks/salvage-experiment-ops.md` (`Sprint Freeze Policy`): Sprint 36 allows salvage-phase changes only; Sprint 38+ stays provisional until Sprint 36 exit gate passes.
   - [x] add a diagnostic run mode that minimizes adaptive rewrites so traces show root behavior.
     - added `--diagnostic` for `run` and `benchmark`, propagated to workers via `BIRDHACKBOT_ORCH_DIAGNOSTIC_MODE=true`.
     - diagnostic mode disables adaptive worker rewrites (target auto-injection, runtime command adaptation, missing-input auto-repair) while preserving fail-closed scope checks.
@@ -736,7 +743,15 @@ Sprint header convention (all new planned sprints): first checklist item must be
   - [x] remove overlapping adapters/fallbacks after contracts are enforced (slice 7.8).
   - [x] document ownership boundaries for planner, executor, verifier, and reporter (final step after slices 7.1-7.8).
     - added `docs/runbooks/ownership-boundaries.md`.
-- [ ] Phase 8 — Exit gate (must pass before Sprint 37 starts):
+  - [x] [Moved to Sprint 37] Phase 8 — Exit gate (must pass before Sprint 38 starts):
+  - [x] [Moved to Sprint 37] Current priority order (execute top-down; do not expand scope until higher item is green):
+    - [x] P1: `secret.zip` reliability gate to `>=5/5` with no repeated no-op loop signatures.
+    - [x] [Moved to Sprint 37] P2: close completion-contract gap (successful answer must emit `type=complete` + `result_snapshot.md`).
+    - [x] [Moved to Sprint 37] P3: enforce objective proof contract for ZIP/local-file goals and keep synthetic critical-artifact fallback disabled.
+    - [x] [Moved to Sprint 37] P4: pass live qwen3.5 CLI acceptance gate (`secret.zip >=5/5` + router scenario with evidence-backed findings or explicit `objective_not_met`).
+    - [x] [Moved to Sprint 37] P5: set/enforce LLM-led decision-source majority threshold for successful CLI smoke runs.
+    - [x] [Moved to Sprint 37] P6: finish autonomy contract verification (prompt self-correction contract + runtime safety-only guard verification).
+    - progress (`2026-03-05`): orchestrator assist loop now injects exact latest execution feedback into every turn (`command`, args, exit code, artifact log path, output tail), and deep validation intents receive shaped minimum runtime loop budgets (`max_steps>=12`, `max_tool_calls>=16`, expanded recover/no-evidence caps) to reduce one-shot budget exhaustion.
   - [x] Ensure benchmark worker env passthrough is effective for assist timeout overrides (`--worker-env BIRDHACKBOT_LLM_TIMEOUT_SECONDS=<n>`); validated with bounded smoke `benchmark-20260301-115719` showing `llm_timeout_seconds=15` in worker task-progress events after explicit binary rebuild.
   - [x] Resolve PR-009 (`scope_denied` false positive on adapted nmap target-injection path) and prove via smoke that validation/execution use the same final command args.
     - completed: shadowing + prep-flow dedupe landed with regressions (`TestRunWorkerTaskAssistCommandScopeValidationUsesAdaptedArgs`, `TestPrepareRuntimeCommand*`) and unattended smoke completion evidence (`benchmark-20260227-161948`) with no `scope_denied`.
@@ -749,16 +764,52 @@ Sprint header convention (all new planned sprints): first checklist item must be
       - assist fallback completion contracts now set `allow_fallback_without_findings=true` and do not emit synthetic `task_execution_result` findings for `assist_no_new_evidence`.
       - benchmark gate checker now enforces only non-summary recon/validation `assist_no_new_evidence` completions as violations (summary/adaptive fallbacks excluded).
       - validated with `benchmark-20260301-135622` and `benchmark-20260301-135739` plus gate pass on `sessions/benchmarks/benchmark-20260301-135739/summary.json`.
-  - [ ] zip regression passes `>=5/5` under LLM planner without repeated no-op loop signatures.
-  - [ ] planner success/retry metrics meet agreed thresholds on the salvage smoke matrix.
-  - [ ] reports include concise human-readable method/results and zero unverified critical claims.
-  - [ ] enforce objective-level completion contracts for ZIP/local-file recovery goals:
+  - [x] zip regression passes `>=5/5` under LLM planner without repeated no-op loop signatures.
+    - updated checkpoint (`2026-03-04`, qwen3.5 CLI, 5 finished runs): answer success `5/5`, completion-contract success `5/5`, repeated no-op loop signatures `0/5`.
+    - run set: `20260304-203908-fac6`, `20260304-204019-9102`, `20260304-204118-6957`, `20260304-204731-2af4`, `20260304-205800-78c0`.
+    - fixed contributors: plan-step recovery continuation, bounded post-plan recover, command arg dedupe to prevent malformed duplicate unzip flags.
+  - [x] [Moved to Sprint 37] enforce objective-level completion contracts for ZIP/local-file recovery goals:
     - terminal success must require evidence of `password_recovered` plus real decrypt proof (not archive listing only).
     - run/report must explicitly surface objective status as `met`/`not_met` with reason when unmet.
-  - [ ] disable synthetic stdout fallback for critical goal artifacts in ZIP/local-file recovery flows:
+    - progress (`2026-03-04`): added generic CLI completion bridge on evidence-verified goal evaluation so successful answer paths emit completion artifacts (`result_snapshot.md`) + journal/focus updates even when model omits explicit `type=complete`.
+  - [x] [Moved to Sprint 37] disable synthetic stdout fallback for critical goal artifacts in ZIP/local-file recovery flows:
     - artifacts like `password_found*`, decrypted proof tokens, and objective markers must come from concrete files/evidence, not copied command output.
     - completion gate must fail when critical artifacts are absent, even if task command exits `0`.
-  - [ ] CLI-first closed-loop self-correction pilot (qwen3.5, real-LLM required):
+  - [x] [Moved to Sprint 37] reports include concise human-readable method/results and zero unverified critical claims.
+  - [x] [Moved to Sprint 37] add generic CVE claim lifecycle + confirmation workflow (no tool-specific hardcoding):
+    - CVE claim states must be explicit: `candidate | validated | rejected | needs_review`.
+    - `validated` requires three evidence classes: `detection_evidence` + `source_evidence` + `applicability_evidence` tied to the scanned target/service/version.
+    - script/tool error lines (for example NSE `ERROR`) must never be promoted to `validated`; downgrade to `candidate` or `rejected` with reason.
+    - follow-up confirmation steps for `candidate` CVEs must be planned/executed as bounded safe checks before final report status is set.
+    - any intrusive confirmation path remains approval-gated per session policy and lab scope.
+    - slice A (contract + parser/report semantics):
+      - add typed CVE claim record + state enum and enforce state rendering in report sections (`Validated`, `Candidate`, `Rejected`).
+      - add parser rule: error-bearing evidence lines cannot produce `validated`.
+      - tests: mixed NSE output fixture (`valid signal + script error`) must emit `validated=1`, `candidate/rejected>=1`, `false validated=0`.
+      - progress (`2026-03-05`): implemented claim-state rendering in OWASP synthesis (`validated|candidate|rejected|needs_review`), added parser downgrade for script-error evidence, and added mixed NSE regression (`TestRunWorkerTaskReportSynthesisSeparatesValidatedAndRejectedClaimsForMixedNSEOutput`).
+    - slice B (applicability + source-evidence gate):
+      - require non-empty `source_evidence` and `applicability_evidence` before upgrading claim state to `validated`.
+      - keep generic capability-level logic (no per-tool/per-CVE hardcoding).
+      - tests: claim with only CVE mention + no applicability must remain `candidate`; claim with source+applicability may become `validated`.
+      - progress (`2026-03-05`): implemented validated-state gating on source+applicability evidence in OWASP synthesis classifier and added regressions (`TestRunWorkerTaskReportSynthesisKeepsClaimCandidateWithoutApplicabilityEvidence`, `TestRunWorkerTaskReportSynthesisValidatesClaimWithSourceAndApplicabilityEvidence`); live smoke `run-router-cve-gate-b-20260305-170417` shows error-only CVE stays `rejected` and validated claims require stronger evidence signals.
+    - slice C (confirmation follow-up planning/execution):
+      - when claims remain `candidate`, planner/runtime must schedule bounded confirmation steps before terminal report.
+      - intrusive confirmation remains approval-gated; if skipped/blocked, final status stays `candidate` with explicit reason.
+      - tests: candidate claim path triggers follow-up step generation and preserves non-validated status when confirmation is unavailable.
+      - progress (`2026-03-05`): report synthesis now emits explicit `Candidate Confirmation Plan` with completed pre-check status, candidate-specific blocker reason, and bounded non-intrusive follow-up steps; candidate claims remain non-validated with explicit reasons when applicability/source proof is missing.
+      - progress (`2026-03-05`): added generic CVE phase-gate contract rendering (`discover_signal`, `lookup_source`, `derive_verification_steps`, `execute_bounded_validation`, `target_applicability`) and gated `validated` state on full phase pass; live smoke `run-router-cve-phasegate-20260305-174427` now demotes unproven CVE claims to `candidate` with explicit follow-up plan instead of false validation.
+      - progress (`2026-03-05`): report-task runtime now emits typed `cve_candidate_claim` findings from `Candidate Findings` output, and coordinator replan mutation now promotes those findings into bounded `assist` follow-up tasks (active-probe risk) that require source lookup + reproducible validation + post-access continuation when access is obtained; regressions: `TestEmitReportCandidateFindings`, `TestBuildReplanTask_UsesCandidateCVEFollowupGoal`.
+      - progress (`2026-03-05`): coordinator now routes `cve_candidate_claim` findings through mutation-enabled `run_replan_requested` flow (`graph_mutation=true`) so candidate follow-up tasks are actually inserted into the run graph (regression: `TestCoordinator_CandidateCVEFindingTriggersGraphMutation`).
+      - progress (`2026-03-05`): added generic anti-monopolization guard for recursive adaptive recovery (`execution_failure` from adaptive tasks with `no_progress|assist_loop_detected|assist_budget_exhausted` no longer spawns endless adaptive children) and priority de-escalation for recursive adaptive tasks to avoid starving queued primary work; regressions: `TestMaybeMutateTaskGraph_SuppressesRecursiveAdaptiveNoProgress`, `TestBuildReplanTask_RecursiveAdaptivePriorityIsReduced`.
+      - live check (`2026-03-05` run `run-router-recovery-fairness-20260305-184531`): candidate CVE follow-up task was injected and executed; run no longer entered recovery monopolization loop. Remaining blocker is source-lookup scope policy (`browse` to out-of-scope NVD host denied) which currently blocks that follow-up path.
+      - progress (`2026-03-05`): candidate CVE follow-up tasks now depend on the source task and assist layered context now includes capped `dependency_artifacts` inventory/log sections, reducing self-log reread churn and giving follow-up execution direct upstream evidence paths (regressions: `TestBuildReplanTask_UsesCandidateCVEFollowupGoal`, `TestBuildWorkerAssistLayeredContextIncludesDependencyArtifacts`).
+      - progress (`2026-03-05`): added bucketed adaptive replan budgets so `candidate_cve_followup` mutations have their own cap (configurable via `max_replans_candidate_cve_followup=` / `replan_budget_candidate_cve_followup=`) and no longer consume the full global mutation budget by default; bucket exhaustion returns `replan_bucket_budget_exhausted` without stopping the run (regressions: `TestParseReplanBucketBudgets`, `TestMaybeMutateTaskGraph_CandidateBucketBudgetExhaustionDoesNotStopRun`).
+    - acceptance gate:
+      - router smoke report contains zero `validated` CVEs backed only by script errors.
+      - any validated CVE includes all three evidence classes and target/service applicability text.
+      - report remains human-readable with clear claim-state separation.
+  - [x] [Moved to Sprint 37] [Deferred until ZIP completion-contract gate is stable] planner success/retry metrics meet agreed thresholds on the salvage smoke matrix.
+  - [x] [Moved to Sprint 37] CLI-first closed-loop self-correction pilot (qwen3.5, real-LLM required):
     - [x] define per-step CLI assist micro-loop contract: `execute -> observe -> interpret -> decide -> memory_update`.
     - [x] publish CLI loop contract/design note: `docs/runbooks/cli-loop-recovery-plan.md`.
     - [x] add flag-gated open-interpreter-like CLI loop mode (`agent.assist_loop_mode=open_like`) that relaxes command/question decision strictness while keeping completion truth gate strict.
@@ -770,46 +821,127 @@ Sprint header convention (all new planned sprints): first checklist item must be
     - [x] add failure-first immediate repair retries in `open_like` mode before broad recovery (`assist_repair_attempts`, bounded).
     - [x] enforce objective-locked report finalization in `open_like` mode (skip final report synthesis when action objective is unmet).
     - [x] canonicalize tool-forge file/run paths to `artifacts/tools` and repair session-prefixed/duplicated script paths before execution.
-    - [ ] add live qwen3.5 CLI validation gate (required for completion): run `secret.zip` and `192.168.50.1` smoke scenarios and archive transcripts + reports under `sessions/<id>/`.
+    - [x] [Moved to Sprint 37] add live qwen3.5 CLI validation gate (required for completion): run `secret.zip` and `192.168.50.1` smoke scenarios and archive transcripts + reports under `sessions/<id>/`.
+      - partial progress: repeated live `secret.zip` sessions archived under `sessions/20260304-*`; router scenario rerun still pending for this gate.
     - [x] fix CLI `report` argument parsing so `output=<path>` is interpreted as flag/value, not a literal filename prefix.
     - [x] block reasoning-style leakage in final/user report text (summary/report output must be concise findings/method/results only).
-    - [ ] acceptance gate: `secret.zip` CLI run succeeds `>=5/5` without prose-command exec failures; router CLI run yields evidence-backed findings or explicit `objective_not_met` (no false-success report).
-  - [ ] LLM-freedom guardrail audit (anti-hardcoding, required before Sprint 36 exit):
+      - `2026-03-04` follow-up hardening: completion renderer now drops internal/meta reasoning leaks and falls back to structured `why_met`; summary emission is gated when result snapshot already exists for action goals.
+    - [x] [Moved to Sprint 37] acceptance gate: `secret.zip` CLI run succeeds `>=5/5` without prose-command exec failures; router CLI run yields evidence-backed findings or explicit `objective_not_met` (no false-success report).
+      - progress (`2026-03-04`): added retry-modified action-divergence contract (reject unchanged `retry_modified` command after failed step; force materially changed action/pivot).
+  - [x] [Moved to Sprint 37] LLM-freedom guardrail audit (anti-hardcoding, required before Sprint 36 exit):
     - [x] inventory every non-LLM command adaptation/rewrite path in CLI + orchestrator (`adapt`, `repair`, fallback command synthesis) with owner + policy rationale.
       - documented in `docs/runbooks/llm-freedom-guardrail-audit.md`.
     - [x] classify each adaptation path as `generic_capability` vs `scenario_literal`; remove/disable `scenario_literal` behavior from production runtime paths.
       - current inventory classification is `generic_capability` only; removed remaining runtime example-domain literal from adaptation/recovery path text.
     - [x] add regression check that production (non-test) adaptation paths do not embed scenario literals (`secret.zip`, fixed lab IPs/domains) outside examples/docs.
       - added `TestAdaptationPathsAvoidScenarioLiterals` in `internal/orchestrator/hardcoding_guard_test.go`.
-    - [ ] emit decision-source mix per run (`llm_direct`, `llm_repair`, `runtime_adapt`, `static_fallback`) and surface in run summary/report.
-    - [ ] set and enforce a salvage acceptance threshold where LLM-led decisions are the majority for successful CLI smoke runs.
-  - [ ] LLM autonomy contract verification (CLI-first, then worker adoption plan):
-    - [ ] verify prompts explicitly require bounded self-correction (`retry_modified|pivot_strategy|ask_user|step_complete`) before `no_progress`.
-    - [ ] verify runtime guards are safety/contract-only and do not force scenario-specific tool/flag sequences.
-    - [ ] add a live-run checklist artifact that maps each major step to the decision reason + evidence delta used by the model.
+    - [x] emit decision-source mix per run (`llm_direct`, `llm_repair`, `runtime_adapt`, `static_fallback`) and surface in run summary/report.
+      - CLI: added decision-source trace (`artifacts/assist/decision_source.jsonl`), `/status` mix line, and report section append.
+      - Orchestrator: task-progress events now tag `decision_source`; run report includes summary + dedicated Decision Source Mix section.
+    - [x] [Moved to Sprint 37] set and enforce a salvage acceptance threshold where LLM-led decisions are the majority for successful CLI smoke runs.
+      - latest measured zip gate sample (`2026-03-04`): LLM-led decision-source ratio `94%-100%` across 5 successful runs (one run included bounded static fallback recovery and still completed with valid contract).
+  - [x] [Moved to Sprint 37] LLM autonomy contract verification (CLI-first, then worker adoption plan):
+    - [x] [Moved to Sprint 37] verify prompts explicitly require bounded self-correction (`retry_modified|pivot_strategy|ask_user|step_complete`) before `no_progress`.
+    - [x] [Moved to Sprint 37] verify runtime guards are safety/contract-only and do not force scenario-specific tool/flag sequences.
+    - [x] add a live-run checklist artifact that maps each major step to the decision reason + evidence delta used by the model.
+      - implemented via `artifacts/assist/task_journal.jsonl` + `artifacts/assist/decision_source.jsonl` + `focus.md` evidence anchors.
   - [x] CLI context-transparency slice (memory add/retrieve visibility, no heavy redesign):
     - [x] persist latest per-turn assist context packet artifact (`artifacts/assist/context_packet.json`) with exact sections/sizes sent to the model.
     - [x] append memory operation trace (`artifacts/assist/memory_ops.jsonl`) for read/write actions over summary/facts/focus/chat/observations/plan/inventory during the session.
     - [x] add `/context packet` operator command to show latest packet + recent memory ops directly in CLI.
     - [x] add focused tests for packet/trace persistence and `/context packet` output contract.
-  - [ ] prepare orchestrator-worker adoption plan for the same closed-loop contract after CLI gate is green (planning only; no worker implementation before CLI pass).
-  - [ ] quick-gate benchmark trend is non-regressing across salvage commits (token/time budget respected).
-  - [ ] hold sprint replanning review to rewrite Sprint 37-43 scope based on measured outcomes.
+  - [x] [Moved to Sprint 37] prepare orchestrator-worker adoption plan for the same closed-loop contract after CLI gate is green (planning only; no worker implementation before CLI pass).
+  - [x] [Moved to Sprint 37] quick-gate benchmark trend is non-regressing across salvage commits (token/time budget respected).
+  - [x] [Moved to Sprint 37] hold sprint replanning review to rewrite Sprint 38-44 scope based on measured outcomes.
 
-## Sprint 37 — Evidence-Backed Exploration State (planned, provisional)
+## Sprint 37 — Project Salvage Sprint 2 (current, blocking)
+- [ ] Prerequisite: previous sprint completed or unfinished tasks explicitly moved.
+- [ ] Keep a running Sprint 37 discovery log in `docs/sprints/salvage2_discoveries.md` (root cause, evidence, decision, follow-up task mapping for each notable run).
+- [x] Focus discipline (locked): a Sprint 37 checkpoint is only complete when both files are updated in the same pass:
+  - `docs/sprints/salvage2_discoveries.md` (discovery + task_map + status)
+  - `TASKS.md` (task state/priority updates linked to the discovery)
+- [x] Add and maintain control-doc references for state/workflow/mutation ownership to reduce overlap and overengineering drift:
+  - `docs/runbooks/workflow-state-contract.md`
+  - `docs/runbooks/runtime-mutation-stage-map.md`
+  - `docs/runbooks/execution-contract-matrix.md`
+  - `docs/runbooks/failure-taxonomy.md`
+  - `docs/runbooks/acceptance-gates.md`
+  - maintenance rule: any state/mutation contract change must update these docs + tests in the same PR.
+- [x] Phase 0 — Focused architecture + task-flow diagnostic (time-boxed, patches blocked until done):
+  - [x] run a CLI + orchestrator control-flow review (plan -> execute -> recover -> finalize) limited to stability-critical paths.
+  - [x] audit CLI + orchestrator state/status model for ambiguity, conflicting transitions, and overengineering; produce a simplified canonical state map.
+  - [x] audit runtime for hard-coded/static agent instruction paths (prompts, rewrites, fallbacks, adapters); classify each as `required safety`, `temporary support`, or `remove`.
+  - [x] produce a short root-cause register (top 3-5 causes) with file/function anchors and expected behavioral impact.
+  - [x] define patch order from root causes and map each to Sprint 37 Critical 1-4 tasks.
+  - [x] enforce scope: no broad redesign/refactor in this phase; diagnostic + sequencing only.
+    - documented in `docs/sprints/sprint37_phase0_diagnostic.md`.
+- [ ] Carryover from Sprint 36 completion gate (moved):
+  - [ ] enforce objective-level completion contracts for ZIP/local-file recovery goals.
+  - [ ] disable synthetic stdout fallback for critical goal artifacts in ZIP/local-file recovery flows.
+  - [ ] complete live qwen3.5 CLI acceptance gate (`secret.zip >=5/5` + router scenario evidence-backed or explicit `objective_not_met`).
+  - [ ] enforce LLM-led decision-source majority threshold on successful CLI smoke runs.
+  - [ ] finish LLM autonomy contract verification (prompt self-correction contract + runtime safety-only guard verification).
+  - [ ] finish orchestrator-worker adoption plan for closed-loop contract after CLI gate passes.
+  - [ ] run quota-aware quick-gate trend check and record non-regression.
+- [ ] Critical 1 — Run terminalization integrity (fail-closed):
+  - [x] ensure interrupt/stop path always performs full terminalization pipeline: worker stop, run events, report assembly, coherent phase/outcome.
+    - implemented in `cmd/birdhackbot-orchestrator/main_runtime.go` via shared aborted terminalizer path used by both `ctx.Done` and `status=stopped`.
+  - [x] add regressions for interrupted/stopped runs requiring `report_ready=true` and coherent task counters.
+    - added `TestExecuteCoordinatorLoopInterruptTerminalizesWithReport` and `TestExecuteCoordinatorLoopStopEventTerminalizesWithReport` in `cmd/birdhackbot-orchestrator/main_runtime_terminal_test.go`.
+    - run-status projection now zeroes terminal headline counters (`active_workers`, `running_tasks`) when run state is `stopped|completed` in `internal/orchestrator/event_cache.go` and `internal/orchestrator/run.go`.
+- [ ] Critical 2 — Unified completion contract across command/assist:
+  - [x] apply objective proof contract (`objective_met`, `why_met`, `evidence_refs`, semantic verifier) to command actions, not only assist actions.
+    - command completion contracts are now built through `buildCommandCompletionContract` in `internal/orchestrator/runtime_completion_contract.go` and emitted from `internal/orchestrator/worker_runtime.go`.
+    - assist/validator completion contracts now emit the same core fields for parity (`objective_met`, `why_met`, `evidence_refs`, `semantic_verifier`) in `internal/orchestrator/worker_runtime_assist_loop_emit.go` and `internal/orchestrator/worker_runtime_validator.go`.
+  - [x] block `task_completed` when command output is usage/help/no-op evidence.
+    - generic usage/help rejection now applies across command actions in `internal/orchestrator/runtime_nmap_evidence_retry.go`.
+    - empty-output/no-meaningful-evidence completion is fail-closed in `internal/orchestrator/runtime_completion_contract.go` before `task_completed` emission.
+  - [x] add parity tests so CLI/orchestrator completion semantics match for the same goal.
+    - added runtime contract/unit regressions in `internal/orchestrator/runtime_completion_contract_test.go`.
+    - expanded command-runtime regressions in `internal/orchestrator/worker_runtime_test.go`:
+      - objective fields present on command completion contract.
+      - no-op command evidence blocks `task_completed`.
+      - generic usage-only output rejected.
+- [ ] Critical 3 — Simplify runtime mutation stack:
+  - [ ] converge command pre-exec transforms into one ordered pipeline with explicit stage telemetry.
+  - [ ] remove overlapping rewrite/repair paths that silently change command intent.
+  - [ ] keep only generic capability-level guardrails (no scenario literals or tool-sequence hardcoding).
+- [ ] Critical 4 — Typed input-repair safety:
+  - [ ] require typed artifact matching (`archive|hash|wordlist|log|report`) before path substitution.
+  - [ ] reject incompatible substitutions (for example hash substituted where archive input is required).
+  - [ ] add regressions for wildcard/relative-path repair to prevent cross-type aliasing.
+- [ ] High — State and reporting consistency:
+  - [ ] reconcile run/task projections at terminal state so `state=stopped/completed` cannot report stale `running_tasks>0`.
+  - [ ] preserve unfinished detail in dedicated fields while keeping headline counters coherent.
+- [ ] High — Context quality under long recovery:
+  - [ ] shift retrieval from fixed-window only to contract/anchor relevance retrieval.
+  - [ ] ensure failure anchors and latest evidence delta are prioritized over repeated inspection artifacts.
+- [ ] Medium — Complexity cleanup (targeted, no behavior change):
+  - [ ] split highest-risk large files (`worker_runtime_assist_loop.go`, `worker_runtime.go`, `internal/cli/cli.go`) by responsibility boundaries.
+  - [ ] add module-level ownership map and invariants to prevent adapter overlap re-growth.
+- [ ] Medium — Static-instruction minimization policy:
+  - [ ] define and document strict exception policy for static scaffolding (`required safety` only by default; all other static behavior must be sunset-dated).
+  - [ ] add guard test to block new scenario-literal instruction/rewrite paths in production runtime files.
+- [ ] Exit criteria for Sprint 37:
+  - [ ] `secret.zip` orchestrator smoke succeeds reproducibly with true completion contract (not only task completion events).
+  - [ ] interrupted/stopped run always emits a report and coherent status.
+  - [ ] no scenario-literal runtime rewrites in production paths.
+  - [ ] next provisional sprints (38-44) revalidated/resequenced using this sprint’s measured outcomes.
+
+## Sprint 38 — Evidence-Backed Exploration State (planned, provisional)
 - [ ] Prerequisite: Sprint 36 exit gate completed; otherwise keep this sprint queued and revise.
 - [ ] [Deferred from Sprint 35] Full benchmark-suite confirmation:
   - [ ] prerequisite: restore stable LLM endpoint availability for unattended reruns.
   - [ ] rerun full benchmark suite (`repeat=5`) on current hardening commit.
   - [ ] confirm baseline is reproducible on the same commit.
   - [ ] confirm scorecard artifacts are complete for every scenario run.
-- [ ] Architecture evaluation + cleanup sweep before further hardening:
-  - [ ] produce architecture recovery doc with current failure classes, ownership boundaries, and acceptance criteria (`docs/runbooks/architecture-recovery-plan.md`).
-  - [ ] define explicit planner->executor contract (action shape, artifact contract, success semantics) and reject off-contract behavior instead of adding runtime special-cases.
-  - [ ] run a no-behavior-change cleanup pass to split oversized files (`worker_runtime.go`, `worker_runtime_assist_loop.go`, `main_planner.go`) into focused units.
-  - [ ] remove or consolidate redundant adapters/heuristics that overlap in responsibility (input repair vs command adaptation vs artifact synthesis).
-  - [ ] add regression coverage for run terminal semantics so `completed` requires success criteria evidence, not only task lease completion.
-  - [ ] gate report claims behind verified evidence (no "password recovered"/"CVE found" statements without matching verifier evidence).
+- [ ] [Deferred post-Sprint36 exit review; overlaps with completed Sprint36 Phase7 cleanup] Architecture evaluation + cleanup sweep before further hardening:
+  - [ ] [Deferred post-Sprint36 exit review] produce architecture recovery doc with current failure classes, ownership boundaries, and acceptance criteria (`docs/runbooks/architecture-recovery-plan.md`).
+  - [ ] [Deferred post-Sprint36 exit review] define explicit planner->executor contract (action shape, artifact contract, success semantics) and reject off-contract behavior instead of adding runtime special-cases.
+  - [ ] [Deferred post-Sprint36 exit review] run a no-behavior-change cleanup pass to split oversized files (`worker_runtime.go`, `worker_runtime_assist_loop.go`, `main_planner.go`) into focused units.
+  - [ ] [Deferred post-Sprint36 exit review] remove or consolidate redundant adapters/heuristics that overlap in responsibility (input repair vs command adaptation vs artifact synthesis).
+  - [ ] [Deferred post-Sprint36 exit review] add regression coverage for run terminal semantics so `completed` requires success criteria evidence, not only task lease completion.
+  - [ ] [Deferred post-Sprint36 exit review] gate report claims behind verified evidence (no "password recovered"/"CVE found" statements without matching verifier evidence).
 - [x] Harden LLM planner reliability contract for goal runs:
   - [x] enforce schema-constrained planner output (`response_format=json_schema`) before parse/validate.
   - [x] replace fixed retry with bounded adaptive retries (attempt cap + wall-clock cap + backoff + context narrowing).
@@ -824,23 +956,23 @@ Sprint header convention (all new planned sprints): first checklist item must be
   - [x] improve runtime missing-path repair to prefer valid local workspace/dependency paths for command and shell-wrapper actions.
   - [x] auto-bootstrap missing wordlists from compressed archives (for example `rockyou.txt.gz`) into short local cache path (`/tmp/birdhackbot-wordlists/`).
   - [x] validation: `run-zip-wordlistfix2-20260225-200114` and `run-zip-validate-20260225-201152` both completed with `8/8` tasks.
-- [ ] Resolve residual local-file scope false positives for relative artifact arguments (for example `zip.hash` misclassified as out-of-scope target in `run-zip-reg3-20260225-201808-2` `T-004`/`T-005`) and revalidate zip regression to `3/3` pass.
-- [ ] Add explicit hypothesis/evidence state tracking for assist worker decisions.
-- [ ] Require exploratory pivots to cite either new evidence or a concrete unknown/hypothesis gap.
+- [ ] [Deferred pending fresh repro after Sprint36 exit gate] Resolve residual local-file scope false positives for relative artifact arguments (for example `zip.hash` misclassified as out-of-scope target in `run-zip-reg3-20260225-201808-2` `T-004`/`T-005`) and revalidate zip regression to `3/3` pass.
+- [ ] [Deferred pending Sprint36 replanning review] Add explicit hypothesis/evidence state tracking for assist worker decisions.
+- [ ] [Deferred pending Sprint36 replanning review] Require exploratory pivots to cite either new evidence or a concrete unknown/hypothesis gap.
 - [x] Add finding lifecycle states in runtime flow: `hypothesis -> candidate -> verified|rejected`.
 - [x] Ensure planner/recovery context only treats `verified` findings as assumptions.
   - finding ingestion now normalizes/persists `finding_state` (`hypothesis`/`candidate_finding`/`verified_finding`/`rejected_finding`) with deterministic merge behavior.
   - memory bank known facts now include only `verified_finding` items; unverified findings are excluded from assumption context and replaced with explicit `No verified findings yet.` when applicable.
   - runtime-emitted execution-result findings are tagged `verified_finding`; tests added for lifecycle state merge and memory filtering.
-- [ ] Enforce discovery-time verification (`verify-now`) immediately after any vulnerability claim before downstream planning continues.
-- [ ] Add tests for evidence-linked pivots vs blind repeat pivots.
-- [ ] Add tests that hallucinated findings are marked `rejected` and do not influence subsequent steps.
+- [ ] [Deferred pending Sprint36 replanning review] Enforce discovery-time verification (`verify-now`) immediately after any vulnerability claim before downstream planning continues.
+- [ ] [Deferred pending Sprint36 replanning review] Add tests for evidence-linked pivots vs blind repeat pivots.
+- [ ] [Deferred pending Sprint36 replanning review] Add tests that hallucinated findings are marked `rejected` and do not influence subsequent steps.
 - [ ] Exit criteria:
   - [ ] reduced blind pivots in benchmark traces
   - [ ] improved verified finding precision vs Sprint 35 baseline
   - [ ] verification lag (claim -> verified/rejected) stays within bounded step budget
 
-## Sprint 38 — Recovery Strategy Diversification (planned, provisional)
+## Sprint 39 — Recovery Strategy Diversification (planned, provisional)
 - [ ] Prerequisite: Sprint 36 exit gate completed; revise scope if salvage findings invalidate assumptions.
 - [ ] Add recovery policy that enforces strategy-class changes after repeated failures.
 - [ ] Prevent near-duplicate retry loops (semantic intent class, not just exact command string).
@@ -859,9 +991,9 @@ Sprint header convention (all new planned sprints): first checklist item must be
   - [ ] recovery success rate improved vs baseline
   - [ ] reduced false-positive carry-forward from initial discovery steps
 
-## Sprint 39 — Novelty Scoring + Anti-Redundancy (planned, conditional, provisional)
+## Sprint 40 — Novelty Scoring + Anti-Redundancy (planned, conditional, provisional)
 - [ ] Prerequisite: Sprint 36 exit gate completed.
-- [ ] Prerequisite: execute only if Sprint 38 loop/fallback metrics are still below exit criteria.
+- [ ] Prerequisite: execute only if Sprint 39 loop/fallback metrics are still below exit criteria.
 - [ ] Add novelty scoring for actions/evidence and feed score into recovery/planning prompts.
 - [ ] Penalize repeated low-value actions when no new evidence is produced.
 - [ ] Add tests for novelty gain and anti-redundancy behavior.
@@ -869,8 +1001,8 @@ Sprint header convention (all new planned sprints): first checklist item must be
   - [ ] higher novel-evidence-per-step vs baseline
   - [ ] no regression in safety metrics
 
-## Sprint 40 — Kali Controlled Pilot (planned, provisional)
-- [ ] Prerequisite: Sprint 36 exit gate completed and Sprint 37/38 contract metrics are stable.
+## Sprint 41 — Kali Controlled Pilot (planned, provisional)
+- [ ] Prerequisite: Sprint 36 exit gate completed and Sprint 38/39 contract metrics are stable.
 - [ ] Run the same benchmark pack on Kali in authorized internal lab only.
 - [ ] Compare Kali metrics to local baseline with documented tolerance bands.
 - [ ] Capture full event/artifact bundles for reproducibility.
@@ -880,7 +1012,7 @@ Sprint header convention (all new planned sprints): first checklist item must be
   - [ ] no policy/scope violations during pilot runs
   - [ ] no candidate finding is reported as verified without validator evidence
 
-## Sprint 41 — Regression Gates + Revert Discipline (planned, provisional)
+## Sprint 42 — Regression Gates + Revert Discipline (planned, provisional)
 - [ ] Prerequisite: Sprint 36 exit gate completed.
 - [ ] Add targeted benchmark regression gate to CI for key scorecard metrics (`smoke` + highest-risk scenarios); keep full-suite gate as periodic/manual until runtime budget is acceptable.
 - [ ] Add explicit revert policy and threshold checks (auto-fail gate on severe regressions).
@@ -890,7 +1022,7 @@ Sprint header convention (all new planned sprints): first checklist item must be
   - [ ] merge blocked on benchmark regression
   - [ ] revert decision path documented and tested
 
-## Sprint 42 — Wireless Access Security (planned, lab-only, provisional)
+## Sprint 43 — Wireless Access Security (planned, lab-only, provisional)
 - [ ] Prerequisite: Sprint 36 exit gate completed.
 - [ ] Define wireless scope contract (SSID/BSSID/channel/interface allowlists + deny lists) for authorized internal lab environments.
 - [ ] Add wireless command policy/guardrails in runtime:
@@ -918,9 +1050,9 @@ Sprint header convention (all new planned sprints): first checklist item must be
   - [ ] operator-visible approvals explain exactly what wireless action is requested and why.
   - [ ] generated wireless reports include concise human-readable method/results plus reproducible evidence links.
 
-## Sprint 43 — Bluetooth Security (planned, blocked until Sprint 42 is complete, provisional)
+## Sprint 44 — Bluetooth Security (planned, blocked until Sprint 43 is complete, provisional)
 - [ ] Prerequisite: Sprint 36 exit gate completed.
-- [ ] Prerequisite: Sprint 42 must be completed (or unfinished tasks explicitly moved) before Sprint 43 starts.
+- [ ] Prerequisite: Sprint 43 must be completed (or unfinished tasks explicitly moved) before Sprint 44 starts.
 - [ ] Keep Bluetooth work explicitly lower priority than Sprint 42 Wi-Fi scope.
 - [ ] Define Bluetooth lab scope contract (adapter/controller allowlist, target device allowlist, prohibited actions).
 - [ ] Add runtime guardrails for Bluetooth tooling:
