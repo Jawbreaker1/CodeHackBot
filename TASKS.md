@@ -879,6 +879,10 @@ Control-doc sync checklist (required at sprint checkpoints and before sprint clo
   - [ ] enforce objective-level completion contracts for ZIP/local-file recovery goals.
   - [ ] disable synthetic stdout fallback for critical goal artifacts in ZIP/local-file recovery flows.
   - [ ] complete live qwen3.5 CLI acceptance gate (`secret.zip >=5/5` + router scenario evidence-backed or explicit `objective_not_met`).
+  - [x] fix LLM planner cycle-preflight reliability for goal runs (`scheduler preflight failed: cycle detected at task ...`):
+    - planner preflight failures for dependency cycles/unknown deps now run bounded DAG repair (drop self/unknown/forward/duplicate edges), then revalidate before returning plan (`cmd/birdhackbot-orchestrator/main_planner_repair.go`).
+    - added planner regressions for cycle candidate output + unknown-dependency recovery, and `buildGoalPlanFromMode(auto)` recovery path (`cmd/birdhackbot-orchestrator/main_planner_repair_test.go`).
+    - minimal live `planner=llm` smoke rerun completed without preflight-cycle abort: `run-live-llm-cyclefix-20260306-161737`.
   - [ ] enforce LLM-led decision-source majority threshold on successful CLI smoke runs.
   - [ ] finish LLM autonomy contract verification (prompt self-correction contract + runtime safety-only guard verification).
   - [ ] finish orchestrator-worker adoption plan for closed-loop contract after CLI gate passes.
@@ -902,10 +906,24 @@ Control-doc sync checklist (required at sprint checkpoints and before sprint clo
       - objective fields present on command completion contract.
       - no-op command evidence blocks `task_completed`.
       - generic usage-only output rejected.
+  - [x] fail closed on objective-not-met fallback for proof-sensitive local workflows.
+    - assist `no_new_evidence` fallback is now rejected for local file/archive workflows and terminalizes as `objective_not_met` failure (not `task_completed`) in `internal/orchestrator/worker_runtime_assist_loop_emit.go`.
+    - coordinator completion validation now enforces `objective_met=true` for proof-sensitive archive tasks and maps violations to `objective_not_met` in `internal/orchestrator/coordinator_completion_contract.go`.
+    - completion gate now marks proof-sensitive completed tasks unverified when `objective_met=false` in `internal/orchestrator/completion_gate.go`.
+    - regressions added:
+      - `internal/orchestrator/worker_runtime_assist_loop_emit_test.go`
+      - `internal/orchestrator/coordinator_completion_contract_test.go`
+      - `internal/orchestrator/completion_gate_test.go`
 - [ ] Critical 3 — Simplify runtime mutation stack:
-  - [ ] converge command pre-exec transforms into one ordered pipeline with explicit stage telemetry.
-  - [ ] remove overlapping rewrite/repair paths that silently change command intent.
-  - [ ] keep only generic capability-level guardrails (no scenario literals or tool-sequence hardcoding).
+  - [x] converge command pre-exec transforms into one ordered pipeline with explicit stage telemetry.
+    - wired `applyRuntimeCommandPipeline` in `internal/orchestrator/worker_runtime.go` so command actions now flow through one ordered pre-exec mutation path (prepare + weak-action adapters + runtime command adaptation + input repair + archive adaptation) before scope validation/execution.
+    - mutation stage telemetry is emitted via `emitRuntimeMutationNotes` with explicit `runtime_stage`.
+    - added pipeline regressions in `internal/orchestrator/runtime_command_pipeline_test.go`.
+  - [x] remove overlapping rewrite/repair paths that silently change command intent.
+    - assist command loop now pre-validates command args through the same runtime pipeline before scope validation, and execution uses prevalidated args without a second hidden mutation pass (`executeWorkerAssistCommandWithOptions(...skipRuntimeMutation=true)` in `internal/orchestrator/worker_runtime_assist_loop.go` + `internal/orchestrator/worker_runtime_assist_exec.go`).
+    - assist tool execution now uses the same runtime mutation pipeline for non-diagnostic runs before validation/execution.
+  - [x] keep only generic capability-level guardrails (no scenario literals or tool-sequence hardcoding).
+    - extended scenario-literal guard coverage to include `internal/orchestrator/runtime_command_pipeline.go` in `internal/orchestrator/hardcoding_guard_test.go`.
 - [ ] Critical 4 — Typed input-repair safety:
   - [ ] require typed artifact matching (`archive|hash|wordlist|log|report`) before path substitution.
   - [ ] reject incompatible substitutions (for example hash substituted where archive input is required).

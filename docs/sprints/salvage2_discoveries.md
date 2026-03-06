@@ -218,3 +218,65 @@ Checkpoint discipline (locked)
 - `decision`: add a locked control-doc sync checklist near the top of `TASKS.md` to enforce review at sprint checkpoints and sprint close.
 - `task_map`: Sprint 37 process control (checkpoint discipline)
 - `status`: `resolved`
+
+## S37-D020
+- `date_utc`: `2026-03-06`
+- `area`: `orchestrator`
+- `symptom`: command-action runtime mutations were split between an early prepare/adapt path and a second late pre-exec block (`msf` adaptation + input repair + archive adaptation), increasing overlap and intent-drift risk.
+- `hypothesis`: command behavior remained hard to reason about because pre-exec transforms were not enforced through one ordered pipeline.
+- `evidence`: code-path review and implementation changes in:
+  - `internal/orchestrator/runtime_command_pipeline.go`
+  - `internal/orchestrator/worker_runtime.go`
+  - `internal/orchestrator/runtime_command_pipeline_test.go`
+- `decision`: unify command-action pre-exec mutations under `applyRuntimeCommandPipeline` (with explicit `runtime_stage` telemetry) and remove duplicated late mutation block from worker runtime.
+- `task_map`: Sprint 37 `Critical 3`
+- `status`: `resolved`
+
+## S37-D021
+- `date_utc`: `2026-03-06`
+- `area`: `orchestrator`
+- `symptom`: assist command execution could still mutate commands after scope validation (hidden second pass), creating overlap and potential intent drift.
+- `hypothesis`: assist loop prepared/validated one command version while execution path reapplied runtime repair/adaptation on another pass.
+- `evidence`: code-path convergence in:
+  - `internal/orchestrator/worker_runtime_assist_loop.go`
+  - `internal/orchestrator/worker_runtime_assist_exec.go`
+  - `internal/orchestrator/runtime_command_pipeline.go`
+  with regression validation via orchestrator test suite.
+- `decision`: route assist `type=command` suggestions through `applyRuntimeCommandPipeline` before validation, then execute with `skipRuntimeMutation=true` to prevent hidden post-validation rewrites.
+- `task_map`: Sprint 37 `Critical 3`
+- `status`: `resolved`
+
+## S37-D022
+- `date_utc`: `2026-03-06`
+- `area`: `orchestrator`
+- `symptom`: proof-sensitive zip/local workflows could still end as `task_completed` via `assist_no_new_evidence`, producing false-positive completed runs with synthetic fallback artifacts.
+- `hypothesis`: objective truth (`objective_met`) was not enforced in coordinator completion-contract validation/gate checks, and no-new-evidence fallback still terminalized as completion for local workflow tasks.
+- `evidence`:
+  - live run `run-live-llm-zip-all-regen-20260306-152801` completed with `assist_no_new_evidence` while `crack_log.txt` stated `No new evidence...`.
+  - report showed completed state without proof-backed objective satisfaction.
+- `decision`:
+  - reject no-new-evidence completion for local proof-sensitive workflows and emit `objective_not_met` failure instead of `task_completed`.
+  - enforce `objective_met=true` for proof-sensitive archive completion contracts in coordinator and completion gate verification.
+  - prevent expected-artifact synthesis when objective is not met.
+- `task_map`: Sprint 37 `Critical 2` (completion truthfulness), carryover completion gate objective-proof enforcement
+- `status`: `resolved`
+
+## S37-D023
+- `date_utc`: `2026-03-06`
+- `area`: `orchestrator`
+- `symptom`: live `planner=llm` goal runs intermittently fail before execution with scheduler preflight cycle errors (`cycle detected at task ...`) after planner retries/regeneration.
+- `hypothesis`: planner output repair/regeneration path can still emit cyclic task dependencies that are not normalized to acyclic DAG before scheduler preflight.
+- `evidence`:
+  - `run-live-llm-zip-all-20260306-152307`
+  - `run-live-llm-zip-postfix-20260306-155241`
+  - `run-live-llm-zip-postfix-20260306-155706-r2`
+- `decision`:
+  - add bounded planner dependency repair on scheduler-preflight cycle/unknown-dependency failures: prune `depends_on` edges that are `self`, `unknown`, `duplicate`, or `forward` (non-DAG) and revalidate before accepting plan.
+  - preserve fail-closed behavior if repaired graph still fails validation.
+  - add regression coverage for direct cycle repair and `buildGoalPlanFromMode(auto)` recovery.
+  - run minimal live `planner=llm` smoke to verify preflight-cycle abort no longer blocks goal planning.
+- `evidence_after_fix`:
+  - tests: `go test ./cmd/birdhackbot-orchestrator ./internal/orchestrator`
+  - live smoke: `run-live-llm-cyclefix-20260306-161737` (planner succeeded; no scheduler preflight cycle abort)
+- `task_map`: Sprint 37 carryover completion gate (`planner=llm` live reliability)
+- `status`: `resolved`

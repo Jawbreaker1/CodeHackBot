@@ -303,6 +303,9 @@ func buildGoalLLMPlanWithStructuredOutput(
 		},
 	}
 	if err := orchestrator.ValidateSynthesizedPlan(plan); err != nil {
+		if repairedPlan, repairNote, repaired := maybeRepairPlannerPreflightFailure(plan, err); repaired {
+			return repairedPlan, strings.TrimSpace(mergePlannerRationale(llmRationale, repairNote)), nil
+		}
 		return orchestrator.RunPlan{}, "", err
 	}
 	return plan, strings.TrimSpace(llmRationale), nil
