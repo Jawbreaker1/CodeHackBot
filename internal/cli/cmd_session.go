@@ -130,6 +130,7 @@ func (r *Runner) handleLedger(args []string) error {
 
 func (r *Runner) handleStatus() {
 	usage, usageErr := r.contextUsageSnapshot()
+	decisionMix := r.statusDecisionSourceMix()
 	active, label, started := r.llmStatus()
 	llmConfigured := strings.TrimSpace(r.cfg.LLM.BaseURL) != ""
 	llmState := "ready"
@@ -147,6 +148,9 @@ func (r *Runner) handleStatus() {
 				r.logger.Printf("Assist budget: step=%d remaining=%d cap=%d hard=%d ext=%d stalls=%d mode=%s", r.assistRuntime.Step, r.assistRuntime.Remaining, r.assistRuntime.CurrentCap, r.assistRuntime.HardCap, r.assistRuntime.Extensions, r.assistRuntime.Stalls, statusValueOrFallback(r.assistRuntime.CurrentMode, "(none)"))
 				r.logger.Printf("Assist reason: %s", statusValueOrFallback(r.assistRuntime.LastReason, "(none)"))
 			}
+			if decisionMix != "" {
+				r.logger.Printf("Decision source mix: %s", decisionMix)
+			}
 			r.logContextUsage(usage, usageErr)
 			return
 		}
@@ -157,6 +161,9 @@ func (r *Runner) handleStatus() {
 		if r.assistRuntime.Active {
 			r.logger.Printf("Assist budget: step=%d remaining=%d cap=%d hard=%d ext=%d stalls=%d mode=%s", r.assistRuntime.Step, r.assistRuntime.Remaining, r.assistRuntime.CurrentCap, r.assistRuntime.HardCap, r.assistRuntime.Extensions, r.assistRuntime.Stalls, statusValueOrFallback(r.assistRuntime.CurrentMode, "(none)"))
 			r.logger.Printf("Assist reason: %s", statusValueOrFallback(r.assistRuntime.LastReason, "(none)"))
+		}
+		if decisionMix != "" {
+			r.logger.Printf("Decision source mix: %s", decisionMix)
 		}
 		r.logContextUsage(usage, usageErr)
 		return
@@ -172,7 +179,25 @@ func (r *Runner) handleStatus() {
 		r.logger.Printf("Assist budget: step=%d remaining=%d cap=%d hard=%d ext=%d stalls=%d mode=%s", r.assistRuntime.Step, r.assistRuntime.Remaining, r.assistRuntime.CurrentCap, r.assistRuntime.HardCap, r.assistRuntime.Extensions, r.assistRuntime.Stalls, statusValueOrFallback(r.assistRuntime.CurrentMode, "(none)"))
 		r.logger.Printf("Assist reason: %s", statusValueOrFallback(r.assistRuntime.LastReason, "(none)"))
 	}
+	if decisionMix != "" {
+		r.logger.Printf("Decision source mix: %s", decisionMix)
+	}
 	r.logContextUsage(usage, usageErr)
+}
+
+func (r *Runner) statusDecisionSourceMix() string {
+	sessionDir := filepath.Join(r.cfg.Session.LogDir, r.sessionID)
+	counts, total, err := readAssistDecisionSourceMix(sessionDir)
+	if err != nil {
+		if r.cfg.UI.Verbose {
+			r.logger.Printf("Decision source mix unavailable: %v", err)
+		}
+		return ""
+	}
+	if total <= 0 {
+		return ""
+	}
+	return formatDecisionSourceMix(counts, total)
 }
 
 func (r *Runner) logContextUsage(usage contextUsage, usageErr error) {

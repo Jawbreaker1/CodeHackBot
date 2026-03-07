@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -125,6 +126,76 @@ func TestRunWorkerTaskCommandAction(t *testing.T) {
 	}
 	if status, _ := contract["verification_status"].(string); status != "reported_by_worker" {
 		t.Fatalf("expected verification_status reported_by_worker, got %q", status)
+	}
+	if objectiveMet, ok := contract["objective_met"].(bool); !ok || !objectiveMet {
+		t.Fatalf("expected completion objective_met=true in command contract, got %#v", contract["objective_met"])
+	}
+	if whyMet := strings.TrimSpace(toString(contract["why_met"])); whyMet == "" {
+		t.Fatalf("expected non-empty why_met in command completion contract")
+	}
+	evidenceRefs := compactStrings(sliceFromAny(contract["evidence_refs"]))
+	if len(evidenceRefs) == 0 {
+		t.Fatalf("expected evidence_refs in command completion contract")
+	}
+}
+
+func TestRunWorkerTaskCommandActionRejectsNoMeaningfulEvidence(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-worker-task-noop"
+	taskID := "t-noop"
+	workerID := "worker-noop-a1"
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	writeWorkerPlan(t, base, runID, Scope{Targets: []string{"127.0.0.1"}})
+
+	cmd, args := testNoOutputCommand()
+	task := TaskSpec{
+		TaskID:            taskID,
+		Goal:              "perform meaningful command action",
+		DoneWhen:          []string{"action completed"},
+		FailWhen:          []string{"action failed"},
+		ExpectedArtifacts: []string{"command.log"},
+		RiskLevel:         string(RiskReconReadonly),
+		Action: TaskAction{
+			Type:    "command",
+			Command: cmd,
+			Args:    args,
+		},
+		Budget: TaskBudget{
+			MaxSteps:     2,
+			MaxToolCalls: 2,
+			MaxRuntime:   10 * time.Second,
+		},
+	}
+	taskPath := filepath.Join(BuildRunPaths(base, runID).TaskDir, taskID+".json")
+	if err := WriteJSONAtomic(taskPath, task); err != nil {
+		t.Fatalf("WriteJSONAtomic task: %v", err)
+	}
+
+	err := RunWorkerTask(WorkerRunConfig{
+		SessionsDir: base,
+		RunID:       runID,
+		TaskID:      taskID,
+		WorkerID:    workerID,
+		Attempt:     1,
+	})
+	if err == nil {
+		t.Fatalf("expected no-op command evidence to fail completion contract")
+	}
+
+	manager := NewManager(base)
+	events, eventsErr := manager.Events(runID, 0)
+	if eventsErr != nil {
+		t.Fatalf("Events: %v", eventsErr)
+	}
+	if hasEventType(events, EventTypeTaskCompleted) {
+		t.Fatalf("did not expect task_completed event for no-op command output")
+	}
+	if !hasEventType(events, EventTypeTaskFailed) {
+		t.Fatalf("expected task_failed event for no-op command output")
 	}
 }
 
@@ -626,6 +697,41 @@ func TestRunWorkerTaskCommandActionMaterializesProducedArtifactFiles(t *testing.
 	}
 }
 
+func TestWriteExpectedCommandArtifactsSkipsLocalWorkflowCriticalFallback(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-worker-critical-fallback-skip"
+	taskID := "t1"
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	workDir := t.TempDir()
+
+	cfg := WorkerRunConfig{SessionsDir: base, RunID: runID, TaskID: taskID, WorkerID: "worker-t1-a1", Attempt: 1}
+	task := TaskSpec{
+		TaskID:            taskID,
+		Title:             "Validate proof of access",
+		Goal:              "Use recovered password to validate minimal archive access",
+		Strategy:          "proof_validation",
+		Targets:           []string{"127.0.0.1"},
+		ExpectedArtifacts: []string{"recovered_password.txt", "extraction_status.txt"},
+	}
+
+	commandLogPath, err := writeWorkerCommandLog(cfg, []byte("command output only"))
+	if err != nil {
+		t.Fatalf("writeWorkerCommandLog: %v", err)
+	}
+
+	written, err := writeExpectedCommandArtifacts(cfg, task, workDir, []byte("command output only"), commandLogPath)
+	if err != nil {
+		t.Fatalf("writeExpectedCommandArtifacts: %v", err)
+	}
+	if len(written) != 0 {
+		t.Fatalf("expected no synthetic fallback artifacts for critical local workflow outputs, got %v", written)
+	}
+}
+
 func TestRunWorkerTaskRepairsMissingDependencyInputPaths(t *testing.T) {
 	t.Parallel()
 
@@ -896,6 +1002,35 @@ func TestBestArtifactCandidateForMissingPathFallsBackToExactBaseMatch(t *testing
 	}
 }
 
+func TestBestArtifactCandidateForMissingPathRejectsCrossTypeAlias(t *testing.T) {
+	t.Parallel()
+
+	missingPath := "/tmp/secret.zip"
+	candidates := []string{
+		"/tmp/run/orchestrator/artifact/T-03/secret.hash",
+		"/tmp/run/orchestrator/artifact/T-03/zip.hash",
+	}
+
+	got := bestArtifactCandidateForMissingPath(missingPath, candidates, map[string]struct{}{})
+	if got != "" {
+		t.Fatalf("expected no candidate for archive->hash mismatch, got %q", got)
+	}
+}
+
+func TestBestArtifactCandidateForMissingPathRejectsWildcardAlias(t *testing.T) {
+	t.Parallel()
+
+	missingPath := "/tmp/*.hash"
+	candidates := []string{
+		"/tmp/run/orchestrator/artifact/T-03/zip.hash",
+	}
+
+	got := bestArtifactCandidateForMissingPath(missingPath, candidates, map[string]struct{}{})
+	if got != "" {
+		t.Fatalf("expected wildcard input to avoid auto-repair, got %q", got)
+	}
+}
+
 func TestRepairMissingCommandInputPathsRepairsFromLocalWorkspaceForLocalFileWorkflow(t *testing.T) {
 	t.Parallel()
 
@@ -1041,7 +1176,89 @@ func TestRepairMissingCommandInputPathsSkipsWorkspaceRepairForNonLocalTargets(t 
 	}
 }
 
-func TestAdaptArchiveJohnArgsRewritesZipFormatToPKZipAndPinsPot(t *testing.T) {
+func TestRepairMissingCommandInputPathsRejectsRelativeCrossTypeAlias(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	sessionsDir := filepath.Join(repoRoot, "sessions")
+	runID := "run-repair-relative-type-safety"
+	paths, err := EnsureRunLayout(sessionsDir, runID)
+	if err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	depDir := filepath.Join(paths.ArtifactDir, "T-001")
+	if err := os.MkdirAll(depDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll depDir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(depDir, "service_scan.log"), []byte("log"), 0o644); err != nil {
+		t.Fatalf("WriteFile log artifact: %v", err)
+	}
+
+	cfg := WorkerRunConfig{SessionsDir: sessionsDir, RunID: runID}
+	task := TaskSpec{
+		TaskID:    "T-002",
+		Title:     "Synthesize report",
+		Goal:      "Build OWASP report from validated findings",
+		Strategy:  "report_synthesis",
+		Targets:   []string{"127.0.0.1"},
+		DependsOn: []string{"T-001"},
+	}
+	args := []string{"./reports/scan_report.md"}
+
+	nextArgs, notes, repaired, err := repairMissingCommandInputPaths(cfg, task, "read_file", args)
+	if err != nil {
+		t.Fatalf("repairMissingCommandInputPaths: %v", err)
+	}
+	if repaired {
+		t.Fatalf("expected no repair for relative report path when only log artifacts exist, got args=%v notes=%v", nextArgs, notes)
+	}
+	if !reflect.DeepEqual(nextArgs, args) {
+		t.Fatalf("expected args unchanged, got %v", nextArgs)
+	}
+}
+
+func TestRepairMissingCommandInputPathsRejectsWildcardAlias(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	sessionsDir := filepath.Join(repoRoot, "sessions")
+	runID := "run-repair-wildcard-safety"
+	paths, err := EnsureRunLayout(sessionsDir, runID)
+	if err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	depDir := filepath.Join(paths.ArtifactDir, "T-001")
+	if err := os.MkdirAll(depDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll depDir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(depDir, "zip.hash"), []byte("hash"), 0o644); err != nil {
+		t.Fatalf("WriteFile hash artifact: %v", err)
+	}
+
+	cfg := WorkerRunConfig{SessionsDir: sessionsDir, RunID: runID}
+	task := TaskSpec{
+		TaskID:    "T-002",
+		Title:     "Crack hash",
+		Goal:      "Use available hash artifacts for cracking",
+		Strategy:  "wordlist_crack",
+		Targets:   []string{"127.0.0.1"},
+		DependsOn: []string{"T-001"},
+	}
+	args := []string{"/tmp/*.hash"}
+
+	nextArgs, notes, repaired, err := repairMissingCommandInputPaths(cfg, task, "john", args)
+	if err != nil {
+		t.Fatalf("repairMissingCommandInputPaths: %v", err)
+	}
+	if repaired {
+		t.Fatalf("expected wildcard path to remain untouched, got args=%v notes=%v", nextArgs, notes)
+	}
+	if !reflect.DeepEqual(nextArgs, args) {
+		t.Fatalf("expected args unchanged, got %v", nextArgs)
+	}
+}
+
+func TestAdaptArchiveJohnArgsDoesNotForceRewrite(t *testing.T) {
 	t.Parallel()
 
 	workDir := t.TempDir()
@@ -1056,17 +1273,14 @@ func TestAdaptArchiveJohnArgsRewritesZipFormatToPKZipAndPinsPot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("adaptArchiveJohnArgs: %v", err)
 	}
-	if !changed {
-		t.Fatalf("expected john args adaptation")
+	if changed {
+		t.Fatalf("expected no forced john args adaptation")
 	}
-	if !containsArg(nextArgs, "--format=pkzip") {
-		t.Fatalf("expected --format=pkzip, got %v", nextArgs)
+	if !reflect.DeepEqual(nextArgs, args) {
+		t.Fatalf("expected args unchanged, got %v", nextArgs)
 	}
-	if !containsArgPrefix(nextArgs, "--pot=") {
-		t.Fatalf("expected --pot override, got %v", nextArgs)
-	}
-	if len(notes) == 0 {
-		t.Fatalf("expected adaptation notes")
+	if len(notes) != 0 {
+		t.Fatalf("expected no adaptation notes, got %v", notes)
 	}
 }
 
@@ -1086,6 +1300,38 @@ func TestValidateCommandOutputEvidenceRejectsJohnNoHashesLoaded(t *testing.T) {
 	}
 }
 
+func TestValidateCommandOutputEvidenceRejectsUsageOnlyOutputForLocalWorkflow(t *testing.T) {
+	t.Parallel()
+
+	task := TaskSpec{
+		TaskID:   "T-usage-1",
+		Title:    "Run baseline archive cracking",
+		Goal:     "Recover password for secret.zip in local lab",
+		Targets:  []string{"127.0.0.1"},
+		Strategy: "baseline_crack",
+	}
+	output := []byte("Usage: john [OPTIONS] [PASSWORD-FILES]\nUse --help to list all available options.\n")
+	if err := validateCommandOutputEvidence(task, "john", nil, output); err == nil {
+		t.Fatalf("expected usage-only john output to be rejected")
+	}
+}
+
+func TestValidateCommandOutputEvidenceRejectsUsageOnlyOutputForAnyCommand(t *testing.T) {
+	t.Parallel()
+
+	task := TaskSpec{
+		TaskID:   "T-usage-2",
+		Title:    "Generic command scan",
+		Goal:     "Run vulnerability discovery command",
+		Targets:  []string{"192.168.50.1"},
+		Strategy: "vulnerability_mapping",
+	}
+	output := []byte("usage: nikto [options] -h <host>\nTry --help for more information\n")
+	if err := validateCommandOutputEvidence(task, "nikto", []string{"--help"}, output); err == nil {
+		t.Fatalf("expected generic usage-only output to be rejected")
+	}
+}
+
 func TestValidateCommandOutputEvidenceRejectsBareUnzipForArchiveWorkflow(t *testing.T) {
 	t.Parallel()
 
@@ -1101,7 +1347,38 @@ func TestValidateCommandOutputEvidenceRejectsBareUnzipForArchiveWorkflow(t *test
 	}
 }
 
-func TestAdaptArchiveExtractionShellArgsUsesRecoveredPasswordArtifact(t *testing.T) {
+func TestValidateCommandOutputEvidenceRejectsMetasploitWithoutExecArg(t *testing.T) {
+	t.Parallel()
+
+	task := TaskSpec{
+		TaskID:   "T-msf-1",
+		Title:    "Execute Metasploit HTTP version scan",
+		Goal:     "Run metasploit scan and capture output",
+		Targets:  []string{"192.168.50.1"},
+		Strategy: "vuln_mapping",
+	}
+	if err := validateCommandOutputEvidence(task, "msfconsole", []string{"192.168.50.1"}, []byte("Metasploit Framework")); err == nil {
+		t.Fatalf("expected metasploit non-interactive validation failure")
+	}
+}
+
+func TestValidateCommandOutputEvidenceRejectsMetasploitParseError(t *testing.T) {
+	t.Parallel()
+
+	task := TaskSpec{
+		TaskID:   "T-msf-2",
+		Title:    "Execute Metasploit HTTP version scan",
+		Goal:     "Run metasploit scan and capture output",
+		Targets:  []string{"192.168.50.1"},
+		Strategy: "vuln_mapping",
+	}
+	output := []byte("Parse error: Unmatched quote: \"use\nmsf6 > ")
+	if err := validateCommandOutputEvidence(task, "msfconsole", []string{"-q", "-x", "use auxiliary/scanner/http/http_version"}, output); err == nil {
+		t.Fatalf("expected metasploit parse-error validation failure")
+	}
+}
+
+func TestAdaptArchiveExtractionShellArgsDoesNotForceRewrite(t *testing.T) {
 	t.Parallel()
 
 	base := t.TempDir()
@@ -1131,14 +1408,14 @@ func TestAdaptArchiveExtractionShellArgsUsesRecoveredPasswordArtifact(t *testing
 	if err != nil {
 		t.Fatalf("adaptArchiveExtractionShellArgs: %v", err)
 	}
-	if !changed {
-		t.Fatalf("expected extraction command adaptation")
+	if changed {
+		t.Fatalf("expected no forced extraction command adaptation")
 	}
-	if len(nextArgs) < 2 || !strings.Contains(nextArgs[1], recoveredPath) {
-		t.Fatalf("expected rewritten shell command to use recovered password path %q, got %q", recoveredPath, nextArgs)
+	if !reflect.DeepEqual(nextArgs, args) {
+		t.Fatalf("expected args unchanged, got %v", nextArgs)
 	}
-	if len(notes) == 0 {
-		t.Fatalf("expected adaptation note")
+	if len(notes) != 0 {
+		t.Fatalf("expected no adaptation notes, got %v", notes)
 	}
 }
 
@@ -1200,7 +1477,7 @@ func TestAdaptArchiveWorkflowCommandInjectsZipInputWhenMissing(t *testing.T) {
 	}
 }
 
-func TestAdaptArchiveWorkflowCommandInjectsJohnInputsWhenMissing(t *testing.T) {
+func TestAdaptArchiveWorkflowCommandDoesNotForceJohnInputs(t *testing.T) {
 	t.Parallel()
 
 	repoRoot := t.TempDir()
@@ -1249,27 +1526,15 @@ func TestAdaptArchiveWorkflowCommandInjectsJohnInputsWhenMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("adaptArchiveWorkflowCommand: %v", err)
 	}
-	if !changed {
-		t.Fatalf("expected john input adaptation")
+	if changed {
+		t.Fatalf("expected no forced john adaptation")
 	}
-	if cmd != "john" {
-		t.Fatalf("expected command john, got %q", cmd)
-	}
-	if !containsArg(args, hashPath) {
-		t.Fatalf("expected injected hash path %q, got %v", hashPath, args)
-	}
-	if !containsArg(args, "--wordlist="+wordlistPath) {
-		t.Fatalf("expected injected wordlist path %q, got %v", wordlistPath, args)
-	}
-	if !containsArgPrefix(args, "--pot=") {
-		t.Fatalf("expected injected --pot argument, got %v", args)
-	}
-	if len(notes) == 0 {
-		t.Fatalf("expected adaptation notes")
+	if cmd != "john" || len(args) != 0 || len(notes) != 0 {
+		t.Fatalf("expected unchanged john command, got cmd=%q args=%v notes=%v", cmd, args, notes)
 	}
 }
 
-func TestAdaptArchiveWorkflowCommandInjectsBoundedFcrackzipStrategy(t *testing.T) {
+func TestAdaptArchiveWorkflowCommandDoesNotForceFcrackzipStrategy(t *testing.T) {
 	t.Parallel()
 
 	repoRoot := t.TempDir()
@@ -1312,23 +1577,15 @@ func TestAdaptArchiveWorkflowCommandInjectsBoundedFcrackzipStrategy(t *testing.T
 	if err != nil {
 		t.Fatalf("adaptArchiveWorkflowCommand: %v", err)
 	}
-	if !changed {
-		t.Fatalf("expected fcrackzip adaptation")
+	if changed {
+		t.Fatalf("expected no forced fcrackzip adaptation")
 	}
-	if cmd != "fcrackzip" {
-		t.Fatalf("expected command fcrackzip, got %q", cmd)
-	}
-	for _, expected := range []string{"-D", "-u", "-p", wordlistPath, "-v", realZip} {
-		if !containsArg(args, expected) {
-			t.Fatalf("expected %q in adapted args, got %v", expected, args)
-		}
-	}
-	if len(notes) == 0 {
-		t.Fatalf("expected adaptation notes")
+	if cmd != "fcrackzip" || len(args) != 0 || len(notes) != 0 {
+		t.Fatalf("expected unchanged fcrackzip command, got cmd=%q args=%v notes=%v", cmd, args, notes)
 	}
 }
 
-func TestAdaptArchiveWorkflowCommandRewritesBareUnzipWithRecoveredPassword(t *testing.T) {
+func TestAdaptArchiveWorkflowCommandDoesNotRewriteBareUnzipWithRecoveredPassword(t *testing.T) {
 	t.Parallel()
 
 	repoRoot := t.TempDir()
@@ -1370,32 +1627,23 @@ func TestAdaptArchiveWorkflowCommandRewritesBareUnzipWithRecoveredPassword(t *te
 	if err != nil {
 		t.Fatalf("adaptArchiveWorkflowCommand: %v", err)
 	}
-	if !changed {
-		t.Fatalf("expected unzip adaptation")
+	if changed {
+		t.Fatalf("expected no forced unzip rewrite")
 	}
-	if cmd != "bash" {
-		t.Fatalf("expected rewritten unzip command bash, got %q", cmd)
-	}
-	if len(args) < 2 || args[0] != "-lc" {
-		t.Fatalf("expected shell args [-lc <script>], got %v", args)
-	}
-	if !strings.Contains(args[1], passPath) || !strings.Contains(args[1], realZip) {
-		t.Fatalf("expected script to reference password and zip paths, got %q", args[1])
-	}
-	if len(notes) < 2 {
-		t.Fatalf("expected adaptation notes, got %v", notes)
+	if cmd != "unzip" || len(args) != 0 || len(notes) != 0 {
+		t.Fatalf("expected unchanged unzip command, got cmd=%q args=%v notes=%v", cmd, args, notes)
 	}
 
 	cmdZip, argsZip, _, changedZip, err := adaptArchiveWorkflowCommand(cfg, task, "zip", nil, workDir)
 	if err != nil {
 		t.Fatalf("adaptArchiveWorkflowCommand zip: %v", err)
 	}
-	if !changedZip || cmdZip != "bash" || len(argsZip) < 2 || argsZip[0] != "-lc" {
-		t.Fatalf("expected bare zip rewrite to bash proof extraction, got cmd=%q args=%v changed=%v", cmdZip, argsZip, changedZip)
+	if changedZip || cmdZip != "zip" || len(argsZip) != 0 {
+		t.Fatalf("expected bare zip command unchanged, got cmd=%q args=%v changed=%v", cmdZip, argsZip, changedZip)
 	}
 }
 
-func TestAdaptArchiveWorkflowCommandConvertsBareZipToUnzipListingWithoutPassword(t *testing.T) {
+func TestAdaptArchiveWorkflowCommandDoesNotRejectProofExtractionWithoutRecoveredPassword(t *testing.T) {
 	t.Parallel()
 
 	repoRoot := t.TempDir()
@@ -1425,19 +1673,10 @@ func TestAdaptArchiveWorkflowCommandConvertsBareZipToUnzipListingWithoutPassword
 
 	cmd, args, notes, changed, err := adaptArchiveWorkflowCommand(cfg, task, "zip", nil, workDir)
 	if err != nil {
-		t.Fatalf("adaptArchiveWorkflowCommand: %v", err)
+		t.Fatalf("expected command to pass through unchanged, got err=%v", err)
 	}
-	if !changed {
-		t.Fatalf("expected adaptation")
-	}
-	if cmd != "unzip" {
-		t.Fatalf("expected command unzip, got %q", cmd)
-	}
-	if len(args) != 2 || args[0] != "-l" || args[1] != realZip {
-		t.Fatalf("expected unzip listing args with %q, got %v", realZip, args)
-	}
-	if len(notes) == 0 {
-		t.Fatalf("expected adaptation note")
+	if changed || cmd != "zip" || len(args) != 0 || len(notes) != 0 {
+		t.Fatalf("expected unchanged zip command, got cmd=%q args=%v changed=%v notes=%v", cmd, args, changed, notes)
 	}
 }
 
@@ -1627,6 +1866,48 @@ func TestRepairMissingCommandInputPathsForShellWrapperRepairsBareFilename(t *tes
 	}
 	if len(nextArgs) < 2 || strings.Contains(nextArgs[1], "secret.zip") && !strings.Contains(nextArgs[1], localArchive) {
 		t.Fatalf("expected repaired shell body to reference %q, got %q", localArchive, nextArgs[1])
+	}
+}
+
+func TestRepairMissingCommandInputPathsForShellWrapperAvoidsDuplicatingInsertedAbsolutePath(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	sessionsDir := filepath.Join(repoRoot, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll sessions: %v", err)
+	}
+	localArchive := filepath.Join(repoRoot, "secret.zip")
+	if err := os.WriteFile(localArchive, []byte("PK\x03\x04test-zip-bytes"), 0o644); err != nil {
+		t.Fatalf("WriteFile secret.zip: %v", err)
+	}
+
+	cfg := WorkerRunConfig{SessionsDir: sessionsDir}
+	task := TaskSpec{
+		TaskID:   "T-001",
+		Title:    "Verify archive exists",
+		Goal:     "Confirm archive path and scope",
+		Targets:  []string{"127.0.0.1"},
+		Strategy: "local_file_check",
+	}
+	args := []string{"-c", "cd " + repoRoot + " && ls -la secret.zip && zipinfo -v secret.zip > zipinfo_output.txt 2>&1"}
+
+	nextArgs, _, repaired, err := repairMissingCommandInputPaths(cfg, task, "bash", args)
+	if err != nil {
+		t.Fatalf("repairMissingCommandInputPaths: %v", err)
+	}
+	if !repaired {
+		t.Fatalf("expected shell bare filename repair")
+	}
+	if len(nextArgs) < 2 {
+		t.Fatalf("expected repaired shell body, got %#v", nextArgs)
+	}
+	duplicated := repoRoot + string(filepath.Separator) + strings.TrimPrefix(localArchive, string(filepath.Separator))
+	if strings.Contains(nextArgs[1], duplicated) {
+		t.Fatalf("expected no duplicated absolute path, got %q", nextArgs[1])
+	}
+	if strings.Count(nextArgs[1], localArchive) != 2 {
+		t.Fatalf("expected both archive references rewritten exactly once, got %q", nextArgs[1])
 	}
 }
 
@@ -2772,7 +3053,7 @@ func TestRunWorkerTaskReportSynthesisNoFindingsIncludesClearSummary(t *testing.T
 	if !strings.Contains(content, "## Executive Summary") {
 		t.Fatalf("expected executive summary section, got: %q", content)
 	}
-	if !strings.Contains(content, "No evidence-backed vulnerabilities identified in this run.") {
+	if !strings.Contains(content, "No validated vulnerabilities identified in this run.") {
 		t.Fatalf("expected explicit no-findings summary, got: %q", content)
 	}
 	if !strings.Contains(content, "## Test Execution Summary") {
@@ -2784,7 +3065,7 @@ func TestRunWorkerTaskReportSynthesisNoFindingsIncludesClearSummary(t *testing.T
 	if !strings.Contains(content, "### Task T-02") || !strings.Contains(content, "### Task T-03") {
 		t.Fatalf("expected task-level trace entries for dependencies, got: %q", content)
 	}
-	if !strings.Contains(content, "No finding-specific remediation generated because no evidence-backed vulnerabilities were identified.") {
+	if !strings.Contains(content, "No finding-specific remediation generated because no validated vulnerabilities were identified.") {
 		t.Fatalf("expected no-findings remediation guidance, got: %q", content)
 	}
 }
@@ -2886,6 +3167,304 @@ func TestRunWorkerTaskReportSynthesisPrioritizesHighConfidenceCVEEvidence(t *tes
 	}
 	if strings.Contains(content, "Reference feed list:") {
 		t.Fatalf("did not expect low-quality reference-feed excerpt in prioritized findings, got: %q", content)
+	}
+}
+
+func TestRunWorkerTaskReportSynthesisSeparatesValidatedAndRejectedClaimsForMixedNSEOutput(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-worker-task-report-cve-mixed-states"
+	taskID := "T-04"
+	workerID := "worker-t4-a1"
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	writeWorkerPlan(t, base, runID, Scope{Targets: []string{"192.168.50.1"}})
+
+	artifactRoot := BuildRunPaths(base, runID).ArtifactDir
+	serviceArtifact := filepath.Join(artifactRoot, "T-02", "service_scan.log")
+	if err := os.MkdirAll(filepath.Dir(serviceArtifact), 0o755); err != nil {
+		t.Fatalf("MkdirAll service artifact dir: %v", err)
+	}
+	if err := os.WriteFile(serviceArtifact, []byte("Nmap scan report for 192.168.50.1\nPORT STATE SERVICE\n80/tcp open http\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile service artifact: %v", err)
+	}
+	vulnArtifact := filepath.Join(artifactRoot, "T-03", "vuln_scan.log")
+	if err := os.MkdirAll(filepath.Dir(vulnArtifact), 0o755); err != nil {
+		t.Fatalf("MkdirAll vuln artifact dir: %v", err)
+	}
+	vulnText := "" +
+		"| http-vuln-cve2010-0738: host appears vulnerable on 192.168.50.1\n" +
+		"|_  /jmx-console/: Authentication was not required\n" +
+		"|     IDs:  CVE:CVE-2010-0738\n" +
+		"|     References: https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2010-0738\n" +
+		"|     Validation method: bounded check of /jmx-console auth flow\n" +
+		"|_http-vuln-cve2017-1001000: ERROR: Script execution failed (use -d to debug)\n"
+	if err := os.WriteFile(vulnArtifact, []byte(vulnText), 0o644); err != nil {
+		t.Fatalf("WriteFile vuln artifact: %v", err)
+	}
+
+	task := TaskSpec{
+		TaskID:            taskID,
+		Goal:              "Produce a final OWASP report from prior artifacts and include remediation guidance",
+		Targets:           []string{"192.168.50.1"},
+		DependsOn:         []string{"T-02", "T-03"},
+		DoneWhen:          []string{"OWASP report generated"},
+		FailWhen:          []string{"report generation failed"},
+		ExpectedArtifacts: []string{"owasp_report.md"},
+		RiskLevel:         string(RiskReconReadonly),
+		Action: TaskAction{
+			Type:    "command",
+			Command: "cat",
+			Args:    []string{"/tmp/service_scan_output.txt", "/tmp/vuln_scan_output.txt"},
+		},
+		Budget: TaskBudget{
+			MaxSteps:     3,
+			MaxToolCalls: 3,
+			MaxRuntime:   30 * time.Second,
+		},
+	}
+	taskPath := filepath.Join(BuildRunPaths(base, runID).TaskDir, taskID+".json")
+	if err := WriteJSONAtomic(taskPath, task); err != nil {
+		t.Fatalf("WriteJSONAtomic task: %v", err)
+	}
+
+	if err := RunWorkerTask(WorkerRunConfig{
+		SessionsDir: base,
+		RunID:       runID,
+		TaskID:      taskID,
+		WorkerID:    workerID,
+		Attempt:     1,
+	}); err != nil {
+		t.Fatalf("RunWorkerTask: %v", err)
+	}
+
+	events, err := NewManager(base).Events(runID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	completedEvent, ok := firstEventByType(events, EventTypeTaskCompleted)
+	if !ok {
+		t.Fatalf("expected task_completed event")
+	}
+	completedPayload := map[string]any{}
+	if len(completedEvent.Payload) > 0 {
+		_ = json.Unmarshal(completedEvent.Payload, &completedPayload)
+	}
+	logPath := strings.TrimSpace(toString(completedPayload["log_path"]))
+	if logPath == "" {
+		t.Fatalf("expected completed payload log_path")
+	}
+	reportOutput, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile command log: %v", err)
+	}
+	content := string(reportOutput)
+	if !strings.Contains(content, "### Validated Findings") {
+		t.Fatalf("expected validated findings section, got: %q", content)
+	}
+	if !strings.Contains(content, "### Rejected Findings") {
+		t.Fatalf("expected rejected findings section, got: %q", content)
+	}
+	if !strings.Contains(content, "### CVE-2010-0738 (validated)") {
+		t.Fatalf("expected CVE-2010-0738 to be marked validated, got: %q", content)
+	}
+	if !strings.Contains(content, "### CVE-2017-1001000 (rejected)") {
+		t.Fatalf("expected CVE-2017-1001000 to be marked rejected due to script error, got: %q", content)
+	}
+	if strings.Contains(content, "### CVE-2017-1001000 (validated)") {
+		t.Fatalf("did not expect script-error CVE to be marked validated, got: %q", content)
+	}
+}
+
+func TestRunWorkerTaskReportSynthesisKeepsClaimCandidateWithoutApplicabilityEvidence(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-worker-task-report-cve-candidate-no-applicability"
+	taskID := "T-04"
+	workerID := "worker-t4-a1"
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	writeWorkerPlan(t, base, runID, Scope{Targets: []string{"192.168.50.1"}})
+
+	artifactRoot := BuildRunPaths(base, runID).ArtifactDir
+	serviceArtifact := filepath.Join(artifactRoot, "T-02", "service_scan.log")
+	if err := os.MkdirAll(filepath.Dir(serviceArtifact), 0o755); err != nil {
+		t.Fatalf("MkdirAll service artifact dir: %v", err)
+	}
+	if err := os.WriteFile(serviceArtifact, []byte("Nmap scan summary\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile service artifact: %v", err)
+	}
+	vulnArtifact := filepath.Join(artifactRoot, "T-03", "vuln_scan.log")
+	if err := os.MkdirAll(filepath.Dir(vulnArtifact), 0o755); err != nil {
+		t.Fatalf("MkdirAll vuln artifact dir: %v", err)
+	}
+	vulnText := "NSE: host appears vulnerable to CVE-2010-0738\n"
+	if err := os.WriteFile(vulnArtifact, []byte(vulnText), 0o644); err != nil {
+		t.Fatalf("WriteFile vuln artifact: %v", err)
+	}
+
+	task := TaskSpec{
+		TaskID:            taskID,
+		Goal:              "Produce a final OWASP report from prior artifacts and include remediation guidance",
+		Targets:           []string{"192.168.50.1"},
+		DependsOn:         []string{"T-02", "T-03"},
+		DoneWhen:          []string{"OWASP report generated"},
+		FailWhen:          []string{"report generation failed"},
+		ExpectedArtifacts: []string{"owasp_report.md"},
+		RiskLevel:         string(RiskReconReadonly),
+		Action: TaskAction{
+			Type:    "command",
+			Command: "cat",
+			Args:    []string{"/tmp/service_scan_output.txt", "/tmp/vuln_scan_output.txt"},
+		},
+		Budget: TaskBudget{
+			MaxSteps:     3,
+			MaxToolCalls: 3,
+			MaxRuntime:   30 * time.Second,
+		},
+	}
+	taskPath := filepath.Join(BuildRunPaths(base, runID).TaskDir, taskID+".json")
+	if err := WriteJSONAtomic(taskPath, task); err != nil {
+		t.Fatalf("WriteJSONAtomic task: %v", err)
+	}
+
+	if err := RunWorkerTask(WorkerRunConfig{
+		SessionsDir: base,
+		RunID:       runID,
+		TaskID:      taskID,
+		WorkerID:    workerID,
+		Attempt:     1,
+	}); err != nil {
+		t.Fatalf("RunWorkerTask: %v", err)
+	}
+
+	events, err := NewManager(base).Events(runID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	completedEvent, ok := firstEventByType(events, EventTypeTaskCompleted)
+	if !ok {
+		t.Fatalf("expected task_completed event")
+	}
+	completedPayload := map[string]any{}
+	if len(completedEvent.Payload) > 0 {
+		_ = json.Unmarshal(completedEvent.Payload, &completedPayload)
+	}
+	logPath := strings.TrimSpace(toString(completedPayload["log_path"]))
+	if logPath == "" {
+		t.Fatalf("expected completed payload log_path")
+	}
+	reportOutput, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile command log: %v", err)
+	}
+	content := string(reportOutput)
+	if !strings.Contains(content, "### CVE-2010-0738 (candidate)") {
+		t.Fatalf("expected CVE-2010-0738 to remain candidate without applicability evidence, got: %q", content)
+	}
+	if !strings.Contains(content, "## Candidate Confirmation Plan") {
+		t.Fatalf("expected candidate confirmation plan section, got: %q", content)
+	}
+	if !strings.Contains(content, "Confirmation blocker/reason:") {
+		t.Fatalf("expected explicit candidate confirmation blocker reason, got: %q", content)
+	}
+	if !strings.Contains(content, "Planned bounded steps:") {
+		t.Fatalf("expected bounded follow-up steps for candidate claim, got: %q", content)
+	}
+	if strings.Contains(content, "### CVE-2010-0738 (validated)") {
+		t.Fatalf("did not expect validation without applicability evidence, got: %q", content)
+	}
+}
+
+func TestRunWorkerTaskReportSynthesisValidatesClaimWithSourceAndApplicabilityEvidence(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-worker-task-report-cve-validated-gate"
+	taskID := "T-04"
+	workerID := "worker-t4-a1"
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	writeWorkerPlan(t, base, runID, Scope{Targets: []string{"192.168.50.1"}})
+
+	artifactRoot := BuildRunPaths(base, runID).ArtifactDir
+	serviceArtifact := filepath.Join(artifactRoot, "T-02", "service_scan.log")
+	if err := os.MkdirAll(filepath.Dir(serviceArtifact), 0o755); err != nil {
+		t.Fatalf("MkdirAll service artifact dir: %v", err)
+	}
+	if err := os.WriteFile(serviceArtifact, []byte("Nmap scan report for 192.168.50.1\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile service artifact: %v", err)
+	}
+	vulnArtifact := filepath.Join(artifactRoot, "T-03", "vuln_scan.log")
+	if err := os.MkdirAll(filepath.Dir(vulnArtifact), 0o755); err != nil {
+		t.Fatalf("MkdirAll vuln artifact dir: %v", err)
+	}
+	vulnText := "" +
+		"NSE: host appears vulnerable to CVE-2010-0738 on 192.168.50.1\n" +
+		"IDs: CVE:CVE-2010-0738\n" +
+		"References: https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2010-0738\n" +
+		"Validation method: bounded verification check completed\n"
+	if err := os.WriteFile(vulnArtifact, []byte(vulnText), 0o644); err != nil {
+		t.Fatalf("WriteFile vuln artifact: %v", err)
+	}
+
+	task := TaskSpec{
+		TaskID:            taskID,
+		Goal:              "Produce a final OWASP report from prior artifacts and include remediation guidance",
+		Targets:           []string{"192.168.50.1"},
+		DependsOn:         []string{"T-02", "T-03"},
+		DoneWhen:          []string{"OWASP report generated"},
+		FailWhen:          []string{"report generation failed"},
+		ExpectedArtifacts: []string{"owasp_report.md"},
+		RiskLevel:         string(RiskReconReadonly),
+		Action: TaskAction{
+			Type:    "command",
+			Command: "cat",
+			Args:    []string{"/tmp/service_scan_output.txt", "/tmp/vuln_scan_output.txt"},
+		},
+		Budget: TaskBudget{
+			MaxSteps:     3,
+			MaxToolCalls: 3,
+			MaxRuntime:   30 * time.Second,
+		},
+	}
+	taskPath := filepath.Join(BuildRunPaths(base, runID).TaskDir, taskID+".json")
+	if err := WriteJSONAtomic(taskPath, task); err != nil {
+		t.Fatalf("WriteJSONAtomic task: %v", err)
+	}
+
+	if err := RunWorkerTask(WorkerRunConfig{
+		SessionsDir: base,
+		RunID:       runID,
+		TaskID:      taskID,
+		WorkerID:    workerID,
+		Attempt:     1,
+	}); err != nil {
+		t.Fatalf("RunWorkerTask: %v", err)
+	}
+
+	events, err := NewManager(base).Events(runID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	completedEvent, ok := firstEventByType(events, EventTypeTaskCompleted)
+	if !ok {
+		t.Fatalf("expected task_completed event")
+	}
+	completedPayload := map[string]any{}
+	if len(completedEvent.Payload) > 0 {
+		_ = json.Unmarshal(completedEvent.Payload, &completedPayload)
+	}
+	logPath := strings.TrimSpace(toString(completedPayload["log_path"]))
+	if logPath == "" {
+		t.Fatalf("expected completed payload log_path")
+	}
+	reportOutput, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile command log: %v", err)
+	}
+	content := string(reportOutput)
+	if !strings.Contains(content, "### CVE-2010-0738 (validated)") {
+		t.Fatalf("expected CVE-2010-0738 validated with source+applicability evidence, got: %q", content)
 	}
 }
 
@@ -3619,6 +4198,115 @@ func TestRunWorkerTaskAssistAction(t *testing.T) {
 	}
 	if atomic.LoadInt32(&calls) < 2 {
 		t.Fatalf("expected at least 2 llm calls, got %d", atomic.LoadInt32(&calls))
+	}
+}
+
+func TestRunWorkerTaskAssistPromptIncludesLatestExecutionFeedback(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-worker-task-assist-feedback-prompt"
+	taskID := "t1"
+	workerID := "worker-t1-a1"
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	writeWorkerPlan(t, base, runID, Scope{Targets: []string{"127.0.0.1"}})
+
+	task := TaskSpec{
+		TaskID:            taskID,
+		Goal:              "use llm reasoning",
+		Targets:           []string{"127.0.0.1"},
+		DoneWhen:          []string{"task complete"},
+		FailWhen:          []string{"task failed"},
+		ExpectedArtifacts: []string{"assist logs"},
+		RiskLevel:         string(RiskReconReadonly),
+		Action: TaskAction{
+			Type:   "assist",
+			Prompt: "List current directory and then complete.",
+		},
+		Budget: TaskBudget{
+			MaxSteps:     4,
+			MaxToolCalls: 4,
+			MaxRuntime:   15 * time.Second,
+		},
+	}
+	taskPath := filepath.Join(BuildRunPaths(base, runID).TaskDir, taskID+".json")
+	if err := WriteJSONAtomic(taskPath, task); err != nil {
+		t.Fatalf("WriteJSONAtomic task: %v", err)
+	}
+
+	var calls int32
+	prompts := make([]string, 0, 2)
+	var promptsMu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.NotFound(w, r)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		payload := struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}{}
+		_ = json.Unmarshal(body, &payload)
+		for _, msg := range payload.Messages {
+			if strings.TrimSpace(msg.Role) != "user" {
+				continue
+			}
+			promptsMu.Lock()
+			prompts = append(prompts, msg.Content)
+			promptsMu.Unlock()
+			break
+		}
+
+		seq := atomic.AddInt32(&calls, 1)
+		w.Header().Set("Content-Type", "application/json")
+		switch seq {
+		case 1:
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"command\",\"command\":\"list_dir\",\"args\":[\".\"],\"summary\":\"Inspect workspace\"}"}}]}`))
+		default:
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"complete\",\"final\":\"done\"}"}}]}`))
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv(workerConfigPathEnv, "")
+	t.Setenv(workerLLMBaseURLEnv, server.URL)
+	t.Setenv(workerLLMModelEnv, "test-model")
+	t.Setenv(workerLLMTimeoutSeconds, "10")
+	t.Setenv(workerAssistModeEnv, "strict")
+
+	err := RunWorkerTask(WorkerRunConfig{
+		SessionsDir: base,
+		RunID:       runID,
+		TaskID:      taskID,
+		WorkerID:    workerID,
+		Attempt:     1,
+	})
+	if err != nil {
+		t.Fatalf("RunWorkerTask assist: %v", err)
+	}
+	if atomic.LoadInt32(&calls) < 2 {
+		t.Fatalf("expected at least 2 llm calls, got %d", atomic.LoadInt32(&calls))
+	}
+	promptsMu.Lock()
+	defer promptsMu.Unlock()
+	if len(prompts) < 2 {
+		t.Fatalf("expected at least 2 captured prompts, got %d", len(prompts))
+	}
+	second := prompts[1]
+	if !strings.Contains(second, "[latest_execution_feedback]") {
+		t.Fatalf("expected latest_execution_feedback section in prompt, got: %q", second)
+	}
+	if !strings.Contains(second, "command: list_dir") {
+		t.Fatalf("expected command detail in prompt feedback, got: %q", second)
+	}
+	if !strings.Contains(second, "exit_code: 0") {
+		t.Fatalf("expected exit code detail in prompt feedback, got: %q", second)
+	}
+	if !strings.Contains(second, "artifact_log: ") {
+		t.Fatalf("expected artifact log detail in prompt feedback, got: %q", second)
 	}
 }
 
@@ -4375,6 +5063,13 @@ func testWriteExpectedArtifactsCommand() (string, []string) {
 		return "cmd", []string{"/C", "echo scan-file>port_scan_output.txt && echo service-file>service_version_output.txt"}
 	}
 	return "sh", []string{"-c", "printf 'scan-file\\n' > port_scan_output.txt; printf 'service-file\\n' > service_version_output.txt"}
+}
+
+func testNoOutputCommand() (string, []string) {
+	if runtime.GOOS == "windows" {
+		return "cmd", []string{"/C", "ver >NUL"}
+	}
+	return "sh", []string{"-c", ":"}
 }
 
 func longSleepCommand(seconds int) (string, []string) {

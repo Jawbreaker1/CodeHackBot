@@ -368,6 +368,8 @@ func TestCoordinator_StopAll(t *testing.T) {
 
 	plan := RunPlan{
 		RunID:           runID,
+		Scope:           Scope{Targets: []string{"192.168.50.1"}},
+		Constraints:     []string{"internal_lab_only"},
 		SuccessCriteria: []string{"done"},
 		StopCriteria:    []string{"stop"},
 		MaxParallelism:  1,
@@ -424,6 +426,8 @@ func TestCoordinator_ApprovalGrantFlow(t *testing.T) {
 	}
 	plan := RunPlan{
 		RunID:           runID,
+		Scope:           Scope{Targets: []string{"192.168.50.1"}},
+		Constraints:     []string{"internal_lab_only"},
 		SuccessCriteria: []string{"done"},
 		StopCriteria:    []string{"stop"},
 		MaxParallelism:  1,
@@ -496,6 +500,8 @@ func TestCoordinator_ApprovalDeniedBlocksTask(t *testing.T) {
 	}
 	plan := RunPlan{
 		RunID:           runID,
+		Scope:           Scope{Targets: []string{"192.168.50.1"}},
+		Constraints:     []string{"internal_lab_only"},
 		SuccessCriteria: []string{"done"},
 		StopCriteria:    []string{"stop"},
 		MaxParallelism:  1,
@@ -506,6 +512,9 @@ func TestCoordinator_ApprovalDeniedBlocksTask(t *testing.T) {
 				return ts
 			}(),
 		},
+	}
+	if _, err := manager.StartFromPlan(plan, ""); err != nil {
+		t.Fatalf("StartFromPlan: %v", err)
 	}
 	scheduler, _ := NewScheduler(plan, 1)
 	workers := NewWorkerManager(manager)
@@ -559,6 +568,8 @@ func TestCoordinator_ApprovalExpirationBlocksTask(t *testing.T) {
 	}
 	plan := RunPlan{
 		RunID:           runID,
+		Scope:           Scope{Targets: []string{"192.168.50.1"}},
+		Constraints:     []string{"internal_lab_only"},
 		SuccessCriteria: []string{"done"},
 		StopCriteria:    []string{"stop"},
 		MaxParallelism:  1,
@@ -569,6 +580,9 @@ func TestCoordinator_ApprovalExpirationBlocksTask(t *testing.T) {
 				return ts
 			}(),
 		},
+	}
+	if _, err := manager.StartFromPlan(plan, ""); err != nil {
+		t.Fatalf("StartFromPlan: %v", err)
 	}
 	scheduler, _ := NewScheduler(plan, 1)
 	workers := NewWorkerManager(manager)
@@ -616,6 +630,8 @@ func TestCoordinator_DeniesOutOfScopeBeforeApproval(t *testing.T) {
 	}
 	plan := RunPlan{
 		RunID:           runID,
+		Scope:           Scope{Targets: []string{"8.8.8.8"}},
+		Constraints:     []string{"internal_lab_only"},
 		SuccessCriteria: []string{"done"},
 		StopCriteria:    []string{"stop"},
 		MaxParallelism:  1,
@@ -627,6 +643,9 @@ func TestCoordinator_DeniesOutOfScopeBeforeApproval(t *testing.T) {
 				return ts
 			}(),
 		},
+	}
+	if _, err := manager.StartFromPlan(plan, ""); err != nil {
+		t.Fatalf("StartFromPlan: %v", err)
 	}
 	scheduler, _ := NewScheduler(plan, 1)
 	workers := NewWorkerManager(manager)
@@ -1082,6 +1101,239 @@ func TestCoordinator_EmitsReplanForNewFindingWithoutDuplicates(t *testing.T) {
 	}
 	if count := replanEventCount(events, "new_finding"); count != 1 {
 		t.Fatalf("expected 1 new_finding replan event, got %d", count)
+	}
+	var found bool
+	for _, event := range events {
+		if event.Type != EventTypeRunReplanRequested {
+			continue
+		}
+		payload := map[string]any{}
+		if len(event.Payload) > 0 {
+			if err := json.Unmarshal(event.Payload, &payload); err != nil {
+				t.Fatalf("unmarshal replan payload: %v", err)
+			}
+		}
+		if strings.TrimSpace(toString(payload["trigger"])) != "new_finding" {
+			continue
+		}
+		found = true
+		if strings.TrimSpace(toString(payload["finding_type"])) != "open_port" {
+			t.Fatalf("expected finding_type open_port in replan payload, got %#v", payload["finding_type"])
+		}
+		if strings.TrimSpace(toString(payload["title"])) != "SSH open" {
+			t.Fatalf("expected finding title in replan payload, got %#v", payload["title"])
+		}
+		break
+	}
+	if !found {
+		t.Fatalf("expected new_finding replan payload")
+	}
+}
+
+func TestCoordinator_CandidateCVEFindingTriggersGraphMutation(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-coord-replan-candidate-cve"
+	manager := NewManager(base)
+	now := time.Now().UTC()
+	manager.Now = func() time.Time { return now }
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	if err := AppendEventJSONL(manager.eventPath(runID), EventEnvelope{
+		EventID:  "e-run-start",
+		RunID:    runID,
+		WorkerID: orchestratorWorkerID,
+		Seq:      1,
+		TS:       now,
+		Type:     EventTypeRunStarted,
+	}); err != nil {
+		t.Fatalf("append run_started: %v", err)
+	}
+	if err := AppendEventJSONL(manager.eventPath(runID), EventEnvelope{
+		EventID:  "e-finding-cve-candidate-1",
+		RunID:    runID,
+		WorkerID: "worker-report",
+		TaskID:   "t1",
+		Seq:      2,
+		TS:       now.Add(time.Second),
+		Type:     EventTypeTaskFinding,
+		Payload: mustJSONRaw(map[string]any{
+			"target":       "192.168.50.1",
+			"finding_type": findingTypeCVECandidateClaim,
+			"title":        "CVE-2010-0738 candidate requires bounded confirmation",
+			"severity":     "medium",
+			"confidence":   "medium",
+			"metadata": map[string]any{
+				"cve":            "CVE-2010-0738",
+				"missing_phases": "lookup_source",
+				"claim_reason":   "missing_phase_requirements: lookup_source",
+			},
+		}),
+	}); err != nil {
+		t.Fatalf("append finding event: %v", err)
+	}
+	plan := RunPlan{
+		RunID:           runID,
+		Scope:           Scope{Targets: []string{"192.168.50.1"}},
+		Constraints:     []string{"internal_lab_only"},
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks: []TaskSpec{
+			func() TaskSpec {
+				ts := task("t1", nil, 1)
+				ts.RiskLevel = string(RiskActiveProbe)
+				return ts
+			}(),
+		},
+	}
+	if _, err := manager.StartFromPlan(plan, ""); err != nil {
+		t.Fatalf("StartFromPlan: %v", err)
+	}
+	scheduler, _ := NewScheduler(plan, 1)
+	workers := NewWorkerManager(manager)
+	broker, _ := NewApprovalBroker(PermissionDefault, false, time.Minute)
+	coord, err := NewCoordinator(runID, Scope{}, manager, workers, scheduler, 2, 2*time.Second, 4*time.Second, 3*time.Second, func(task TaskSpec, attempt int, workerID string) WorkerSpec {
+		return helperWorkerSpec(t, workerID, "ok")
+	}, broker)
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	if err := coord.Tick(); err != nil {
+		t.Fatalf("tick1: %v", err)
+	}
+	if err := coord.Tick(); err != nil {
+		t.Fatalf("tick2: %v", err)
+	}
+
+	events, err := manager.Events(runID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	var mutated bool
+	for _, event := range events {
+		if event.Type != EventTypeRunReplanRequested {
+			continue
+		}
+		payload := map[string]any{}
+		if len(event.Payload) > 0 {
+			if err := json.Unmarshal(event.Payload, &payload); err != nil {
+				t.Fatalf("unmarshal replan payload: %v", err)
+			}
+		}
+		if strings.TrimSpace(toString(payload["trigger"])) != "new_finding" {
+			continue
+		}
+		if strings.TrimSpace(toString(payload["finding_type"])) != findingTypeCVECandidateClaim {
+			continue
+		}
+		if got, _ := payload["graph_mutation"].(bool); !got {
+			t.Fatalf("expected graph mutation for candidate cve finding, payload=%#v", payload)
+		}
+		if strings.TrimSpace(toString(payload["mutation_status"])) != "task_added" {
+			t.Fatalf("expected mutation_status task_added, payload=%#v", payload)
+		}
+		if !strings.Contains(strings.TrimSpace(toString(payload["added_task_strategy"])), "adaptive_replan_new_finding") {
+			t.Fatalf("expected adaptive replan new_finding strategy, payload=%#v", payload)
+		}
+		mutated = true
+		break
+	}
+	if !mutated {
+		t.Fatalf("expected candidate cve replan mutation event")
+	}
+}
+
+func TestCoordinator_TaskExecutionFailureFindingDoesNotEmitNewFindingReplan(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-coord-task-exec-finding"
+	manager := NewManager(base)
+	now := time.Now().UTC()
+	manager.Now = func() time.Time { return now }
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	if err := AppendEventJSONL(manager.eventPath(runID), EventEnvelope{
+		EventID:  "e-run-start",
+		RunID:    runID,
+		WorkerID: orchestratorWorkerID,
+		Seq:      1,
+		TS:       now,
+		Type:     EventTypeRunStarted,
+	}); err != nil {
+		t.Fatalf("append run_started: %v", err)
+	}
+	if err := AppendEventJSONL(manager.eventPath(runID), EventEnvelope{
+		EventID:  "e-finding-exec-failure-1",
+		RunID:    runID,
+		WorkerID: "worker-T-01-a1",
+		TaskID:   "t1",
+		Seq:      2,
+		TS:       now.Add(time.Second),
+		Type:     EventTypeTaskFinding,
+		Payload: mustJSONRaw(map[string]any{
+			"target":       "127.0.0.1",
+			"finding_type": "task_execution_failure",
+			"title":        "task action failed",
+			"severity":     "low",
+			"confidence":   "high",
+		}),
+	}); err != nil {
+		t.Fatalf("append finding event: %v", err)
+	}
+	plan := RunPlan{
+		RunID:           runID,
+		Scope:           Scope{Targets: []string{"127.0.0.1"}},
+		Constraints:     []string{"internal_lab_only"},
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks: []TaskSpec{
+			task("t1", nil, 1),
+		},
+	}
+	if _, err := manager.StartFromPlan(plan, ""); err != nil {
+		t.Fatalf("StartFromPlan: %v", err)
+	}
+	scheduler, _ := NewScheduler(plan, 1)
+	workers := NewWorkerManager(manager)
+	broker, _ := NewApprovalBroker(PermissionDefault, false, time.Minute)
+	coord, err := NewCoordinator(runID, Scope{}, manager, workers, scheduler, 2, 2*time.Second, 4*time.Second, 3*time.Second, func(task TaskSpec, attempt int, workerID string) WorkerSpec {
+		return helperWorkerSpec(t, workerID, "ok")
+	}, broker)
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	if err := coord.Tick(); err != nil {
+		t.Fatalf("tick1: %v", err)
+	}
+	if err := coord.Tick(); err != nil {
+		t.Fatalf("tick2: %v", err)
+	}
+
+	events, err := manager.Events(runID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	for _, event := range events {
+		if event.Type != EventTypeRunReplanRequested {
+			continue
+		}
+		payload := map[string]any{}
+		if len(event.Payload) > 0 {
+			if err := json.Unmarshal(event.Payload, &payload); err != nil {
+				t.Fatalf("unmarshal replan payload: %v", err)
+			}
+		}
+		if strings.TrimSpace(toString(payload["trigger"])) == "new_finding" {
+			t.Fatalf("did not expect new_finding replan for task_execution_failure, payload=%#v", payload)
+		}
 	}
 }
 

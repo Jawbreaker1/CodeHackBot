@@ -32,16 +32,7 @@ func executeCoordinatorLoop(
 	for {
 		select {
 		case <-ctx.Done():
-			_ = coord.StopAll(stopGrace)
-			if status, err := manager.Status(runID); err == nil && status.State != "completed" && status.State != "stopped" {
-				_ = manager.Stop(runID)
-			}
-			_ = manager.SetRunOutcome(runID, orchestrator.RunOutcomeAborted)
-			_ = manager.SetRunPhase(runID, orchestrator.RunPhaseCompleted)
-			if announce {
-				fmt.Fprintf(stdout, "run interrupted: %s\n", runID)
-			}
-			return 0
+			return finalizeAbortedRun(manager, coord, runID, tick, stopGrace, stdout, stderr, announce, "run interrupted")
 		case <-ticker.C:
 			status, err := manager.Status(runID)
 			if err != nil {
@@ -49,14 +40,7 @@ func executeCoordinatorLoop(
 				return 1
 			}
 			if status.State == "stopped" {
-				_ = coord.StopAll(stopGrace)
-				_ = manager.SetRunOutcome(runID, orchestrator.RunOutcomeAborted)
-				emitRunReport(manager, runID, stdout, stderr, announce)
-				_ = manager.SetRunPhase(runID, orchestrator.RunPhaseCompleted)
-				if announce {
-					fmt.Fprintf(stdout, "run stopped: %s\n", runID)
-				}
-				return 0
+				return finalizeAbortedRun(manager, coord, runID, tick, stopGrace, stdout, stderr, announce, "run stopped")
 			}
 			if err := coord.Tick(); err != nil {
 				fmt.Fprintf(stderr, "run tick failed: %v\n", err)
@@ -107,6 +91,74 @@ func executeCoordinatorLoop(
 			}
 		}
 	}
+}
+
+func finalizeAbortedRun(
+	manager *orchestrator.Manager,
+	coord *orchestrator.Coordinator,
+	runID string,
+	tick time.Duration,
+	stopGrace time.Duration,
+	stdout io.Writer,
+	stderr io.Writer,
+	announce bool,
+	terminalMessage string,
+) int {
+	if err := coord.StopAll(stopGrace); err != nil {
+		fmt.Fprintf(stderr, "run stop failed: %v\n", err)
+		return 1
+	}
+	status, err := manager.Status(runID)
+	if err != nil {
+		fmt.Fprintf(stderr, "run status failed during terminalization: %v\n", err)
+		return 1
+	}
+	if status.State != "completed" && status.State != "stopped" {
+		if err := manager.Stop(runID); err != nil {
+			fmt.Fprintf(stderr, "run stop event failed: %v\n", err)
+			return 1
+		}
+		// Wait briefly for event projection to converge before report/status output.
+		deadline := time.Now().Add(maxDuration(3*tick, 200*time.Millisecond))
+		for time.Now().Before(deadline) {
+			current, statusErr := manager.Status(runID)
+			if statusErr == nil && (current.State == "stopped" || current.State == "completed") {
+				break
+			}
+			time.Sleep(minDuration(25*time.Millisecond, tick))
+		}
+	}
+	if _, err := manager.IngestEvidence(runID); err != nil {
+		fmt.Fprintf(stderr, "run terminal evidence ingest failed: %v\n", err)
+		return 1
+	}
+	if err := manager.SetRunOutcome(runID, orchestrator.RunOutcomeAborted); err != nil {
+		fmt.Fprintf(stderr, "run outcome update failed: %v\n", err)
+		return 1
+	}
+	emitRunReport(manager, runID, stdout, stderr, announce)
+	if err := manager.SetRunPhase(runID, orchestrator.RunPhaseCompleted); err != nil {
+		fmt.Fprintf(stderr, "run phase update failed: %v\n", err)
+		return 1
+	}
+	if announce {
+		fmt.Fprintf(stdout, "%s: %s\n", terminalMessage, runID)
+	}
+	return 0
+}
+
+func minDuration(a, b time.Duration) time.Duration {
+	if a <= b {
+		return a
+	}
+	return b
+}
+
+func maxDuration(a, b time.Duration) time.Duration {
+	if a >= b {
+		return a
+	}
+	return b
 }
 
 func emitRunReport(manager *orchestrator.Manager, runID string, stdout, stderr io.Writer, announce bool) {

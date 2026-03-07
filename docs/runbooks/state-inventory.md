@@ -238,6 +238,7 @@ Coordinator/runtime reasons:
 - `execution_timeout`
 - `budget_exhausted`
 - `repeated_step_loop`
+- `objective_not_met`
 
 Notes:
 

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBuildWorkerAssistLayeredContextReadsMemoryAndArtifacts(t *testing.T) {
@@ -34,7 +35,14 @@ func TestBuildWorkerAssistLayeredContextReadsMemoryAndArtifacts(t *testing.T) {
 		t.Fatalf("write artifact: %v", err)
 	}
 
-	ctx := buildWorkerAssistLayeredContext(cfg, []string{"command ok: list_dir -la /tmp"}, "prior failure")
+	task := TaskSpec{
+		TaskID:            cfg.TaskID,
+		Goal:              "Validate archive workflow",
+		DoneWhen:          []string{"objective_met"},
+		FailWhen:          []string{"objective_not_met"},
+		ExpectedArtifacts: []string{"scan.log"},
+	}
+	ctx := buildWorkerAssistLayeredContext(cfg, task, []string{"command ok: list_dir -la /tmp"}, "prior failure", nil, nil)
 	if len(ctx.KnownFacts) != 2 {
 		t.Fatalf("expected 2 known facts, got %d", len(ctx.KnownFacts))
 	}
@@ -43,6 +51,12 @@ func TestBuildWorkerAssistLayeredContextReadsMemoryAndArtifacts(t *testing.T) {
 	}
 	if !strings.Contains(ctx.ChatHistory, "[recent_actions]") {
 		t.Fatalf("expected recent_actions section in chat history, got: %q", ctx.ChatHistory)
+	}
+	if !strings.Contains(ctx.ChatHistory, "[task_contract]") {
+		t.Fatalf("expected task_contract section in chat history, got: %q", ctx.ChatHistory)
+	}
+	if !strings.Contains(ctx.ChatHistory, "[recovery_state]") {
+		t.Fatalf("expected recovery_state section in chat history, got: %q", ctx.ChatHistory)
 	}
 	if !strings.Contains(ctx.RecentLog, "[recent_artifacts]") {
 		t.Fatalf("expected recent_artifacts section in recent log, got: %q", ctx.RecentLog)
@@ -104,7 +118,7 @@ func TestBuildWorkerAssistLayeredContextIncludesMemoryCompactionSummary(t *testi
 		t.Fatalf("write context.json: %v", err)
 	}
 
-	ctx := buildWorkerAssistLayeredContext(cfg, []string{"command ok: noop"}, "")
+	ctx := buildWorkerAssistLayeredContext(cfg, TaskSpec{TaskID: cfg.TaskID, Goal: "demo"}, []string{"command ok: noop"}, "", nil, nil)
 	if !strings.Contains(ctx.RecentLog, "[compaction_summary]") {
 		t.Fatalf("expected compaction summary section in recent log")
 	}
@@ -165,7 +179,7 @@ func TestBuildWorkerAssistLayeredContextStressCompaction(t *testing.T) {
 		observations = append(observations, fmt.Sprintf("obs-%03d %s", i, strings.Repeat("o", 300)))
 	}
 
-	ctx := buildWorkerAssistLayeredContext(cfg, observations, "prior failure: command timed out")
+	ctx := buildWorkerAssistLayeredContext(cfg, TaskSpec{TaskID: cfg.TaskID, Goal: "stress context"}, observations, "prior failure: command timed out", nil, nil)
 	if len(ctx.KnownFacts) > 20 {
 		t.Fatalf("known facts should be capped at 20, got %d", len(ctx.KnownFacts))
 	}
@@ -215,4 +229,182 @@ func TestBuildWorkerAssistLayeredContextStressCompaction(t *testing.T) {
 		len(ctx.Summary), len(ctx.KnownFacts), len(ctx.OpenUnknowns), len(ctx.RecentActions), inventoryLines, len(ctx.ChatHistory), len(ctx.RecentLog))
 	t.Logf("retained samples: knownFactFirst=%q knownFactLast=%q recentActionFirst=%q recentActionLast=%q",
 		ctx.KnownFacts[0], ctx.KnownFacts[len(ctx.KnownFacts)-1], ctx.RecentActions[0], ctx.RecentActions[len(ctx.RecentActions)-1])
+}
+
+func TestBuildWorkerAssistLayeredContextIncludesDependencyArtifacts(t *testing.T) {
+	base := t.TempDir()
+	cfg := WorkerRunConfig{
+		SessionsDir: base,
+		RunID:       "run-layered-deps",
+		TaskID:      "T-002",
+		WorkerID:    "worker-T-002-a1",
+		Attempt:     1,
+	}
+	paths, err := EnsureRunLayout(base, cfg.RunID)
+	if err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	currentTaskDir := filepath.Join(paths.ArtifactDir, cfg.TaskID)
+	if err := os.MkdirAll(currentTaskDir, 0o755); err != nil {
+		t.Fatalf("mkdir task artifact dir: %v", err)
+	}
+	depDir := filepath.Join(paths.ArtifactDir, "T-001")
+	if err := os.MkdirAll(depDir, 0o755); err != nil {
+		t.Fatalf("mkdir dep artifact dir: %v", err)
+	}
+	currentArtifact := filepath.Join(currentTaskDir, "current.log")
+	depArtifact := filepath.Join(depDir, "dep.log")
+	if err := os.WriteFile(currentArtifact, []byte("current output"), 0o644); err != nil {
+		t.Fatalf("write current artifact: %v", err)
+	}
+	if err := os.WriteFile(depArtifact, []byte("dependency output"), 0o644); err != nil {
+		t.Fatalf("write dep artifact: %v", err)
+	}
+	ctx := buildWorkerAssistLayeredContext(cfg, TaskSpec{TaskID: cfg.TaskID, Goal: "dependency test"}, []string{"command ok"}, "", []string{depArtifact}, nil)
+	if !strings.Contains(ctx.RecentLog, "[dependency_artifacts]") {
+		t.Fatalf("expected dependency_artifacts section in recent log, got: %q", ctx.RecentLog)
+	}
+	if !strings.Contains(ctx.Inventory, depArtifact) {
+		t.Fatalf("expected dependency artifact in inventory, got: %q", ctx.Inventory)
+	}
+	if !strings.Contains(ctx.Inventory, currentArtifact) {
+		t.Fatalf("expected current artifact in inventory, got: %q", ctx.Inventory)
+	}
+}
+
+func TestBuildWorkerAssistLayeredContextPrioritizesFailureAnchorsOverInspectionChurn(t *testing.T) {
+	base := t.TempDir()
+	cfg := WorkerRunConfig{
+		SessionsDir: base,
+		RunID:       "run-layered-relevance",
+		TaskID:      "T-FAIL",
+		WorkerID:    "worker-T-FAIL-a1",
+		Attempt:     2,
+	}
+	paths, err := EnsureRunLayout(base, cfg.RunID)
+	if err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(paths.ArtifactDir, cfg.TaskID), 0o755); err != nil {
+		t.Fatalf("mkdir artifact dir: %v", err)
+	}
+	observations := []string{
+		"command ok: read_file /tmp/worker.log | output: still inspecting",
+		"command ok: list_dir /tmp | output: file list",
+		"command failed: read_file /home/johan/birdhackbot/CodeHackBot/sessions/run/orchestrator/artifact/T-03-hash-extraction/zip.hash | output: no such file",
+		"attempt delta summary: observations=7->20 | anchors=4->6",
+		"command ok: read_file /tmp/worker.log | output: repeated inspection",
+	}
+	ctx := buildWorkerAssistLayeredContext(cfg, TaskSpec{
+		TaskID:            cfg.TaskID,
+		Goal:              "recover zip password",
+		ExpectedArtifacts: []string{"zip.hash"},
+	}, observations, "prior attempt failure: no such file /home/johan/.../zip.hash", nil, nil)
+
+	if !strings.Contains(ctx.RecentLog, "[recovery_anchors]") {
+		t.Fatalf("expected recovery_anchors section in recent log, got: %q", ctx.RecentLog)
+	}
+	if !strings.Contains(ctx.ChatHistory, "zip.hash") {
+		t.Fatalf("expected chat history to retain hash anchor, got: %q", ctx.ChatHistory)
+	}
+	if !strings.Contains(ctx.ChatHistory, "attempt delta summary") {
+		t.Fatalf("expected attempt delta summary retained, got: %q", ctx.ChatHistory)
+	}
+}
+
+func TestBuildWorkerAssistLayeredContextPrioritizesAnchoredArtifacts(t *testing.T) {
+	base := t.TempDir()
+	cfg := WorkerRunConfig{
+		SessionsDir: base,
+		RunID:       "run-layered-artifacts",
+		TaskID:      "T-ART",
+		WorkerID:    "worker-T-ART-a1",
+		Attempt:     1,
+	}
+	paths, err := EnsureRunLayout(base, cfg.RunID)
+	if err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	taskDir := filepath.Join(paths.ArtifactDir, cfg.TaskID)
+	if err := os.MkdirAll(taskDir, 0o755); err != nil {
+		t.Fatalf("mkdir artifact dir: %v", err)
+	}
+	anchored := filepath.Join(taskDir, "zip.hash")
+	if err := os.WriteFile(anchored, []byte("hash"), 0o644); err != nil {
+		t.Fatalf("write anchored artifact: %v", err)
+	}
+	old := time.Now().Add(-10 * time.Minute)
+	if err := os.Chtimes(anchored, old, old); err != nil {
+		t.Fatalf("chtimes anchored artifact: %v", err)
+	}
+	for i := 0; i < 12; i++ {
+		path := filepath.Join(taskDir, fmt.Sprintf("worker-T-ART-a1-s%d.log", i))
+		if err := os.WriteFile(path, []byte("inspection"), 0o644); err != nil {
+			t.Fatalf("write worker log: %v", err)
+		}
+	}
+
+	ctx := buildWorkerAssistLayeredContext(cfg, TaskSpec{
+		TaskID:            cfg.TaskID,
+		Goal:              "recover zip password",
+		ExpectedArtifacts: []string{"zip.hash"},
+	}, []string{"command failed: read_file /tmp/zip.hash | output: no such file"}, "recover using zip.hash", nil, nil)
+
+	if !strings.Contains(ctx.RecentLog, anchored) {
+		t.Fatalf("expected anchored artifact retained in recent log, got: %q", ctx.RecentLog)
+	}
+	if !strings.Contains(ctx.Inventory, anchored) {
+		t.Fatalf("expected anchored artifact retained in inventory, got: %q", ctx.Inventory)
+	}
+}
+
+func TestBuildWorkerAssistLayeredContextIncludesExplicitRecoveryState(t *testing.T) {
+	base := t.TempDir()
+	cfg := WorkerRunConfig{
+		SessionsDir: base,
+		RunID:       "run-layered-recovery-state",
+		TaskID:      "T-REC",
+		WorkerID:    "worker-T-REC-a1",
+		Attempt:     1,
+	}
+	paths, err := EnsureRunLayout(base, cfg.RunID)
+	if err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	taskDir := filepath.Join(paths.ArtifactDir, cfg.TaskID)
+	if err := os.MkdirAll(taskDir, 0o755); err != nil {
+		t.Fatalf("mkdir artifact dir: %v", err)
+	}
+	logPath := filepath.Join(taskDir, "worker-T-REC-a1-a1-s1-t1.log")
+	if err := os.WriteFile(logPath, []byte("zipinfo output"), 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+	feedback := &assistExecutionFeedback{
+		Command:             "read_file",
+		Args:                []string{"/tmp/archive_metadata.txt"},
+		ExitCode:            0,
+		ResultSummary:       "command ok: read_file /tmp/archive_metadata.txt | output: Archive contains secret_text.txt",
+		PrimaryArtifactRefs: []string{"/tmp/archive_metadata.txt"},
+		LogPath:             logPath,
+		CombinedOutputTail:  "Archive contains secret_text.txt",
+	}
+
+	ctx := buildWorkerAssistLayeredContext(cfg, TaskSpec{
+		TaskID:            cfg.TaskID,
+		Goal:              "inspect metadata",
+		ExpectedArtifacts: []string{"archive_metadata.txt", "password.txt"},
+	}, []string{"command ok: read_file /tmp/archive_metadata.txt | output: Archive contains secret_text.txt"}, "", nil, feedback)
+
+	if !strings.Contains(ctx.RecentLog, "previous_command: read_file /tmp/archive_metadata.txt") {
+		t.Fatalf("expected previous_command in recovery state, got: %q", ctx.RecentLog)
+	}
+	if !strings.Contains(ctx.RecentLog, "previous_result_summary: command ok: read_file /tmp/archive_metadata.txt") {
+		t.Fatalf("expected previous_result_summary in recovery state, got: %q", ctx.RecentLog)
+	}
+	if !strings.Contains(ctx.RecentLog, "primary_evidence_refs: /tmp/archive_metadata.txt") {
+		t.Fatalf("expected primary_evidence_refs in recovery state, got: %q", ctx.RecentLog)
+	}
+	if !strings.Contains(ctx.RecentLog, "contract_gap: missing_expected_artifacts=archive_metadata.txt, password.txt") {
+		t.Fatalf("expected contract gap in recovery state, got: %q", ctx.RecentLog)
+	}
 }

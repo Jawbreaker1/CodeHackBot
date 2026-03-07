@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,7 +13,36 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/Jawbreaker1/CodeHackBot/internal/assist"
 )
+
+type scriptedWorkerAssistant struct {
+	seq   []assist.Suggestion
+	meta  []workerAssistantTurnMeta
+	index int
+}
+
+func (s *scriptedWorkerAssistant) Suggest(_ context.Context, _ assist.Input) (assist.Suggestion, workerAssistantTurnMeta, error) {
+	if len(s.seq) == 0 {
+		return assist.Suggestion{Type: "complete", Final: "done"}, workerAssistantTurnMeta{}, nil
+	}
+	if s.index >= len(s.seq) {
+		last := s.seq[len(s.seq)-1]
+		var meta workerAssistantTurnMeta
+		if len(s.meta) > 0 {
+			meta = s.meta[min(len(s.meta)-1, len(s.seq)-1)]
+		}
+		return last, meta, nil
+	}
+	out := s.seq[s.index]
+	var meta workerAssistantTurnMeta
+	if s.index < len(s.meta) {
+		meta = s.meta[s.index]
+	}
+	s.index++
+	return out, meta, nil
+}
 
 func TestNormalizeWorkerAssistModeRejectsInvalidValue(t *testing.T) {
 	t.Parallel()
@@ -287,7 +317,6 @@ func TestRunWorkerTaskAssistTraceLLMResponsesWritesArtifacts(t *testing.T) {
 			MaxRuntime:   10 * time.Second,
 		},
 	})
-
 	var calls int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
@@ -361,6 +390,107 @@ func TestRunWorkerTaskAssistTraceLLMResponsesWritesArtifacts(t *testing.T) {
 	}
 }
 
+func TestRunWorkerTaskRecoverFallbackQuestionFailsFastWithLatestResult(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-worker-task-recover-fallback-question"
+	taskID := "t-recover"
+	workerID := "worker-t-recover-a1"
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	writeWorkerPlan(t, base, runID, Scope{Targets: []string{"127.0.0.1"}})
+	writeAssistTask(t, base, runID, TaskSpec{
+		TaskID:            taskID,
+		Goal:              "recover from failed metadata extraction",
+		Targets:           []string{"127.0.0.1"},
+		DoneWhen:          []string{"task complete"},
+		FailWhen:          []string{"task failed"},
+		ExpectedArtifacts: []string{"zip_metadata.txt"},
+		RiskLevel:         string(RiskReconReadonly),
+		Action: TaskAction{
+			Type:   "assist",
+			Prompt: "inspect zip metadata",
+		},
+		Budget: TaskBudget{
+			MaxSteps:     4,
+			MaxToolCalls: 4,
+			MaxRuntime:   15 * time.Second,
+		},
+	})
+
+	assistant := &scriptedWorkerAssistant{
+		seq: []assist.Suggestion{
+			{
+				Type:    "command",
+				Command: "read_file",
+				Args:    []string{"missing.txt"},
+				Summary: "read missing artifact",
+			},
+			{
+				Type:     "question",
+				Question: "Retry the LLM step with the latest execution evidence.",
+				Summary:  "Recover-mode fallback will not invent a new command.",
+			},
+		},
+		meta: []workerAssistantTurnMeta{
+			{Model: "test-model", AssistMode: "degraded"},
+			{Model: "test-model", AssistMode: "degraded", FallbackUsed: true, FallbackReason: "primary_error"},
+		},
+	}
+
+	err := RunWorkerTask(WorkerRunConfig{
+		SessionsDir: base,
+		RunID:       runID,
+		TaskID:      taskID,
+		WorkerID:    workerID,
+		Attempt:     1,
+		assistantBuilder: func() (string, string, workerAssistant, error) {
+			return "test-model", "degraded", assistant, nil
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected recover fallback question to fail fast")
+	}
+
+	events, err := NewManager(base).Events(runID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	failEvent, ok := firstEventByType(events, EventTypeTaskFailed)
+	if !ok {
+		t.Fatalf("expected task_failed event")
+	}
+	payload := map[string]any{}
+	if len(failEvent.Payload) > 0 {
+		_ = json.Unmarshal(failEvent.Payload, &payload)
+	}
+	if got, _ := payload["reason"].(string); got != WorkerFailureAssistUnavailable {
+		t.Fatalf("expected %s reason, got %q", WorkerFailureAssistUnavailable, got)
+	}
+	if got := strings.TrimSpace(toString(payload["latest_result_summary"])); got == "" {
+		t.Fatalf("expected latest_result_summary in failure payload, got %#v", payload)
+	}
+	if refs := sliceFromAny(payload["latest_evidence_refs"]); len(refs) == 0 {
+		t.Fatalf("expected latest_evidence_refs in failure payload, got %#v", payload)
+	}
+	questionProgress := 0
+	for _, event := range events {
+		if event.Type != EventTypeTaskProgress {
+			continue
+		}
+		payload := map[string]any{}
+		if len(event.Payload) > 0 {
+			_ = json.Unmarshal(event.Payload, &payload)
+		}
+		if strings.TrimSpace(toString(payload["question"])) != "" {
+			questionProgress++
+		}
+	}
+	if questionProgress > 1 {
+		t.Fatalf("expected fallback question to fail fast without repeated question loop, got %d question events", questionProgress)
+	}
+}
+
 func TestRunWorkerTaskAssistDiagnosticModeSkipsShellRewrite(t *testing.T) {
 	base := t.TempDir()
 	runID := "run-worker-task-assist-diagnostic-shell"
@@ -388,7 +518,6 @@ func TestRunWorkerTaskAssistDiagnosticModeSkipsShellRewrite(t *testing.T) {
 			MaxRuntime:   10 * time.Second,
 		},
 	})
-
 	var calls int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
@@ -490,7 +619,6 @@ func TestRunWorkerTaskAssistLoopGuardDetectsSemanticRepeatsAsNoProgress(t *testi
 			MaxRuntime:   20 * time.Second,
 		},
 	})
-
 	var calls int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
@@ -2517,6 +2645,184 @@ func TestRunWorkerTaskAssistPromptIncludesFullRunScope(t *testing.T) {
 	}
 	if !strings.Contains(seenScopePrompt, "Targets: 192.168.50.10") {
 		t.Fatalf("expected task targets in prompt, got: %q", seenScopePrompt)
+	}
+}
+
+func TestRunWorkerTaskAssistRecoverLocalInspectionChurnFailsFast(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-worker-task-assist-recover-local-inspection"
+	taskID := "t1"
+	workerID := "worker-t1-a1"
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	writeWorkerPlan(t, base, runID, Scope{Targets: []string{"127.0.0.1"}})
+	writeAssistTask(t, base, runID, TaskSpec{
+		TaskID:            taskID,
+		Goal:              "Validate vulnerability mapping evidence with recover pivots.",
+		Strategy:          "vuln_mapping_validation",
+		Targets:           []string{"127.0.0.1"},
+		DoneWhen:          []string{"task complete"},
+		FailWhen:          []string{"task failed"},
+		ExpectedArtifacts: []string{"assist logs"},
+		RiskLevel:         string(RiskReconReadonly),
+		Action: TaskAction{
+			Type:   "assist",
+			Prompt: "Validate CVE mapping using upstream evidence.",
+		},
+		Budget: TaskBudget{
+			MaxSteps:     12,
+			MaxToolCalls: 12,
+			MaxRuntime:   20 * time.Second,
+		},
+	})
+
+	var calls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.NotFound(w, r)
+			return
+		}
+		seq := atomic.AddInt32(&calls, 1)
+		w.Header().Set("Content-Type", "application/json")
+		switch seq {
+		case 1:
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"command\",\"command\":\"read_file\",\"args\":[\"missing.txt\"],\"summary\":\"seed recover\"}"}}]}`))
+		case 2:
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"command\",\"command\":\"list_dir\",\"args\":[\".\"],\"summary\":\"unknown under test: inspect current logs\"}"}}]}`))
+		case 3:
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"command\",\"command\":\"read_file\",\"args\":[\"worker.log\"],\"summary\":\"unknown under test: inspect current logs\"}"}}]}`))
+		default:
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"command\",\"command\":\"read_file\",\"args\":[\"worker2.log\"],\"summary\":\"unknown under test: inspect current logs\"}"}}]}`))
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv(workerConfigPathEnv, "")
+	t.Setenv(workerLLMBaseURLEnv, server.URL)
+	t.Setenv(workerLLMModelEnv, "test-model")
+	t.Setenv(workerLLMTimeoutSeconds, "10")
+	t.Setenv(workerAssistModeEnv, "strict")
+
+	err := RunWorkerTask(WorkerRunConfig{
+		SessionsDir: base,
+		RunID:       runID,
+		TaskID:      taskID,
+		WorkerID:    workerID,
+		Attempt:     1,
+	})
+	if err == nil {
+		t.Fatalf("expected recover local inspection churn to fail fast")
+	}
+
+	events, eventsErr := NewManager(base).Events(runID, 0)
+	if eventsErr != nil {
+		t.Fatalf("Events: %v", eventsErr)
+	}
+	failed, ok := firstEventByType(events, EventTypeTaskFailed)
+	if !ok {
+		t.Fatalf("expected task_failed event")
+	}
+	payload := map[string]any{}
+	if len(failed.Payload) > 0 {
+		_ = json.Unmarshal(failed.Payload, &payload)
+	}
+	if got, _ := payload["reason"].(string); got != WorkerFailureNoProgress {
+		t.Fatalf("expected reason=%s, got %q payload=%#v", WorkerFailureNoProgress, got, payload)
+	}
+	if got, _ := payload["fallback_reason"].(string); !strings.Contains(got, "local-inspection churn") {
+		t.Fatalf("expected fallback_reason to mention local-inspection churn, got %q", got)
+	}
+}
+
+func TestRunWorkerTaskAssistRecoverExecutionLogLoopFailsFast(t *testing.T) {
+	base := t.TempDir()
+	runID := "run-worker-task-assist-recover-execution-log"
+	taskID := "t1"
+	workerID := "worker-t1-a1"
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	writeWorkerPlan(t, base, runID, Scope{Targets: []string{"127.0.0.1"}})
+	writeAssistTask(t, base, runID, TaskSpec{
+		TaskID:            taskID,
+		Goal:              "Validate service evidence with bounded recovery.",
+		Strategy:          "vuln_mapping_validation",
+		Targets:           []string{"127.0.0.1"},
+		DoneWhen:          []string{"task complete"},
+		FailWhen:          []string{"task failed"},
+		ExpectedArtifacts: []string{"service_scan.txt"},
+		RiskLevel:         string(RiskReconReadonly),
+		Action: TaskAction{
+			Type:   "assist",
+			Prompt: "Read evidence once, then pivot if needed.",
+		},
+		Budget: TaskBudget{
+			MaxSteps:     12,
+			MaxToolCalls: 12,
+			MaxRuntime:   20 * time.Second,
+		},
+	})
+
+	firstLogPath := filepath.Join(BuildRunPaths(base, runID).ArtifactDir, taskID, "worker-t1-a1-a1-s1-t1.log")
+	thirdLogPath := filepath.Join(BuildRunPaths(base, runID).ArtifactDir, taskID, "worker-t1-a1-a1-s3-t3.log")
+	var calls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.NotFound(w, r)
+			return
+		}
+		seq := atomic.AddInt32(&calls, 1)
+		w.Header().Set("Content-Type", "application/json")
+		switch seq {
+		case 1:
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"command\",\"command\":\"read_file\",\"args\":[\"missing.txt\"],\"summary\":\"seed recover state\"}"}}]}`))
+		case 2:
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"command\",\"command\":\"write_file\",\"args\":[\"service_scan.txt\",\"22/tcp open ssh\"],\"summary\":\"seed service scan evidence\"}"}}]}`))
+		case 3:
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"command\",\"command\":\"read_file\",\"args\":[\"service_scan.txt\"],\"summary\":\"read seeded evidence\"}"}}]}`))
+		case 4:
+			_, _ = w.Write([]byte(fmt.Sprintf("{\"choices\":[{\"message\":{\"content\":\"{\\\"type\\\":\\\"command\\\",\\\"command\\\":\\\"read_file\\\",\\\"args\\\":[\\\"%s\\\"],\\\"summary\\\":\\\"inspect first execution log\\\"}\"}}]}", firstLogPath)))
+		default:
+			_, _ = w.Write([]byte(fmt.Sprintf("{\"choices\":[{\"message\":{\"content\":\"{\\\"type\\\":\\\"command\\\",\\\"command\\\":\\\"read_file\\\",\\\"args\\\":[\\\"%s\\\"],\\\"summary\\\":\\\"unknown under test: inspect current execution log\\\"}\"}}]}", thirdLogPath)))
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv(workerConfigPathEnv, "")
+	t.Setenv(workerLLMBaseURLEnv, server.URL)
+	t.Setenv(workerLLMModelEnv, "test-model")
+	t.Setenv(workerLLMTimeoutSeconds, "10")
+	t.Setenv(workerAssistModeEnv, "strict")
+
+	err := RunWorkerTask(WorkerRunConfig{
+		SessionsDir: base,
+		RunID:       runID,
+		TaskID:      taskID,
+		WorkerID:    workerID,
+		Attempt:     1,
+	})
+	if err == nil {
+		t.Fatalf("expected recover execution-log churn to fail fast")
+	}
+
+	events, eventsErr := NewManager(base).Events(runID, 0)
+	if eventsErr != nil {
+		t.Fatalf("Events: %v", eventsErr)
+	}
+	failed, ok := firstEventByType(events, EventTypeTaskFailed)
+	if !ok {
+		t.Fatalf("expected task_failed event")
+	}
+	payload := map[string]any{}
+	if len(failed.Payload) > 0 {
+		_ = json.Unmarshal(failed.Payload, &payload)
+	}
+	if got, _ := payload["reason"].(string); got != WorkerFailureNoProgress {
+		t.Fatalf("expected reason=%s, got %q payload=%#v", WorkerFailureNoProgress, got, payload)
+	}
+	if got, _ := payload["fallback_reason"].(string); !strings.Contains(got, "execution-log churn") && !strings.Contains(got, "inspection-only churn") {
+		t.Fatalf("expected fallback_reason to mention execution-log or inspection-only churn, got %q", got)
 	}
 }
 

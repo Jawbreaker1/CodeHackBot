@@ -113,6 +113,17 @@ func TestSynthesizeTaskGraphWithLLMRejectsInvalidTask(t *testing.T) {
 	}
 }
 
+func TestLLMPlannerSystemPromptRequiresSourceValidatedVulnerabilityClaims(t *testing.T) {
+	t.Parallel()
+	lower := strings.ToLower(llmPlannerSystemPrompt)
+	if !strings.Contains(lower, "source-backed validation") {
+		t.Fatalf("expected source-backed validation requirement in planner prompt")
+	}
+	if !strings.Contains(lower, "avoid memory-only cve claims") {
+		t.Fatalf("expected anti-memory-only CVE guidance in planner prompt")
+	}
+}
+
 func TestSynthesizeTaskGraphWithLLMNormalizesInlineShellCommandAction(t *testing.T) {
 	t.Parallel()
 
@@ -363,6 +374,99 @@ func TestSynthesizeTaskGraphWithLLMAppliesBudgetFloors(t *testing.T) {
 	}
 }
 
+func TestSynthesizeTaskGraphWithLLMAppliesAssistValidationBudgetFloor(t *testing.T) {
+	t.Parallel()
+
+	client := &fakePlannerClient{
+		content: `{
+			"tasks":[
+				{
+					"task_id":"task-validate-low",
+					"title":"Validate service findings",
+					"goal":"Validate discovered service vulnerabilities with bounded checks",
+					"targets":["192.168.50.1"],
+					"priority":80,
+					"strategy":"validation_followup",
+					"risk_level":"recon_readonly",
+					"done_when":["done"],
+					"fail_when":["fail"],
+					"expected_artifacts":["validation.log"],
+					"action":{"type":"assist","prompt":"validate findings and report evidence"},
+					"budget":{"max_steps":1,"max_tool_calls":1,"max_runtime_seconds":30}
+				}
+			]
+		}`,
+	}
+
+	tasks, _, err := SynthesizeTaskGraphWithLLM(
+		context.Background(),
+		client,
+		"model",
+		"validate router findings",
+		Scope{Targets: []string{"192.168.50.1"}},
+		[]string{"internal_lab_only"},
+		nil,
+		1,
+	)
+	if err != nil {
+		t.Fatalf("SynthesizeTaskGraphWithLLM: %v", err)
+	}
+	if got := tasks[0].Budget.MaxSteps; got < 14 {
+		t.Fatalf("expected validation assist step floor >=14, got %d", got)
+	}
+	if got := tasks[0].Budget.MaxToolCalls; got < 20 {
+		t.Fatalf("expected validation assist tool call floor >=20, got %d", got)
+	}
+	if got := tasks[0].Budget.MaxRuntime; got < 8*time.Minute {
+		t.Fatalf("expected validation assist runtime floor >=8m, got %s", got)
+	}
+}
+
+func TestSynthesizeTaskGraphWithLLMDoesNotOverinflateSummaryAssistBudget(t *testing.T) {
+	t.Parallel()
+
+	client := &fakePlannerClient{
+		content: `{
+			"tasks":[
+				{
+					"task_id":"task-summary-low",
+					"title":"Plan summary",
+					"goal":"Summarize findings and report next steps",
+					"targets":["192.168.50.1"],
+					"priority":50,
+					"strategy":"summarize_and_replan",
+					"risk_level":"recon_readonly",
+					"done_when":["done"],
+					"fail_when":["fail"],
+					"expected_artifacts":["summary.log"],
+					"action":{"type":"assist","prompt":"summarize"},
+					"budget":{"max_steps":1,"max_tool_calls":1,"max_runtime_seconds":30}
+				}
+			]
+		}`,
+	}
+
+	tasks, _, err := SynthesizeTaskGraphWithLLM(
+		context.Background(),
+		client,
+		"model",
+		"summarize run",
+		Scope{Targets: []string{"192.168.50.1"}},
+		[]string{"internal_lab_only"},
+		nil,
+		1,
+	)
+	if err != nil {
+		t.Fatalf("SynthesizeTaskGraphWithLLM: %v", err)
+	}
+	if got := tasks[0].Budget.MaxSteps; got != 6 {
+		t.Fatalf("expected summary assist to stay at recon floor (6), got %d", got)
+	}
+	if got := tasks[0].Budget.MaxToolCalls; got != 8 {
+		t.Fatalf("expected summary assist to stay at recon floor (8), got %d", got)
+	}
+}
+
 func TestSynthesizeTaskGraphWithLLMClampsBudgetCeilings(t *testing.T) {
 	t.Parallel()
 
@@ -473,6 +577,297 @@ func TestSynthesizeTaskGraphWithLLMNormalizesDisallowedRiskLevels(t *testing.T) 
 	}
 	if tasks[1].RiskLevel != string(RiskReconReadonly) {
 		t.Fatalf("expected invalid risk to default to recon_readonly, got %q", tasks[1].RiskLevel)
+	}
+}
+
+func TestSynthesizeTaskGraphWithLLMPromotesWeakVulnQueryCommandToAssist(t *testing.T) {
+	t.Parallel()
+
+	client := &fakePlannerClient{
+		content: `{
+			"tasks":[
+				{
+					"task_id":"task-vuln-map",
+					"title":"Map CVEs",
+					"goal":"Map discovered services to known CVEs",
+					"targets":["192.168.50.1"],
+					"priority":90,
+					"strategy":"vulnerability_mapping",
+					"risk_level":"recon_readonly",
+					"done_when":["cves mapped"],
+					"fail_when":["mapping failed"],
+					"expected_artifacts":["cve-map.log"],
+					"action":{"type":"command","command":"searchsploit"},
+					"budget":{"max_steps":8,"max_tool_calls":10,"max_runtime_seconds":300}
+				}
+			]
+		}`,
+	}
+
+	tasks, _, err := SynthesizeTaskGraphWithLLM(
+		context.Background(),
+		client,
+		"model",
+		"assess router vulnerabilities",
+		Scope{Targets: []string{"192.168.50.1"}},
+		[]string{"internal_lab_only"},
+		nil,
+		1,
+	)
+	if err != nil {
+		t.Fatalf("SynthesizeTaskGraphWithLLM: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(tasks))
+	}
+	if got := strings.ToLower(strings.TrimSpace(tasks[0].Action.Type)); got != "assist" {
+		t.Fatalf("expected weak vulnerability query command promoted to assist, got %q", got)
+	}
+	if !strings.Contains(strings.ToLower(tasks[0].Action.Prompt), "do not rely on bare target ip-only lookups") {
+		t.Fatalf("expected promoted assist prompt to contain query guidance, got %q", tasks[0].Action.Prompt)
+	}
+	if got := tasks[0].Budget.MaxSteps; got < 14 {
+		t.Fatalf("expected promoted assist task to receive validation budget floor >=14, got %d", got)
+	}
+}
+
+func TestSynthesizeTaskGraphWithLLMPromotesVulnerscanInputOnlyCommandToAssist(t *testing.T) {
+	t.Parallel()
+
+	client := &fakePlannerClient{
+		content: `{
+			"tasks":[
+				{
+					"task_id":"task-vuln-map",
+					"title":"Map CVEs",
+					"goal":"Map discovered services to known CVEs",
+					"targets":["192.168.50.1"],
+					"priority":90,
+					"strategy":"vulnerability_mapping",
+					"risk_level":"recon_readonly",
+					"done_when":["cves mapped"],
+					"fail_when":["mapping failed"],
+					"expected_artifacts":["cve-map.log"],
+					"action":{"type":"command","command":"vulnerscan","args":["-i","nmap_vuln_scan_192.168.50.1.xml"]},
+					"budget":{"max_steps":8,"max_tool_calls":10,"max_runtime_seconds":300}
+				}
+			]
+		}`,
+	}
+
+	tasks, _, err := SynthesizeTaskGraphWithLLM(
+		context.Background(),
+		client,
+		"model",
+		"assess router vulnerabilities",
+		Scope{Targets: []string{"192.168.50.1"}},
+		[]string{"internal_lab_only"},
+		nil,
+		1,
+	)
+	if err != nil {
+		t.Fatalf("SynthesizeTaskGraphWithLLM: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(tasks))
+	}
+	if got := strings.ToLower(strings.TrimSpace(tasks[0].Action.Type)); got != "assist" {
+		t.Fatalf("expected vulnerscan input-only command promoted to assist, got %q", got)
+	}
+	if !strings.Contains(strings.ToLower(tasks[0].Action.Prompt), "input-file-only wrapper commands") {
+		t.Fatalf("expected promoted assist prompt to mention input-file-only wrappers, got %q", tasks[0].Action.Prompt)
+	}
+}
+
+func TestSynthesizeTaskGraphWithLLMPromotesNmapVulnersInputOnlyCommandToAssist(t *testing.T) {
+	t.Parallel()
+
+	client := &fakePlannerClient{
+		content: `{
+			"tasks":[
+				{
+					"task_id":"task-vuln-map",
+					"title":"Map CVEs",
+					"goal":"Map discovered services to known CVEs",
+					"targets":["192.168.50.1"],
+					"priority":90,
+					"strategy":"vulnerability_mapping",
+					"risk_level":"recon_readonly",
+					"done_when":["cves mapped"],
+					"fail_when":["mapping failed"],
+					"expected_artifacts":["cve-map.log"],
+					"action":{"type":"command","command":"nmap-vulners","args":["-i","nmap_vuln_scan_192.168.50.1.xml"]},
+					"budget":{"max_steps":8,"max_tool_calls":10,"max_runtime_seconds":300}
+				}
+			]
+		}`,
+	}
+
+	tasks, _, err := SynthesizeTaskGraphWithLLM(
+		context.Background(),
+		client,
+		"model",
+		"assess router vulnerabilities",
+		Scope{Targets: []string{"192.168.50.1"}},
+		[]string{"internal_lab_only"},
+		nil,
+		1,
+	)
+	if err != nil {
+		t.Fatalf("SynthesizeTaskGraphWithLLM: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(tasks))
+	}
+	if got := strings.ToLower(strings.TrimSpace(tasks[0].Action.Type)); got != "assist" {
+		t.Fatalf("expected nmap-vulners input-only command promoted to assist, got %q", got)
+	}
+}
+
+func TestSynthesizeTaskGraphWithLLMPromotesNmapVulnCheckerInputOnlyCommandToAssist(t *testing.T) {
+	t.Parallel()
+
+	client := &fakePlannerClient{
+		content: `{
+			"tasks":[
+				{
+					"task_id":"task-vuln-map",
+					"title":"Map CVEs",
+					"goal":"Map discovered services to known CVEs",
+					"targets":["192.168.50.1"],
+					"priority":90,
+					"strategy":"vulnerability_mapping",
+					"risk_level":"recon_readonly",
+					"done_when":["cves mapped"],
+					"fail_when":["mapping failed"],
+					"expected_artifacts":["cve-map.log"],
+					"action":{"type":"command","command":"nmap-vuln-checker","args":["-i","nmap_vuln_scan_192.168.50.1.xml"]},
+					"budget":{"max_steps":8,"max_tool_calls":10,"max_runtime_seconds":300}
+				}
+			]
+		}`,
+	}
+
+	tasks, _, err := SynthesizeTaskGraphWithLLM(
+		context.Background(),
+		client,
+		"model",
+		"assess router vulnerabilities",
+		Scope{Targets: []string{"192.168.50.1"}},
+		[]string{"internal_lab_only"},
+		nil,
+		1,
+	)
+	if err != nil {
+		t.Fatalf("SynthesizeTaskGraphWithLLM: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(tasks))
+	}
+	if got := strings.ToLower(strings.TrimSpace(tasks[0].Action.Type)); got != "assist" {
+		t.Fatalf("expected nmap-vuln-checker input-only command promoted to assist, got %q", got)
+	}
+}
+
+func TestSynthesizeTaskGraphWithLLMPromotesNmapVulnersWrapperInputOnlyCommandToAssist(t *testing.T) {
+	t.Parallel()
+
+	client := &fakePlannerClient{
+		content: `{
+			"tasks":[
+				{
+					"task_id":"task-vuln-map",
+					"title":"Map CVEs",
+					"goal":"Map discovered services to known CVEs",
+					"targets":["192.168.50.1"],
+					"priority":90,
+					"strategy":"vulnerability_mapping",
+					"risk_level":"recon_readonly",
+					"done_when":["cves mapped"],
+					"fail_when":["mapping failed"],
+					"expected_artifacts":["cve-map.log"],
+					"action":{"type":"command","command":"/home/johan/birdhackbot/CodeHackBot/tools/nmap_vulners_wrapper.sh","args":["-i","nmap_vuln_scan_192.168.50.1.xml"]},
+					"budget":{"max_steps":8,"max_tool_calls":10,"max_runtime_seconds":300}
+				}
+			]
+		}`,
+	}
+
+	tasks, _, err := SynthesizeTaskGraphWithLLM(
+		context.Background(),
+		client,
+		"model",
+		"assess router vulnerabilities",
+		Scope{Targets: []string{"192.168.50.1"}},
+		[]string{"internal_lab_only"},
+		nil,
+		1,
+	)
+	if err != nil {
+		t.Fatalf("SynthesizeTaskGraphWithLLM: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(tasks))
+	}
+	if got := strings.ToLower(strings.TrimSpace(tasks[0].Action.Type)); got != "assist" {
+		t.Fatalf("expected nmap_vulners_wrapper input-only command promoted to assist, got %q", got)
+	}
+}
+
+func TestHasOnlyArtifactInputArgs(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{
+			name: "input_file_only",
+			args: []string{"-i", "scan.xml"},
+			want: true,
+		},
+		{
+			name: "input_and_output_files",
+			args: []string{"--input", "/tmp/scan.xml", "--output", "report.json"},
+			want: true,
+		},
+		{
+			name: "contains_product_query",
+			args: []string{"apache", "2.4"},
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := hasOnlyArtifactInputArgs(tc.args); got != tc.want {
+				t.Fatalf("hasOnlyArtifactInputArgs(%v)=%v want=%v", tc.args, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeVulnMapperCommandBase(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{in: "nmap-vulners", want: "nmap-vulners"},
+		{in: "nmap_vulners_wrapper.sh", want: "nmap-vulners-wrapper"},
+		{in: "/tmp/tools/NMAP_VULNERS_WRAPPER.SH", want: "nmap-vulners-wrapper"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.in, func(t *testing.T) {
+			t.Parallel()
+			if got := normalizeVulnMapperCommandBase(tc.in); got != tc.want {
+				t.Fatalf("normalizeVulnMapperCommandBase(%q)=%q want=%q", tc.in, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -736,5 +1131,63 @@ func TestSynthesizeTaskGraphWithLLMWithOptionsIncludesPlaybooksInPayload(t *test
 	playbooks, _ := payload["playbooks"].(string)
 	if got := strings.TrimSpace(playbooks); got == "" {
 		t.Fatalf("expected playbooks in llm payload")
+	}
+}
+
+func TestSynthesizeTaskGraphWithLLMWithOptionsEmitsTraceOnSuccess(t *testing.T) {
+	t.Parallel()
+
+	client := &fakePlannerClient{
+		content: `{
+			"rationale":"single task",
+			"tasks":[
+				{
+					"task_id":"task-1",
+					"title":"Recon",
+					"goal":"Collect recon",
+					"targets":["127.0.0.1"],
+					"priority":90,
+					"strategy":"recon_seed",
+					"risk_level":"recon_readonly",
+					"done_when":["done"],
+					"fail_when":["failed"],
+					"expected_artifacts":["recon.log"],
+					"action":{"type":"assist","prompt":"collect recon"},
+					"budget":{"max_steps":8,"max_tool_calls":10,"max_runtime_seconds":120}
+				}
+			]
+		}`,
+	}
+
+	var trace LLMPlannerTrace
+	_, _, err := SynthesizeTaskGraphWithLLMWithOptions(
+		context.Background(),
+		client,
+		"model",
+		"goal",
+		Scope{Targets: []string{"127.0.0.1"}},
+		[]string{"local_only"},
+		nil,
+		1,
+		LLMPlannerOptions{
+			Trace: func(t LLMPlannerTrace) {
+				trace = t
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("SynthesizeTaskGraphWithLLMWithOptions: %v", err)
+	}
+	if strings.TrimSpace(trace.RequestPayload) == "" {
+		t.Fatalf("expected request payload in planner trace")
+	}
+	if strings.TrimSpace(trace.RawResponse) == "" {
+		t.Fatalf("expected raw response in planner trace")
+	}
+	if strings.TrimSpace(trace.ExtractedJSON) == "" {
+		t.Fatalf("expected extracted json in planner trace")
+	}
+	if trace.Stage != "success" {
+		t.Fatalf("expected success stage, got %q", trace.Stage)
 	}
 }

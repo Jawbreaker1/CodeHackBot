@@ -207,6 +207,99 @@ func TestScheduler_AddTaskDynamicGraphMutation(t *testing.T) {
 	}
 }
 
+func TestScheduler_AdaptiveReplanEvidenceDependencyAllowsFailedSource(t *testing.T) {
+	t.Parallel()
+
+	plan := RunPlan{
+		RunID:           "run-adaptive-replan-evidence-dep",
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks: []TaskSpec{
+			{
+				TaskID:            "t1",
+				Title:             "Source task",
+				Goal:              "Gather evidence",
+				DoneWhen:          []string{"done"},
+				FailWhen:          []string{"fail"},
+				ExpectedArtifacts: []string{"source.log"},
+				RiskLevel:         string(RiskReconReadonly),
+				Action:            TaskAction{Type: "assist", Prompt: "do source task"},
+				Budget:            TaskBudget{MaxSteps: 2, MaxToolCalls: 2, MaxRuntime: time.Minute},
+			},
+			{
+				TaskID:            "t2",
+				Title:             "Adaptive recovery",
+				Goal:              "Recover from source failure",
+				DependsOn:         []string{"t1"},
+				Strategy:          "adaptive_replan_execution_failure",
+				DoneWhen:          []string{"done"},
+				FailWhen:          []string{"fail"},
+				ExpectedArtifacts: []string{"adaptive.log"},
+				RiskLevel:         string(RiskReconReadonly),
+				Action:            TaskAction{Type: "assist", Prompt: "recover"},
+				Budget:            TaskBudget{MaxSteps: 2, MaxToolCalls: 2, MaxRuntime: time.Minute},
+			},
+		},
+	}
+	s, err := NewScheduler(plan, 1)
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	if err := s.MarkLeased("t1"); err != nil {
+		t.Fatalf("MarkLeased t1: %v", err)
+	}
+	if err := s.MarkRunning("t1"); err != nil {
+		t.Fatalf("MarkRunning t1: %v", err)
+	}
+	if err := s.MarkFailed("t1", WorkerFailureCommandFailed, false, 1); err != nil {
+		t.Fatalf("MarkFailed t1: %v", err)
+	}
+	ready := s.NextLeasable()
+	if len(ready) != 1 || ready[0].TaskID != "t2" {
+		t.Fatalf("expected adaptive recovery task to be leasable after source failure, got %#v", ready)
+	}
+}
+
+func TestScheduler_UpdateTaskReplacesActionAndPreservesState(t *testing.T) {
+	t.Parallel()
+
+	plan := RunPlan{
+		RunID:           "run-update-task",
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks: []TaskSpec{
+			task("t1", nil, 1),
+		},
+	}
+	s, err := NewScheduler(plan, 1)
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	if err := s.SetAttempt("t1", 2); err != nil {
+		t.Fatalf("SetAttempt: %v", err)
+	}
+	updated := task("t1", nil, 1)
+	updated.Action = TaskAction{
+		Type:   "assist",
+		Prompt: "Use recovered evidence and pivot strategy.",
+	}
+	if err := s.UpdateTask(updated); err != nil {
+		t.Fatalf("UpdateTask: %v", err)
+	}
+	got, ok := s.Task("t1")
+	if !ok {
+		t.Fatalf("expected task t1 after update")
+	}
+	if got.Action.Type != "assist" {
+		t.Fatalf("expected action type assist, got %q", got.Action.Type)
+	}
+	if gotAttempt, _ := s.Attempt("t1"); gotAttempt != 2 {
+		t.Fatalf("expected attempt preserved as 2, got %d", gotAttempt)
+	}
+}
+
 func TestScheduler_IsDoneWhenQueuedTaskHasTerminalDependency(t *testing.T) {
 	t.Parallel()
 

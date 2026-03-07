@@ -29,10 +29,13 @@ Derived projection domains (read-only, never truth source):
 ### Orchestrator task workflow
 1. `plan`:
    - run plan + task graph prepared.
+   - under-specified direct command actions are promoted back to `assist` before lease.
 2. `execute`:
    - task leased/running and command or assist action executes.
+   - for assist-mode, the target direction is LLM-owned command choice with runtime limited to safety/scope validation and exact execution feedback.
 3. `recover`:
    - bounded retries/repairs/replan when execution contract fails.
+   - fallback must not become a second planner for assist-mode work.
 4. `finalize`:
    - emit terminal task event + completion contract or failure reason.
 

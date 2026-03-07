@@ -28,9 +28,26 @@ This is the contract for future refactors and feature work.
 - Outputs:
   - events, artifacts, candidate findings, task terminal events.
 - Owns:
-  - *how work is executed safely* (scope enforcement, retries, bounded recovery, tool execution).
+  - *how work is executed safely* (scope enforcement, minimal wrapping, bounded recovery, tool execution).
 - Does not own:
   - promotion of shared memory truth, acceptance of high-confidence claims as verified truth, final report truth decisions.
+  - inventing assist-mode commands when the LLM already owns the closed loop.
+
+### Fallback
+
+- Inputs:
+  - model unavailability, timeout, or parse failure.
+- Outputs:
+  - explicit unavailable/not-met/question states only.
+- Owns:
+  - resilience signaling when LLM output cannot be used.
+- Does not own:
+  - executable action choice,
+  - workflow planning,
+  - recovery strategy.
+
+Reference:
+- `docs/runbooks/fallback-ownership-reduction.md`
 
 ### Verifier
 
@@ -77,3 +94,4 @@ This is the contract for future refactors and feature work.
 ## Known Open Gaps
 
 - `PR-010`: non-summary tasks can still complete via `assist_no_new_evidence`; this violates desired executor->completion contract and remains a blocking fix item.
+- `PR-011`: assist-mode execution still has overlapping action owners (`planner post-processing`, residual artifact/replan truth). Fallback command synthesis, assist-mode command shaping, recover-mode fallback question churn, and basename-only adaptive-replan evidence handoff have been reduced in Sprint 37, but residual basename-first repair during replans still needs reduction.

@@ -21,6 +21,8 @@ func emitAssistCompletion(
 	if statusReason == "" {
 		statusReason = "assist_complete"
 	}
+	allowFallbackWithoutFindings := statusReason == "assist_no_new_evidence"
+	objectiveMet := !allowFallbackWithoutFindings
 	final = strings.TrimSpace(final)
 	if final == "" {
 		final = "assistant marked task complete"
@@ -31,7 +33,7 @@ func emitAssistCompletion(
 		return logErr
 	}
 	producedArtifacts := []string{logPath}
-	derivedPaths, derivedErr := materializeAssistExpectedArtifacts(cfg, task, logPath)
+	derivedPaths, derivedErr := materializeAssistExpectedArtifacts(cfg, task, logPath, objectiveMet)
 	if derivedErr != nil {
 		_ = emitWorkerFailure(manager, cfg, task, derivedErr, WorkerFailureArtifactWrite, nil)
 		return derivedErr
@@ -53,7 +55,6 @@ func emitAssistCompletion(
 			"tool_call": toolCalls,
 		})
 	}
-	allowFallbackWithoutFindings := statusReason == "assist_no_new_evidence"
 	requiredFindings := []string{"task_execution_result"}
 	producedFindings := []string{"task_execution_result"}
 	if allowFallbackWithoutFindings {
@@ -89,6 +90,10 @@ func emitAssistCompletion(
 	if allowFallbackWithoutFindings {
 		verificationStatus = "fallback_no_new_evidence"
 	}
+	whyMet := strings.TrimSpace(final)
+	if whyMet == "" {
+		whyMet = statusReason
+	}
 	_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskCompleted, map[string]any{
 		"attempt":   cfg.Attempt,
 		"worker_id": cfg.WorkerID,
@@ -102,6 +107,10 @@ func emitAssistCompletion(
 			"produced_findings":               producedFindings,
 			"allow_fallback_without_findings": allowFallbackWithoutFindings,
 			"verification_status":             verificationStatus,
+			"objective_met":                   objectiveMet,
+			"why_met":                         whyMet,
+			"evidence_refs":                   producedArtifacts,
+			"semantic_verifier":               "assistant_runtime_contract",
 		},
 	})
 	return nil
@@ -119,6 +128,7 @@ func emitAssistNoProgressFailure(
 	args []string,
 	reason string,
 	extra map[string]any,
+	lastExecFeedback *assistExecutionFeedback,
 ) error {
 	lastAction := strings.TrimSpace(strings.Join(append([]string{command}, args...), " "))
 	if lastAction == "" {
@@ -150,6 +160,7 @@ func emitAssistNoProgressFailure(
 	for k, v := range extra {
 		details[k] = v
 	}
+	details = mergeFailureDetails(details, latestAssistFailureDetails(lastExecFeedback))
 	_ = emitWorkerFailure(manager, cfg, task, failErr, WorkerFailureNoProgress, details)
 	return failErr
 }
@@ -177,6 +188,32 @@ func emitAssistNoNewEvidenceCompletion(
 		reason = "repeated identical command results"
 	}
 	if !allowAssistNoNewEvidenceCompletion(task) {
+		if taskLikelyLocalFileWorkflow(task) || archiveTaskRequiresPositiveProof(task) {
+			notMetErr := fmt.Errorf("objective not met: no new evidence for proof-sensitive local workflow (%s)", lastAction)
+			_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
+				"message":                    "objective_not_met: no new evidence for proof-sensitive local workflow",
+				"step":                       step,
+				"turn":                       turn,
+				"tool_calls":                 toolCalls,
+				"mode":                       mode,
+				"result_streak":              resultStreak,
+				"bounded_fallback":           "no_new_evidence",
+				"last_repeated_action":       lastAction,
+				"fallback_reason":            reason,
+				"completion_terminalization": "objective_not_met",
+			})
+			_ = emitWorkerFailure(manager, cfg, task, notMetErr, TaskFailureReasonObjectiveNotMet, map[string]any{
+				"step":                       step,
+				"turn":                       turn,
+				"tool_calls":                 toolCalls,
+				"result_streak":              resultStreak,
+				"bounded_fallback":           "no_new_evidence",
+				"last_repeated_action":       lastAction,
+				"fallback_reason":            reason,
+				"completion_terminalization": "objective_not_met",
+			})
+			return notMetErr
+		}
 		return emitAssistNoProgressFailure(manager, cfg, task, mode, step, turn, toolCalls, command, args, reason, map[string]any{
 			"result_streak":                 resultStreak,
 			"bounded_fallback":              "no_new_evidence",
@@ -184,13 +221,13 @@ func emitAssistNoNewEvidenceCompletion(
 			"completion_terminalization":    "no_progress",
 			"completion_reason_candidate":   "assist_no_new_evidence",
 			"completion_reason_enforcement": "fallback_rejected",
-		})
+		}, nil)
 	}
 	summary := fmt.Sprintf("No new evidence after repeated identical runtime results. Last action: %s (result_streak=%d, reason=%s).", lastAction, resultStreak, reason)
 	if isLowValueListingCommand(command, args) {
 		return emitAssistNoProgressFailure(manager, cfg, task, mode, step, turn, toolCalls, command, args, reason, map[string]any{
 			"result_streak": resultStreak,
-		})
+		}, nil)
 	}
 	_ = manager.EmitEvent(cfg.RunID, WorkerSignalID(cfg.WorkerID), cfg.TaskID, EventTypeTaskProgress, map[string]any{
 		"message":              "no new evidence after repeated identical results; completing task with bounded fallback",

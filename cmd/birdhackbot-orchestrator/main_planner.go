@@ -119,6 +119,7 @@ func buildGoalPlanFromMode(
 
 			useJSONSchema := true
 			attemptMaxTokens := adaptivePlannerMaxTokens(cfg, attempt)
+			var plannerTrace orchestrator.LLMPlannerTrace
 			plan, llmRationale, err := buildGoalLLMPlanWithStructuredOutput(
 				ctx,
 				cfg,
@@ -137,10 +138,28 @@ func buildGoalPlanFromMode(
 				now,
 				useJSONSchema,
 				attemptMaxTokens,
+				func(trace orchestrator.LLMPlannerTrace) {
+					plannerTrace = trace
+				},
 			)
 			if err == nil {
-				if attempt > 1 {
-					_, _ = persistPlannerAttemptDiagnostics(sessionsDir, runID, diagnostics)
+				diagnostics = append(diagnostics, plannerAttemptDiagnostic{
+					Attempt:           attempt,
+					WhenUTC:           time.Now().UTC(),
+					Outcome:           "succeeded",
+					HypothesisLimit:   attemptHypothesisLimit,
+					PlaybooksIncluded: playbooksIncluded,
+					JSONSchemaEnabled: useJSONSchema,
+					MaxTokens:         attemptMaxTokens,
+					RequestPayload:    strings.TrimSpace(plannerTrace.RequestPayload),
+					RawResponse:       strings.TrimSpace(plannerTrace.RawResponse),
+					ExtractedJSON:     strings.TrimSpace(plannerTrace.ExtractedJSON),
+					Fingerprint:       strings.TrimSpace(plannerTrace.Fingerprint),
+					FinishReason:      strings.TrimSpace(plannerTrace.FinishReason),
+					FailureStage:      strings.TrimSpace(plannerTrace.Stage),
+				})
+				if diagPath, diagErr := persistPlannerAttemptDiagnostics(sessionsDir, runID, diagnostics); diagErr == nil && strings.TrimSpace(diagPath) != "" {
+					plan.Metadata.PlannerTracePath = diagPath
 				}
 				if attempt <= 1 {
 					return plan, llmRationale, nil
@@ -162,6 +181,7 @@ func buildGoalPlanFromMode(
 				PlaybooksIncluded: playbooksIncluded,
 				JSONSchemaEnabled: useJSONSchema,
 				MaxTokens:         attemptMaxTokens,
+				RequestPayload:    strings.TrimSpace(plannerTrace.RequestPayload),
 			}
 			var plannerFailure *orchestrator.LLMPlannerFailure
 			if errors.As(err, &plannerFailure) {
@@ -226,6 +246,7 @@ func buildGoalLLMPlan(
 		now,
 		true,
 		0,
+		nil,
 	)
 }
 
@@ -243,6 +264,7 @@ func buildGoalLLMPlanWithStructuredOutput(
 	now time.Time,
 	useJSONSchema bool,
 	maxTokensOverride int,
+	trace func(orchestrator.LLMPlannerTrace),
 ) (orchestrator.RunPlan, string, error) {
 	normalizedGoal := normalizeGoal(goal)
 	hypotheses := orchestrator.GenerateHypotheses(normalizedGoal, scope, hypothesisLimit)
@@ -265,10 +287,15 @@ func buildGoalLLMPlanWithStructuredOutput(
 			MaxTokens:     intPtrPositive(maxTokens),
 			Playbooks:     strings.TrimSpace(playbookHints),
 			UseJSONSchema: &useJSONSchemaPtr,
+			Trace:         trace,
 		},
 	)
 	if err != nil {
 		return orchestrator.RunPlan{}, "", err
+	}
+	if normalizedTasks, note := normalizePlannerCommandExecutability(tasks); note != "" {
+		tasks = normalizedTasks
+		llmRationale = mergePlannerRationale(llmRationale, note)
 	}
 	if normalizedTasks, note := normalizeArchiveWorkflowTaskDependencies(normalizedGoal, tasks); note != "" {
 		tasks = normalizedTasks

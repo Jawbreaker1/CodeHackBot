@@ -22,23 +22,54 @@ func TestValidateAssistCompletionContractRequiresFieldsForActionGoal(t *testing.
 	}
 }
 
-func TestValidateAssistCompletionContractRejectsObjectiveNotMet(t *testing.T) {
+func TestValidateAssistCompletionContractAllowsObjectiveNotMetWithEvidence(t *testing.T) {
 	cfg := config.Config{}
 	cfg.Session.LogDir = t.TempDir()
 	r := NewRunner(cfg, "session-complete-contract-notmet", "", "")
+	r.startAssistRuntime("scan host and produce findings", "execute-step", newAssistBudget("scan host and produce findings", 6))
+	t.Cleanup(r.clearAssistRuntime)
+	if _, err := r.ensureSessionScaffold(); err != nil {
+		t.Fatalf("ensure scaffold: %v", err)
+	}
+	logPath := filepath.Join(cfg.Session.LogDir, "session-complete-contract-notmet", "logs", "cmd.log")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		t.Fatalf("mkdir logs: %v", err)
+	}
+	if err := os.WriteFile(logPath, []byte("scan timed out after retries"), 0o644); err != nil {
+		t.Fatalf("write evidence log: %v", err)
+	}
+
+	objectiveMet := false
+	err := r.validateAssistCompletionContract(assist.Suggestion{
+		Type:         "complete",
+		Final:        "Objective not met from current evidence. Need additional scan angle.",
+		ObjectiveMet: &objectiveMet,
+		EvidenceRefs: []string{logPath},
+		WhyMet:       "scan did not identify target service fingerprint",
+	})
+	if err != nil {
+		t.Fatalf("expected objective_not_met completion to pass with evidence: %v", err)
+	}
+}
+
+func TestValidateAssistCompletionContractRejectsObjectiveNotMetWithoutEvidence(t *testing.T) {
+	cfg := config.Config{}
+	cfg.Session.LogDir = t.TempDir()
+	r := NewRunner(cfg, "session-complete-contract-notmet-missing", "", "")
 	r.startAssistRuntime("scan host and produce findings", "execute-step", newAssistBudget("scan host and produce findings", 6))
 	t.Cleanup(r.clearAssistRuntime)
 
 	objectiveMet := false
 	err := r.validateAssistCompletionContract(assist.Suggestion{
 		Type:         "complete",
+		Final:        "Objective not met from current evidence.",
 		ObjectiveMet: &objectiveMet,
-		WhyMet:       "scan did not identify target service fingerprint",
+		WhyMet:       "insufficient signal",
 	})
 	if err == nil {
-		t.Fatalf("expected objective_not_met contract failure")
+		t.Fatalf("expected missing evidence refs to fail")
 	}
-	if !strings.Contains(err.Error(), "objective not met") {
+	if !strings.Contains(strings.ToLower(err.Error()), "evidence") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -142,6 +173,39 @@ func TestValidateAssistCompletionContractRejectsConversationalReplyForActionGoal
 		t.Fatalf("expected conversational completion to fail for action goal")
 	}
 	if !strings.Contains(strings.ToLower(err.Error()), "conversational reply") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateAssistCompletionContractRejectsContradictoryObjectiveNarrative(t *testing.T) {
+	cfg := config.Config{}
+	cfg.Session.LogDir = t.TempDir()
+	r := NewRunner(cfg, "session-complete-contract-contradiction", "", "")
+	r.startAssistRuntime("scan host and produce findings", "execute-step", newAssistBudget("scan host and produce findings", 6))
+	t.Cleanup(r.clearAssistRuntime)
+	if _, err := r.ensureSessionScaffold(); err != nil {
+		t.Fatalf("ensure scaffold: %v", err)
+	}
+	logPath := filepath.Join(cfg.Session.LogDir, "session-complete-contract-contradiction", "logs", "cmd.log")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		t.Fatalf("mkdir logs: %v", err)
+	}
+	if err := os.WriteFile(logPath, []byte("scan evidence"), 0o644); err != nil {
+		t.Fatalf("write evidence log: %v", err)
+	}
+
+	objectiveMet := true
+	err := r.validateAssistCompletionContract(assist.Suggestion{
+		Type:         "complete",
+		Final:        "UNVERIFIED: cannot prove admin/root access from session evidence.",
+		ObjectiveMet: &objectiveMet,
+		EvidenceRefs: []string{logPath},
+		WhyMet:       "done",
+	})
+	if err == nil {
+		t.Fatalf("expected contradiction to fail")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "contradicts") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

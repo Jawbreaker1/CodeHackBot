@@ -57,6 +57,38 @@ func TestApplyCommandTargetFallbackSkipsNonNetworkCommands(t *testing.T) {
 	}
 }
 
+func TestApplyCommandTargetFallbackSkipsSearchsploitQueries(t *testing.T) {
+	t.Parallel()
+
+	scope := Scope{Networks: []string{"192.168.50.0/24"}}
+	policy := NewScopePolicy(scope)
+	task := TaskSpec{Targets: []string{"192.168.50.1"}}
+
+	args, injected, _ := applyCommandTargetFallback(policy, task, "searchsploit", []string{"openssh 8.2"})
+	if injected {
+		t.Fatalf("did not expect target injection for searchsploit query")
+	}
+	if len(args) != 1 || args[0] != "openssh 8.2" {
+		t.Fatalf("unexpected args: %#v", args)
+	}
+}
+
+func TestApplyCommandTargetFallbackSkipsMetasploitConsole(t *testing.T) {
+	t.Parallel()
+
+	scope := Scope{Networks: []string{"192.168.50.0/24"}}
+	policy := NewScopePolicy(scope)
+	task := TaskSpec{Targets: []string{"192.168.50.1"}}
+
+	args, injected, _ := applyCommandTargetFallback(policy, task, "msfconsole", nil)
+	if injected {
+		t.Fatalf("did not expect target injection for msfconsole")
+	}
+	if len(args) != 0 {
+		t.Fatalf("unexpected args: %#v", args)
+	}
+}
+
 func TestApplyCommandTargetFallbackUsesScopeDefaultWhenTaskHasNoTargets(t *testing.T) {
 	t.Parallel()
 

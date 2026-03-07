@@ -7,6 +7,63 @@ import (
 	"strings"
 )
 
+type assistLoopCaps struct {
+	MaxActionSteps           int
+	MaxToolCalls             int
+	MaxTurns                 int
+	MaxRecoverTransitions    int
+	NoNewEvidenceToolCallCap int
+}
+
+func deriveAssistLoopCaps(task TaskSpec) assistLoopCaps {
+	maxActionSteps := task.Budget.MaxSteps
+	if maxActionSteps <= 0 {
+		maxActionSteps = 6
+	}
+	maxToolCalls := task.Budget.MaxToolCalls
+	if maxToolCalls <= 0 {
+		maxToolCalls = 6
+	}
+	maxRecoverTransitions := workerAssistMaxRecoveries
+	noNewEvidenceToolCallCap := workerAssistNoNewEvidenceToolCallCap
+
+	intentText := strings.ToLower(strings.TrimSpace(strings.Join([]string{
+		task.Title,
+		task.Goal,
+		task.Strategy,
+		task.Action.Prompt,
+	}, " ")))
+	deepValidationIntent := !isAssistSummaryTask(task) &&
+		(taskLikelyDeepValidationIntent(intentText) || isAssistReconOrValidationTask(task))
+	if deepValidationIntent {
+		if maxActionSteps < 12 {
+			maxActionSteps = 12
+		}
+		if maxToolCalls < 16 {
+			maxToolCalls = 16
+		}
+		if maxRecoverTransitions < 6 {
+			maxRecoverTransitions = 6
+		}
+		if noNewEvidenceToolCallCap < 12 {
+			noNewEvidenceToolCallCap = 12
+		}
+	}
+
+	maxTurns := maxActionSteps * workerAssistTurnFactor
+	if maxTurns < workerAssistMinTurns {
+		maxTurns = workerAssistMinTurns
+	}
+
+	return assistLoopCaps{
+		MaxActionSteps:           maxActionSteps,
+		MaxToolCalls:             maxToolCalls,
+		MaxTurns:                 maxTurns,
+		MaxRecoverTransitions:    maxRecoverTransitions,
+		NoNewEvidenceToolCallCap: noNewEvidenceToolCallCap,
+	}
+}
+
 func trackAssistActionStreak(lastKey string, lastStreak int, currentKey string) (string, int) {
 	currentKey = strings.TrimSpace(currentKey)
 	if currentKey == "" {
@@ -61,6 +118,21 @@ func isAssistAdaptiveReplanTask(task TaskSpec) bool {
 	return strings.HasPrefix(strategy, "adaptive_replan_")
 }
 
+func workerFailureReasonForFallbackQuestion(fallbackReason string) string {
+	switch strings.ToLower(strings.TrimSpace(fallbackReason)) {
+	case "parse_failure":
+		return WorkerFailureAssistParseFailure
+	case "timeout":
+		return WorkerFailureAssistTimeout
+	default:
+		return WorkerFailureAssistUnavailable
+	}
+}
+
+func isAssistAdaptiveExecutionFailureTask(task TaskSpec) bool {
+	return strings.EqualFold(strings.TrimSpace(task.Strategy), "adaptive_replan_execution_failure")
+}
+
 func isAssistReconOrValidationTask(task TaskSpec) bool {
 	strategy := strings.ToLower(strings.TrimSpace(task.Strategy))
 	if strategy != "" {
@@ -92,6 +164,11 @@ func isAssistReconOrValidationTask(task TaskSpec) bool {
 func allowAssistNoNewEvidenceCompletion(task TaskSpec) bool {
 	if isAssistSummaryTask(task) || isAssistAdaptiveReplanTask(task) {
 		return true
+	}
+	// Local archive/file workflows require concrete proof or explicit not-met.
+	// Do not terminal-complete these with no-new-evidence fallback.
+	if taskLikelyLocalFileWorkflow(task) || archiveTaskRequiresPositiveProof(task) {
+		return false
 	}
 	return !isAssistReconOrValidationTask(task)
 }
@@ -137,6 +214,152 @@ func isLowValueListingCommand(command string, args []string) bool {
 	}
 	_ = args
 	return true
+}
+
+func isAssistInspectionOnlyAction(command string, args []string) bool {
+	base := canonicalAssistActionCommand(command)
+	switch base {
+	case "list_dir", "read_file":
+		return true
+	default:
+		return false
+	}
+}
+
+func shouldEnforceAssistInspectionGuards(task TaskSpec) bool {
+	if isAssistSummaryTask(task) {
+		return false
+	}
+	return isAssistReconOrValidationTask(task) || isAssistAdaptiveExecutionFailureTask(task) || archiveTaskRequiresPositiveProof(task)
+}
+
+func detectRecoverLocalInspection(workDir, command string, args []string) (string, bool) {
+	base := canonicalAssistActionCommand(command)
+	if base != "list_dir" && base != "read_file" {
+		return "", false
+	}
+	candidates := make([]string, 0, len(args))
+	for _, arg := range args {
+		token := strings.TrimSpace(arg)
+		if token == "" || strings.HasPrefix(token, "-") {
+			continue
+		}
+		if strings.Contains(token, "://") {
+			continue
+		}
+		candidates = append(candidates, token)
+	}
+	if len(candidates) == 0 {
+		if base != "list_dir" {
+			return "", false
+		}
+		return ".", true
+	}
+	for _, token := range candidates {
+		resolved := token
+		if !filepath.IsAbs(resolved) {
+			resolved = filepath.Join(workDir, resolved)
+		}
+		resolved = filepath.Clean(resolved)
+		if !pathWithinRoot(resolved, workDir) {
+			return "", false
+		}
+	}
+	rel, err := filepath.Rel(workDir, filepath.Clean(filepath.Join(workDir, candidates[0])))
+	if err != nil || strings.TrimSpace(rel) == "" {
+		rel = candidates[0]
+	}
+	return rel, true
+}
+
+func detectRecoverExecutionLogInspection(cfg WorkerRunConfig, command string, args []string, lastExecFeedback *assistExecutionFeedback) (string, bool) {
+	if lastExecFeedback == nil {
+		return "", false
+	}
+	base := canonicalAssistActionCommand(command)
+	if base != "read_file" && base != "list_dir" {
+		return "", false
+	}
+	targetPath := firstAssistPathArg(args)
+	if targetPath == "" {
+		return "", false
+	}
+	artifactDir := filepath.Join(BuildRunPaths(cfg.SessionsDir, cfg.RunID).ArtifactDir, cfg.TaskID)
+	cleanTarget := filepath.Clean(targetPath)
+	if !filepath.IsAbs(cleanTarget) || !pathWithinRoot(cleanTarget, artifactDir) {
+		return "", false
+	}
+	targetBase := strings.ToLower(filepath.Base(cleanTarget))
+	if !strings.HasPrefix(targetBase, "worker-") || !strings.HasSuffix(targetBase, ".log") {
+		return "", false
+	}
+	if strings.TrimSpace(lastExecFeedback.LogPath) == "" {
+		return "", false
+	}
+	if filepath.Clean(lastExecFeedback.LogPath) != cleanTarget {
+		return "", false
+	}
+	return cleanTarget, true
+}
+
+func detectRecoverDependencyArtifactRegression(command string, args []string, dependencyArtifacts []string, lastExecFeedback *assistExecutionFeedback) (string, string, bool) {
+	if lastExecFeedback == nil {
+		return "", "", false
+	}
+	base := canonicalAssistActionCommand(command)
+	if base != "read_file" && base != "list_dir" {
+		return "", "", false
+	}
+	targetPath := normalizeAssistPathValue(firstAssistPathArg(args))
+	if targetPath == "" {
+		return "", "", false
+	}
+	targetBase := strings.ToLower(filepath.Base(targetPath))
+	if targetBase == "" {
+		return "", "", false
+	}
+	isDependency := false
+	for _, artifact := range dependencyArtifacts {
+		trimmed := strings.TrimSpace(artifact)
+		if trimmed == "" {
+			continue
+		}
+		if strings.EqualFold(filepath.Clean(trimmed), filepath.Clean(targetPath)) || strings.EqualFold(filepath.Base(trimmed), targetBase) {
+			isDependency = true
+			break
+		}
+	}
+	if !isDependency {
+		return "", "", false
+	}
+	for _, ref := range buildPrimaryEvidenceRefs(*lastExecFeedback) {
+		trimmed := strings.TrimSpace(ref)
+		if trimmed == "" {
+			continue
+		}
+		if strings.EqualFold(filepath.Clean(trimmed), filepath.Clean(targetPath)) || strings.EqualFold(filepath.Base(trimmed), targetBase) {
+			continue
+		}
+		if strings.HasPrefix(strings.ToLower(filepath.Base(trimmed)), "worker-") && strings.HasSuffix(strings.ToLower(filepath.Base(trimmed)), ".log") {
+			continue
+		}
+		return targetPath, trimmed, true
+	}
+	return "", "", false
+}
+
+func firstAssistPathArg(args []string) string {
+	for _, arg := range args {
+		trimmed := strings.TrimSpace(arg)
+		if trimmed == "" || strings.HasPrefix(trimmed, "-") {
+			continue
+		}
+		if strings.Contains(trimmed, "://") {
+			continue
+		}
+		return trimmed
+	}
+	return ""
 }
 
 func resolveRecoverPivotBasis(summary, recoverHint string, observations []string) (basis string, source string, kind string) {
@@ -269,9 +492,14 @@ func buildAssistPromptScope(runScope Scope, taskTargets []string) []string {
 	return out
 }
 
-func materializeAssistExpectedArtifacts(cfg WorkerRunConfig, task TaskSpec, sourcePath string) ([]string, error) {
+func materializeAssistExpectedArtifacts(cfg WorkerRunConfig, task TaskSpec, sourcePath string, objectiveMet bool) ([]string, error) {
 	sourcePath = strings.TrimSpace(sourcePath)
 	if sourcePath == "" {
+		return nil, nil
+	}
+	// Never synthesize expected artifacts for objective-not-met terminal states.
+	// This prevents fallback summaries from masquerading as concrete proof outputs.
+	if !objectiveMet {
 		return nil, nil
 	}
 	data, err := os.ReadFile(sourcePath)
@@ -286,6 +514,11 @@ func materializeAssistExpectedArtifacts(cfg WorkerRunConfig, task TaskSpec, sour
 	for _, raw := range task.ExpectedArtifacts {
 		requirement := strings.TrimSpace(raw)
 		if requirement == "" || !artifactRequirementNeedsConcreteMatch(requirement) {
+			continue
+		}
+		if expectedArtifactRequiresConcreteSource(task, requirement) {
+			// Do not synthesize sensitive proof/password artifacts from summary text.
+			// These must come from concrete command/tool output.
 			continue
 		}
 		relative := requirement

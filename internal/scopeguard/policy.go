@@ -37,7 +37,7 @@ var networkCommandSet = map[string]struct{}{
 	"ping": {}, "traceroute": {}, "tracepath": {},
 	"ssh": {}, "scp": {}, "sftp": {}, "ftp": {}, "telnet": {},
 	"httpx": {}, "nikto": {}, "ffuf": {}, "amass": {}, "subfinder": {},
-	"msfconsole": {}, "searchsploit": {},
+	"msfconsole": {},
 }
 
 var shellWrapperSet = map[string]struct{}{
@@ -488,6 +488,7 @@ func hasToken(text, token string) bool {
 
 func looksLikeFileToken(token string) bool {
 	trimmed := strings.TrimSpace(token)
+	trimmed = strings.Trim(trimmed, "\"'`()[]{}<>,;")
 	if trimmed == "" {
 		return false
 	}

@@ -26,6 +26,13 @@ func (r *Runner) assistRepairAttempts() int {
 	return 1
 }
 
+func (r *Runner) assistPostPlanRecoveryAttempts() int {
+	if r.openLikeAssistLoopEnabled() {
+		return 3
+	}
+	return 2
+}
+
 func (r *Runner) isActionGoal(goal string) bool {
 	return looksLikeAction(strings.TrimSpace(goal))
 }

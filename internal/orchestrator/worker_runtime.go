@@ -11,8 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/Jawbreaker1/CodeHackBot/internal/msf"
 )
 
 const (
@@ -210,89 +208,7 @@ func RunWorkerTask(cfg WorkerRunConfig) error {
 			if strings.TrimSpace(requiredAttribution.Target) != "" {
 				task.Targets = []string{strings.TrimSpace(requiredAttribution.Target)}
 			}
-			if nextArgs, note, rewritten := enforceAttributedCommandTarget(action.Command, action.Args, requiredAttribution.Target); rewritten {
-				action.Args = nextArgs
-				_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskProgress, map[string]any{
-					"message":   note,
-					"step":      0,
-					"tool_call": 0,
-					"command":   action.Command,
-					"args":      action.Args,
-				})
-			}
 		}
-		prepared := prepareRuntimeCommand(scopePolicy, task, action.Command, action.Args)
-		action.Command = prepared.Command
-		action.Args = prepared.Args
-		emitRuntimePreparationProgress(
-			manager,
-			cfg.RunID,
-			signalWorkerID,
-			cfg.TaskID,
-			0,
-			0,
-			0,
-			"tool_call",
-			"",
-			action.Command,
-			action.Args,
-			runtimePreparationMessages(prepared),
-		)
-		if nextCommand, nextArgs, note, rewritten := adaptWeakReportAction(cfg, task, scopePolicy, action.Command, action.Args, requiredAttribution); rewritten {
-			action.Command = nextCommand
-			action.Args = nextArgs
-			_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskProgress, map[string]any{
-				"message":   note,
-				"step":      0,
-				"tool_call": 0,
-				"command":   action.Command,
-				"args":      action.Args,
-			})
-		}
-		if nextArgs, note, rewritten := ensureVulnerabilityEvidenceActionWithGoal(task, plan.Metadata.Goal, action.Command, action.Args); rewritten {
-			action.Args = nextArgs
-			_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskProgress, map[string]any{
-				"message":   note,
-				"step":      0,
-				"tool_call": 0,
-				"command":   action.Command,
-				"args":      action.Args,
-			})
-		}
-		if nextCommand, nextArgs, note, rewritten := adaptWeakVulnerabilityAction(task, scopePolicy, action.Command, action.Args); rewritten {
-			action.Command = nextCommand
-			action.Args = nextArgs
-			_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskProgress, map[string]any{
-				"message":   note,
-				"step":      0,
-				"tool_call": 0,
-				"command":   action.Command,
-				"args":      action.Args,
-			})
-		}
-	}
-	if requiresCommandScopeValidation(action.Command, action.Args) {
-		if err := scopePolicy.ValidateCommandTargets(action.Command, action.Args); err != nil {
-			_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureScopeDenied, nil)
-			return err
-		}
-	}
-	if reason, err := enforceWorkerRiskPolicy(task, cfg); err != nil {
-		_ = emitWorkerFailure(manager, cfg, task, err, reason, nil)
-		return err
-	}
-	_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskStarted, map[string]any{
-		"attempt":   cfg.Attempt,
-		"worker_id": cfg.WorkerID,
-		"goal":      task.Goal,
-	})
-	if cfg.Diagnostic {
-		_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskProgress, map[string]any{
-			"message":   "diagnostic mode active: adaptive runtime rewrites disabled for this attempt",
-			"step":      0,
-			"tool_call": 0,
-			"mode":      "diagnostic",
-		})
 	}
 
 	workspaceDir := filepath.Join(BuildRunPaths(cfg.SessionsDir, cfg.RunID).Root, "workers", cfg.WorkerID)
@@ -320,81 +236,62 @@ func RunWorkerTask(cfg WorkerRunConfig) error {
 		return runWorkerValidatorTask(manager, cfg, task, workDir)
 	}
 	if action.Type != "assist" && !cfg.Diagnostic {
-		if adaptedCmd, adaptedArgs, notes, adaptErr := msf.AdaptRuntimeCommand(action.Command, action.Args, workDir); adaptErr != nil {
-			_ = emitWorkerFailure(manager, cfg, task, adaptErr, WorkerFailureBootstrapFailed, map[string]any{
+		pipeline, pipelineErr := applyRuntimeCommandPipeline(
+			cfg,
+			task,
+			scopePolicy,
+			action.Command,
+			action.Args,
+			requiredAttribution,
+			plan.Metadata.Goal,
+			workDir,
+		)
+		if pipelineErr != nil {
+			_ = emitWorkerFailure(manager, cfg, task, pipelineErr, WorkerFailureBootstrapFailed, map[string]any{
 				"command": action.Command,
 				"args":    action.Args,
 			})
-			return adaptErr
-		} else {
-			action.Command = adaptedCmd
-			action.Args = adaptedArgs
-			for _, note := range notes {
-				if strings.TrimSpace(note) == "" {
-					continue
-				}
-				_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskProgress, map[string]any{
-					"message":   note,
-					"step":      0,
-					"tool_call": 0,
-					"command":   action.Command,
-					"args":      action.Args,
-				})
-			}
+			return pipelineErr
 		}
-		if repairedArgs, repairNotes, repaired, repairErr := repairMissingCommandInputPaths(cfg, task, action.Command, action.Args); repairErr != nil {
-			_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskProgress, map[string]any{
-				"message":   fmt.Sprintf("runtime input repair skipped: %v", repairErr),
-				"step":      0,
-				"tool_call": 0,
-				"command":   action.Command,
-				"args":      action.Args,
-			})
-		} else if repaired {
-			action.Args = repairedArgs
-			for _, note := range repairNotes {
-				if strings.TrimSpace(note) == "" {
-					continue
-				}
-				_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskProgress, map[string]any{
-					"message":   note,
-					"step":      0,
-					"tool_call": 0,
-					"command":   action.Command,
-					"args":      action.Args,
-				})
-			}
+		action.Command = pipeline.Command
+		action.Args = pipeline.Args
+		emitRuntimeMutationNotes(
+			manager,
+			cfg.RunID,
+			signalWorkerID,
+			cfg.TaskID,
+			0,
+			0,
+			0,
+			"tool_call",
+			"",
+			action.Command,
+			action.Args,
+			pipeline.Notes,
+		)
+	}
+	if requiresCommandScopeValidation(action.Command, action.Args) {
+		if err := scopePolicy.ValidateCommandTargets(action.Command, action.Args); err != nil {
+			_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureScopeDenied, nil)
+			return err
 		}
-		if adaptedCommand, adaptedArgs, adaptNotes, adapted, adaptErr := adaptArchiveWorkflowCommand(cfg, task, action.Command, action.Args, workDir); adaptErr != nil {
-			_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskProgress, map[string]any{
-				"message":   fmt.Sprintf("archive workflow adaptation skipped: %v", adaptErr),
-				"step":      0,
-				"tool_call": 0,
-				"command":   action.Command,
-				"args":      action.Args,
-			})
-		} else if adapted {
-			action.Command = adaptedCommand
-			action.Args = adaptedArgs
-			for _, note := range adaptNotes {
-				if strings.TrimSpace(note) == "" {
-					continue
-				}
-				_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskProgress, map[string]any{
-					"message":   note,
-					"step":      0,
-					"tool_call": 0,
-					"command":   action.Command,
-					"args":      action.Args,
-				})
-			}
-		}
-		if requiresCommandScopeValidation(action.Command, action.Args) {
-			if err := scopePolicy.ValidateCommandTargets(action.Command, action.Args); err != nil {
-				_ = emitWorkerFailure(manager, cfg, task, err, WorkerFailureScopeDenied, nil)
-				return err
-			}
-		}
+	}
+	if reason, err := enforceWorkerRiskPolicy(task, cfg); err != nil {
+		_ = emitWorkerFailure(manager, cfg, task, err, reason, nil)
+		return err
+	}
+	_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskStarted, map[string]any{
+		"attempt":   cfg.Attempt,
+		"worker_id": cfg.WorkerID,
+		"goal":      task.Goal,
+	})
+	if cfg.Diagnostic {
+		_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskProgress, map[string]any{
+			"message":   "diagnostic mode active: adaptive runtime rewrites disabled for this attempt",
+			"step":      0,
+			"tool_call": 0,
+			"mode":      "diagnostic",
+		})
 	}
 
 	timeout := resolveActionTimeout(task.Budget.MaxRuntime, action.TimeoutSeconds)
@@ -622,6 +519,26 @@ func RunWorkerTask(cfg WorkerRunConfig) error {
 			"source":     attrForArtifact.Source,
 		})
 	}
+	requiredArtifacts := requiredArtifactsForCompletion(task)
+	completionContract, contractErr := buildCommandCompletionContract(
+		task,
+		cfg,
+		workDir,
+		execCommand,
+		output,
+		requiredArtifacts,
+		producedArtifacts,
+	)
+	if contractErr != nil {
+		_ = emitWorkerFailure(manager, cfg, task, contractErr, WorkerFailureInsufficientEvidence, map[string]any{
+			"command":        execCommand,
+			"args":           execArgs,
+			"log_path":       logPath,
+			"completion_err": contractErr.Error(),
+		})
+		return contractErr
+	}
+
 	_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskFinding, map[string]any{
 		"target":       primaryTaskTarget(task),
 		"finding_type": "task_execution_result",
@@ -636,21 +553,18 @@ func RunWorkerTask(cfg WorkerRunConfig) error {
 			"reason":  "action_completed",
 		},
 	})
-	requiredArtifacts := requiredArtifactsForCompletion(task)
+	if err := emitReportCandidateFindings(manager, cfg, task, output, producedArtifacts); err != nil {
+		_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskProgress, map[string]any{
+			"message": fmt.Sprintf("candidate CVE finding emission skipped: %v", err),
+		})
+	}
 
 	_ = manager.EmitEvent(cfg.RunID, signalWorkerID, cfg.TaskID, EventTypeTaskCompleted, map[string]any{
-		"attempt":   cfg.Attempt,
-		"worker_id": cfg.WorkerID,
-		"reason":    "action_completed",
-		"log_path":  logPath,
-		"completion_contract": map[string]any{
-			"status_reason":       "action_completed",
-			"required_artifacts":  requiredArtifacts,
-			"produced_artifacts":  producedArtifacts,
-			"required_findings":   []string{"task_execution_result"},
-			"produced_findings":   []string{"task_execution_result"},
-			"verification_status": "reported_by_worker",
-		},
+		"attempt":             cfg.Attempt,
+		"worker_id":           cfg.WorkerID,
+		"reason":              "action_completed",
+		"log_path":            logPath,
+		"completion_contract": completionContract,
 	})
 	return nil
 }
@@ -707,19 +621,32 @@ func normalizeCommandAction(command string, args []string) (string, []string) {
 		return "", args
 	}
 	if len(args) > 0 {
+		if isMetasploitConsoleCommand(command) {
+			args = normalizeMetasploitExecArgs(args)
+		}
+		command, args, _ = enforceCommandExecutionMode(command, args)
+		return command, args
+	}
+	parts := strings.Fields(command)
+	if len(parts) > 0 && isMetasploitConsoleCommand(parts[0]) {
+		command, args, _ = enforceCommandExecutionMode(parts[0], normalizeMetasploitExecArgs(parts[1:]))
 		return command, args
 	}
 	if looksLikeShellExpression(command) {
 		return "bash", []string{"-lc", command}
 	}
-	parts := strings.Fields(command)
 	if len(parts) == 0 {
 		return command, nil
 	}
 	if len(parts) == 1 {
 		return parts[0], nil
 	}
-	return parts[0], parts[1:]
+	if isMetasploitConsoleCommand(parts[0]) {
+		command, args, _ = enforceCommandExecutionMode(parts[0], normalizeMetasploitExecArgs(parts[1:]))
+		return command, args
+	}
+	command, args, _ = enforceCommandExecutionMode(parts[0], parts[1:])
+	return command, args
 }
 
 func looksLikeShellExpression(command string) bool {
@@ -864,8 +791,7 @@ func expectedArtifactRequiresConcreteSource(task TaskSpec, artifactName string) 
 	if !taskLikelyLocalFileWorkflow(task) {
 		return false
 	}
-	name := strings.ToLower(strings.TrimSpace(filepath.Base(artifactName)))
-	return name == "password_found" || name == "password_found.txt" || name == "recovered_password.txt"
+	return localWorkflowCriticalArtifactName(artifactName)
 }
 
 func requiredArtifactsForCompletion(task TaskSpec) []string {

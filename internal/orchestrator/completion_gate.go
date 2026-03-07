@@ -116,6 +116,11 @@ func (m *Manager) EvaluateCompletionVerificationGate(runID string) (CompletionVe
 		if verificationStatus == "" || verificationStatus == "failed" {
 			reasons = append(reasons, "verification_status="+nonEmptyOrFallback(verificationStatus, "missing"))
 		}
+		if archiveTaskRequiresPositiveProof(task) {
+			if objectiveMet, ok := completionContractObjectiveMet(contract); !ok || !objectiveMet {
+				reasons = append(reasons, "objective_met=false")
+			}
+		}
 
 		requiredArtifacts := compactStrings(sliceFromAny(contract["required_artifacts"]))
 		if len(requiredArtifacts) == 0 {

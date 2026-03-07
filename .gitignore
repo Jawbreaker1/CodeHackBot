@@ -19,7 +19,10 @@
 
 # Local lab run scratch artifacts (repo root)
 /active_hosts.txt
+/archive_metadata.txt
 /candidate_passwords.txt
+/encryption_check.txt
+/encryption_info.txt
 /extracted_files.txt
 /extracted_preview.txt
 /extraction_status.txt
@@ -29,17 +32,29 @@
 /john_*.txt
 /live_hosts.txt
 /net_scan.md
+/nmap_router_scan*.xml
+/nmap_scan*.txt
+/nmap_scan*.xml
+/nmap_vuln_scan*.xml
 /nmap_scan.gnmap
 /now.txt
 /port_scan.gnmap
 /port_scan.nmap
 /port_scan.xml
 /prep_summary.txt
+/proof_of_access.txt
 /recovered_password.txt
+/rockyou.txt
 /secret.zip
 /secret.zip.hash
+/secret_zip_hexdump.txt
 /syve.md
+/unzip_list_output.txt
+/unzip_v_output.txt
 /zip_crack_report.md
+/zip_header_hex.txt
+/zip_metadata.txt
+/zipinfo_output.txt
 /zipinfo_verbose.txt
 /zip.hash
 /temp_hash.txt
@@ -51,10 +66,12 @@
 /--output=sessions/
 
 # Local lab run scratch directories
+.birdhackbot/
 /extracted_content/
 /extracted_secret/
 /nmap_results/
 /systemverification/
+/tools/sessions/
 
 # OS files
 .DS_Store

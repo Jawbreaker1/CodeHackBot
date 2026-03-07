@@ -396,19 +396,13 @@ func capNmapPortBreadth(args []string, maxTopPorts int) ([]string, string, bool)
 			alreadyHasTopPorts = true
 			continue
 		case "-p-":
-			changed = true
-			if !alreadyHasTopPorts {
-				out = append(out, "--top-ports", strconv.Itoa(maxTopPorts))
-				alreadyHasTopPorts = true
-			}
+			out = append(out, arg)
+			alreadyHasTopPorts = true
 			continue
 		case "-p":
 			if i+1 < len(args) && strings.TrimSpace(args[i+1]) == "-" {
-				changed = true
-				if !alreadyHasTopPorts {
-					out = append(out, "--top-ports", strconv.Itoa(maxTopPorts))
-					alreadyHasTopPorts = true
-				}
+				out = append(out, arg, strings.TrimSpace(args[i+1]))
+				alreadyHasTopPorts = true
 				i++
 				continue
 			}

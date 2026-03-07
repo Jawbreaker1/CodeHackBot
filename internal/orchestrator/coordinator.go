@@ -31,6 +31,8 @@ type Coordinator struct {
 	lastRunStateHash            string
 	replanMutationCount         int
 	replanMutationBudget        int
+	replanMutationBucketCounts  map[string]int
+	replanMutationBucketBudgets map[string]int
 }
 
 func NewCoordinator(runID string, scope Scope, manager *Manager, workers *WorkerManager, scheduler *Scheduler, maxAttempts int, startupTimeout, staleTimeout, softStallGrace time.Duration, specForTask func(TaskSpec, int, string) WorkerSpec, broker *ApprovalBroker) (*Coordinator, error) {
@@ -83,6 +85,8 @@ func NewCoordinator(runID string, scope Scope, manager *Manager, workers *Worker
 		seenReplanSourceEvents:      map[string]struct{}{},
 		seenReplanMutationKeys:      map[string]struct{}{},
 		seenMissingArtifactTasks:    map[string]struct{}{},
+		replanMutationBucketCounts:  map[string]int{},
+		replanMutationBucketBudgets: map[string]int{},
 	}, nil
 }
 
@@ -336,8 +340,12 @@ func (c *Coordinator) handleWorkerExits() error {
 				return err
 			}
 			if check.Status != "satisfied" {
+				failureReason := check.Reason
+				if failureReason == "" {
+					failureReason = TaskFailureReasonMissingRequiredArtifacts
+				}
 				failurePayload := map[string]any{
-					"reason":              TaskFailureReasonMissingRequiredArtifacts,
+					"reason":              failureReason,
 					"error":               "completion contract verification failed",
 					"worker_id":           exit.WorkerID,
 					"log_path":            exit.LogPath,
@@ -353,7 +361,11 @@ func (c *Coordinator) handleWorkerExits() error {
 				if err := c.manager.EmitEvent(c.runID, orchestratorWorkerID, taskID, EventTypeTaskFailed, failurePayload); err != nil {
 					return err
 				}
-				if err := c.markFailedWithReplan(taskID, TaskFailureReasonMissingRequiredArtifacts, true, failurePayload); err != nil {
+				retryable := true
+				if failureReason == TaskFailureReasonObjectiveNotMet {
+					retryable = false
+				}
+				if err := c.markFailedWithReplan(taskID, failureReason, retryable, failurePayload); err != nil {
 					return err
 				}
 				_ = c.syncLeaseWithSchedulerState(taskID, "")

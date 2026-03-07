@@ -54,6 +54,16 @@ func TestNormalizeAssistCommandContractRejectsTypePrefixProse(t *testing.T) {
 	}
 }
 
+func TestNormalizeAssistCommandContractRejectsReservedContractToken(t *testing.T) {
+	_, _, err := normalizeAssistCommandContract("evidence_refs", []string{"pointing", "to", "logs"})
+	if err == nil {
+		t.Fatalf("expected reserved contract token rejection")
+	}
+	if !strings.Contains(err.Error(), "non-executable prose") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestNormalizeAssistCommandContractRejectsNarrativeCommandLine(t *testing.T) {
 	_, _, err := normalizeAssistCommandContract("zip2john was run and created sessions/demo/zip.hash", nil)
 	if err == nil {

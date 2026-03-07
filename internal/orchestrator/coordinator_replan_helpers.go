@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -47,6 +48,7 @@ func (c *Coordinator) buildReplanTask(trigger string, source EventEnvelope, payl
 		targets = append(targets, c.runScopeTargets()...)
 	}
 	taskID := fmt.Sprintf("task-rp-%s", hashKey(mutationKey)[:10])
+	priority := deriveAdaptiveReplanPriority(trigger, source, payload, hasBase, baseTask)
 	risk := string(RiskReconReadonly)
 	if trigger == "new_finding" {
 		severity := strings.ToLower(strings.TrimSpace(toString(payload["severity"])))
@@ -75,11 +77,38 @@ func (c *Coordinator) buildReplanTask(trigger string, source EventEnvelope, payl
 	action := echoAction(fmt.Sprintf("adaptive_replan:%s:%s", trigger, evidenceTarget))
 	title := fmt.Sprintf("Adaptive replan for %s", trigger)
 	expectedArtifacts := []string{fmt.Sprintf("replan-%s.log", sanitizePathComponent(evidenceTarget))}
+	dependsOn := []string{}
+	if trigger == "new_finding" {
+		findingType := strings.ToLower(strings.TrimSpace(toString(payload["finding_type"])))
+		if findingType == findingTypeCVECandidateClaim {
+			cve := strings.ToUpper(strings.TrimSpace(toString(payload["cve"])))
+			missing := compactStringSlice(strings.Split(strings.TrimSpace(toString(payload["missing_phases"])), ","))
+			claimReason := strings.TrimSpace(toString(payload["claim_reason"]))
+			goal = buildCandidateCVEFollowupGoal(cve, evidenceTarget, missing, claimReason)
+			action = assistAction(goal)
+			title = "Candidate CVE follow-up"
+			if cve != "" {
+				title = fmt.Sprintf("Candidate CVE follow-up (%s)", cve)
+			}
+			expectedName := "candidate-cve-followup.log"
+			if cve != "" {
+				expectedName = fmt.Sprintf("candidate-cve-%s-followup.log", sanitizePathComponent(strings.ToLower(cve)))
+			}
+			expectedArtifacts = []string{expectedName}
+			risk = string(RiskActiveProbe)
+			if sourceTaskID := strings.TrimSpace(source.TaskID); sourceTaskID != "" {
+				dependsOn = append(dependsOn, sourceTaskID)
+			}
+		}
+	}
 	if trigger == "execution_failure" || trigger == "worker_recovery" || trigger == "budget_exhausted" || trigger == "repeated_step_loop" {
 		goal = buildAdaptiveRecoveryGoal(trigger, evidenceTarget, payload)
 		action = assistAction(goal)
 		title = fmt.Sprintf("Adaptive recovery for %s", trigger)
 		expectedArtifacts = []string{fmt.Sprintf("adaptive-recovery-%s.log", sanitizePathComponent(evidenceTarget))}
+		if sourceTaskID := strings.TrimSpace(source.TaskID); sourceTaskID != "" {
+			dependsOn = append(dependsOn, sourceTaskID)
+		}
 	}
 	if operatorInstruction != "" {
 		goal = operatorInstruction
@@ -93,15 +122,76 @@ func (c *Coordinator) buildReplanTask(trigger string, source EventEnvelope, payl
 		IdempotencyKey:    mutationKey,
 		Goal:              goal,
 		Targets:           targets,
-		Priority:          95,
+		Priority:          priority,
 		Strategy:          "adaptive_replan_" + sanitizePathComponent(trigger),
 		Action:            action,
 		DoneWhen:          done,
 		FailWhen:          fail,
 		ExpectedArtifacts: expectedArtifacts,
+		DependsOn:         compactStringSlice(dependsOn),
 		RiskLevel:         risk,
 		Budget:            budget,
 	}, nil
+}
+
+func deriveAdaptiveReplanPriority(trigger string, source EventEnvelope, payload map[string]any, hasBase bool, baseTask TaskSpec) int {
+	basePriority := 50
+	if hasBase && baseTask.Priority > 0 {
+		basePriority = baseTask.Priority
+	}
+	clamp := func(value int) int {
+		if value < 1 {
+			return 1
+		}
+		if value > 99 {
+			return 99
+		}
+		return value
+	}
+	trigger = strings.TrimSpace(trigger)
+	switch trigger {
+	case "operator_instruction":
+		return 99
+	case "new_finding":
+		findingType := strings.ToLower(strings.TrimSpace(toString(payload["finding_type"])))
+		if findingType == findingTypeCVECandidateClaim {
+			return clamp(basePriority + 1)
+		}
+		return clamp(basePriority)
+	case "execution_failure", "worker_recovery", "repeated_step_loop":
+		if taskID := strings.TrimSpace(source.TaskID); taskID != "" &&
+			hasBase && strings.HasPrefix(strings.TrimSpace(baseTask.Strategy), "adaptive_replan_") {
+			// Keep recursive adaptive recovery below regular queued tasks to avoid starvation.
+			return clamp(basePriority - 10)
+		}
+		return clamp(basePriority)
+	case "budget_exhausted":
+		return clamp(basePriority - 1)
+	default:
+		return clamp(basePriority)
+	}
+}
+
+func buildCandidateCVEFollowupGoal(cve, evidenceTarget string, missingPhases []string, claimReason string) string {
+	targetLabel := strings.TrimSpace(evidenceTarget)
+	if targetLabel == "" {
+		targetLabel = "in-scope target"
+	}
+	base := "Validate candidate vulnerability evidence with bounded in-scope execution and continue testing if access is obtained."
+	if cve != "" {
+		base = fmt.Sprintf("Validate candidate vulnerability %s with bounded in-scope execution and continue testing if access is obtained.", cve)
+	}
+	base += " Source task: " + targetLabel + "."
+	if claimReason != "" {
+		base += " Candidate reason: " + claimReason + "."
+	}
+	if len(missingPhases) > 0 {
+		base += " Missing verification phases: " + strings.Join(missingPhases, ", ") + "."
+	}
+	base += " Perform this sequence: (1) look up authoritative vulnerability source details and cite artifacts, (2) derive reproducible validation steps tied to target service/version, (3) run bounded confirmation checks in scope, and (4) if validation grants access, continue post-access security checks allowed by policy and capture evidence."
+	base += " Do not rely on memory-only CVE claims; every vulnerability statement must be source-backed and target-applicable."
+	base += " End with explicit state for the claim: validated, rejected, or still-candidate with blocker."
+	return base
 }
 
 func buildAdaptiveRecoveryGoal(trigger, evidenceTarget string, payload map[string]any) string {
@@ -111,6 +201,9 @@ func buildAdaptiveRecoveryGoal(trigger, evidenceTarget string, payload map[strin
 	cmd := strings.TrimSpace(toString(payload["command"]))
 	args := payloadStringSlice(payload["args"])
 	logPath := strings.TrimSpace(toString(payload["log_path"]))
+	latestResult := strings.TrimSpace(toString(payload["latest_result_summary"]))
+	latestEvidence := payloadStringSlice(payload["latest_evidence_refs"])
+	latestInputs := payloadStringSlice(payload["latest_input_refs"])
 	if cmd != "" {
 		fullCmd := strings.TrimSpace(strings.Join(append([]string{cmd}, args...), " "))
 		if fullCmd != "" {
@@ -123,14 +216,122 @@ func buildAdaptiveRecoveryGoal(trigger, evidenceTarget string, payload map[strin
 	if errText != "" {
 		base += " Error: " + errText + "."
 	}
+	if latestResult != "" {
+		base += " Latest command result: " + latestResult + "."
+	}
+	if len(latestEvidence) > 0 {
+		base += " Latest evidence refs: " + strings.Join(latestEvidence, ", ") + "."
+	}
+	if len(latestInputs) > 0 {
+		base += " Latest input refs: " + strings.Join(latestInputs, ", ") + "."
+	}
 	if logPath != "" {
 		base += " Failure log: " + logPath + "."
 	}
-	base += " Use recent artifacts/logs first. Avoid re-running the same failing command unchanged."
-	base += " If a broad CIDR scan timed out, switch to host discovery first, then split into targeted host/service follow-up scans."
+	base += " Prefer the newest command result and newest evidence refs over older worker logs. Avoid re-running the same failing command unchanged."
+	if shouldIncludeNetworkRecoveryHint(payload) {
+		base += " If a broad CIDR scan timed out, switch to host discovery first, then split into targeted host/service follow-up scans."
+	}
 	base += " Worker mode is non-interactive: do not ask the operator questions; infer best-effort inputs from context and continue."
 	base += " End with a concise summary and clear next steps."
 	return base
+}
+
+func shouldIncludeNetworkRecoveryHint(payload map[string]any) bool {
+	command := strings.TrimSpace(toString(payload["command"]))
+	if command == "" {
+		return false
+	}
+	if isNetworkSensitiveCommand(command) {
+		return true
+	}
+	base := strings.ToLower(strings.TrimSpace(filepath.Base(command)))
+	switch base {
+	case "browse", "crawl", "dig", "nslookup", "whois", "curl", "wget":
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *Coordinator) maybePromoteExecutionFailureRetryTask(source EventEnvelope, payload map[string]any) map[string]any {
+	out := map[string]any{}
+	taskID := strings.TrimSpace(source.TaskID)
+	if taskID == "" || c.isAdaptiveReplanTask(taskID) {
+		return out
+	}
+	reason := CanonicalTaskFailureReason(toString(payload["reason"]))
+	if reason != WorkerFailureCommandFailed {
+		return out
+	}
+	errText := strings.ToLower(strings.TrimSpace(toString(payload["error"])))
+	if errText == "" || (!strings.Contains(errText, "executable file not found") && !strings.Contains(errText, "not found in $path")) {
+		return out
+	}
+	failedAttempt, _ := payloadInt(payload["attempt"])
+	if currentAttempt, ok := c.scheduler.Attempt(taskID); ok && failedAttempt > 0 && currentAttempt <= failedAttempt {
+		return out
+	}
+	task, ok := c.scheduler.Task(taskID)
+	if !ok {
+		loaded, err := c.manager.ReadTask(c.runID, taskID)
+		if err != nil {
+			return out
+		}
+		task = loaded
+	}
+	if strings.ToLower(strings.TrimSpace(task.Action.Type)) != "command" {
+		return out
+	}
+	failedCommand := strings.TrimSpace(toString(payload["command"]))
+	if failedCommand == "" {
+		failedCommand = strings.TrimSpace(task.Action.Command)
+	}
+	base := strings.ToLower(strings.TrimSpace(filepath.Base(failedCommand)))
+	if !isFragileVulnMapperCommand(base) && !taskRequiresVulnerabilityEvidence(task) {
+		return out
+	}
+	originalTask := task
+	prompt := strings.TrimSpace(task.Action.Prompt)
+	if prompt == "" {
+		prompt = strings.TrimSpace(task.Goal)
+	}
+	if prompt == "" {
+		prompt = "Validate discovered vulnerabilities with source-backed evidence."
+	}
+	failedArgs := payloadStringSlice(payload["args"])
+	failedCommandLine := strings.TrimSpace(strings.Join(append([]string{failedCommand}, failedArgs...), " "))
+	if failedCommandLine == "" {
+		failedCommandLine = failedCommand
+	}
+	prompt = strings.TrimSpace(prompt +
+		"\nPrevious command failed due to unavailable executable: " + failedCommandLine + "." +
+		"\nPivot to available tools in the current environment and do not retry missing wrapper commands unchanged." +
+		"\nValidate target applicability with artifact-backed evidence and cite artifact paths.")
+	task.Action = TaskAction{
+		Type:           "assist",
+		Prompt:         prompt,
+		WorkingDir:     originalTask.Action.WorkingDir,
+		TimeoutSeconds: originalTask.Action.TimeoutSeconds,
+	}
+	if err := c.scheduler.UpdateTask(task); err != nil {
+		out["source_task_mutation_status"] = "scheduler_update_failed"
+		out["source_task_mutation_error"] = err.Error()
+		return out
+	}
+	if err := c.manager.UpdateTask(c.runID, task); err != nil {
+		_ = c.scheduler.UpdateTask(originalTask)
+		out["source_task_mutation_status"] = "task_persist_failed"
+		out["source_task_mutation_error"] = err.Error()
+		return out
+	}
+	out["source_task_mutated"] = true
+	out["source_task_mutation_status"] = "retry_action_promoted_to_assist"
+	out["source_task_id"] = taskID
+	out["source_task_previous_action"] = "command"
+	out["source_task_next_action"] = "assist"
+	out["source_task_failed_command"] = failedCommand
+	return out
 }
 
 func payloadStringSlice(value any) []string {
@@ -292,13 +493,19 @@ func (c *Coordinator) ensureReplanBudget() {
 		return
 	}
 	c.replanMutationBudget = 8
+	c.replanMutationBucketBudgets = map[string]int{}
 	plan, err := c.manager.LoadRunPlan(c.runID)
 	if err != nil {
+		c.ensureDefaultReplanBucketBudgets()
 		return
 	}
 	if budget := parseReplanBudget(plan.StopCriteria); budget > 0 {
 		c.replanMutationBudget = budget
 	}
+	for bucket, budget := range parseReplanBucketBudgets(plan.StopCriteria) {
+		c.replanMutationBucketBudgets[bucket] = budget
+	}
+	c.ensureDefaultReplanBucketBudgets()
 }
 
 func parseReplanBudget(stopCriteria []string) int {
@@ -314,6 +521,106 @@ func parseReplanBudget(stopCriteria []string) int {
 				return n
 			}
 		}
+	}
+	return 0
+}
+
+const (
+	replanMutationBucketDefault            = "default"
+	replanMutationBucketCandidateCVEFollow = "candidate_cve_followup"
+)
+
+func canonicalReplanMutationBucket(raw string) string {
+	token := strings.ToLower(strings.TrimSpace(raw))
+	switch token {
+	case "", replanMutationBucketDefault:
+		return replanMutationBucketDefault
+	case replanMutationBucketCandidateCVEFollow, "candidate_cve", "cve_candidate":
+		return replanMutationBucketCandidateCVEFollow
+	default:
+		return token
+	}
+}
+
+func parseReplanBucketBudgets(stopCriteria []string) map[string]int {
+	out := map[string]int{}
+	for _, criterion := range stopCriteria {
+		raw := strings.ToLower(strings.TrimSpace(criterion))
+		for _, prefix := range []string{"max_replans_", "replan_budget_"} {
+			if !strings.HasPrefix(raw, prefix) {
+				continue
+			}
+			rest := strings.TrimSpace(strings.TrimPrefix(raw, prefix))
+			if rest == "" {
+				continue
+			}
+			parts := strings.SplitN(rest, "=", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			bucket := canonicalReplanMutationBucket(parts[0])
+			var n int
+			if _, err := fmt.Sscanf(strings.TrimSpace(parts[1]), "%d", &n); err == nil && n > 0 {
+				out[bucket] = n
+			}
+		}
+	}
+	return out
+}
+
+func (c *Coordinator) ensureDefaultReplanBucketBudgets() {
+	if c.replanMutationBucketBudgets == nil {
+		c.replanMutationBucketBudgets = map[string]int{}
+	}
+	if _, ok := c.replanMutationBucketBudgets[replanMutationBucketCandidateCVEFollow]; ok {
+		return
+	}
+	// Reserve part of adaptive budget for non-CVE-replan work so candidate follow-ups cannot monopolize mutations.
+	candidateBudget := c.replanMutationBudget / 2
+	if candidateBudget < 2 {
+		candidateBudget = 2
+	}
+	if candidateBudget > c.replanMutationBudget && c.replanMutationBudget > 0 {
+		candidateBudget = c.replanMutationBudget
+	}
+	c.replanMutationBucketBudgets[replanMutationBucketCandidateCVEFollow] = candidateBudget
+}
+
+func replanMutationBucket(trigger string, payload map[string]any) string {
+	trigger = strings.TrimSpace(trigger)
+	if trigger == "new_finding" {
+		findingType := strings.ToLower(strings.TrimSpace(toString(payload["finding_type"])))
+		if findingType == findingTypeCVECandidateClaim {
+			return replanMutationBucketCandidateCVEFollow
+		}
+	}
+	return replanMutationBucketDefault
+}
+
+func (c *Coordinator) replanMutationBucketCount(bucket string) int {
+	bucket = canonicalReplanMutationBucket(bucket)
+	if c.replanMutationBucketCounts == nil {
+		c.replanMutationBucketCounts = map[string]int{}
+	}
+	return c.replanMutationBucketCounts[bucket]
+}
+
+func (c *Coordinator) incrementReplanMutationBucket(bucket string) int {
+	bucket = canonicalReplanMutationBucket(bucket)
+	if c.replanMutationBucketCounts == nil {
+		c.replanMutationBucketCounts = map[string]int{}
+	}
+	c.replanMutationBucketCounts[bucket]++
+	return c.replanMutationBucketCounts[bucket]
+}
+
+func (c *Coordinator) replanMutationBucketBudget(bucket string) int {
+	bucket = canonicalReplanMutationBucket(bucket)
+	if c.replanMutationBucketBudgets == nil {
+		c.replanMutationBucketBudgets = map[string]int{}
+	}
+	if budget, ok := c.replanMutationBucketBudgets[bucket]; ok {
+		return budget
 	}
 	return 0
 }
@@ -344,6 +651,11 @@ func (c *Coordinator) restoreSeenReplanState() error {
 			}
 			if mutated, ok := payload["graph_mutation"].(bool); ok && mutated {
 				c.replanMutationCount++
+				bucket := strings.TrimSpace(toString(payload["mutation_bucket"]))
+				if bucket == "" {
+					bucket = replanMutationBucket(toString(payload["trigger"]), payload)
+				}
+				c.incrementReplanMutationBucket(bucket)
 			}
 			sourceEventID := toString(payload["source_event_id"])
 			if sourceEventID != "" {

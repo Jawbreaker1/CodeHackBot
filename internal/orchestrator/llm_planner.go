@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -28,7 +29,8 @@ const llmPlannerSystemPrompt = "You are the BirdHackBot Orchestrator planner. Re
 	"prefer leaving action.working_dir empty so execution uses the default workspace; when set, it must be a real concise filesystem path (never narrative text). " +
 	"Use input.default_working_dir as the preferred base path when a working directory is required, and never invent synthetic paths like /home/user/lab or /lab/...; " +
 	"when input.playbooks is provided, use it as bounded procedural guidance and adapt tasks to those playbooks without copying blindly; " +
-	"if the goal asks for vulnerabilities, include a dedicated vulnerability-mapping step tied to discovered versions/configuration."
+	"if the goal asks for vulnerabilities, include a dedicated vulnerability-mapping step tied to discovered versions/configuration; " +
+	"for vulnerability/CVE outputs, require source-backed validation tasks (tool/advisory evidence plus target applicability checks) and avoid memory-only CVE claims."
 
 type llmPlannerResponse struct {
 	Rationale string           `json:"rationale"`
@@ -71,6 +73,16 @@ type LLMPlannerOptions struct {
 	MaxTokens     *int
 	Playbooks     string
 	UseJSONSchema *bool
+	Trace         func(LLMPlannerTrace)
+}
+
+type LLMPlannerTrace struct {
+	RequestPayload string
+	RawResponse    string
+	ExtractedJSON  string
+	FinishReason   string
+	Fingerprint    string
+	Stage          string
 }
 
 type LLMPlannerFailure struct {
@@ -166,6 +178,7 @@ func SynthesizeTaskGraphWithLLMWithOptions(
 	if err != nil {
 		return nil, "", fmt.Errorf("marshal planner payload: %w", err)
 	}
+	requestPayload := string(data)
 
 	temperature := float32(0.1)
 	if options.Temperature != nil {
@@ -185,7 +198,7 @@ func SynthesizeTaskGraphWithLLMWithOptions(
 		MaxTokens:   maxTokens,
 		Messages: []llm.Message{
 			{Role: "system", Content: llmPlannerSystemPrompt},
-			{Role: "user", Content: string(data)},
+			{Role: "user", Content: requestPayload},
 		},
 	}
 	if useJSONSchema {
@@ -193,6 +206,12 @@ func SynthesizeTaskGraphWithLLMWithOptions(
 	}
 	resp, err := client.Chat(ctx, request)
 	if err != nil {
+		if options.Trace != nil {
+			options.Trace(LLMPlannerTrace{
+				RequestPayload: requestPayload,
+				Stage:          "request",
+			})
+		}
 		return nil, "", &LLMPlannerFailure{
 			Stage: "request",
 			Cause: fmt.Errorf("llm planner request: %w", err),
@@ -210,6 +229,16 @@ func SynthesizeTaskGraphWithLLMWithOptions(
 			stage = "truncate"
 			cause = fmt.Errorf("planner output truncated by token limit: %w", err)
 		}
+		if options.Trace != nil {
+			options.Trace(LLMPlannerTrace{
+				RequestPayload: requestPayload,
+				RawResponse:    rawContent,
+				ExtractedJSON:  raw,
+				FinishReason:   finishReason,
+				Fingerprint:    llmPlannerFingerprint(raw),
+				Stage:          stage,
+			})
+		}
 		return nil, "", &LLMPlannerFailure{
 			Stage:        stage,
 			Cause:        cause,
@@ -220,6 +249,16 @@ func SynthesizeTaskGraphWithLLMWithOptions(
 		}
 	}
 	if len(decoded.Tasks) == 0 {
+		if options.Trace != nil {
+			options.Trace(LLMPlannerTrace{
+				RequestPayload: requestPayload,
+				RawResponse:    rawContent,
+				ExtractedJSON:  raw,
+				FinishReason:   finishReason,
+				Fingerprint:    llmPlannerFingerprint(raw),
+				Stage:          "parse",
+			})
+		}
 		return nil, "", &LLMPlannerFailure{
 			Stage:        "parse",
 			Cause:        fmt.Errorf("llm planner returned no tasks"),
@@ -234,6 +273,16 @@ func SynthesizeTaskGraphWithLLMWithOptions(
 	for i, task := range decoded.Tasks {
 		spec, err := toTaskSpec(task, i, scope)
 		if err != nil {
+			if options.Trace != nil {
+				options.Trace(LLMPlannerTrace{
+					RequestPayload: requestPayload,
+					RawResponse:    rawContent,
+					ExtractedJSON:  raw,
+					FinishReason:   finishReason,
+					Fingerprint:    llmPlannerFingerprint(raw),
+					Stage:          "validate",
+				})
+			}
 			return nil, "", &LLMPlannerFailure{
 				Stage:        "validate",
 				Cause:        err,
@@ -246,6 +295,16 @@ func SynthesizeTaskGraphWithLLMWithOptions(
 		tasks = append(tasks, spec)
 	}
 	tasks = applyGoalAnchoring(tasks, goal)
+	if options.Trace != nil {
+		options.Trace(LLMPlannerTrace{
+			RequestPayload: requestPayload,
+			RawResponse:    rawContent,
+			ExtractedJSON:  raw,
+			FinishReason:   finishReason,
+			Fingerprint:    llmPlannerFingerprint(raw),
+			Stage:          "success",
+		})
+	}
 	return tasks, strings.TrimSpace(decoded.Rationale), nil
 }
 
@@ -277,7 +336,15 @@ func toTaskSpec(task llmPlannerTask, index int, scope Scope) (TaskSpec, error) {
 	if budget.MaxRuntime <= 0 {
 		budget.MaxRuntime = 8 * time.Minute
 	}
-	budget = normalizeLLMTaskBudget(budget, riskLevel)
+	budget = normalizeLLMTaskBudget(
+		budget,
+		riskLevel,
+		actionType,
+		strings.TrimSpace(task.Title),
+		strings.TrimSpace(task.Goal),
+		strings.TrimSpace(task.Strategy),
+		strings.TrimSpace(task.Action.Prompt),
+	)
 	normalizedAction, err := normalizeTaskAction(TaskAction{
 		Type:           actionType,
 		Prompt:         strings.TrimSpace(task.Action.Prompt),
@@ -316,10 +383,210 @@ func toTaskSpec(task llmPlannerTask, index int, scope Scope) (TaskSpec, error) {
 	if spec.Action.Type == "assist" && strings.TrimSpace(spec.Action.Prompt) == "" {
 		spec.Action.Prompt = spec.Goal
 	}
+	spec = maybePromoteVulnerabilityMappingToAssist(spec)
+	spec.Budget = normalizeLLMTaskBudget(
+		spec.Budget,
+		spec.RiskLevel,
+		spec.Action.Type,
+		spec.Title,
+		spec.Goal,
+		spec.Strategy,
+		spec.Action.Prompt,
+	)
 	if err := ValidateTaskSpec(spec); err != nil {
 		return TaskSpec{}, fmt.Errorf("llm planner task %s invalid: %w", spec.TaskID, err)
 	}
 	return spec, nil
+}
+
+func maybePromoteVulnerabilityMappingToAssist(spec TaskSpec) TaskSpec {
+	if !taskRequiresVulnerabilityEvidence(spec) {
+		return spec
+	}
+	if strings.ToLower(strings.TrimSpace(spec.Action.Type)) != "command" {
+		return spec
+	}
+	base := strings.ToLower(strings.TrimSpace(filepath.Base(spec.Action.Command)))
+	if !isFragileVulnMapperCommand(base) {
+		return spec
+	}
+	if hasSubstantiveVulnerabilityQueryArgs(spec.Action.Args, spec.Targets) &&
+		!(isInputOnlyFragileVulnMapper(base) && hasOnlyArtifactInputArgs(spec.Action.Args)) {
+		return spec
+	}
+	prompt := strings.TrimSpace(spec.Action.Prompt)
+	if prompt == "" {
+		prompt = strings.TrimSpace(spec.Goal)
+	}
+	if prompt == "" {
+		prompt = "Map discovered services and versions to source-validated CVEs."
+	}
+	spec.Action = TaskAction{
+		Type:           "assist",
+		Prompt:         strings.TrimSpace(prompt + "\nUse prior discovery artifacts to derive product/version queries for searchsploit/metasploit/advisory checks. Do not rely on bare target IP-only lookups or input-file-only wrapper commands; validate CVE applicability against observed service/version evidence and cite artifact paths."),
+		WorkingDir:     spec.Action.WorkingDir,
+		TimeoutSeconds: spec.Action.TimeoutSeconds,
+	}
+	return spec
+}
+
+func isFragileVulnMapperCommand(base string) bool {
+	base = normalizeVulnMapperCommandBase(base)
+	switch base {
+	case "searchsploit", "msfconsole", "metasploit", "vulnerscan", "vulners", "nmap-vulners":
+		return true
+	}
+	if strings.Contains(base, "vulners") && (strings.Contains(base, "nmap") || strings.Contains(base, "wrapper")) {
+		return true
+	}
+	return strings.HasPrefix(base, "nmap-vuln")
+}
+
+func isInputOnlyFragileVulnMapper(base string) bool {
+	base = normalizeVulnMapperCommandBase(base)
+	switch base {
+	case "vulnerscan", "vulners", "nmap-vulners":
+		return true
+	default:
+		if strings.Contains(base, "vulners") && (strings.Contains(base, "nmap") || strings.Contains(base, "wrapper")) {
+			return true
+		}
+		return strings.HasPrefix(base, "nmap-vuln")
+	}
+}
+
+func normalizeVulnMapperCommandBase(base string) string {
+	base = strings.TrimSpace(strings.ToLower(filepath.Base(base)))
+	if ext := filepath.Ext(base); ext != "" {
+		base = strings.TrimSuffix(base, ext)
+	}
+	base = strings.ReplaceAll(base, "_", "-")
+	return base
+}
+
+func hasOnlyArtifactInputArgs(args []string) bool {
+	sawArtifactArg := false
+	skipNext := false
+	for _, raw := range args {
+		arg := strings.TrimSpace(raw)
+		if arg == "" {
+			continue
+		}
+		lower := strings.ToLower(arg)
+		if skipNext {
+			skipNext = false
+			if !looksLikeArtifactPath(lower) {
+				return false
+			}
+			sawArtifactArg = true
+			continue
+		}
+		if strings.HasPrefix(lower, "-") {
+			switch lower {
+			case "-i", "--input", "-o", "--output":
+				skipNext = true
+			}
+			continue
+		}
+		if !looksLikeArtifactPath(lower) {
+			return false
+		}
+		sawArtifactArg = true
+	}
+	return sawArtifactArg
+}
+
+func looksLikeArtifactPath(arg string) bool {
+	arg = strings.TrimSpace(strings.ToLower(arg))
+	if arg == "" {
+		return false
+	}
+	if strings.HasPrefix(arg, "/") || strings.HasPrefix(arg, "./") || strings.HasPrefix(arg, "../") {
+		return true
+	}
+	if strings.Contains(arg, "/") {
+		return true
+	}
+	for _, ext := range []string{".xml", ".json", ".txt", ".log", ".nmap", ".csv"} {
+		if strings.HasSuffix(arg, ext) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasSubstantiveVulnerabilityQueryArgs(args []string, knownTargets []string) bool {
+	targetSet := make(map[string]struct{}, len(knownTargets))
+	for _, target := range knownTargets {
+		target = strings.ToLower(strings.TrimSpace(target))
+		if target != "" {
+			targetSet[target] = struct{}{}
+		}
+	}
+	skipNext := false
+	for _, raw := range args {
+		arg := strings.TrimSpace(raw)
+		if arg == "" {
+			continue
+		}
+		lower := strings.ToLower(arg)
+		if skipNext {
+			skipNext = false
+			if !looksLikeTargetOnlyQueryArg(lower, targetSet) {
+				return true
+			}
+			continue
+		}
+		if strings.HasPrefix(lower, "-") {
+			// Keep parser simple for common command syntaxes (e.g. msfconsole -x "...").
+			if lower == "-x" || lower == "--exec" || lower == "-e" {
+				skipNext = true
+			}
+			continue
+		}
+		if !looksLikeTargetOnlyQueryArg(lower, targetSet) {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeTargetOnlyQueryArg(arg string, targetSet map[string]struct{}) bool {
+	arg = strings.TrimSpace(strings.ToLower(arg))
+	if arg == "" {
+		return true
+	}
+	if _, ok := targetSet[arg]; ok {
+		return true
+	}
+	if looksLikeIPv4(arg) || strings.Contains(arg, "/") {
+		return true
+	}
+	if strings.Contains(arg, ":") {
+		return true
+	}
+	if strings.HasPrefix(arg, "http://") || strings.HasPrefix(arg, "https://") {
+		return true
+	}
+	return false
+}
+
+func looksLikeIPv4(value string) bool {
+	parts := strings.Split(value, ".")
+	if len(parts) != 4 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" {
+			return false
+		}
+		for _, ch := range part {
+			if ch < '0' || ch > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func normalizeLLMTaskTargets(rawTargets []string, scope Scope) []string {
@@ -344,7 +611,15 @@ func normalizeLLMTaskTargets(rawTargets []string, scope Scope) []string {
 	return allowed
 }
 
-func normalizeLLMTaskBudget(budget TaskBudget, riskLevel string) TaskBudget {
+func normalizeLLMTaskBudget(
+	budget TaskBudget,
+	riskLevel string,
+	actionType string,
+	title string,
+	goal string,
+	strategy string,
+	prompt string,
+) TaskBudget {
 	risk := strings.ToLower(strings.TrimSpace(riskLevel))
 	minSteps := 6
 	minToolCalls := 8
@@ -353,6 +628,31 @@ func normalizeLLMTaskBudget(budget TaskBudget, riskLevel string) TaskBudget {
 		minSteps = 8
 		minToolCalls = 12
 		minRuntime = 6 * time.Minute
+	}
+	actionType = strings.ToLower(strings.TrimSpace(actionType))
+	intentText := strings.ToLower(strings.TrimSpace(strings.Join([]string{title, goal, strategy, prompt}, " ")))
+	if actionType == "assist" {
+		assistMinSteps := 10
+		assistMinToolCalls := 14
+		assistMinRuntime := 6 * time.Minute
+		if taskLikelySummaryIntent(intentText) {
+			assistMinSteps = 6
+			assistMinToolCalls = 8
+			assistMinRuntime = 4 * time.Minute
+		} else if taskLikelyDeepValidationIntent(intentText) {
+			assistMinSteps = 14
+			assistMinToolCalls = 20
+			assistMinRuntime = 8 * time.Minute
+		}
+		if assistMinSteps > minSteps {
+			minSteps = assistMinSteps
+		}
+		if assistMinToolCalls > minToolCalls {
+			minToolCalls = assistMinToolCalls
+		}
+		if assistMinRuntime > minRuntime {
+			minRuntime = assistMinRuntime
+		}
 	}
 	if budget.MaxSteps < minSteps {
 		budget.MaxSteps = minSteps
@@ -373,6 +673,42 @@ func normalizeLLMTaskBudget(budget TaskBudget, riskLevel string) TaskBudget {
 		budget.MaxRuntime = maxSynthesizedTaskRuntime
 	}
 	return budget
+}
+
+func taskLikelySummaryIntent(text string) bool {
+	text = strings.ToLower(strings.TrimSpace(text))
+	if text == "" {
+		return false
+	}
+	return containsAny(
+		text,
+		"summarize",
+		"summary",
+		"final report",
+		"report synthesis",
+		"plan summary",
+	)
+}
+
+func taskLikelyDeepValidationIntent(text string) bool {
+	text = strings.ToLower(strings.TrimSpace(text))
+	if text == "" {
+		return false
+	}
+	return containsAny(
+		text,
+		"validate",
+		"validation",
+		"verify",
+		"verification",
+		"vulnerab",
+		"cve",
+		"exploit",
+		"post-access",
+		"triage",
+		"recover",
+		"recovery",
+	)
 }
 
 func normalizeLLMTaskRiskLevel(raw string) string {

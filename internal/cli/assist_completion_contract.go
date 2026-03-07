@@ -19,14 +19,15 @@ func (r *Runner) validateAssistCompletionContract(suggestion assist.Suggestion) 
 	if suggestion.ObjectiveMet == nil {
 		return fmt.Errorf("assistant completion contract: objective_met is required for action goals")
 	}
+	objectiveMet := *suggestion.ObjectiveMet
+	if err := validateCompletionNarrativeConsistency(finalText, objectiveMet); err != nil {
+		return err
+	}
 	if strings.TrimSpace(suggestion.WhyMet) == "" {
 		return fmt.Errorf("assistant completion contract: why_met is required for action goals")
 	}
-	if !*suggestion.ObjectiveMet {
-		return fmt.Errorf("assistant completion contract: objective not met (%s)", strings.TrimSpace(suggestion.WhyMet))
-	}
 	if len(suggestion.EvidenceRefs) == 0 {
-		return fmt.Errorf("assistant completion contract: evidence_refs are required when objective_met=true")
+		return fmt.Errorf("assistant completion contract: evidence_refs are required for action completion claims")
 	}
 	for _, ref := range suggestion.EvidenceRefs {
 		if strings.TrimSpace(ref) == "" {
@@ -42,6 +43,12 @@ func (r *Runner) validateAssistCompletionContract(suggestion assist.Suggestion) 
 		if len(missing) > 0 {
 			return fmt.Errorf("assistant completion contract: unresolved evidence refs: %s", strings.Join(missing, ", "))
 		}
+	}
+	if !objectiveMet {
+		if len(resolved) == 0 {
+			return fmt.Errorf("assistant completion contract: objective_not_met requires at least one readable evidence ref")
+		}
+		return nil
 	}
 	if len(resolved) > 0 {
 		if err := r.verifyCompletionEvidenceSemantics(goal, suggestion, resolved); err != nil {
@@ -75,4 +82,43 @@ func looksLikeConversationalCompletion(text string) bool {
 		return true
 	}
 	return false
+}
+
+func validateCompletionNarrativeConsistency(finalText string, objectiveMet bool) error {
+	lower := strings.ToLower(collapseWhitespace(strings.TrimSpace(finalText)))
+	if lower == "" {
+		return nil
+	}
+	if objectiveMet {
+		deny := []string{
+			"unverified",
+			"cannot prove",
+			"can't prove",
+			"could not prove",
+			"objective not met",
+			"goal not met",
+			"not completed",
+			"incomplete",
+			"failed",
+		}
+		for _, token := range deny {
+			if strings.Contains(lower, token) {
+				return fmt.Errorf("assistant completion contract: objective_met=true contradicts final narrative (%q)", token)
+			}
+		}
+		return nil
+	}
+	deny := []string{
+		"objective status: met",
+		"objective met",
+		"goal completed",
+		"completed successfully",
+		"successfully completed",
+	}
+	for _, token := range deny {
+		if strings.Contains(lower, token) {
+			return fmt.Errorf("assistant completion contract: objective_met=false contradicts final narrative (%q)", token)
+		}
+	}
+	return nil
 }

@@ -43,6 +43,12 @@ func (r *Runner) assistInput(sessionDir, goal, mode string) (assist.Input, error
 			recentLog = snippets
 		}
 	}
+	if journal := r.taskJournalSummary(sessionDir, 8); journal != "" {
+		if recentLog != "" {
+			recentLog += "\n\n"
+		}
+		recentLog += "Task journal:\n" + journal
+	}
 	playbooks := r.playbookHints(goal, mode, recentLog)
 	tools := r.toolsSummary(sessionDir, 12)
 	planPath := filepath.Join(sessionDir, r.cfg.Session.PlanFilename)
@@ -79,6 +85,7 @@ func (r *Runner) buildAskPrompt(sessionDir, question string) string {
 	focus := readFileTrimmed(artifacts.FocusPath)
 	history := r.readChatHistory(artifacts.ChatPath)
 	recentLogs := r.readRecentLogSnippets(artifacts, 3)
+	journal := r.taskJournalSummary(sessionDir, 8)
 	planPath := filepath.Join(sessionDir, r.cfg.Session.PlanFilename)
 	inventoryPath := filepath.Join(sessionDir, r.cfg.Session.InventoryFilename)
 
@@ -89,6 +96,9 @@ func (r *Runner) buildAskPrompt(sessionDir, question string) string {
 	}
 	if recentLogs != "" {
 		builder.WriteString("\nRecent log snippets:\n" + recentLogs + "\n")
+	}
+	if journal != "" {
+		builder.WriteString("\nTask journal:\n" + journal + "\n")
 	}
 	if summary != "" {
 		builder.WriteString("\nSummary:\n" + summary + "\n")
@@ -288,7 +298,7 @@ func fallbackBlock(content string) string {
 	return content
 }
 
-func (r *Runner) assistGenerator(metaHook func(assist.LLMSuggestMetadata)) assist.Assistant {
+func (r *Runner) assistGenerator(metaHook func(assist.LLMSuggestMetadata), fallbackHook func(error)) assist.Assistant {
 	assistTemp, assistTokens := r.llmRoleOptions("assist", 0.15, 1200)
 	recoveryTemp, recoveryTokens := r.llmRoleOptions("recovery", 0.1, 900)
 	llmAssistant := assist.LLMAssistant{
@@ -311,6 +321,9 @@ func (r *Runner) assistGenerator(metaHook func(assist.LLMSuggestMetadata)) assis
 		},
 		onFallback: func(err error) {
 			r.logAssistFallbackCause(err)
+			if fallbackHook != nil {
+				fallbackHook(err)
+			}
 		},
 		primary:  llmAssistant,
 		fallback: fallback,
@@ -369,18 +382,35 @@ func (r *Runner) getAssistSuggestion(goal string, mode string) (assist.Suggestio
 		r.logger.Printf("Assist context artifact warning: %v", artifactsErr)
 	}
 	var (
-		meta     assist.LLMSuggestMetadata
-		metaSeen bool
+		meta           assist.LLMSuggestMetadata
+		metaSeen       bool
+		fallbackUsed   bool
+		fallbackReason string
 	)
 	assistant := r.assistGenerator(func(m assist.LLMSuggestMetadata) {
 		meta = m
 		metaSeen = true
+	}, func(err error) {
+		fallbackUsed = true
+		if err != nil {
+			fallbackReason = strings.TrimSpace(err.Error())
+		}
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	suggestion, suggestErr := assistant.Suggest(ctx, input)
-	if auditErr := r.writeAssistContextAudit(sessionDir, goal, mode, input, suggestion, suggestErr, metaSeen, meta); auditErr != nil && r.cfg.UI.Verbose {
+	if auditErr := r.writeAssistContextAudit(sessionDir, goal, mode, input, suggestion, suggestErr, metaSeen, meta, fallbackUsed); auditErr != nil && r.cfg.UI.Verbose {
 		r.logger.Printf("Assist context audit warning: %v", auditErr)
+	}
+	if suggestErr == nil {
+		source := normalizeDecisionSource(classifyAssistDecisionSource(metaSeen, meta, fallbackUsed))
+		reason := strings.TrimSpace(suggestion.Type)
+		if source == decisionSourceStatic && fallbackReason != "" {
+			reason = strings.TrimSpace(firstNonEmpty(reason, fallbackReason))
+		}
+		if dsErr := r.appendAssistDecisionSource(sessionDir, source, mode, reason, suggestion.Command); dsErr != nil && r.cfg.UI.Verbose {
+			r.logger.Printf("Assist decision source trace warning: %v", dsErr)
+		}
 	}
 	return suggestion, suggestErr
 }

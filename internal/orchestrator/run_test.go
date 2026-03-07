@@ -102,6 +102,32 @@ func TestBuildRunStatusIgnoresApprovalEventsWithoutTaskID(t *testing.T) {
 	}
 }
 
+func TestBuildRunStatusTerminalPreservesUnfinishedDetailCounters(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	events := []EventEnvelope{
+		{EventID: "e1", RunID: "run-terminal-detail", WorkerID: orchestratorWorkerID, Seq: 1, TS: now, Type: EventTypeRunStarted},
+		{EventID: "e2", RunID: "run-terminal-detail", WorkerID: "worker-1", Seq: 1, TS: now.Add(time.Second), Type: EventTypeWorkerStarted},
+		{EventID: "e3", RunID: "run-terminal-detail", WorkerID: "worker-1", TaskID: "task-1", Seq: 2, TS: now.Add(2 * time.Second), Type: EventTypeTaskStarted},
+		{EventID: "e4", RunID: "run-terminal-detail", WorkerID: orchestratorWorkerID, Seq: 2, TS: now.Add(3 * time.Second), Type: EventTypeRunStopped},
+	}
+
+	status := BuildRunStatus("run-terminal-detail", events)
+	if status.State != runProjectionStateStopped {
+		t.Fatalf("expected stopped state, got %s", status.State)
+	}
+	if status.ActiveWorkers != 0 || status.RunningTasks != 0 {
+		t.Fatalf("expected headline counters zeroed at terminal state, got active=%d running=%d", status.ActiveWorkers, status.RunningTasks)
+	}
+	if status.TerminalRunningTasks != 1 {
+		t.Fatalf("expected terminal_running_tasks=1, got %d", status.TerminalRunningTasks)
+	}
+	if status.TerminalActiveWorkers != 1 {
+		t.Fatalf("expected terminal_active_workers=1, got %d", status.TerminalActiveWorkers)
+	}
+}
+
 func TestBuildRunStatusMatchesCacheProjection(t *testing.T) {
 	t.Parallel()
 
@@ -229,6 +255,39 @@ func TestManagerStatusApprovalEventsDoNotMarkTaskRunning(t *testing.T) {
 	}
 	if status.QueuedTasks != 1 {
 		t.Fatalf("expected queued task count 1, got %d", status.QueuedTasks)
+	}
+}
+
+func TestManagerStatusTerminalPreservesUnfinishedDetailCounters(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-status-terminal-detail"
+	paths, err := EnsureRunLayout(base, runID)
+	if err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	eventPath := filepath.Join(paths.EventDir, "event.jsonl")
+	now := time.Now().UTC()
+
+	writeEvent(t, eventPath, EventEnvelope{EventID: "e1", RunID: runID, WorkerID: orchestratorWorkerID, Seq: 1, TS: now, Type: EventTypeRunStarted})
+	writeEvent(t, eventPath, EventEnvelope{EventID: "e2", RunID: runID, WorkerID: "worker-1", Seq: 1, TS: now.Add(time.Second), Type: EventTypeWorkerStarted})
+	writeEvent(t, eventPath, EventEnvelope{EventID: "e3", RunID: runID, WorkerID: "worker-1", TaskID: "task-1", Seq: 2, TS: now.Add(2 * time.Second), Type: EventTypeTaskStarted})
+	writeEvent(t, eventPath, EventEnvelope{EventID: "e4", RunID: runID, WorkerID: orchestratorWorkerID, Seq: 2, TS: now.Add(3 * time.Second), Type: EventTypeRunStopped})
+
+	m := NewManager(base)
+	status, err := m.Status(runID)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if status.ActiveWorkers != 0 || status.RunningTasks != 0 {
+		t.Fatalf("expected headline counters zeroed at terminal state, got active=%d running=%d", status.ActiveWorkers, status.RunningTasks)
+	}
+	if status.TerminalRunningTasks != 1 {
+		t.Fatalf("expected terminal running count, got %d", status.TerminalRunningTasks)
+	}
+	if status.TerminalActiveWorkers != 1 {
+		t.Fatalf("expected terminal active workers count, got %d", status.TerminalActiveWorkers)
 	}
 }
 

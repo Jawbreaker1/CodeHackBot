@@ -54,6 +54,11 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "active_workers: %d\n", status.ActiveWorkers)
 	fmt.Fprintf(stdout, "queued_tasks: %d\n", status.QueuedTasks)
 	fmt.Fprintf(stdout, "running_tasks: %d\n", status.RunningTasks)
+	if status.TerminalActiveWorkers > 0 || status.TerminalQueuedTasks > 0 || status.TerminalRunningTasks > 0 {
+		fmt.Fprintf(stdout, "terminal_active_workers: %d\n", status.TerminalActiveWorkers)
+		fmt.Fprintf(stdout, "terminal_queued_tasks: %d\n", status.TerminalQueuedTasks)
+		fmt.Fprintf(stdout, "terminal_running_tasks: %d\n", status.TerminalRunningTasks)
+	}
 	if reportPath, reportReady, reportErr := manager.ResolveRunReportPath(runID); reportErr == nil {
 		fmt.Fprintf(stdout, "report_path: %s\n", reportPath)
 		fmt.Fprintf(stdout, "report_ready: %t\n", reportReady)

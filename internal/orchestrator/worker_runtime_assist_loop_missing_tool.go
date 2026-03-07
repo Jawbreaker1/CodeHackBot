@@ -56,7 +56,7 @@ func handleAssistMissingToolRecovery(
 				"missing_tool_retry_count":       missingToolRetryCount[toolKey],
 				"missing_tool_available_tools":   discoverAvailableFallbackTools(),
 				"missing_tool_contract_enforced": true,
-			})
+			}, nil)
 		}
 	}
 	if remediation.Observation != "" {

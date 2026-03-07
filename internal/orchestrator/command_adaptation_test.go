@@ -307,6 +307,30 @@ func TestAdaptCommandForRuntimeCapsServiceTopPortsAndUsesVersionLight(t *testing
 	}
 }
 
+func TestAdaptCommandForRuntimeKeepsExplicitAllPortsDuringServiceEnumeration(t *testing.T) {
+	t.Parallel()
+
+	scope := Scope{Targets: []string{"192.168.50.1"}}
+	policy := NewScopePolicy(scope)
+	_, args, note, adapted := adaptCommandForRuntime(policy, "nmap", []string{"-sV", "-p-", "192.168.50.1"})
+	if !adapted {
+		t.Fatalf("expected guardrail adaptation for service enumeration")
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-p-") {
+		t.Fatalf("expected explicit all-ports request to be preserved, got %#v", args)
+	}
+	if strings.Contains(joined, "--top-ports 20") {
+		t.Fatalf("did not expect explicit all-ports request to be capped to top-ports, got %#v", args)
+	}
+	if !strings.Contains(joined, "--version-light") {
+		t.Fatalf("expected version-light guardrail, got %#v", args)
+	}
+	if strings.Contains(note, "port breadth") {
+		t.Fatalf("did not expect port-breadth cap note for explicit all-ports request, got %q", note)
+	}
+}
+
 func TestAdaptCommandForRuntimeRewritesVulnScriptToSafeSubset(t *testing.T) {
 	t.Parallel()
 

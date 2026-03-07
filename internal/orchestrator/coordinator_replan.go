@@ -115,15 +115,43 @@ func (c *Coordinator) handleRunStateAndReplan() error {
 			c.seenFindingKeys[key] = struct{}{}
 			continue
 		}
-		if err := c.manager.EmitEvent(c.runID, orchestratorWorkerID, finding.TaskID, EventTypeRunReplanRequested, map[string]any{
-			"trigger":     "new_finding",
-			"finding_key": key,
-			"target":      finding.Target,
-			"title":       finding.Title,
-			"severity":    finding.Severity,
-			"confidence":  finding.Confidence,
-		}); err != nil {
-			return err
+		if strings.EqualFold(strings.TrimSpace(finding.FindingType), "task_execution_failure") {
+			// Task failure events already own adaptive recovery. Do not add a weaker duplicate
+			// new_finding replan path for the same execution failure.
+			c.seenFindingKeys[key] = struct{}{}
+			continue
+		}
+		payload := map[string]any{
+			"trigger":        "new_finding",
+			"finding_key":    key,
+			"finding_type":   strings.TrimSpace(finding.FindingType),
+			"target":         finding.Target,
+			"title":          finding.Title,
+			"severity":       finding.Severity,
+			"confidence":     finding.Confidence,
+			"cve":            strings.TrimSpace(finding.Metadata["cve"]),
+			"missing_phases": strings.TrimSpace(finding.Metadata["missing_phases"]),
+			"claim_reason":   strings.TrimSpace(finding.Metadata["claim_reason"]),
+			"finding_metadata": map[string]any{
+				"cve":            strings.TrimSpace(finding.Metadata["cve"]),
+				"missing_phases": strings.TrimSpace(finding.Metadata["missing_phases"]),
+				"claim_reason":   strings.TrimSpace(finding.Metadata["claim_reason"]),
+			},
+		}
+		if strings.EqualFold(strings.TrimSpace(finding.FindingType), findingTypeCVECandidateClaim) {
+			source := EventEnvelope{
+				EventID: fmt.Sprintf("finding-%s", hashKey(key)),
+				RunID:   c.runID,
+				TaskID:  finding.TaskID,
+				Type:    EventTypeTaskFinding,
+			}
+			if err := c.emitReplanForSourceEvent(source, "new_finding", payload); err != nil {
+				return err
+			}
+		} else {
+			if err := c.manager.EmitEvent(c.runID, orchestratorWorkerID, finding.TaskID, EventTypeRunReplanRequested, payload); err != nil {
+				return err
+			}
 		}
 		c.seenFindingKeys[key] = struct{}{}
 	}
@@ -234,6 +262,11 @@ func (c *Coordinator) handleEventDrivenReplanTriggers() error {
 		for k, v := range payload {
 			enriched[k] = v
 		}
+		if trigger == "execution_failure" && event.Type == EventTypeTaskFailed {
+			for k, v := range c.maybePromoteExecutionFailureRetryTask(event, enriched) {
+				enriched[k] = v
+			}
+		}
 		if err := c.emitReplanForSourceEvent(event, trigger, enriched); err != nil {
 			return err
 		}
@@ -282,9 +315,26 @@ func (c *Coordinator) maybeMutateTaskGraph(trigger string, source EventEnvelope,
 		out["mutation_status"] = "no_mutation_policy"
 		return out
 	}
+	if c.shouldSuppressAdaptiveFailureMutation(trigger, source, payload) {
+		out["mutation_status"] = "adaptive_failure_terminal_no_progress"
+		out["outcome"] = string(ReplanOutcomeRefineTask)
+		return out
+	}
 	if _, seen := c.seenReplanMutationKeys[mutationKey]; seen {
 		out["mutation_status"] = "duplicate_ignored"
 		return out
+	}
+	mutationBucket := replanMutationBucket(trigger, payload)
+	out["mutation_bucket"] = mutationBucket
+	if bucketBudget := c.replanMutationBucketBudget(mutationBucket); bucketBudget > 0 {
+		bucketCount := c.replanMutationBucketCount(mutationBucket)
+		out["mutation_bucket_budget"] = bucketBudget
+		out["mutation_bucket_count"] = bucketCount
+		if bucketCount >= bucketBudget {
+			out["mutation_status"] = "replan_bucket_budget_exhausted"
+			out["outcome"] = string(ReplanOutcomeRefineTask)
+			return out
+		}
 	}
 	if c.replanMutationBudget > 0 && c.replanMutationCount >= c.replanMutationBudget {
 		out["mutation_status"] = "replan_budget_exhausted"
@@ -332,6 +382,7 @@ func (c *Coordinator) maybeMutateTaskGraph(trigger string, source EventEnvelope,
 		return out
 	}
 	c.replanMutationCount++
+	out["mutation_bucket_count"] = c.incrementReplanMutationBucket(mutationBucket)
 	c.seenReplanMutationKeys[mutationKey] = struct{}{}
 	out["graph_mutation"] = true
 	out["mutation_status"] = "task_added"
@@ -349,6 +400,23 @@ func (c *Coordinator) maybeMutateTaskGraph(trigger string, source EventEnvelope,
 		}
 	}
 	return out
+}
+
+func (c *Coordinator) shouldSuppressAdaptiveFailureMutation(trigger string, source EventEnvelope, payload map[string]any) bool {
+	if strings.TrimSpace(trigger) != "execution_failure" {
+		return false
+	}
+	taskID := strings.TrimSpace(source.TaskID)
+	if taskID == "" || !c.isAdaptiveReplanTask(taskID) {
+		return false
+	}
+	reason := CanonicalTaskFailureReason(toString(payload["reason"]))
+	switch reason {
+	case WorkerFailureNoProgress, WorkerFailureAssistLoopDetected, WorkerFailureAssistExhausted:
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *Coordinator) rewireDependentTasksForRecovery(sourceTaskID, replacementTaskID string) ([]string, error) {

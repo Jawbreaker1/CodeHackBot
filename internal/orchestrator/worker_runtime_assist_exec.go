@@ -13,6 +13,22 @@ import (
 )
 
 func executeWorkerAssistCommand(ctx context.Context, cfg WorkerRunConfig, task TaskSpec, command string, args []string, workDir string) workerToolResult {
+	return executeWorkerAssistCommandWithOptions(ctx, cfg, task, command, args, workDir, assistCommandExecOptions{})
+}
+
+type assistCommandExecOptions struct {
+	skipRuntimeMutation bool
+}
+
+func executeWorkerAssistCommandWithOptions(
+	ctx context.Context,
+	cfg WorkerRunConfig,
+	task TaskSpec,
+	command string,
+	args []string,
+	workDir string,
+	opts assistCommandExecOptions,
+) workerToolResult {
 	command = strings.TrimSpace(command)
 	args = normalizeArgs(args)
 	runtimeNotes := []string{}
@@ -25,6 +41,9 @@ func executeWorkerAssistCommand(ctx context.Context, cfg WorkerRunConfig, task T
 			args = repairedArgs
 			runtimeNotes = append(runtimeNotes, repairNotes...)
 		}
+	}
+	if opts.skipRuntimeMutation {
+		runtimeNotes = append(runtimeNotes, "runtime mutation: using prevalidated command args")
 	}
 
 	if isBuiltinListDir(command) {
@@ -58,7 +77,7 @@ func executeWorkerAssistCommand(ctx context.Context, cfg WorkerRunConfig, task T
 		return workerToolResult{command: "report", args: args, output: output, runErr: err}
 	}
 	msfNotes := []string{}
-	if !cfg.Diagnostic {
+	if !cfg.Diagnostic && !opts.skipRuntimeMutation {
 		adaptedCmd, adaptedArgs, nextNotes, adaptErr := msf.AdaptRuntimeCommand(command, args, workDir)
 		if adaptErr != nil {
 			output := prependWorkerOutputNotes([]byte(adaptErr.Error()+"\n"), runtimeNotes)
@@ -67,20 +86,22 @@ func executeWorkerAssistCommand(ctx context.Context, cfg WorkerRunConfig, task T
 		command = adaptedCmd
 		args = adaptedArgs
 		msfNotes = nextNotes
+	} else if opts.skipRuntimeMutation {
+		runtimeNotes = append(runtimeNotes, "runtime mutation: skipped command adaptation after prevalidation")
 	} else {
 		runtimeNotes = append(runtimeNotes, "diagnostic mode: skipped runtime command adaptation")
 	}
 
 	cmd := exec.Command(command, args...)
 	cmd.Dir = workDir
-	env, guardrailNotes, envErr := applyWorkerRuntimeGuardrails(os.Environ(), workDir)
+	env, envNotes, envErr := applyAssistExternalCommandEnv(os.Environ(), task, command, workDir)
 	if envErr != nil {
 		return workerToolResult{command: command, args: args, output: []byte(envErr.Error() + "\n"), runErr: envErr}
 	}
 	cmd.Env = env
 	output, err := runWorkerCommand(ctx, cmd, workerCommandStopGrace)
 	noteLines := append([]string{}, runtimeNotes...)
-	noteLines = append(noteLines, guardrailNotes...)
+	noteLines = append(noteLines, envNotes...)
 	noteLines = append(noteLines, msfNotes...)
 	output = prependWorkerOutputNotes(output, noteLines)
 	return workerToolResult{command: command, args: args, output: output, runErr: err}
@@ -138,23 +159,45 @@ func executeWorkerAssistTool(ctx context.Context, cfg WorkerRunConfig, task Task
 	} else {
 		_, _ = fmt.Fprintf(&builder, "Diagnostic mode: skipped shell command normalization\n")
 	}
-	if isWorkerBuiltinCommand(runCommand) {
-		if !cfg.Diagnostic {
-			var injected bool
-			var target string
-			args, injected, target = applyCommandTargetFallback(scopePolicy, task, runCommand, args)
-			if injected {
-				_, _ = fmt.Fprintf(&builder, "Runtime adaptation: auto-injected target %s for command %s\n", target, runCommand)
-			}
-		} else {
-			_, _ = fmt.Fprintf(&builder, "Diagnostic mode: skipped target auto-injection for builtin command\n")
+	if !cfg.Diagnostic {
+		pipeline, pipelineErr := applyRuntimeCommandPipeline(
+			cfg,
+			task,
+			scopePolicy,
+			runCommand,
+			args,
+			targetAttribution{},
+			task.Goal,
+			workDir,
+		)
+		if pipelineErr != nil {
+			return workerToolResult{}, pipelineErr
 		}
+		runCommand = pipeline.Command
+		args = pipeline.Args
+		for _, note := range pipeline.Notes {
+			if msg := strings.TrimSpace(note.Message); msg != "" {
+				_, _ = fmt.Fprintf(&builder, "%s\n", msg)
+			}
+		}
+	} else {
+		_, _ = fmt.Fprintf(&builder, "Diagnostic mode: skipped runtime mutation pipeline\n")
+	}
+	if isWorkerBuiltinCommand(runCommand) {
 		if requiresCommandScopeValidation(runCommand, args) {
 			if err := scopePolicy.ValidateCommandTargets(runCommand, args); err != nil {
 				return workerToolResult{}, fmt.Errorf("%s: %w", WorkerFailureScopeDenied, err)
 			}
 		}
-		result := executeWorkerAssistCommand(ctx, cfg, task, runCommand, args, workDir)
+		result := executeWorkerAssistCommandWithOptions(
+			ctx,
+			cfg,
+			task,
+			runCommand,
+			args,
+			workDir,
+			assistCommandExecOptions{skipRuntimeMutation: !cfg.Diagnostic},
+		)
 		builder.Write(result.output)
 		return workerToolResult{
 			command: result.command,
@@ -163,50 +206,22 @@ func executeWorkerAssistTool(ctx context.Context, cfg WorkerRunConfig, task Task
 			runErr:  result.runErr,
 		}, nil
 	}
-	var adaptedNote string
-	msfNotes := []string{}
-	if !cfg.Diagnostic {
-		prepared := prepareRuntimeCommand(scopePolicy, task, runCommand, args)
-		runCommand = prepared.Command
-		args = prepared.Args
-		adaptedNote = prepared.AdaptationNote
-		if prepared.InjectedFollowupTarget {
-			_, _ = fmt.Fprintf(&builder, "Runtime adaptation follow-up: auto-injected target %s for command %s\n", prepared.FollowupTarget, runCommand)
-		}
-		adaptedCmd, adaptedArgs, nextNotes, adaptErr := msf.AdaptRuntimeCommand(runCommand, args, workDir)
-		if adaptErr != nil {
-			return workerToolResult{}, adaptErr
-		}
-		runCommand = adaptedCmd
-		args = adaptedArgs
-		msfNotes = nextNotes
-	} else {
-		_, _ = fmt.Fprintf(&builder, "Diagnostic mode: skipped target auto-injection and runtime command adaptation\n")
-	}
-	for _, note := range msfNotes {
-		if strings.TrimSpace(note) != "" {
-			_, _ = fmt.Fprintf(&builder, "%s\n", note)
-		}
-	}
 	if err := scopePolicy.ValidateCommandTargets(runCommand, args); err != nil {
 		return workerToolResult{}, fmt.Errorf("%s: %w", WorkerFailureScopeDenied, err)
 	}
 	cmd := exec.Command(runCommand, args...)
 	cmd.Dir = workDir
-	env, guardrailNotes, envErr := applyWorkerRuntimeGuardrails(os.Environ(), workDir)
+	env, envNotes, envErr := applyAssistExternalCommandEnv(os.Environ(), task, runCommand, workDir)
 	if envErr != nil {
 		return workerToolResult{}, envErr
 	}
 	cmd.Env = env
-	for _, note := range guardrailNotes {
+	for _, note := range envNotes {
 		if strings.TrimSpace(note) != "" {
 			_, _ = fmt.Fprintf(&builder, "%s\n", note)
 		}
 	}
 	output, runErr := runWorkerCommand(ctx, cmd, workerCommandStopGrace)
-	if adaptedNote != "" {
-		_, _ = fmt.Fprintf(&builder, "Runtime adaptation: %s\n", adaptedNote)
-	}
 	builder.Write(output)
 	return workerToolResult{
 		command: runCommand,
@@ -214,6 +229,20 @@ func executeWorkerAssistTool(ctx context.Context, cfg WorkerRunConfig, task Task
 		output:  capBytes([]byte(builder.String()), workerAssistOutputLimit),
 		runErr:  runErr,
 	}, nil
+}
+
+func applyAssistExternalCommandEnv(baseEnv []string, task TaskSpec, command, workDir string) ([]string, []string, error) {
+	env, guardrailNotes, err := applyWorkerRuntimeGuardrails(baseEnv, workDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	env, archiveNotes, err := applyArchiveToolRuntimeEnv(env, task, command, workDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	notes := append([]string{}, guardrailNotes...)
+	notes = append(notes, archiveNotes...)
+	return env, notes, nil
 }
 
 func prependWorkerOutputNotes(output []byte, notes []string) []byte {
@@ -242,16 +271,24 @@ func normalizeWorkerAssistCommand(command string, args []string) (string, []stri
 		return "", args
 	}
 	parts := strings.Fields(command)
-	if len(parts) > 1 && len(args) == 0 {
+	if len(parts) > 0 {
 		command = parts[0]
-		args = parts[1:]
+		if len(parts) > 1 {
+			args = append(parts[1:], args...)
+		}
+	}
+	if isMetasploitConsoleCommand(command) {
+		command, args, _ = enforceCommandExecutionMode(command, normalizeMetasploitExecArgs(args))
+		return command, args
 	}
 	base := strings.ToLower(filepath.Base(strings.TrimSpace(command)))
 	if base == "bash" || base == "sh" || base == "zsh" {
 		if normalized, rewritten := normalizeSingleArgShellCommand(args); rewritten {
+			command, normalized, _ = enforceCommandExecutionMode(command, normalized)
 			return command, normalized
 		}
 	}
+	command, args, _ = enforceCommandExecutionMode(command, args)
 	return command, args
 }
 

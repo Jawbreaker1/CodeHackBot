@@ -45,6 +45,11 @@ type ReportTruthGateSummary struct {
 	VerificationGateReason string `json:"verification_gate_reason,omitempty"`
 }
 
+type decisionSourceMixSummary struct {
+	Counts map[string]int `json:"counts"`
+	Total  int            `json:"total"`
+}
+
 type reportTaskNarrative struct {
 	TaskID            string
 	Title             string
@@ -119,6 +124,7 @@ func (m *Manager) AssembleRunReport(runID, outPath string) (string, error) {
 	})
 	reportFindings := buildReportFindings(findings, artifacts)
 	taskNarratives := buildTaskNarratives(plan, events, artifacts, reportFindings)
+	decisionSourceMix := summarizeDecisionSourceMix(events)
 	verifiedCount := 0
 	for _, item := range reportFindings {
 		if item.Verification == reportFindingVerified {
@@ -149,6 +155,12 @@ func (m *Manager) AssembleRunReport(runID, outPath string) (string, error) {
 		fmt.Fprintf(&b, "- Claim truth gate detail: %s\n", reason)
 	}
 	fmt.Fprintf(&b, "- Artifacts: %d\n", len(artifacts))
+	if decisionSourceMix.Total > 0 {
+		llmLed := decisionSourceMix.Counts[decisionSourceLLMDirect] + decisionSourceMix.Counts[decisionSourceLLMRepair]
+		fmt.Fprintf(&b, "- Decision sources: %d tagged events\n", decisionSourceMix.Total)
+		fmt.Fprintf(&b, "- Decision source mix: %s\n", formatDecisionSourceMixLine(decisionSourceMix))
+		fmt.Fprintf(&b, "- LLM-led decisions: %d (%.1f%%)\n", llmLed, percentOf(llmLed, decisionSourceMix.Total))
+	}
 	if hasRunWindow {
 		fmt.Fprintf(&b, "- Runtime window: %s\n", formatRuntimeWindow(runStartedAt, runEndedAt))
 	}
@@ -240,6 +252,21 @@ func (m *Manager) AssembleRunReport(runID, outPath string) (string, error) {
 				fmt.Fprintf(&b, "  - %s\n", summary)
 			}
 		}
+	}
+
+	if decisionSourceMix.Total > 0 {
+		fmt.Fprintf(&b, "\n## Decision Source Mix\n\n")
+		fmt.Fprintf(&b, "- Total tagged decision events: %d\n", decisionSourceMix.Total)
+		llmDirect := decisionSourceMix.Counts[decisionSourceLLMDirect]
+		llmRepair := decisionSourceMix.Counts[decisionSourceLLMRepair]
+		runtimeAdapt := decisionSourceMix.Counts[decisionSourceRuntimeAdapt]
+		staticFallback := decisionSourceMix.Counts[decisionSourceStatic]
+		llmLed := llmDirect + llmRepair
+		fmt.Fprintf(&b, "- `%s`: %d (%.1f%%)\n", decisionSourceLLMDirect, llmDirect, percentOf(llmDirect, decisionSourceMix.Total))
+		fmt.Fprintf(&b, "- `%s`: %d (%.1f%%)\n", decisionSourceLLMRepair, llmRepair, percentOf(llmRepair, decisionSourceMix.Total))
+		fmt.Fprintf(&b, "- `%s`: %d (%.1f%%)\n", decisionSourceRuntimeAdapt, runtimeAdapt, percentOf(runtimeAdapt, decisionSourceMix.Total))
+		fmt.Fprintf(&b, "- `%s`: %d (%.1f%%)\n", decisionSourceStatic, staticFallback, percentOf(staticFallback, decisionSourceMix.Total))
+		fmt.Fprintf(&b, "- LLM-led (`%s` + `%s`): %d (%.1f%%)\n", decisionSourceLLMDirect, decisionSourceLLMRepair, llmLed, percentOf(llmLed, decisionSourceMix.Total))
 	}
 
 	fmt.Fprintf(&b, "\n## Findings\n\n")
@@ -987,6 +1014,51 @@ func dedupeTrimmed(values []string) []string {
 		out = append(out, trimmed)
 	}
 	return out
+}
+
+func summarizeDecisionSourceMix(events []EventEnvelope) decisionSourceMixSummary {
+	counts := map[string]int{}
+	total := 0
+	for _, event := range events {
+		if event.Type != EventTypeTaskProgress {
+			continue
+		}
+		payload := eventPayloadMap(event.Payload)
+		source := normalizeDecisionSource(asString(payload["decision_source"]))
+		if source == "" {
+			continue
+		}
+		counts[source]++
+		total++
+	}
+	return decisionSourceMixSummary{
+		Counts: counts,
+		Total:  total,
+	}
+}
+
+func percentOf(value int, total int) float64 {
+	if total <= 0 {
+		return 0
+	}
+	return (float64(value) * 100) / float64(total)
+}
+
+func formatDecisionSourceMixLine(mix decisionSourceMixSummary) string {
+	if mix.Total <= 0 {
+		return "(none)"
+	}
+	parts := []string{}
+	order := []string{decisionSourceLLMDirect, decisionSourceLLMRepair, decisionSourceRuntimeAdapt, decisionSourceStatic}
+	for _, key := range order {
+		if count := mix.Counts[key]; count > 0 {
+			parts = append(parts, fmt.Sprintf("%s=%d (%.1f%%)", key, count, percentOf(count, mix.Total)))
+		}
+	}
+	if len(parts) == 0 {
+		return "(none)"
+	}
+	return strings.Join(parts, ", ")
 }
 
 func (m *Manager) listArtifactRecords(runID string) ([]artifactRecord, error) {

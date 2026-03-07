@@ -9,21 +9,25 @@ import (
 )
 
 type Input struct {
-	SessionID   string
-	Scope       []string
-	Targets     []string
-	Summary     string
-	KnownFacts  []string
-	Focus       string
-	Inventory   string
-	Plan        string
-	Goal        string
-	ChatHistory string
-	WorkingDir  string
-	RecentLog   string
-	Playbooks   string
-	Tools       string
-	Mode        string
+	SessionID           string
+	Scope               []string
+	Targets             []string
+	Summary             string
+	KnownFacts          []string
+	Focus               string
+	Inventory           string
+	Plan                string
+	Goal                string
+	ChatHistory         string
+	WorkingDir          string
+	RecentLog           string
+	Playbooks           string
+	Tools               string
+	Mode                string
+	LatestResultSummary string
+	LatestEvidenceRefs  []string
+	LatestInputRefs     []string
+	LatestLogPath       string
 }
 
 type Suggestion struct {

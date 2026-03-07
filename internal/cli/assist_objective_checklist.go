@@ -30,6 +30,9 @@ func objectiveChecklist(goal string) []string {
 	if strings.Contains(lower, "report") {
 		add("Produce the requested report artifact and summarize key findings in plain language.")
 	}
+	if strings.Contains(lower, "vulnerab") || strings.Contains(lower, "cve") || strings.Contains(lower, "exploit") || strings.Contains(lower, "misconfig") {
+		add("For each vulnerability/CVE claim, include source-backed evidence refs (tool/advisory output) and target-applicability validation evidence before marking complete.")
+	}
 	if strings.Contains(lower, "scan") || strings.Contains(lower, "identify") || strings.Contains(lower, "find") || strings.Contains(lower, "verify") {
 		add("Tie conclusions to concrete evidence refs (logs/artifacts) before marking objective complete.")
 	}
@@ -38,4 +41,3 @@ func objectiveChecklist(goal string) []string {
 	}
 	return items
 }
-

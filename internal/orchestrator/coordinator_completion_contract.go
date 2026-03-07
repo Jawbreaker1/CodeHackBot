@@ -57,9 +57,17 @@ func (c *Coordinator) validateTaskCompletionContract(task TaskSpec, taskID, sign
 	missingFindings := verifyRequiredFindings(requiredFindings, producedFindings)
 	status := "satisfied"
 	reason := ""
+	if archiveTaskRequiresPositiveProof(task) {
+		if objectiveMet, ok := completionContractObjectiveMet(contract); !ok || !objectiveMet {
+			status = "failed"
+			reason = TaskFailureReasonObjectiveNotMet
+		}
+	}
 	if len(missingArtifacts) > 0 || len(missingFindings) > 0 {
 		status = "failed"
-		reason = TaskFailureReasonMissingRequiredArtifacts
+		if strings.TrimSpace(reason) == "" {
+			reason = TaskFailureReasonMissingRequiredArtifacts
+		}
 	}
 
 	return completionContractCheck{
@@ -73,6 +81,32 @@ func (c *Coordinator) validateTaskCompletionContract(task TaskSpec, taskID, sign
 		ProducedFindings:  producedFindings,
 		MissingFindings:   missingFindings,
 	}, nil
+}
+
+func completionContractObjectiveMet(contract map[string]any) (bool, bool) {
+	if len(contract) == 0 {
+		return false, false
+	}
+	raw, ok := contract["objective_met"]
+	if !ok {
+		return false, false
+	}
+	switch typed := raw.(type) {
+	case bool:
+		return typed, true
+	case string:
+		trimmed := strings.TrimSpace(strings.ToLower(typed))
+		switch trimmed {
+		case "1", "true", "yes":
+			return true, true
+		case "0", "false", "no":
+			return false, true
+		default:
+			return false, false
+		}
+	default:
+		return false, false
+	}
 }
 
 func (c *Coordinator) collectProducedArtifacts(taskID, signalWorkerID string, events []EventEnvelope, completionPayload map[string]any, contract map[string]any) []string {

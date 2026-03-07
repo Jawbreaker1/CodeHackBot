@@ -86,6 +86,7 @@ type PlanMetadata struct {
 	PlannerModel      string       `json:"planner_model,omitempty"`
 	PlannerPlaybooks  []string     `json:"planner_playbooks,omitempty"`
 	PlannerPromptHash string       `json:"planner_prompt_hash,omitempty"`
+	PlannerTracePath  string       `json:"planner_trace_path,omitempty"`
 	PlannerDecision   string       `json:"planner_decision,omitempty"`
 	PlannerRationale  string       `json:"planner_rationale,omitempty"`
 	RegenerationCount int          `json:"regeneration_count,omitempty"`

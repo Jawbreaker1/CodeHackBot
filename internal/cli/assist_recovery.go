@@ -160,10 +160,8 @@ func (r *Runner) suggestAssistRecovery(goal string, suggestion assist.Suggestion
 		return true
 	}
 	if recovery.Type == "complete" {
-		final := normalizeAssistantOutput(strings.TrimSpace(firstNonEmpty(recovery.Final, recovery.Summary)))
-		if final != "" {
-			safePrintln(final)
-			r.appendConversation("Assistant", final)
+		if err := r.executeAssistSuggestion(recovery, false); err != nil {
+			r.logger.Printf("Recovery completion rejected: %v", err)
 		}
 		return true
 	}
@@ -256,6 +254,12 @@ func (r *Runner) maybeEmitGoalSummary(goal string, dryRun bool) {
 	goal = strings.TrimSpace(goal)
 	if !isSummaryIntent(goal) {
 		return
+	}
+	if looksLikeAction(goal) {
+		sessionDir := filepath.Join(r.cfg.Session.LogDir, r.sessionID)
+		if hasResultSnapshot(sessionDir) {
+			return
+		}
 	}
 	if strings.TrimSpace(r.summaryArtifactPath(goal)) == "" {
 		return

@@ -199,6 +199,10 @@ func runWorkerValidatorTask(manager *Manager, cfg WorkerRunConfig, task TaskSpec
 			"required_findings":   []string{"task_execution_result"},
 			"produced_findings":   []string{"task_execution_result"},
 			"verification_status": "reported_by_worker",
+			"objective_met":       true,
+			"why_met":             summary,
+			"evidence_refs":       producedArtifacts,
+			"semantic_verifier":   "validator_runtime_contract",
 		},
 	})
 	return nil

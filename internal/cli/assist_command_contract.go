@@ -60,6 +60,9 @@ func looksLikeProseCommand(command, line string) bool {
 	if token == "" {
 		return true
 	}
+	if isReservedContractToken(token) {
+		return true
+	}
 	if strings.HasSuffix(token, ":") {
 		return true
 	}
@@ -88,6 +91,24 @@ func looksLikeProseCommand(command, line string) bool {
 		return true
 	}
 	return false
+}
+
+func isReservedContractToken(token string) bool {
+	switch token {
+	case "type",
+		"decision",
+		"objective_met",
+		"evidence_refs",
+		"why_met",
+		"summary",
+		"final",
+		"risk",
+		"steps",
+		"plan":
+		return true
+	default:
+		return false
+	}
 }
 
 func isShellCommand(command string) bool {

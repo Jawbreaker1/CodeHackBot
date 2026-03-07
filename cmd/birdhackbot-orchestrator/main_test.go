@@ -616,6 +616,12 @@ func TestBuildGoalPlanFromModeAutoRetriesLLMPlannerThenSucceeds(t *testing.T) {
 	if !strings.Contains(note, "retry") {
 		t.Fatalf("expected retry note, got %q", note)
 	}
+	if strings.TrimSpace(plan.Metadata.PlannerTracePath) == "" {
+		t.Fatalf("expected planner trace path in metadata")
+	}
+	if _, err := os.Stat(plan.Metadata.PlannerTracePath); err != nil {
+		t.Fatalf("planner trace path missing: %v", err)
+	}
 }
 
 func TestBuildGoalPlanFromModeAutoPersistsPlannerAttemptDiagnostics(t *testing.T) {
@@ -1792,7 +1798,7 @@ func TestHelperProcessOrchestratorWorker(t *testing.T) {
 	mode := ""
 	for _, arg := range os.Args {
 		switch arg {
-		case "worker-ok", "worker-evidence", "worker-budget-steps", "worker-zip-crack", "worker-zip-unsolved":
+		case "worker-ok", "worker-evidence", "worker-budget-steps", "worker-zip-crack", "worker-zip-unsolved", "worker-hang":
 			mode = arg
 		}
 	}
@@ -1827,6 +1833,9 @@ func TestHelperProcessOrchestratorWorker(t *testing.T) {
 			_, _ = os.Stderr.WriteString(err.Error())
 			os.Exit(2)
 		}
+		os.Exit(0)
+	case "worker-hang":
+		time.Sleep(60 * time.Second)
 		os.Exit(0)
 	}
 	os.Exit(1)

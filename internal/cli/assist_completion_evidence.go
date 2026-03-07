@@ -136,10 +136,7 @@ func (r *Runner) verifyCompletionEvidenceSemantics(goal string, suggestion assis
 	}
 	parsed, parseErr := parseCompletionEvidenceCheck(resp.Content)
 	if parseErr != nil {
-		if r.cfg.UI.Verbose {
-			r.logger.Printf("Completion semantic verification parse skipped: %v", parseErr)
-		}
-		return nil
+		return fmt.Errorf("assistant completion contract: semantic verification parse failure: %w", parseErr)
 	}
 	if parsed.Verified {
 		return nil

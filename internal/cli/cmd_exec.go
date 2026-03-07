@@ -20,21 +20,33 @@ func (r *Runner) handleRun(args []string) error {
 	}
 	runCommand := strings.TrimSpace(args[0])
 	runArgs := append([]string{}, args[1:]...)
+	runtimeAdapted := false
+	runtimeAdaptReason := ""
 	if adaptedCmd, adaptedArgs, notes, err := msf.AdaptRuntimeCommand(runCommand, runArgs, r.currentWorkingDir()); err != nil {
 		r.logger.Printf("Runtime adaptation failed: %v", err)
 	} else {
 		if adaptedCmd != runCommand || !equalStringSlices(adaptedArgs, runArgs) {
 			runCommand = adaptedCmd
 			runArgs = adaptedArgs
+			runtimeAdapted = true
 		}
 		for _, note := range notes {
 			if strings.TrimSpace(note) != "" {
 				r.logger.Printf("%s", note)
+				runtimeAdapted = true
+				if runtimeAdaptReason == "" {
+					runtimeAdaptReason = strings.TrimSpace(note)
+				}
 			}
 		}
 	}
 	r.setTask(formatWorkingCommandTask("run", runCommand, runArgs))
 	defer r.clearTask()
+	if runtimeAdapted {
+		if sessionDir, sessErr := r.ensureSessionScaffold(); sessErr == nil {
+			_ = r.appendAssistDecisionSource(sessionDir, decisionSourceRuntimeAdapt, "execute-step", runtimeAdaptReason, runCommand)
+		}
+	}
 	if !r.cfg.Tools.Shell.Enabled {
 		return fmt.Errorf("shell execution disabled by config")
 	}

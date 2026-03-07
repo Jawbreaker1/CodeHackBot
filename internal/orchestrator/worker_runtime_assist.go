@@ -36,6 +36,9 @@ const (
 	workerAssistMaxConsecutiveRecoverToolTurns = 3
 	workerAssistNoNewEvidenceResultRepeat      = 3
 	workerAssistNoNewEvidenceToolCallCap       = 8
+	workerAssistRecoverLocalInspectGrace       = 1
+	workerAssistRecoverLocalInspectCap         = 3
+	workerAssistInspectionOnlyStepCap          = 4
 	workerAssistResultFingerprintBytes         = 512
 	workerAssistSummaryRecoverStepCap          = 4
 	workerAssistSummaryRecoverLoopCap          = 3

@@ -300,6 +300,13 @@ func BuildRunStatus(runID string, events []EventEnvelope) RunStatus {
 			status.RunningTasks++
 		}
 	}
+	if status.State == runProjectionStateStopped || status.State == runProjectionStateCompleted {
+		status.TerminalActiveWorkers = status.ActiveWorkers
+		status.TerminalQueuedTasks = status.QueuedTasks
+		status.TerminalRunningTasks = status.RunningTasks
+		status.ActiveWorkers = 0
+		status.RunningTasks = 0
+	}
 	return status
 }
 

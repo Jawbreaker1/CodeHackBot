@@ -23,6 +23,7 @@ type plannerAttemptDiagnostic struct {
 	PlaybooksIncluded bool      `json:"playbooks_included"`
 	JSONSchemaEnabled bool      `json:"json_schema_enabled"`
 	MaxTokens         int       `json:"max_tokens"`
+	RequestPayload    string    `json:"-"`
 	RawResponse       string    `json:"-"`
 	ExtractedJSON     string    `json:"-"`
 }
@@ -85,7 +86,14 @@ func persistPlannerAttemptDiagnostics(sessionsDir, runID string, attempts []plan
 		record := attempt
 		record.RawResponse = ""
 		record.ExtractedJSON = ""
+		record.RequestPayload = ""
 		prefix := fmt.Sprintf("attempt-%02d", record.Attempt)
+		if request := strings.TrimSpace(attempt.RequestPayload); request != "" {
+			requestPath := filepath.Join(baseDir, prefix+".request.json")
+			if err := os.WriteFile(requestPath, []byte(request+"\n"), 0o644); err != nil {
+				return "", err
+			}
+		}
 		if raw := strings.TrimSpace(attempt.RawResponse); raw != "" {
 			rawPath := filepath.Join(baseDir, prefix+".raw.txt")
 			if err := os.WriteFile(rawPath, []byte(raw+"\n"), 0o644); err != nil {

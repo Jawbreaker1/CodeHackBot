@@ -527,8 +527,8 @@ func TestAssistConcludesZipPresenceFromArtifactImmediately(t *testing.T) {
 	if !strings.Contains(out, "Yes, secret.zip exists in the directory.") {
 		t.Fatalf("expected evaluator conclusion, got:\n%s", out)
 	}
-	if atomic.LoadInt32(&calls) != 2 {
-		t.Fatalf("expected 2 llm calls (assist + eval), got %d", calls)
+	if atomic.LoadInt32(&calls) != 3 {
+		t.Fatalf("expected 3 llm calls (assist + eval + completion contract), got %d", calls)
 	}
 }
 

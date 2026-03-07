@@ -47,7 +47,7 @@ func TestWriteAssistContextAuditAppendsRecord(t *testing.T) {
 		PrimaryResponse: "{\"type\":\"command\"}",
 	}
 
-	if err := r.writeAssistContextAudit(sessionDir, "test goal", "execute-step", input, suggestion, nil, true, meta); err != nil {
+	if err := r.writeAssistContextAudit(sessionDir, "test goal", "execute-step", input, suggestion, nil, true, meta, false); err != nil {
 		t.Fatalf("writeAssistContextAudit: %v", err)
 	}
 
@@ -74,6 +74,9 @@ func TestWriteAssistContextAuditAppendsRecord(t *testing.T) {
 	}
 	if !rec.LLM.Attempted || rec.LLM.Model != "qwen" {
 		t.Fatalf("llm metadata mismatch: %+v", rec.LLM)
+	}
+	if rec.DecisionSource != decisionSourceLLMRepair {
+		t.Fatalf("decision source mismatch: %q", rec.DecisionSource)
 	}
 	if rec.InputSizes.KnownFactsCount != 2 {
 		t.Fatalf("known facts count mismatch: %d", rec.InputSizes.KnownFactsCount)

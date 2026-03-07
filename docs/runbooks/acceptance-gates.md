@@ -30,6 +30,11 @@ Keep sprint reliability decisions tied to measurable gates instead of subjective
 - Scenario: Ctrl-C / stop event during active run.
 - Pass: terminal report exists; run headline counters coherent (`active_workers=0`, `running_tasks=0`).
 
+4. Cross-scenario anti-hardcoding gate
+- Scenario: at least two live smokes with materially different task shapes than `secret.zip` (for example local file workflow vs scoped network workflow vs reporting-heavy workflow).
+- Pass: runs make forward progress using the same generic planning/runtime contracts; no new scenario-specific rewrite path is introduced to satisfy only one scenario.
+- Required evidence: run ids, reports, and rationale in `docs/sprints/salvage2_discoveries.md`.
+
 ## Evidence Checklist
 
 - Run/session id

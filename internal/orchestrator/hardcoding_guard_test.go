@@ -17,6 +17,7 @@ func TestAdaptationPathsAvoidScenarioLiterals(t *testing.T) {
 		"internal/cli/tool_forge.go",
 		"internal/orchestrator/command_adaptation.go",
 		"internal/orchestrator/runtime_archive_workflow.go",
+		"internal/orchestrator/runtime_command_pipeline.go",
 		"internal/orchestrator/runtime_command_prepare.go",
 		"internal/orchestrator/runtime_command_utils.go",
 		"internal/orchestrator/runtime_input_repair.go",

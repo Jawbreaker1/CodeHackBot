@@ -9,9 +9,12 @@ type Engine interface {
 }
 
 type RunStatus struct {
-	RunID         string `json:"run_id"`
-	State         string `json:"state"`
-	ActiveWorkers int    `json:"active_workers"`
-	QueuedTasks   int    `json:"queued_tasks"`
-	RunningTasks  int    `json:"running_tasks"`
+	RunID                  string `json:"run_id"`
+	State                  string `json:"state"`
+	ActiveWorkers          int    `json:"active_workers"`
+	QueuedTasks            int    `json:"queued_tasks"`
+	RunningTasks           int    `json:"running_tasks"`
+	TerminalActiveWorkers  int    `json:"terminal_active_workers,omitempty"`
+	TerminalQueuedTasks    int    `json:"terminal_queued_tasks,omitempty"`
+	TerminalRunningTasks   int    `json:"terminal_running_tasks,omitempty"`
 }

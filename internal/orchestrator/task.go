@@ -73,3 +73,38 @@ func (m *Manager) AddTask(runID string, task TaskSpec) error {
 	}
 	return nil
 }
+
+func (m *Manager) UpdateTask(runID string, task TaskSpec) error {
+	if strings.TrimSpace(runID) == "" {
+		return fmt.Errorf("run id is required")
+	}
+	if err := ValidateTaskSpec(task); err != nil {
+		return err
+	}
+	plan, err := m.LoadRunPlan(runID)
+	if err != nil {
+		return err
+	}
+	index := -1
+	for i, existing := range plan.Tasks {
+		if existing.TaskID == task.TaskID {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return fmt.Errorf("task %s not found", task.TaskID)
+	}
+	plan.Tasks[index] = task
+	if err := ValidateRunPlan(plan); err != nil {
+		return err
+	}
+	planPath := filepath.Join(BuildRunPaths(m.SessionsDir, runID).PlanDir, "plan.json")
+	if err := WriteJSONAtomic(planPath, plan); err != nil {
+		return fmt.Errorf("write run plan: %w", err)
+	}
+	if err := m.WriteTask(runID, task); err != nil {
+		return err
+	}
+	return nil
+}

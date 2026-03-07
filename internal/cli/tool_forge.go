@@ -641,16 +641,28 @@ func (r *Runner) executeToolRun(command string, args []string) error {
 	if command == "" {
 		return fmt.Errorf("tool run: empty command")
 	}
+	runtimeAdapted := false
+	runtimeAdaptReason := ""
 	if adaptedCmd, adaptedArgs, notes, adaptErr := msf.AdaptRuntimeCommand(command, args, r.currentWorkingDir()); adaptErr != nil {
 		r.logger.Printf("Runtime adaptation failed: %v", adaptErr)
 	} else {
 		if adaptedCmd != command || !equalStringSlices(adaptedArgs, args) {
 			command, args = adaptedCmd, adaptedArgs
+			runtimeAdapted = true
 		}
 		for _, note := range notes {
 			if strings.TrimSpace(note) != "" {
 				r.logger.Printf("%s", note)
+				runtimeAdapted = true
+				if runtimeAdaptReason == "" {
+					runtimeAdaptReason = strings.TrimSpace(note)
+				}
 			}
+		}
+	}
+	if runtimeAdapted {
+		if sessionDir, sessErr := r.ensureSessionScaffold(); sessErr == nil {
+			_ = r.appendAssistDecisionSource(sessionDir, decisionSourceRuntimeAdapt, "execute-step", runtimeAdaptReason, command)
 		}
 	}
 

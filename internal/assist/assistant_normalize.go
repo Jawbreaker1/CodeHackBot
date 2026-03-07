@@ -41,17 +41,124 @@ func normalizeSuggestion(suggestion Suggestion) Suggestion {
 		}
 		suggestion.Tool.Files = files
 	}
-	if suggestion.Command != "" && len(suggestion.Args) == 0 {
+	suggestion = normalizeAmbiguousToolExecution(suggestion)
+	if suggestion.Command != "" && strings.ContainsAny(suggestion.Command, " \t\r\n") {
 		parts := strings.Fields(suggestion.Command)
-		if len(parts) > 1 {
+		if len(parts) > 0 {
 			suggestion.Command = parts[0]
-			suggestion.Args = parts[1:]
+			if len(parts) > 1 {
+				// Models often inline flags in `command` while also returning
+				// additional args. Merge while avoiding duplicate arg blocks.
+				inlineArgs := collapseRepeatedOptionArgBlock(parts[1:])
+				suggestion.Args = mergeInlineAndExplicitArgs(inlineArgs, suggestion.Args)
+			}
 		}
 	}
 	if suggestion.Command != "" && len(suggestion.Args) == 0 {
 		suggestion = splitDashCommandIfNeeded(suggestion)
 	}
 	return suggestion
+}
+
+func normalizeAmbiguousToolExecution(suggestion Suggestion) Suggestion {
+	if suggestion.Tool == nil {
+		return suggestion
+	}
+	if strings.ToLower(strings.TrimSpace(suggestion.Type)) != "tool" {
+		return suggestion
+	}
+	if len(suggestion.Tool.Files) > 0 {
+		return suggestion
+	}
+	runCommand := strings.TrimSpace(suggestion.Tool.Run.Command)
+	if runCommand == "" {
+		return suggestion
+	}
+	if strings.TrimSpace(suggestion.Command) == "" {
+		suggestion.Command = runCommand
+		suggestion.Args = append([]string{}, suggestion.Tool.Run.Args...)
+	}
+	suggestion.Tool = nil
+	suggestion.Type = "command"
+	return suggestion
+}
+
+func mergeInlineAndExplicitArgs(inlineArgs, explicitArgs []string) []string {
+	inlineArgs = normalizeArgsSlice(inlineArgs)
+	explicitArgs = normalizeArgsSlice(explicitArgs)
+	if len(inlineArgs) == 0 {
+		return explicitArgs
+	}
+	if len(explicitArgs) == 0 {
+		return inlineArgs
+	}
+	// If explicit args already include the inline command args, trust explicit.
+	if hasPrefixArgs(explicitArgs, inlineArgs) {
+		return explicitArgs
+	}
+	merged := append([]string{}, inlineArgs...)
+	merged = append(merged, explicitArgs...)
+	return merged
+}
+
+func normalizeArgsSlice(args []string) []string {
+	if len(args) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(args))
+	for _, arg := range args {
+		arg = strings.TrimSpace(arg)
+		if arg == "" {
+			continue
+		}
+		out = append(out, arg)
+	}
+	return out
+}
+
+func hasPrefixArgs(full, prefix []string) bool {
+	if len(prefix) == 0 {
+		return true
+	}
+	if len(full) < len(prefix) {
+		return false
+	}
+	for i := range prefix {
+		if full[i] != prefix[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func collapseRepeatedOptionArgBlock(args []string) []string {
+	if len(args) < 4 || len(args)%2 != 0 {
+		return args
+	}
+	half := len(args) / 2
+	left := args[:half]
+	right := args[half:]
+	if !equalArgs(left, right) {
+		return args
+	}
+	for _, token := range left {
+		if strings.HasPrefix(strings.TrimSpace(token), "-") {
+			return left
+		}
+	}
+	return args
+}
+
+func equalArgs(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeSuggestionType(suggestion Suggestion) Suggestion {

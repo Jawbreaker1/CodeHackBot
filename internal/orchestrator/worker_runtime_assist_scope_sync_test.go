@@ -29,7 +29,7 @@ func (s *sequenceWorkerAssistant) Suggest(_ context.Context, _ assist.Input) (as
 	return out, workerAssistantTurnMeta{}, nil
 }
 
-func TestRunWorkerTaskAssistCommandScopeValidationUsesAdaptedArgs(t *testing.T) {
+func TestRunWorkerTaskAssistCommandScopeValidationDoesNotInjectTargetForAssistTask(t *testing.T) {
 	base := t.TempDir()
 	runID := "run-assist-scope-sync"
 	taskID := "T-SCOPE-SYNC"
@@ -97,8 +97,8 @@ func TestRunWorkerTaskAssistCommandScopeValidationUsesAdaptedArgs(t *testing.T) 
 			return "test-model", "strict", assistant, nil
 		},
 	}
-	if err := RunWorkerTask(cfg); err != nil {
-		t.Fatalf("RunWorkerTask: %v", err)
+	if err := RunWorkerTask(cfg); err == nil {
+		t.Fatalf("expected scope validation failure for assist task without injected target")
 	}
 
 	events, err := NewManager(base).Events(runID, 0)
@@ -106,26 +106,19 @@ func TestRunWorkerTaskAssistCommandScopeValidationUsesAdaptedArgs(t *testing.T) 
 		t.Fatalf("Events: %v", err)
 	}
 
-	for _, event := range events {
-		if event.Type != EventTypeTaskFailed {
-			continue
-		}
-		payload := map[string]any{}
-		if len(event.Payload) > 0 {
-			_ = json.Unmarshal(event.Payload, &payload)
-		}
-		reason := strings.TrimSpace(toString(payload["reason"]))
-		if reason == WorkerFailureScopeDenied {
-			t.Fatalf("unexpected scope_denied after runtime adaptation: payload=%#v", payload)
-		}
-	}
-
+	scopeDenied := false
 	progressFound := false
-	executedWithTarget := false
+	executedCommand := false
 	for _, event := range events {
 		payload := map[string]any{}
 		if len(event.Payload) > 0 {
 			_ = json.Unmarshal(event.Payload, &payload)
+		}
+		if event.Type == EventTypeTaskFailed {
+			reason := strings.TrimSpace(toString(payload["reason"]))
+			if reason == WorkerFailureScopeDenied {
+				scopeDenied = true
+			}
 		}
 		if event.Type == EventTypeTaskProgress {
 			msg := strings.ToLower(strings.TrimSpace(toString(payload["message"])))
@@ -138,18 +131,16 @@ func TestRunWorkerTaskAssistCommandScopeValidationUsesAdaptedArgs(t *testing.T) 
 			if command != "nmap" {
 				continue
 			}
-			for _, arg := range sliceFromAny(payload["args"]) {
-				if strings.TrimSpace(arg) == "127.0.0.1" {
-					executedWithTarget = true
-					break
-				}
-			}
+			executedCommand = true
 		}
 	}
-	if !progressFound {
-		t.Fatalf("expected runtime adaptation progress event for reinjected target")
+	if !scopeDenied {
+		t.Fatalf("expected assist task to fail scope validation without injected target")
 	}
-	if !executedWithTarget {
-		t.Fatalf("expected executed command args to include injected target 127.0.0.1")
+	if progressFound {
+		t.Fatalf("did not expect runtime adaptation progress event for reinjected target")
+	}
+	if executedCommand {
+		t.Fatalf("did not expect nmap command to execute after scope validation failure")
 	}
 }

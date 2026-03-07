@@ -62,7 +62,7 @@ func (r *Runner) handleAsk(text string) error {
 		Messages: []llm.Message{
 			{
 				Role:    "system",
-				Content: "You are BirdHackBot, a security testing assistant operating in an authorized lab owned by the user. Never claim to be Claude, OpenAI, Anthropic, or any other assistant identity. Provide direct help within scope, including inspecting local files or assisting with encrypted files the user created. Assume the standard Kali Linux toolchain is available, including Metasploit (msfconsole), and suggest/use those tools when suitable to the goal and scope. If access requires a password, ask for it; if asked to crack a password, proceed only when the user confirms authorization for that file. Do not emit tool-call markup; respond in plain text. If web access is needed, ask the user to run /browse with the URL (it requires approval). Answer clearly and concisely and ask follow-up questions when needed.",
+				Content: "You are BirdHackBot, a security testing assistant operating in an authorized lab owned by the user. Never claim to be Claude, OpenAI, Anthropic, or any other assistant identity. Provide direct help within scope, including inspecting local files or assisting with encrypted files the user created. Assume the standard Kali Linux toolchain is available, including Metasploit (msfconsole), and suggest/use those tools when suitable to the goal and scope. For vulnerability/CVE statements, do not rely on memory alone: require source-backed evidence from tooling or captured advisories, and clearly label anything not yet validated as unverified. If access requires a password, ask for it; if asked to crack a password, proceed only when the user confirms authorization for that file. Do not emit tool-call markup; respond in plain text. If web access is needed, ask the user to run /browse with the URL (it requires approval). Answer clearly and concisely and ask follow-up questions when needed.",
 			},
 			{
 				Role:    "user",
@@ -212,7 +212,11 @@ func (r *Runner) handleAssistGoal(goal string, dryRun bool) error {
 			return r.summarizeFromLatestArtifact(trimmedGoal)
 		}
 	}
-	return r.handleAssistGoalWithMode(goal, dryRun, "")
+	err := r.handleAssistGoalWithMode(goal, dryRun, "")
+	if err == nil {
+		r.ensureActionGoalTerminalState(trimmedGoal, dryRun)
+	}
+	return err
 }
 
 func (r *Runner) handleAssistGoalWithMode(goal string, dryRun bool, mode string) error {
@@ -737,9 +741,21 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 		}
 		final = normalizeAssistantOutput(final)
 		final = r.enforceEvidenceClaims(final)
+		final = renderCompletionMessage(suggestion, final)
 		safePrintln(final)
 		r.appendConversation("Assistant", final)
 		r.assistObjectiveMet = suggestion.ObjectiveMet != nil && *suggestion.ObjectiveMet
+		sessionDir := filepath.Join(r.cfg.Session.LogDir, r.sessionID)
+		_ = r.appendTaskJournalEntry(sessionDir, taskJournalEntry{
+			Kind:         "complete",
+			Result:       map[bool]string{true: "ok", false: "error"}[r.assistObjectiveMet],
+			Decision:     "step_complete",
+			EvidenceRefs: append([]string{}, suggestion.EvidenceRefs...),
+			Notes:        strings.TrimSpace(suggestion.WhyMet),
+			Excerpt:      strings.TrimSpace(final),
+		})
+		_ = r.writeResultSnapshot(r.currentAssistGoal(), suggestion)
+		r.refreshFocusFromRecentState(sessionDir, r.currentAssistGoal())
 		r.pendingAssistGoal = ""
 		r.pendingAssistQ = ""
 		return nil
@@ -778,6 +794,9 @@ func (r *Runner) executeAssistSuggestion(suggestion assist.Suggestion, dryRun bo
 		}
 		if reason, blocked := assistInteractiveCommandReason(suggestion.Command, suggestion.Args); blocked {
 			return fmt.Errorf("assistant command contract: interactive command blocked: %s", reason)
+		}
+		if err := r.enforceRetryModifiedCommandContract(suggestion); err != nil {
+			return err
 		}
 		if err := r.enforceAssistTargetPivotContract(suggestion); err != nil {
 			return err
@@ -926,7 +945,19 @@ func (r *Runner) handlePlanSuggestion(suggestion assist.Suggestion, dryRun bool)
 				return nil
 			}
 			if r.handleAssistCommandFailure(step, result, err) {
-				return nil
+				if shouldPauseAfterHandledFailure(false, r.pendingAssistGoal, r.pendingAssistQ) {
+					return nil
+				}
+				if strings.TrimSpace(goal) != "" && r.tryConcludeGoalFromArtifacts(goal) {
+					if r.cfg.UI.Verbose {
+						r.logger.Printf("Plan objective satisfied after recovery at step %d.", i+1)
+					}
+					return nil
+				}
+				if r.cfg.UI.Verbose {
+					r.logger.Printf("Plan step %d recovered; continuing remaining plan steps.", i+1)
+				}
+				continue
 			}
 			return err
 		}
@@ -949,6 +980,15 @@ func (r *Runner) handlePlanSuggestion(suggestion assist.Suggestion, dryRun bool)
 	if r.tryConcludeGoalFromArtifacts(goal) {
 		return nil
 	}
+	if strings.TrimSpace(goal) != "" {
+		resolved, err := r.runBoundedPostPlanRecovery(goal)
+		if err != nil {
+			return err
+		}
+		if resolved || strings.TrimSpace(r.pendingAssistQ) != "" || strings.TrimSpace(r.pendingAssistGoal) != "" {
+			return nil
+		}
+	}
 	msg := "Plan finished, but objective is not yet verified from evidence. Reviewing latest output and suggesting next steps."
 	safePrintln(msg)
 	r.appendConversation("Assistant", msg)
@@ -963,6 +1003,60 @@ func (r *Runner) handlePlanSuggestion(suggestion assist.Suggestion, dryRun bool)
 	}
 	if lastResult.Type == "command" || lastResult.Type == "tool" {
 		r.maybeSuggestNextSteps(goal, lastResult)
+	}
+	return nil
+}
+
+func (r *Runner) runBoundedPostPlanRecovery(goal string) (bool, error) {
+	goal = strings.TrimSpace(goal)
+	if goal == "" || !looksLikeAction(goal) {
+		return false, nil
+	}
+	maxAttempts := r.assistPostPlanRecoveryAttempts()
+	if maxAttempts <= 0 {
+		return false, nil
+	}
+	if r.cfg.UI.Verbose {
+		r.logger.Printf("Plan objective not yet verified; entering bounded recovery (%d step(s)).", maxAttempts)
+	}
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if r.tryConcludeGoalFromArtifacts(goal) {
+			if r.cfg.UI.Verbose {
+				r.logger.Printf("Post-plan recovery verified objective at attempt %d.", attempt)
+			}
+			return true, nil
+		}
+		if err := r.handleAssistSingleStep(goal, false, "recover"); err != nil {
+			return false, err
+		}
+		if strings.TrimSpace(r.pendingAssistQ) != "" || strings.TrimSpace(r.pendingAssistGoal) != "" {
+			return true, nil
+		}
+	}
+	if r.tryConcludeGoalFromArtifacts(goal) {
+		return true, nil
+	}
+	return false, nil
+}
+
+func (r *Runner) enforceRetryModifiedCommandContract(suggestion assist.Suggestion) error {
+	if !strings.EqualFold(strings.TrimSpace(suggestion.Type), "command") {
+		return nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(suggestion.Decision), "retry_modified") {
+		return nil
+	}
+	lastObs, ok := r.latestObservation()
+	if !ok || lastObs.ExitCode == 0 {
+		return nil
+	}
+	prevKey := canonicalAssistActionKey(lastObs.Command, lastObs.Args)
+	nextKey := canonicalAssistActionKey(suggestion.Command, suggestion.Args)
+	if prevKey == "" || nextKey == "" {
+		return nil
+	}
+	if prevKey == nextKey {
+		return fmt.Errorf("retry_modified contract: action unchanged after failure; choose pivot_strategy or materially change the action")
 	}
 	return nil
 }

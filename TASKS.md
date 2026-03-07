@@ -877,8 +877,21 @@ Control-doc sync checklist (required at sprint checkpoints and before sprint clo
     - documented in `docs/sprints/sprint37_phase0_diagnostic.md`.
 - [ ] Carryover from Sprint 36 completion gate (moved):
   - [ ] enforce objective-level completion contracts for ZIP/local-file recovery goals.
-  - [ ] disable synthetic stdout fallback for critical goal artifacts in ZIP/local-file recovery flows.
+  - [x] disable synthetic stdout fallback for critical goal artifacts in ZIP/local-file recovery flows.
+    - command expected-artifact materialization now requires concrete source files for local-workflow critical artifacts (`recovered_password`, proof token/access, extraction/decryption status/files) and skips stdout fallback for these claims (`internal/orchestrator/worker_runtime.go`, `internal/orchestrator/runtime_archive_proof.go`).
+    - regressions added:
+      - `internal/orchestrator/runtime_archive_proof_test.go:TestLocalWorkflowCriticalArtifactName`
+      - `internal/orchestrator/runtime_archive_proof_test.go:TestExpectedArtifactRequiresConcreteSource_ArchiveWorkflow`
+      - `internal/orchestrator/worker_runtime_test.go:TestWriteExpectedCommandArtifactsSkipsLocalWorkflowCriticalFallback`
+    - validation: `go test ./internal/orchestrator ./cmd/birdhackbot-orchestrator` and `go build -buildvcs=false ./cmd/birdhackbot ./cmd/birdhackbot-orchestrator`.
   - [ ] complete live qwen3.5 CLI acceptance gate (`secret.zip >=5/5` + router scenario evidence-backed or explicit `objective_not_met`).
+    - in-progress checkpoint (`2026-03-06`):
+      - `sessions/20260306-174840-a3dd`: partial success (password recovered) but objective not finalized before session EOF; completion response leaked internal reasoning text.
+      - `sessions/20260306-175138-db2f`: successful password + content recovery, but repeated completion confirmations under queued `continue` inputs (needs cleaner gate harness to avoid post-complete chatter bias).
+      - `sessions/20260306-175932-90ae`: long-running cracking churn (fcrackzip-heavy path) required operator stop for budget control.
+      - `sessions/20260306-181309-c84e`: router smoke produced evidence-backed recon but drifted into repeat read/curl/report loop before clean terminalization; operator stop used for budget control.
+      - `sessions/run-s37-zip2-20260306-192543`: bounded orchestrator ZIP run completed with report; objective not achieved (recovery churn -> `assist_no_new_evidence` / `budget_exhausted` path, downstream tasks left queued).
+      - `sessions/run-s37-router-20260306-192140`: orchestrator router run completed with report; candidate CVE follow-up blocked by scope (`out of scope target nvd.nist.gov`) and correctly retained as `UNVERIFIED`.
   - [x] fix LLM planner cycle-preflight reliability for goal runs (`scheduler preflight failed: cycle detected at task ...`):
     - planner preflight failures for dependency cycles/unknown deps now run bounded DAG repair (drop self/unknown/forward/duplicate edges), then revalidate before returning plan (`cmd/birdhackbot-orchestrator/main_planner_repair.go`).
     - added planner regressions for cycle candidate output + unknown-dependency recovery, and `buildGoalPlanFromMode(auto)` recovery path (`cmd/birdhackbot-orchestrator/main_planner_repair_test.go`).
@@ -925,15 +938,224 @@ Control-doc sync checklist (required at sprint checkpoints and before sprint clo
   - [x] keep only generic capability-level guardrails (no scenario literals or tool-sequence hardcoding).
     - extended scenario-literal guard coverage to include `internal/orchestrator/runtime_command_pipeline.go` in `internal/orchestrator/hardcoding_guard_test.go`.
 - [ ] Critical 4 — Typed input-repair safety:
-  - [ ] require typed artifact matching (`archive|hash|wordlist|log|report`) before path substitution.
-  - [ ] reject incompatible substitutions (for example hash substituted where archive input is required).
-  - [ ] add regressions for wildcard/relative-path repair to prevent cross-type aliasing.
+  - [x] require typed artifact matching (`archive|hash|wordlist|log|report`) before path substitution.
+    - added generic artifact input kind inference + compatibility gating in `internal/orchestrator/runtime_input_repair.go` (`classifyArtifactInputKind`, `artifactKindsCompatible`), and wired typed matching into both direct and shell-wrapper repair paths.
+  - [x] reject incompatible substitutions (for example hash substituted where archive input is required).
+    - dependency/workspace substitutions now require compatible expected/candidate kinds before replacement; mismatches are skipped fail-closed.
+  - [x] add regressions for wildcard/relative-path repair to prevent cross-type aliasing.
+    - added tests in `internal/orchestrator/worker_runtime_test.go`:
+      - `TestBestArtifactCandidateForMissingPathRejectsCrossTypeAlias`
+      - `TestBestArtifactCandidateForMissingPathRejectsWildcardAlias`
+      - `TestRepairMissingCommandInputPathsRejectsRelativeCrossTypeAlias`
+      - `TestRepairMissingCommandInputPathsRejectsWildcardAlias`
+    - validation: `go test ./internal/orchestrator ./cmd/birdhackbot-orchestrator` and `go build -buildvcs=false ./cmd/birdhackbot ./cmd/birdhackbot-orchestrator`.
 - [ ] High — State and reporting consistency:
-  - [ ] reconcile run/task projections at terminal state so `state=stopped/completed` cannot report stale `running_tasks>0`.
-  - [ ] preserve unfinished detail in dedicated fields while keeping headline counters coherent.
+  - [x] reconcile run/task projections at terminal state so `state=stopped/completed` cannot report stale `running_tasks>0`.
+    - terminal projections now keep headline counters coherent (`active_workers=0`, `running_tasks=0`) and explicitly preserve pre-zero values in `terminal_*` fields.
+  - [x] preserve unfinished detail in dedicated fields while keeping headline counters coherent.
+    - added `terminal_active_workers`, `terminal_queued_tasks`, `terminal_running_tasks` to `RunStatus` in `internal/orchestrator/engine.go`.
+    - applied in both event and cache projections (`internal/orchestrator/run.go`, `internal/orchestrator/event_cache.go`) and surfaced via status command output (`cmd/birdhackbot-orchestrator/main_commands.go`).
+    - regressions: `TestBuildRunStatusTerminalPreservesUnfinishedDetailCounters`, `TestManagerStatusTerminalPreservesUnfinishedDetailCounters` in `internal/orchestrator/run_test.go`.
+- [x] High — Input-repair type system generalization (plan first, no code until approved):
+  - [x] write a short design note that narrows runtime repair typing to generic safety families instead of enumerating artifact kinds (`input_source`, `validation_input`, `report_output`, `auxiliary_log`, `unknown`).
+    - design doc: `docs/runbooks/input-repair-family-design.md`
+  - [x] derive expected repair family from command intent/flags and task contract first; use filename heuristics only as fallback.
+    - documented in `docs/runbooks/input-repair-family-design.md` (`Family Derivation Order`).
+  - [x] define fail-closed behavior for unknown family: allow exact-basename substitution only, block semantic/token-based aliasing.
+    - documented in `docs/runbooks/input-repair-family-design.md` (`Substitution Contract`).
+  - [x] add acceptance tests for unknown-family cases to ensure no regression to brittle hardcoded type lists.
+    - added `internal/orchestrator/runtime_input_repair_test.go`:
+      - `TestBestArtifactCandidateForMissingPathWithFamilyUnknownAllowsExactBasename`
+      - `TestBestArtifactCandidateForMissingPathWithFamilyUnknownRejectsSemanticAlias`
+      - `TestBestArtifactCandidateForMissingPathWithFamilyRejectsFamilyMismatch`
+      - `TestInferExpectedRepairFamilyTaskIntentPrecedesPathHeuristic`
+    - validation: `go test ./internal/orchestrator ./cmd/birdhackbot-orchestrator`.
 - [ ] High — Context quality under long recovery:
-  - [ ] shift retrieval from fixed-window only to contract/anchor relevance retrieval.
-  - [ ] ensure failure anchors and latest evidence delta are prioritized over repeated inspection artifacts.
+  - [x] shift retrieval from fixed-window only to contract/anchor relevance retrieval.
+    - `internal/orchestrator/worker_runtime_assist_context_layered.go` now ranks observations and artifacts by recovery anchors, failure signals, task-contract cues, and recency instead of using fixed tail/modtime only.
+  - [x] ensure failure anchors and latest evidence delta are prioritized over repeated inspection artifacts.
+    - layered context now emits explicit `recovery_anchors` sections and de-prioritizes generic `worker-*.log` inspection churn behind anchored semantic artifacts.
+    - regressions:
+      - `TestBuildWorkerAssistLayeredContextPrioritizesFailureAnchorsOverInspectionChurn`
+      - `TestBuildWorkerAssistLayeredContextPrioritizesAnchoredArtifacts`
+    - validation: `go test ./internal/orchestrator ./cmd/birdhackbot-orchestrator`.
+- [ ] Critical 5 — Closed-loop architecture reduction (design gate before more tactical fixes):
+  - [x] audit current control docs for relevance vs latest live evidence.
+    - still authoritative:
+      - `docs/runbooks/workflow-state-contract.md`
+      - `docs/runbooks/state-inventory.md`
+      - `docs/runbooks/ownership-boundaries.md`
+      - `docs/runbooks/agent-workflow-checkpoint-s37.md`
+    - current-state maps only (not target-state endorsement):
+      - `docs/runbooks/runtime-mutation-stage-map.md`
+      - `docs/runbooks/planner-action-executability.md`
+      - `docs/runbooks/input-repair-family-design.md`
+  - [x] write reduction-plan doc for assist/orchestrator closed loop with explicit owner-removal targets.
+    - doc: `docs/runbooks/closed-loop-reduction-plan.md`
+  - [ ] implement only architecture-reducing slices from this point:
+    - remove fallback command synthesis as a second planner for assist-mode work,
+    - reduce assist-mode runtime command shaping to safety/scope/minimal wrapping only,
+    - standardize one canonical execution-result object across recovery/replan/finalize,
+    - replace layered anti-loop patches with one generic material-progress gate.
+  - [x] perform fallback ownership audit across CLI + orchestrator and document reduced contract.
+    - doc: `docs/runbooks/fallback-ownership-reduction.md`
+    - current owners audited:
+      - `internal/assist/assistant_fallback.go`
+      - `internal/orchestrator/worker_runtime_assist_llm.go`
+      - `internal/cli/llm_guard.go`
+      - `internal/orchestrator/worker_runtime_assist_loop_emit.go`
+  - [x] first reduction slice:
+    - strip executable command/tool synthesis out of `FallbackAssistant`,
+    - keep only explicit unavailable/not-met/question behavior where allowed.
+    - implementation:
+      - `internal/assist/assistant_fallback.go`
+      - `internal/assist/doc.go`
+      - `internal/assist/assistant_test.go`
+    - validation:
+      - `go test ./internal/assist ./internal/cli ./internal/orchestrator ./cmd/birdhackbot-orchestrator`
+    - live evidence:
+      - ZIP: `run-s37-fallbackless-zip-20260307-143338` stayed `llm_direct` through observed execution and no longer used fallback command synthesis; it still failed later via evidence-inspection churn.
+      - Router: `run-s37-fallbackless-router-20260307-143338` emitted question-only degraded fallback during recovery (`Recover-mode fallback will not invent a new command.`), then cleanly terminalized with `report_ready=true`.
+  - [x] second reduction slice:
+    - design doc: `docs/runbooks/runtime-shaping-reduction.md`
+    - reduce assist-mode runtime shaping to safety/scope/minimal wrapping only,
+    - ensure degraded recovery uses terminal/replan signals instead of fallback question loops in non-interactive workers.
+    - owner removed:
+      - assist-mode archive input injection in `internal/orchestrator/runtime_archive_workflow.go`
+    - contract simplified:
+      - assist-mode archive commands now execute with exact LLM-selected args; runtime no longer injects ZIP inputs for `zip2john` / `zipinfo`
+      - safe archive runtime env setup remains available for assist-mode `john` execution
+    - code path shrunk:
+      - `applyRuntimeCommandPipeline(...)` now skips `adapt_archive_workflow` when `task.Action.Type == "assist"`
+      - assist external command execution now uses shared env setup instead of separate ad hoc handling
+    - implementation:
+      - `internal/orchestrator/runtime_command_pipeline.go`
+      - `internal/orchestrator/worker_runtime_assist_exec.go`
+      - tests:
+        - `internal/orchestrator/runtime_command_pipeline_test.go`
+        - `internal/orchestrator/worker_runtime_assist_builtin_test.go`
+    - validation:
+      - `go test ./internal/orchestrator ./cmd/birdhackbot-orchestrator`
+      - `go build -buildvcs=false ./cmd/birdhackbot ./cmd/birdhackbot-orchestrator`
+    - live evidence:
+      - ZIP: `run-s37-rtshape-zip-20260307-151500` no longer showed `adapt_archive_workflow`; remaining runtime mutation came from generic path repair and the run still regressed into evidence rereads before operator stop.
+      - Router: `run-s37-rtshape-router-20260307-152000` completed connectivity check cleanly and continued into port enumeration; runtime shaping remains active there through `prepare_runtime_command`, confirming the next reduction target is not archive-specific anymore.
+  - [x] third reduction slice:
+    - remove assist-mode `prepare_runtime_command`, weak vulnerability rewrites, and weak report rewrites from the runtime mutation pipeline.
+    - owner removed:
+      - assist-mode generic command shaping in `prepareRuntimeCommand(...)`, `adaptWeakVulnerabilityAction(...)`, `ensureVulnerabilityEvidenceActionWithGoal(...)`, and `adaptWeakReportAction(...)`
+    - contract simplified:
+      - assist-mode commands now execute without runtime-selected target injection, scan-shape narrowing, or report/vulnerability command replacement
+      - runtime retains scope validation, minimal shell normalization, exact path repair, and external-command env guardrails
+    - code path shrunk:
+      - `applyRuntimeCommandPipeline(...)` now skips these shaping stages when `task.Action.Type == "assist"`
+    - implementation:
+      - `internal/orchestrator/runtime_command_pipeline.go`
+      - tests:
+        - `internal/orchestrator/runtime_command_pipeline_test.go`
+        - `internal/orchestrator/worker_runtime_assist_scope_sync_test.go`
+    - validation:
+      - `go test ./internal/orchestrator ./cmd/birdhackbot-orchestrator`
+      - `go build -buildvcs=false ./cmd/birdhackbot ./cmd/birdhackbot-orchestrator`
+    - live evidence:
+      - ZIP: `run-s37-rtshape2-zip-20260307-153200` showed no `runtime_adapt` stage before failure; `T-01` executed the raw LLM-selected `bash` command and later regressed in adaptive replan on a missing `zip_metadata.txt` path.
+      - Router: `run-s37-rtshape2-router-20260307-153600` showed no `runtime_adapt` stage on the initial port-scan command; the remaining failure was degraded recovery looping on fallback questions after a primary assistant error.
+  - [x] fourth reduction slice:
+    - fail fast on recover-mode fallback questions in non-interactive workers using canonical latest-result details,
+    - capture shell-wrapper output refs and input refs into latest execution feedback so replans see exact artifact paths instead of basename guesses.
+    - owner removed:
+      - degraded fallback question-loop ownership as a pseudo-recovery strategy
+      - hidden loss of shell-produced artifact truth between execution and replan
+    - contract simplified:
+      - recover-mode fallback no longer loops on repeated `question` turns after a primary assistant failure; it emits an explicit assist failure with latest-result metadata
+      - latest execution feedback now includes shell output redirections/`tee` paths and shell input refs for closed-loop recovery context
+    - code path shrunk:
+      - `internal/orchestrator/worker_runtime_assist_loop.go` exits recover-mode fallback questions immediately
+      - `internal/orchestrator/worker_runtime_assist_feedback.go` now derives canonical shell output/input refs without adding new planner/runtime owners
+    - implementation:
+      - `internal/orchestrator/worker_runtime_assist_loop.go`
+      - `internal/orchestrator/worker_runtime_assist_loop_helpers.go`
+      - `internal/orchestrator/worker_runtime_assist_feedback.go`
+      - tests:
+        - `internal/orchestrator/worker_runtime_assist_modes_test.go`
+        - `internal/orchestrator/worker_runtime_assist_feedback_test.go`
+        - `internal/orchestrator/coordinator_recovery_goal_test.go`
+    - validation:
+      - `go test ./internal/orchestrator ./cmd/birdhackbot-orchestrator`
+      - `go build -buildvcs=false ./cmd/birdhackbot ./cmd/birdhackbot-orchestrator`
+    - live evidence:
+      - ZIP: `run-s37-recover-zip-20260307-154400` remained LLM-led through metadata/recover steps; no new regression from the latest-result capture change, though this bounded run did not reach a fresh adaptive-replan failure before operator stop.
+      - Router: `run-s37-recover-router-20260307-154900` remained LLM-led on the initial port-scan step with no fallback-command invention; this bounded run also did not hit a fresh primary-assistant recovery failure before operator stop.
+  - [x] fifth reduction slice:
+    - carry adaptive-replan artifact truth through an explicit evidence dependency on the source task instead of basename-only prompt hints.
+    - owner removed:
+      - basename-first artifact lookup as the primary recovery handoff for adaptive replans
+    - contract simplified:
+      - adaptive recovery tasks now declare the failed source task as a dependency for evidence access
+      - scheduler treats those dependencies as evidence-ready when the source task is terminal non-success, so the replan can queue without waiting for completion
+    - code path shrunk:
+      - recovery artifact collection reuses `DependsOn` / `collectDependencyArtifactCandidates(...)` instead of inventing a separate basename-only handoff path
+    - implementation:
+      - `internal/orchestrator/coordinator_replan_helpers.go`
+      - `internal/orchestrator/scheduler.go`
+      - tests:
+        - `internal/orchestrator/coordinator_replan_mutation_test.go`
+        - `internal/orchestrator/scheduler_test.go`
+    - validation:
+      - `go test ./internal/orchestrator ./cmd/birdhackbot-orchestrator`
+      - `go build -buildvcs=false ./cmd/birdhackbot ./cmd/birdhackbot-orchestrator`
+    - live evidence:
+      - ZIP: `run-s37-arttruth-zipall-20260307-145040` showed adaptive recovery tasks now carry explicit source-task dependencies (`task-rp-c32629789c -> T-01-metadata`, `task-rp-f3a9dfa46d -> T-01-metadata`, `task-rp-fac1ef2dfd -> task-rp-c32629789c`), so canonical source-task artifacts are available through the normal dependency path. Remaining failures moved to malformed parse-repair / tool-install recovery (`type ✓`) and execution-log churn inside adaptive recovery.
+      - Router: `run-s37-arttruth-router-20260307-144314` showed the first adaptive recovery task now depends on `TASK-001-DISCOVERY` instead of relying only on prompt text; recovery could cite `host_discovery.log` via latest-result metadata, but the worker still re-read its own command log and later the bounded run stopped during `TASK-002-PORTSCAN`.
+  - [ ] any new implementation proposal must name:
+    - owner being removed,
+    - contract being simplified,
+    - code path expected to shrink or disappear.
+- [ ] High — Planner action executability gate:
+  - [x] persist successful planner request/response traces so raw structured output can be inspected, not just failed attempts.
+    - planner trace artifacts now include `attempt-XX.request.json`, `attempt-XX.extracted.json`, and `PlanMetadata.planner_trace_path`.
+  - [x] add a generic under-specified command detector based on task-contract anchors, not tool-specific rules.
+    - added `normalizePlannerCommandExecutability(...)` in `cmd/birdhackbot-orchestrator/main_planner_actionshape.go`; it derives anchors from targets, goal/title path-like tokens, and dependency artifact basenames, then promotes direct commands that do not bind to available anchors.
+  - [x] promote under-specified direct commands to `assist` with task-contract grounding instead of executing bare tool labels.
+    - promoted tasks preserve the original command only as an optional hint and add task-contract anchors + done/fail criteria to the assist prompt.
+  - [x] add regressions for:
+    - bare command with explicit anchors -> promoted,
+    - concrete bound command -> preserved,
+    - benign anchorless command -> preserved.
+    - tests: `TestNormalizePlannerCommandExecutabilityPromotesBareBoundCommand`, `TestNormalizePlannerCommandExecutabilityPreservesConcreteBoundCommand`, `TestNormalizePlannerCommandExecutabilityPreservesAnchorlessBenignCommand`
+  - [x] validate with a bounded live ZIP planner smoke and inspect raw planner trace vs final normalized plan.
+    - evidence:
+      - `sessions/planner-attempts/run-s37-trace2-zip-20260307-110408/attempt-01.request.json`
+      - `sessions/planner-attempts/run-s37-trace2-zip-20260307-110408/attempt-01.extracted.json`
+      - `sessions/run-s37-trace2-zip-20260307-110408/orchestrator/plan/plan.json`
+- [ ] Critical checkpoint — Simplify agent workflow ownership before more tactical fixes:
+  - [x] audit the repeatedly failing chain:
+    - planner task contract
+    - runtime action shaping
+    - artifact truth
+    - recovery input model
+  - [x] write checkpoint doc with ownership map, overlap points, simplification targets, and candidate merges/deletions.
+    - doc: `docs/runbooks/agent-workflow-checkpoint-s37.md`
+  - [x] choose one overlap-reduction slice before further ZIP/router hardening:
+    - single owner for executable action shape, or
+    - single owner for artifact truth, or
+    - simpler recovery input object.
+    - selected slice: simplify recovery input object so recovery is driven by explicit state (`previous_command`, `previous_exit_code`, `primary_evidence_refs`, `contract_gap`) instead of observation/log reread chains.
+  - [ ] use this checkpoint as a gate:
+    - no new scenario-specific tactical patch unless it directly reduces ownership overlap called out in the checkpoint doc.
+    - no new assist-mode command shaping unless it removes an existing decision owner.
+    - no new fallback command invention from hint/path scraps.
+    - current implementation slice (`2026-03-07`): recovery input now exposes explicit recovery state and blocks recover-mode execution-log reread chains before adding more ZIP/router-specific handling.
+    - live validation:
+      - `run-s37-routerdeep-20260307-123600`: old router transcript-reread churn did not recur in `T-01-port-scan` or `T-02-vuln-mapping`; next overlapping seam is action/tool-schema ambiguity in `T-03-report-generation` (`assistant tool suggestion has no files`).
+      - `run-s37-postfix-zip-20260307-124500`: generic tool-schema normalization did not help ZIP yet; run failed earlier in runtime input repair with duplicated absolute path injection inside `bash -c`.
+      - `run-s37-postfix-router-20260307-124700`: router still reproduced transcript reread churn in `T-01-port-scan` because recover-mode selected the worker command log instead of the canonical XML evidence path; current execution-log churn guard is too narrow.
+      - `run-s37-fix2-zip-20260307-125600`: shell-wrapper path duplication is fixed and ZIP now reaches `T-03` password cracking, but recovery still collapses into repeated `read_file zip.hash` diagnosis after `john` output instead of interpreting the cracking result and pivoting.
+      - `run-s37-fix2-router-20260307-123100`: router `T-01` completes cleanly and `T-02` runs bounded vuln-scan `nmap`, but post-command recovery still falls back to repeated reads of the prior dependency XML instead of the newly produced vuln-scan artifact; run required operator stop and partial report generation.
+      - `run-s37-fix3-zip-20260307-133800`: newer recovery-state hints did not hold because recover-mode later fell into static fallback and repeated `read_file secret.zip`; run now fails even earlier in `T-01` metadata extraction after making more progress through concrete metadata commands.
+      - `run-s37-fix3-router-20260307-134300`: execution-log churn is blocked earlier, but the first task now hard-fails fast and the adaptive replan immediately reopens the same worker log; newer command-result prioritization is still being lost across fallback/replan boundaries.
+      - `run-s37-next-zip-20260307-140336`: duplicate `new_finding` replan no longer fires for `task_execution_failure`; recovery now stays on the `execution_failure` path, but ZIP metadata still derails on malformed archive adaptation (`zipinfo` receives duplicated/broken args) and later static fallback collapses into repeated `read_file` of the failure log.
+      - `run-s37-next-router-20260307-140336`: `task_execution_failure` now routes only through `execution_failure` adaptive replan (no weaker duplicate `new_finding` path), but `T-02-map-vulnerabilities` still repeats `read_file` on the prior XML evidence and then no-progress terminalizes; next overlap remains static-fallback/parse-failure inspection churn.
 - [ ] Medium — Complexity cleanup (targeted, no behavior change):
   - [ ] split highest-risk large files (`worker_runtime_assist_loop.go`, `worker_runtime.go`, `internal/cli/cli.go`) by responsibility boundaries.
   - [ ] add module-level ownership map and invariants to prevent adapter overlap re-growth.
@@ -944,6 +1166,7 @@ Control-doc sync checklist (required at sprint checkpoints and before sprint clo
   - [ ] `secret.zip` orchestrator smoke succeeds reproducibly with true completion contract (not only task completion events).
   - [ ] interrupted/stopped run always emits a report and coherent status.
   - [ ] no scenario-literal runtime rewrites in production paths.
+  - [ ] at least two cross-scenario live smokes beyond ZIP (different task shapes) pass without introducing scenario-specific planner/runtime patches.
   - [ ] next provisional sprints (38-44) revalidated/resequenced using this sprint’s measured outcomes.
 
 ## Sprint 38 — Evidence-Backed Exploration State (planned, provisional)

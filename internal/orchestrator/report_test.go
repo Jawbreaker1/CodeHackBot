@@ -531,6 +531,106 @@ func TestAssembleRunReportUsesValidatorVerdictStates(t *testing.T) {
 	}
 }
 
+func TestAssembleRunReportIncludesDecisionSourceMix(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-report-decision-source"
+	manager := NewManager(base)
+	if _, err := EnsureRunLayout(base, runID); err != nil {
+		t.Fatalf("EnsureRunLayout: %v", err)
+	}
+	planPath := filepath.Join(base, "plan.json")
+	plan := RunPlan{
+		RunID:           runID,
+		Scope:           Scope{Targets: []string{"127.0.0.1"}},
+		Constraints:     []string{"local_only"},
+		SuccessCriteria: []string{"report_done"},
+		StopCriteria:    []string{"manual_stop"},
+		MaxParallelism:  1,
+		Tasks: []TaskSpec{
+			{
+				TaskID:            "t1",
+				Goal:              "collect evidence",
+				DoneWhen:          []string{"done"},
+				FailWhen:          []string{"failed"},
+				ExpectedArtifacts: []string{"scan.log"},
+				RiskLevel:         "recon_readonly",
+				Budget:            TaskBudget{MaxSteps: 2, MaxToolCalls: 2, MaxRuntime: time.Second},
+			},
+		},
+	}
+	if err := WriteJSONAtomic(planPath, plan); err != nil {
+		t.Fatalf("WriteJSONAtomic plan: %v", err)
+	}
+	if _, err := manager.Start(planPath, ""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	now := time.Now().UTC()
+	events := []EventEnvelope{
+		{
+			EventID:  "e-progress-1",
+			RunID:    runID,
+			WorkerID: "worker-1",
+			TaskID:   "t1",
+			Seq:      1,
+			TS:       now,
+			Type:     EventTypeTaskProgress,
+			Payload: mustJSONRaw(map[string]any{
+				"message":         "assistant returned command",
+				"decision_source": decisionSourceLLMDirect,
+			}),
+		},
+		{
+			EventID:  "e-progress-2",
+			RunID:    runID,
+			WorkerID: "worker-1",
+			TaskID:   "t1",
+			Seq:      2,
+			TS:       now.Add(time.Second),
+			Type:     EventTypeTaskProgress,
+			Payload: mustJSONRaw(map[string]any{
+				"message":         "assistant recovered",
+				"decision_source": decisionSourceLLMRepair,
+			}),
+		},
+		{
+			EventID:  "e-progress-3",
+			RunID:    runID,
+			WorkerID: "worker-1",
+			TaskID:   "t1",
+			Seq:      3,
+			TS:       now.Add(2 * time.Second),
+			Type:     EventTypeTaskProgress,
+			Payload: mustJSONRaw(map[string]any{
+				"message":         "runtime adaptation applied",
+				"decision_source": decisionSourceRuntimeAdapt,
+			}),
+		},
+	}
+	for _, event := range events {
+		if err := AppendEventJSONL(manager.eventPath(runID), event); err != nil {
+			t.Fatalf("append event %s: %v", event.EventID, err)
+		}
+	}
+
+	reportPath, err := manager.AssembleRunReport(runID, "")
+	if err != nil {
+		t.Fatalf("AssembleRunReport: %v", err)
+	}
+	data, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "## Decision Source Mix") {
+		t.Fatalf("expected decision source section:\n%s", content)
+	}
+	if !strings.Contains(content, "`llm_direct`: 1") || !strings.Contains(content, "`llm_repair`: 1") || !strings.Contains(content, "`runtime_adapt`: 1") {
+		t.Fatalf("expected decision source counts in report:\n%s", content)
+	}
+}
+
 func TestAssembleRunReportQualityNetworkAndWebArtifacts(t *testing.T) {
 	t.Parallel()
 

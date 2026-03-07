@@ -89,6 +89,30 @@ func TestRunCommandStreaming(t *testing.T) {
 	}
 }
 
+func TestRunCommandStreamingIsStableForShortLivedCommands(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skip on windows: echo may not be available as an external command")
+	}
+	for i := 0; i < 100; i++ {
+		var live bytes.Buffer
+		runner := Runner{
+			Permissions: PermissionAll,
+			LogDir:      t.TempDir(),
+			LiveWriter:  &live,
+		}
+		result, err := runner.RunCommand("echo", "hello")
+		if err != nil {
+			t.Fatalf("iteration %d: RunCommand error: %v", i, err)
+		}
+		if !strings.Contains(live.String(), "hello") {
+			t.Fatalf("iteration %d: expected live output, got %q", i, live.String())
+		}
+		if !strings.Contains(result.Output, "hello") {
+			t.Fatalf("iteration %d: expected result output, got %q", i, result.Output)
+		}
+	}
+}
+
 func TestRunCommandNormalizesCarriageReturns(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("skip on windows: sh may not be available")

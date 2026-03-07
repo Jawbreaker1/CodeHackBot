@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -73,60 +74,60 @@ func TestFallbackAssistantLocalFileGoalWithoutTargets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fallback error: %v", err)
 	}
-	if suggestion.Type != "command" {
-		t.Fatalf("expected command, got %s", suggestion.Type)
+	if suggestion.Type != "question" {
+		t.Fatalf("expected question, got %s", suggestion.Type)
 	}
-	if suggestion.Command != "list_dir" {
-		t.Fatalf("expected list_dir command, got %q", suggestion.Command)
+	if strings.Contains(strings.ToLower(suggestion.Question), "list_dir") {
+		t.Fatalf("fallback should not synthesize a command: %+v", suggestion)
 	}
 }
 
-func TestFallbackAssistantLocalFileGoalWithPathUsesReadFile(t *testing.T) {
+func TestFallbackAssistantLocalFileGoalWithPathDoesNotUseReadFile(t *testing.T) {
 	suggestion, err := (FallbackAssistant{}).Suggest(context.Background(), Input{
 		Goal: "Read ./artifacts/secret.txt and summarize it.",
 	})
 	if err != nil {
 		t.Fatalf("fallback error: %v", err)
 	}
-	if suggestion.Type != "command" || suggestion.Command != "read_file" {
+	if suggestion.Type != "question" {
 		t.Fatalf("unexpected suggestion: %+v", suggestion)
 	}
-	if len(suggestion.Args) == 0 || suggestion.Args[0] != "artifacts/secret.txt" {
-		t.Fatalf("unexpected args: %v", suggestion.Args)
+	if strings.Contains(strings.ToLower(suggestion.Question), "read_file") {
+		t.Fatalf("fallback should not synthesize read_file: %+v", suggestion)
 	}
 }
 
-func TestFallbackAssistantWebGoalUsesBrowse(t *testing.T) {
+func TestFallbackAssistantWebGoalDoesNotUseBrowse(t *testing.T) {
 	suggestion, err := (FallbackAssistant{}).Suggest(context.Background(), Input{
 		Goal: "Investigate www.systemverification.com from a security perspective",
 	})
 	if err != nil {
 		t.Fatalf("fallback error: %v", err)
 	}
-	if suggestion.Type != "command" || suggestion.Command != "browse" {
+	if suggestion.Type != "question" {
 		t.Fatalf("unexpected suggestion: %+v", suggestion)
 	}
-	if len(suggestion.Args) == 0 || !strings.Contains(suggestion.Args[0], "systemverification.com") {
-		t.Fatalf("unexpected browse args: %v", suggestion.Args)
+	if strings.Contains(strings.ToLower(suggestion.Question), "browse") {
+		t.Fatalf("fallback should not synthesize browse: %+v", suggestion)
 	}
 }
 
-func TestFallbackAssistantReportGoalUsesReportCommand(t *testing.T) {
+func TestFallbackAssistantReportGoalDoesNotUseReportCommand(t *testing.T) {
 	suggestion, err := (FallbackAssistant{}).Suggest(context.Background(), Input{
 		Goal: "Create a security_report.md in this folder using OWASP format.",
 	})
 	if err != nil {
 		t.Fatalf("fallback error: %v", err)
 	}
-	if suggestion.Type != "command" || suggestion.Command != "report" {
+	if suggestion.Type != "question" {
 		t.Fatalf("unexpected suggestion: %+v", suggestion)
 	}
-	if len(suggestion.Args) == 0 || suggestion.Args[0] != "security_report.md" {
-		t.Fatalf("unexpected report args: %+v", suggestion.Args)
+	if strings.Contains(strings.ToLower(suggestion.Question), "report command") {
+		t.Fatalf("fallback should not synthesize report command: %+v", suggestion)
 	}
 }
 
-func TestFallbackAssistantReportGoalCompletesWhenReportEvidenceExists(t *testing.T) {
+func TestFallbackAssistantReportGoalWithEvidenceStillAsksQuestion(t *testing.T) {
 	suggestion, err := (FallbackAssistant{}).Suggest(context.Background(), Input{
 		Goal:      "Create an OWASP report for this run.",
 		RecentLog: "# OWASP-Style Security Assessment Report\n\n## Executive Summary\n- Outcome: ...",
@@ -134,12 +135,12 @@ func TestFallbackAssistantReportGoalCompletesWhenReportEvidenceExists(t *testing
 	if err != nil {
 		t.Fatalf("fallback error: %v", err)
 	}
-	if suggestion.Type != "complete" {
-		t.Fatalf("expected complete, got %s", suggestion.Type)
+	if suggestion.Type != "question" {
+		t.Fatalf("expected question, got %s", suggestion.Type)
 	}
 }
 
-func TestFallbackAssistantReportGoalInRecoverModeCompletes(t *testing.T) {
+func TestFallbackAssistantReportGoalInRecoverModeAsksQuestion(t *testing.T) {
 	suggestion, err := (FallbackAssistant{}).Suggest(context.Background(), Input{
 		Goal: "Generate an OWASP report for this run.",
 		Mode: "recover",
@@ -147,8 +148,8 @@ func TestFallbackAssistantReportGoalInRecoverModeCompletes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fallback error: %v", err)
 	}
-	if suggestion.Type != "complete" {
-		t.Fatalf("expected complete, got %s", suggestion.Type)
+	if suggestion.Type != "question" {
+		t.Fatalf("expected question, got %s", suggestion.Type)
 	}
 }
 
@@ -164,6 +165,83 @@ func TestFallbackAssistantNoTargetsAsksGenericTargetQuestion(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(suggestion.Question), "ip/hostname/url") {
 		t.Fatalf("unexpected question: %q", suggestion.Question)
+	}
+}
+
+func TestFallbackAssistantAdaptiveLocalRecoveryDoesNotDefaultToNmap(t *testing.T) {
+	suggestion, err := (FallbackAssistant{}).Suggest(context.Background(), Input{
+		Goal:    "Recover from execution_failure on task T-06. Failed command: unzip -P badpass /home/johan/CodeHackBot/secret.zip. Failure log: /home/johan/CodeHackBot/sessions/run-x/artifact/T-06/worker.log.",
+		Targets: []string{"127.0.0.1"},
+		Mode:    "recover",
+	})
+	if err != nil {
+		t.Fatalf("fallback error: %v", err)
+	}
+	if suggestion.Type != "question" {
+		t.Fatalf("expected question fallback, got %s", suggestion.Type)
+	}
+}
+
+func TestFallbackAssistantRecoverDoesNotReadLatestEvidenceRef(t *testing.T) {
+	suggestion, err := (FallbackAssistant{}).Suggest(context.Background(), Input{
+		Goal:                "Recover from execution_failure on task T-03.",
+		Targets:             []string{"192.168.50.1"},
+		Mode:                "recover",
+		LatestResultSummary: "command failed: nmap ... | output: host timeout",
+		LatestEvidenceRefs:  []string{"/tmp/nmap_vuln_scan.xml"},
+	})
+	if err != nil {
+		t.Fatalf("fallback error: %v", err)
+	}
+	if suggestion.Type != "question" {
+		t.Fatalf("expected question fallback, got %+v", suggestion)
+	}
+}
+
+func TestFallbackAssistantRecoverDirectoryEvidenceDoesNotUseListDir(t *testing.T) {
+	dir := t.TempDir()
+	suggestion, err := (FallbackAssistant{}).Suggest(context.Background(), Input{
+		Goal:                "Recover from execution_failure on task T-03.",
+		Mode:                "recover",
+		LatestResultSummary: "command failed: read_file /tmp/workspace | is a directory",
+		LatestEvidenceRefs:  []string{dir},
+	})
+	if err != nil {
+		t.Fatalf("fallback error: %v", err)
+	}
+	if suggestion.Type != "question" {
+		t.Fatalf("expected question fallback, got %+v", suggestion)
+	}
+}
+
+func TestFallbackAssistantRecoverNonexistentArtifactPathDoesNotUseReadFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "scan.xml")
+	suggestion, err := (FallbackAssistant{}).Suggest(context.Background(), Input{
+		Goal:                "Recover from execution_failure on task T-03.",
+		Mode:                "recover",
+		LatestResultSummary: "command ok: nmap ... -oX scan.xml",
+		LatestEvidenceRefs:  []string{path},
+	})
+	if err != nil {
+		t.Fatalf("fallback error: %v", err)
+	}
+	if suggestion.Type != "question" {
+		t.Fatalf("expected question fallback, got %+v", suggestion)
+	}
+}
+
+func TestFallbackAssistantRecoverDoesNotTreatRouterFailureAsLocalWorkflow(t *testing.T) {
+	suggestion, err := (FallbackAssistant{}).Suggest(context.Background(), Input{
+		Goal:                "Recover from execution_failure on task T-01-port-scan. Failure reason: no_progress. Error: no progress reading worker log.",
+		Targets:             []string{"192.168.50.1"},
+		Mode:                "recover",
+		LatestResultSummary: "command failed: nmap -sV 192.168.50.1 | output: host timeout",
+	})
+	if err != nil {
+		t.Fatalf("fallback error: %v", err)
+	}
+	if suggestion.Type != "question" {
+		t.Fatalf("expected question fallback, got %+v", suggestion)
 	}
 }
 
@@ -246,6 +324,19 @@ func TestLLMAssistantReturnsParseErrorWithRawContent(t *testing.T) {
 	}
 	if !strings.Contains(parseErr.Raw, "cannot help") {
 		t.Fatalf("expected raw refusal to be preserved, got %q", parseErr.Raw)
+	}
+}
+
+func TestAssistSystemPromptRequiresSourceValidationForVulnerabilities(t *testing.T) {
+	prompt := strings.ToLower(assistSystemPrompt)
+	if !strings.Contains(prompt, "vulnerability/cve claim") {
+		t.Fatalf("expected vulnerability/CVE source validation guidance in system prompt")
+	}
+	if !strings.Contains(prompt, "never rely on model memory alone") {
+		t.Fatalf("expected anti-hallucination guidance in system prompt")
+	}
+	if !strings.Contains(prompt, "msfconsole") {
+		t.Fatalf("expected metasploit source guidance in system prompt")
 	}
 }
 
@@ -356,6 +447,73 @@ func TestNormalizeSuggestionSplitsCommand(t *testing.T) {
 	}
 }
 
+func TestNormalizeSuggestionSplitsCommandWhenArgsAlreadyPresent(t *testing.T) {
+	suggestion := normalizeSuggestion(Suggestion{
+		Type:    "command",
+		Command: "ls -la",
+		Args:    []string{"."},
+	})
+	if suggestion.Command != "ls" {
+		t.Fatalf("expected command ls, got %s", suggestion.Command)
+	}
+	if len(suggestion.Args) != 2 || suggestion.Args[0] != "-la" || suggestion.Args[1] != "." {
+		t.Fatalf("unexpected args: %v", suggestion.Args)
+	}
+}
+
+func TestNormalizeSuggestionAvoidsDuplicateInlineAndExplicitArgs(t *testing.T) {
+	suggestion := normalizeSuggestion(Suggestion{
+		Type:    "command",
+		Command: "unzip -P telefo01 -o secret.zip",
+		Args:    []string{"-P", "telefo01", "-o", "secret.zip"},
+	})
+	if suggestion.Command != "unzip" {
+		t.Fatalf("expected command unzip, got %s", suggestion.Command)
+	}
+	if len(suggestion.Args) != 4 {
+		t.Fatalf("expected 4 args, got %v", suggestion.Args)
+	}
+	want := []string{"-P", "telefo01", "-o", "secret.zip"}
+	for i := range want {
+		if suggestion.Args[i] != want[i] {
+			t.Fatalf("unexpected args at %d: %v", i, suggestion.Args)
+		}
+	}
+}
+
+func TestNormalizeSuggestionCollapsesRepeatedOptionBlockInCommand(t *testing.T) {
+	suggestion := normalizeSuggestion(Suggestion{
+		Type:    "command",
+		Command: "unzip -P telefo01 -o secret.zip -P telefo01 -o secret.zip",
+	})
+	if suggestion.Command != "unzip" {
+		t.Fatalf("expected command unzip, got %s", suggestion.Command)
+	}
+	want := []string{"-P", "telefo01", "-o", "secret.zip"}
+	if len(suggestion.Args) != len(want) {
+		t.Fatalf("expected %d args, got %v", len(want), suggestion.Args)
+	}
+	for i := range want {
+		if suggestion.Args[i] != want[i] {
+			t.Fatalf("unexpected args at %d: %v", i, suggestion.Args)
+		}
+	}
+}
+
+func TestNormalizeSuggestionSplitsShellPrefixWhenArgsAlreadyPresent(t *testing.T) {
+	suggestion := normalizeSuggestion(Suggestion{
+		Type:    "command",
+		Command: "bash -c",
+		Args:    []string{"echo ok"},
+	})
+	if suggestion.Command != "bash" {
+		t.Fatalf("expected command bash, got %s", suggestion.Command)
+	}
+	if len(suggestion.Args) != 2 || suggestion.Args[0] != "-c" || suggestion.Args[1] != "echo ok" {
+		t.Fatalf("unexpected args: %v", suggestion.Args)
+	}
+}
+
 func TestNormalizeSuggestionSplitsDashCommand(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("skip on windows: ls may be unavailable")
@@ -412,6 +570,32 @@ func TestNormalizeSuggestionMapsUnknownTypeByPayload(t *testing.T) {
 	})
 	if suggestion.Type != "question" {
 		t.Fatalf("expected question, got %s", suggestion.Type)
+	}
+}
+
+func TestNormalizeSuggestionConvertsToolWithoutFilesToCommand(t *testing.T) {
+	suggestion := normalizeSuggestion(Suggestion{
+		Type: "tool",
+		Tool: &ToolSpec{
+			Name: "report-runner",
+			Run: ToolRun{
+				Command: "report",
+				Args:    []string{"owasp_report.md"},
+			},
+		},
+		Summary: "Generate final report from collected evidence.",
+	})
+	if suggestion.Type != "command" {
+		t.Fatalf("expected command, got %s", suggestion.Type)
+	}
+	if suggestion.Command != "report" {
+		t.Fatalf("expected command report, got %q", suggestion.Command)
+	}
+	if suggestion.Tool != nil {
+		t.Fatalf("expected tool to be cleared after normalization")
+	}
+	if len(suggestion.Args) != 1 || suggestion.Args[0] != "owasp_report.md" {
+		t.Fatalf("unexpected args: %v", suggestion.Args)
 	}
 }
 

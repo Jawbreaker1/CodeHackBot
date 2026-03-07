@@ -96,6 +96,9 @@ func (r *Runner) handleReport(args []string) error {
 	if err := report.GenerateWithProfile(profile, "", outPath, info); err != nil {
 		return err
 	}
+	if err := appendDecisionSourceMixSection(outPath, sessionDir); err != nil && r.cfg.UI.Verbose {
+		r.logger.Printf("Decision source mix section warning: %v", err)
+	}
 	r.logger.Printf("Report generated (%s): %s", profile, outPath)
 	return nil
 }
@@ -236,7 +239,38 @@ func (r *Runner) finalizeReport(goal string) (string, error) {
 		return "", err
 	}
 	_ = report.GenerateWithProfile(profile, "", archivePath, info)
+	_ = appendDecisionSourceMixSection(outPath, sessionDir)
+	_ = appendDecisionSourceMixSection(archivePath, sessionDir)
 	return outPath, nil
+}
+
+func appendDecisionSourceMixSection(reportPath, sessionDir string) error {
+	counts, total, err := readAssistDecisionSourceMix(sessionDir)
+	if err != nil {
+		return err
+	}
+	if total <= 0 {
+		return nil
+	}
+	data, err := os.ReadFile(reportPath)
+	if err != nil {
+		return err
+	}
+	content := string(data)
+	if strings.Contains(content, "## Decision Source Mix") {
+		return nil
+	}
+	llmLed := counts[decisionSourceLLMDirect] + counts[decisionSourceLLMRepair]
+	body := []string{
+		fmt.Sprintf("- Total tagged decisions: %d", total),
+		fmt.Sprintf("- LLM-led (`%s` + `%s`): %d (%.1f%%)", decisionSourceLLMDirect, decisionSourceLLMRepair, llmLed, (float64(llmLed)*100)/float64(total)),
+		fmt.Sprintf("- Runtime-adapt (`%s`): %d (%.1f%%)", decisionSourceRuntimeAdapt, counts[decisionSourceRuntimeAdapt], (float64(counts[decisionSourceRuntimeAdapt])*100)/float64(total)),
+		fmt.Sprintf("- Static fallback (`%s`): %d (%.1f%%)", decisionSourceStatic, counts[decisionSourceStatic], (float64(counts[decisionSourceStatic])*100)/float64(total)),
+		fmt.Sprintf("- Mix detail: %s", formatDecisionSourceMix(counts, total)),
+	}
+	section := "\n\n## Decision Source Mix\n\n" + strings.Join(body, "\n") + "\n"
+	updated := strings.TrimRight(content, "\n") + section
+	return os.WriteFile(reportPath, []byte(updated), 0o644)
 }
 
 var expectedAtGoalTargetPattern = regexp.MustCompile(`(?i)\bexpected\s+at\s+([^\s,;:()]+)`)

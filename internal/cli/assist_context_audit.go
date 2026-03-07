@@ -18,15 +18,16 @@ const (
 )
 
 type assistContextAuditRecord struct {
-	Time       string                     `json:"time"`
-	SessionID  string                     `json:"session_id"`
-	Goal       string                     `json:"goal"`
-	Mode       string                     `json:"mode"`
-	Input      assistContextAuditInput    `json:"input"`
-	InputSizes assistContextAuditSizes    `json:"input_sizes"`
-	Suggestion assistContextAuditDecision `json:"suggestion"`
-	Error      string                     `json:"error,omitempty"`
-	LLM        assistContextAuditLLM      `json:"llm"`
+	Time           string                     `json:"time"`
+	SessionID      string                     `json:"session_id"`
+	Goal           string                     `json:"goal"`
+	Mode           string                     `json:"mode"`
+	DecisionSource string                     `json:"decision_source,omitempty"`
+	Input          assistContextAuditInput    `json:"input"`
+	InputSizes     assistContextAuditSizes    `json:"input_sizes"`
+	Suggestion     assistContextAuditDecision `json:"suggestion"`
+	Error          string                     `json:"error,omitempty"`
+	LLM            assistContextAuditLLM      `json:"llm"`
 }
 
 type assistContextAuditInput struct {
@@ -71,6 +72,7 @@ type assistContextAuditLLM struct {
 	Attempted           bool   `json:"attempted"`
 	Model               string `json:"model,omitempty"`
 	ParseRepairUsed     bool   `json:"parse_repair_used,omitempty"`
+	FallbackUsed        bool   `json:"fallback_used,omitempty"`
 	PrimaryFinishReason string `json:"primary_finish_reason,omitempty"`
 	RepairFinishReason  string `json:"repair_finish_reason,omitempty"`
 	PrimaryPreview      string `json:"primary_preview,omitempty"`
@@ -86,6 +88,7 @@ func (r *Runner) writeAssistContextAudit(
 	suggestErr error,
 	metaSeen bool,
 	meta assist.LLMSuggestMetadata,
+	fallbackUsed bool,
 ) error {
 	path := filepath.Join(sessionDir, "artifacts", "assist", "context_audit.jsonl")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -93,10 +96,11 @@ func (r *Runner) writeAssistContextAudit(
 	}
 
 	record := assistContextAuditRecord{
-		Time:      time.Now().UTC().Format(time.RFC3339Nano),
-		SessionID: strings.TrimSpace(r.sessionID),
-		Goal:      clampAuditText(goal, assistAuditTextMaxChars),
-		Mode:      strings.TrimSpace(mode),
+		Time:           time.Now().UTC().Format(time.RFC3339Nano),
+		SessionID:      strings.TrimSpace(r.sessionID),
+		Goal:           clampAuditText(goal, assistAuditTextMaxChars),
+		Mode:           strings.TrimSpace(mode),
+		DecisionSource: normalizeDecisionSource(classifyAssistDecisionSource(metaSeen, meta, fallbackUsed)),
 		Input: assistContextAuditInput{
 			Scope:       clampStringList(input.Scope, assistAuditListMaxItems, 120),
 			Targets:     clampStringList(input.Targets, assistAuditListMaxItems, 160),
@@ -136,6 +140,7 @@ func (r *Runner) writeAssistContextAudit(
 			Attempted:           metaSeen,
 			Model:               clampAuditText(meta.Model, 120),
 			ParseRepairUsed:     meta.ParseRepairUsed,
+			FallbackUsed:        fallbackUsed,
 			PrimaryFinishReason: clampAuditText(meta.PrimaryFinishReason, 120),
 			RepairFinishReason:  clampAuditText(meta.RepairFinishReason, 120),
 			PrimaryPreview:      clampAuditText(meta.PrimaryResponse, assistAuditSectionMaxChars),

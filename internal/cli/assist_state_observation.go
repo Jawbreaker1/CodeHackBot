@@ -109,6 +109,22 @@ func (r *Runner) recordObservationWithCommand(kind string, command string, args 
 	if logPath != "" && exitCode == 0 {
 		r.lastSuccessLogPath = logPath
 	}
+	result := "ok"
+	if exitCode != 0 {
+		result = "error"
+	}
+	_ = r.appendTaskJournalEntry(sessionDir, taskJournalEntry{
+		Kind:     strings.TrimSpace(kind),
+		Tool:     strings.TrimSpace(command),
+		Args:     append([]string{}, args...),
+		Result:   result,
+		Decision: "execute_step",
+		ExitCode: exitCode,
+		LogPath:  logPath,
+		Excerpt:  strings.TrimSpace(outputExcerpt),
+		Notes:    strings.TrimSpace(errText),
+	})
+	r.refreshFocusFromRecentState(sessionDir, r.currentAssistGoal())
 }
 
 func (r *Runner) clearActionContext() {

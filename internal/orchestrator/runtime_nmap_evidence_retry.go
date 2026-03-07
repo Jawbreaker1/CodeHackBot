@@ -132,10 +132,21 @@ func mergeRetryOutput(first, second []byte, note string) []byte {
 }
 
 func validateCommandOutputEvidence(task TaskSpec, command string, args []string, output []byte) error {
+	base := strings.ToLower(strings.TrimSpace(filepath.Base(command)))
+	lower := strings.ToLower(string(output))
+	if outputLooksLikeUsageOnly(lower) {
+		return fmt.Errorf("%s output indicates usage/help only; command lacks concrete inputs", base)
+	}
 	if !isNmapCommand(command) || !nmapRequiresActionableEvidence(args) {
-		base := strings.ToLower(strings.TrimSpace(filepath.Base(command)))
+		if base == "msfconsole" {
+			if !hasMetasploitExecutionArg(args) {
+				return fmt.Errorf("msfconsole command missing non-interactive execution arg (-x/--exec/-e/-r)")
+			}
+			if containsAnySubstring(lower, "parse error", "unmatched quote", "invalid option") {
+				return fmt.Errorf("msfconsole output indicates script parsing/option failure")
+			}
+		}
 		if taskLikelyLocalFileWorkflow(task) && base == "john" {
-			lower := strings.ToLower(string(output))
 			if strings.Contains(lower, "no password hashes loaded") {
 				return fmt.Errorf("john reported no password hashes loaded; hash/format pipeline is invalid")
 			}
@@ -157,4 +168,84 @@ func validateCommandOutputEvidence(task TaskSpec, command string, args []string,
 		return fmt.Errorf("nmap output indicates host timeout without actionable service/vulnerability evidence")
 	}
 	return nil
+}
+
+func outputLooksLikeUsageOnly(lowerOutput string) bool {
+	lower := strings.ToLower(strings.TrimSpace(lowerOutput))
+	if lower == "" {
+		return false
+	}
+	if !containsAnySubstring(
+		lower,
+		"usage:",
+		"try --help",
+		"use --help",
+		"invalid option",
+		"you have to specify",
+		"missing operand",
+	) {
+		return false
+	}
+	if containsAnySubstring(
+		lower,
+		"password found",
+		"password recovered",
+		"password hash cracked",
+		"archive extracted",
+		"proof_of_access",
+	) {
+		return false
+	}
+	if outputContainsMeaningfulNonUsageLine(lower) {
+		return false
+	}
+	return true
+}
+
+func outputContainsMeaningfulNonUsageLine(lowerOutput string) bool {
+	lines := strings.Split(lowerOutput, "\n")
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		if containsAnySubstring(
+			line,
+			"usage:",
+			"try --help",
+			"use --help",
+			"invalid option",
+			"you have to specify",
+			"missing operand",
+			"for help",
+			"options:",
+			"error:",
+			"unknown option",
+			"unrecognized option",
+			"requires an argument",
+			"requires a value",
+			"missing required",
+		) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func hasMetasploitExecutionArg(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		flag := strings.ToLower(strings.TrimSpace(args[i]))
+		if flag == "-r" {
+			return true
+		}
+		if flag == "-x" || flag == "--exec" || flag == "-e" {
+			if i+1 >= len(args) {
+				return false
+			}
+			payload := strings.TrimSpace(args[i+1])
+			return payload != ""
+		}
+	}
+	return false
 }

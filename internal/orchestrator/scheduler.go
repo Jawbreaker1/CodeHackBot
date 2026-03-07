@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -221,6 +222,30 @@ func (s *Scheduler) AddTask(task TaskSpec) error {
 	return nil
 }
 
+func (s *Scheduler) UpdateTask(task TaskSpec) error {
+	if err := ValidateTaskSpec(task); err != nil {
+		return err
+	}
+	if _, exists := s.tasks[task.TaskID]; !exists {
+		return fmt.Errorf("task %s does not exist", task.TaskID)
+	}
+	for _, dep := range task.DependsOn {
+		if _, ok := s.tasks[dep]; !ok {
+			return fmt.Errorf("task %s depends on unknown task %s", task.TaskID, dep)
+		}
+	}
+	tasks := make(map[string]TaskSpec, len(s.tasks))
+	for id, existing := range s.tasks {
+		tasks[id] = existing
+	}
+	tasks[task.TaskID] = task
+	if err := validateAcyclic(tasks); err != nil {
+		return err
+	}
+	s.tasks[task.TaskID] = task
+	return nil
+}
+
 func (s *Scheduler) IsDone() bool {
 	for taskID, st := range s.state {
 		switch st {
@@ -334,11 +359,44 @@ func (s *Scheduler) activeSlots() int {
 
 func (s *Scheduler) dependenciesMet(task TaskSpec) bool {
 	for _, dep := range task.DependsOn {
-		if s.state[dep] != TaskStateCompleted {
+		if !s.dependencySatisfied(task, dep) {
 			return false
 		}
 	}
 	return true
+}
+
+func (s *Scheduler) dependencySatisfied(task TaskSpec, dep string) bool {
+	state, ok := s.state[dep]
+	if !ok {
+		return false
+	}
+	if state == TaskStateCompleted {
+		return true
+	}
+	if allowsEvidenceOnlyDependency(task) {
+		switch state {
+		case TaskStateFailed, TaskStateBlocked, TaskStateCanceled:
+			return true
+		}
+	}
+	return false
+}
+
+func allowsEvidenceOnlyDependency(task TaskSpec) bool {
+	strategy := strings.ToLower(strings.TrimSpace(task.Strategy))
+	if !strings.HasPrefix(strategy, "adaptive_replan_") {
+		return false
+	}
+	switch strategy {
+	case "adaptive_replan_execution_failure",
+		"adaptive_replan_worker_recovery",
+		"adaptive_replan_budget_exhausted",
+		"adaptive_replan_repeated_step_loop":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Scheduler) transition(taskID string, to TaskState) error {

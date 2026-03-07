@@ -1,6 +1,9 @@
 package orchestrator
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestTrackAssistActionStreakResetsOnNewAction(t *testing.T) {
 	t.Parallel()
@@ -136,5 +139,74 @@ func TestNormalizeWorkerAssistCommandKeepsSingleArgShellScript(t *testing.T) {
 	}
 	if len(args) != 1 || args[0] != "scan.sh" {
 		t.Fatalf("expected shell script arg unchanged, got %#v", args)
+	}
+}
+
+func TestNormalizeWorkerAssistCommandSplitsInlineFlagsWithArgs(t *testing.T) {
+	t.Parallel()
+
+	command, args := normalizeWorkerAssistCommand("ls -la", []string{"."})
+	if command != "ls" {
+		t.Fatalf("expected command ls, got %q", command)
+	}
+	if len(args) != 2 || args[0] != "-la" || args[1] != "." {
+		t.Fatalf("expected args [-la .], got %#v", args)
+	}
+}
+
+func TestNormalizeWorkerAssistCommandSplitsShellPrefixWithScriptArg(t *testing.T) {
+	t.Parallel()
+
+	command, args := normalizeWorkerAssistCommand("bash -c", []string{"echo ok"})
+	if command != "bash" {
+		t.Fatalf("expected command bash, got %q", command)
+	}
+	if len(args) != 2 || args[0] != "-c" || args[1] != "echo ok" {
+		t.Fatalf("expected args [-c \"echo ok\"], got %#v", args)
+	}
+}
+
+func TestNormalizeWorkerAssistCommandNormalizesMetasploitExecPayload(t *testing.T) {
+	t.Parallel()
+
+	command, args := normalizeWorkerAssistCommand("msfconsole -q -x \"use auxiliary/scanner/http/http_version", []string{"set", "RHOSTS", "192.168.50.1;", "run;", "exit\""})
+	if command != "msfconsole" {
+		t.Fatalf("expected command msfconsole, got %q", command)
+	}
+	if len(args) != 3 {
+		t.Fatalf("expected 3 args, got %#v", args)
+	}
+	if args[0] != "-q" || args[1] != "-x" {
+		t.Fatalf("unexpected metasploit args: %#v", args)
+	}
+	if args[2] != "use auxiliary/scanner/http/http_version set RHOSTS 192.168.50.1; run; exit" {
+		t.Fatalf("unexpected -x payload: %q", args[2])
+	}
+}
+
+func TestNormalizeWorkerAssistCommandWrapsShellOperatorArgs(t *testing.T) {
+	t.Parallel()
+
+	command, args := normalizeWorkerAssistCommand("msfconsole", []string{"-x", "use auxiliary/scanner/http/http_version; set RHOSTS 192.168.50.1; run; exit", "|", "tee", "msf.log"})
+	if command != "bash" {
+		t.Fatalf("expected bash wrapper, got %q", command)
+	}
+	if len(args) != 2 || args[0] != "-lc" {
+		t.Fatalf("expected bash -lc wrapper args, got %#v", args)
+	}
+	if !strings.Contains(args[1], "msfconsole") || !strings.Contains(args[1], "| tee") {
+		t.Fatalf("unexpected wrapped script: %q", args[1])
+	}
+}
+
+func TestNormalizeWorkerAssistCommandKeepsRegexPipeArg(t *testing.T) {
+	t.Parallel()
+
+	command, args := normalizeWorkerAssistCommand("grep", []string{"-E", "(HTTP|version)", "scan.log"})
+	if command != "grep" {
+		t.Fatalf("expected grep command unchanged, got %q", command)
+	}
+	if len(args) != 3 || args[1] != "(HTTP|version)" {
+		t.Fatalf("expected regex arg preserved, got %#v", args)
 	}
 }

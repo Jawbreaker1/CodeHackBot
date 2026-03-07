@@ -20,6 +20,7 @@ func handleAssistExecutionFailure(
 	output []byte,
 	summary string,
 	logPath string,
+	lastExecFeedback *assistExecutionFeedback,
 	mode *string,
 	recoverHint *string,
 	missingToolInstallAttempts map[string]struct{},
@@ -72,14 +73,14 @@ func handleAssistExecutionFailure(
 		if errorsIsTimeout(runErr) {
 			reason = WorkerFailureCommandTimeout
 		}
-		_ = emitWorkerFailure(manager, cfg, task, runErr, reason, map[string]any{
+		_ = emitWorkerFailure(manager, cfg, task, runErr, reason, mergeFailureDetails(map[string]any{
 			"step":       actionSteps,
 			"turn":       turn,
 			"tool_calls": toolCalls,
 			"command":    command,
 			"args":       args,
 			"log_path":   logPath,
-		})
+		}, latestAssistFailureDetails(lastExecFeedback)))
 		return false, runErr
 	}
 	*mode = "recover"

@@ -46,52 +46,8 @@ func adaptArchiveWorkflowCommand(cfg WorkerRunConfig, task TaskSpec, command str
 	}
 	base := strings.ToLower(strings.TrimSpace(filepath.Base(command)))
 	switch base {
-	case "zip2john", "zipinfo", "fcrackzip":
+	case "zip2john", "zipinfo":
 		nextArgs, notes, changed, err := ensureArchiveZipInputArg(cfg, task, base, args, workDir)
-		if err != nil {
-			return command, args, nil, false, err
-		}
-		if base == "fcrackzip" {
-			verboseArgs, verboseNotes, verboseChanged := adaptArchiveFcrackzipArgs(cfg, task, nextArgs)
-			if verboseChanged {
-				nextArgs = verboseArgs
-				notes = append(notes, verboseNotes...)
-				changed = true
-			}
-		}
-		if !changed {
-			return command, args, nil, false, nil
-		}
-		return command, nextArgs, annotateHardSupportNotes(notes, decision), true, nil
-	case "unzip", "zip":
-		nextCommand, nextArgs, notes, changed, err := ensureArchiveUnzipInputs(cfg, task, command, args, workDir)
-		if err != nil {
-			return command, args, nil, false, err
-		}
-		if !changed {
-			return command, args, nil, false, nil
-		}
-		return nextCommand, nextArgs, annotateHardSupportNotes(notes, decision), true, nil
-	case "john":
-		nextArgs, notes, changed, err := ensureArchiveJohnInputs(cfg, task, args, workDir)
-		if err != nil {
-			return command, args, nil, false, err
-		}
-		johnArgs, johnNotes, johnChanged, err := adaptArchiveJohnArgs(nextArgs, workDir)
-		if err != nil {
-			return command, args, nil, false, err
-		}
-		if johnChanged {
-			nextArgs = johnArgs
-			notes = append(notes, johnNotes...)
-			changed = true
-		}
-		if !changed {
-			return command, args, nil, false, nil
-		}
-		return command, nextArgs, annotateHardSupportNotes(notes, decision), true, nil
-	case "bash", "sh", "zsh":
-		nextArgs, notes, changed, err := adaptArchiveExtractionShellArgs(cfg, task, args)
 		if err != nil {
 			return command, args, nil, false, err
 		}
@@ -119,59 +75,6 @@ func ensureArchiveZipInputArg(cfg WorkerRunConfig, task TaskSpec, command string
 	next = append(next, zipPath)
 	note := fmt.Sprintf("archive command adaptation: injected %s input from %s (%s)", command, source, zipPath)
 	return next, []string{note}, true, nil
-}
-
-func ensureArchiveJohnInputs(cfg WorkerRunConfig, task TaskSpec, args []string, workDir string) ([]string, []string, bool, error) {
-	next := append([]string{}, args...)
-	notes := []string{}
-	changed := false
-
-	if _, hasHash := findJohnHashArg(next); !hasHash {
-		hashPath, source, ok, err := findArchiveHashInputPath(cfg, task, workDir)
-		if err != nil {
-			return args, nil, false, err
-		}
-		if ok {
-			next = append(next, hashPath)
-			changed = true
-			notes = append(notes, fmt.Sprintf("archive command adaptation: injected john hash input from %s (%s)", source, hashPath))
-		}
-	}
-	if !johnHasWordlist(next) {
-		if wordlistPath, source, ok := findArchiveWordlistPath(cfg, task); ok {
-			next = append([]string{"--wordlist=" + wordlistPath}, next...)
-			changed = true
-			notes = append(notes, fmt.Sprintf("archive command adaptation: injected john wordlist from %s (%s)", source, wordlistPath))
-		}
-	}
-	return next, notes, changed, nil
-}
-
-func ensureArchiveUnzipInputs(cfg WorkerRunConfig, task TaskSpec, command string, args []string, workDir string) (string, []string, []string, bool, error) {
-	if len(args) > 0 {
-		return command, args, nil, false, nil
-	}
-	zipPath, zipSource, zipOK, err := findArchiveZipInputPath(cfg, task, workDir)
-	if err != nil {
-		return command, args, nil, false, err
-	}
-	if !zipOK {
-		return command, args, nil, false, nil
-	}
-	passwordPath, passSource, passOK, err := findRecoveredPasswordArtifactPath(cfg, task)
-	if err != nil {
-		return command, args, nil, false, err
-	}
-	if passOK {
-		script := fmt.Sprintf("set -euo pipefail; unzip -P \"$(cat %s)\" -p %s", shellQuotePath(passwordPath), shellQuotePath(zipPath))
-		notes := []string{
-			fmt.Sprintf("archive command adaptation: rewrote unzip to password-backed proof extraction from %s (%s)", zipSource, zipPath),
-			fmt.Sprintf("archive command adaptation: using recovered password source %s (%s)", passSource, passwordPath),
-		}
-		return "bash", []string{"-lc", script}, notes, true, nil
-	}
-	note := fmt.Sprintf("archive command adaptation: injected unzip listing input from %s (%s)", zipSource, zipPath)
-	return "unzip", []string{"-l", zipPath}, []string{note}, true, nil
 }
 
 func findArchiveZipInputPath(cfg WorkerRunConfig, task TaskSpec, workDir string) (string, string, bool, error) {
@@ -282,27 +185,6 @@ func findArchiveHashInputPath(cfg WorkerRunConfig, task TaskSpec, workDir string
 	return best.path, best.source, true, nil
 }
 
-func findArchiveWordlistPath(cfg WorkerRunConfig, task TaskSpec) (string, string, bool) {
-	if len(task.DependsOn) > 0 {
-		depCandidates, err := collectDependencyArtifactCandidates(cfg, task.DependsOn)
-		if err == nil {
-			for _, candidate := range depCandidates {
-				if !looksLikeWordlistPath(candidate) {
-					continue
-				}
-				info, statErr := os.Stat(candidate)
-				if statErr == nil && !info.IsDir() && info.Size() > 0 {
-					return candidate, "dependency artifact", true
-				}
-			}
-		}
-	}
-	if candidate, source := resolveWordlistCandidate("/usr/share/wordlists/rockyou.txt"); strings.TrimSpace(candidate) != "" {
-		return candidate, source, true
-	}
-	return "", "", false
-}
-
 func archiveCandidateRoots(cfg WorkerRunConfig, workDir string) []string {
 	roots := append([]string{}, localWorkspaceRoots(cfg)...)
 	if strings.TrimSpace(workDir) != "" {
@@ -346,33 +228,6 @@ func hasNonFlagArg(args []string) bool {
 	return false
 }
 
-func johnHasWordlist(args []string) bool {
-	for i := 0; i < len(args); i++ {
-		trimmed := strings.TrimSpace(args[i])
-		if strings.HasPrefix(trimmed, "--wordlist=") {
-			return true
-		}
-		if trimmed == "--wordlist" && i+1 < len(args) && strings.TrimSpace(args[i+1]) != "" {
-			return true
-		}
-	}
-	return false
-}
-
-func fcrackzipHasStrategy(args []string) bool {
-	for i := 0; i < len(args); i++ {
-		trimmed := strings.TrimSpace(args[i])
-		switch trimmed {
-		case "-D", "--dictionary", "-b", "--bruteforce", "-c", "--charset", "-l", "--length":
-			return true
-		}
-		if strings.HasPrefix(trimmed, "--dictionary=") || strings.HasPrefix(trimmed, "--charset=") || strings.HasPrefix(trimmed, "--length=") {
-			return true
-		}
-	}
-	return false
-}
-
 func isLikelyZipArchiveFile(path string) bool {
 	info, err := os.Stat(path)
 	if err != nil || info.IsDir() || info.Size() < 4 {
@@ -403,6 +258,16 @@ func isLikelyZipArchiveFile(path string) bool {
 	return false
 }
 
+// Legacy no-op: keep signature stable while avoiding forced per-tool rewrites.
+func adaptArchiveJohnArgs(args []string, _ string) ([]string, []string, bool, error) {
+	return append([]string{}, args...), nil, false, nil
+}
+
+// Legacy no-op: keep signature stable while avoiding hardcoded shell rewrites.
+func adaptArchiveExtractionShellArgs(_ WorkerRunConfig, _ TaskSpec, args []string) ([]string, []string, bool, error) {
+	return append([]string{}, args...), nil, false, nil
+}
+
 func fileContainsPKZIPHash(path string) bool {
 	info, err := os.Stat(path)
 	if err != nil || info.IsDir() || info.Size() == 0 {
@@ -416,88 +281,6 @@ func fileContainsPKZIPHash(path string) bool {
 		return false
 	}
 	return strings.Contains(strings.ToLower(string(data)), "$pkzip$")
-}
-
-func adaptArchiveJohnArgs(args []string, workDir string) ([]string, []string, bool, error) {
-	next := append([]string{}, args...)
-	notes := []string{}
-	changed := false
-
-	hashPath, hasHash := findJohnHashArg(next)
-	if rewritten, ok := rewriteJohnFormat(next, "zip", "pkzip"); ok {
-		next = rewritten
-		changed = true
-		if hasHash && isPKZIPHashFile(hashPath) {
-			notes = append(notes, fmt.Sprintf("archive command adaptation: rewrote john format zip->pkzip for %s", hashPath))
-		} else {
-			notes = append(notes, "archive command adaptation: rewrote john format zip->pkzip for local zip hash workflow")
-		}
-	}
-
-	potPath := filepath.Join(workDir, "john.pot")
-	if !johnHasOption(next, "--pot") {
-		next = append([]string{"--pot=" + potPath}, next...)
-		changed = true
-		notes = append(notes, fmt.Sprintf("archive command adaptation: set john --pot to %s", potPath))
-	}
-
-	return next, notes, changed, nil
-}
-
-func adaptArchiveFcrackzipArgs(cfg WorkerRunConfig, task TaskSpec, args []string) ([]string, []string, bool) {
-	next := append([]string{}, args...)
-	notes := []string{}
-	changed := false
-	if !hasCommandFlag(next, "-v") {
-		next = append([]string{"-v"}, next...)
-		notes = append(notes, "archive command adaptation: enabled fcrackzip verbose mode (-v) for evidence capture")
-		changed = true
-	}
-	if !fcrackzipHasStrategy(next) {
-		if wordlistPath, source, ok := findArchiveWordlistPath(cfg, task); ok {
-			next = append([]string{"-D", "-u", "-p", wordlistPath}, next...)
-			notes = append(notes, fmt.Sprintf("archive command adaptation: injected bounded fcrackzip dictionary strategy from %s (%s)", source, wordlistPath))
-			changed = true
-		}
-	}
-	return next, notes, changed
-}
-
-func adaptArchiveExtractionShellArgs(cfg WorkerRunConfig, task TaskSpec, args []string) ([]string, []string, bool, error) {
-	if len(args) < 2 {
-		return args, nil, false, nil
-	}
-	mode := strings.TrimSpace(args[0])
-	if mode != "-c" && mode != "-lc" {
-		return args, nil, false, nil
-	}
-	body := args[1]
-	if strings.TrimSpace(body) == "" || !strings.Contains(strings.ToLower(body), "unzip -p") {
-		return args, nil, false, nil
-	}
-	if !strings.Contains(strings.ToLower(body), "john_output") && !strings.Contains(strings.ToLower(body), "password_found") {
-		return args, nil, false, nil
-	}
-	passwordPath, source, ok, err := findRecoveredPasswordArtifactPath(cfg, task)
-	if err != nil {
-		return args, nil, false, err
-	}
-	if !ok {
-		return args, nil, false, nil
-	}
-	replacement := "unzip -P \"$(cat " + shellQuotePath(passwordPath) + ")\""
-	rewritten := unzipPasswordPipelinePattern.ReplaceAllString(body, replacement)
-	if rewritten == body {
-		rewritten = strings.ReplaceAll(body, "$(cat password_found)", "\"$(cat "+shellQuotePath(passwordPath)+")\"")
-		rewritten = strings.ReplaceAll(rewritten, "$(cat ./password_found)", "\"$(cat "+shellQuotePath(passwordPath)+")\"")
-	}
-	if rewritten == body {
-		return args, nil, false, nil
-	}
-	next := append([]string{}, args...)
-	next[1] = rewritten
-	note := fmt.Sprintf("archive command adaptation: rewrote unzip password source to %s (%s)", source, passwordPath)
-	return next, []string{note}, true, nil
 }
 
 func findRecoveredPasswordArtifactPath(cfg WorkerRunConfig, task TaskSpec) (string, string, bool, error) {

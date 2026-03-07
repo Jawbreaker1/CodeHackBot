@@ -80,3 +80,45 @@ func TestManagerAddTaskRejectsDuplicateTaskID(t *testing.T) {
 		t.Fatalf("expected duplicate task id rejection")
 	}
 }
+
+func TestManagerUpdateTaskPersistsPlanAndTask(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runID := "run-task-update"
+	manager := NewManager(base)
+	plan := RunPlan{
+		RunID:           runID,
+		Scope:           Scope{Targets: []string{"127.0.0.1"}},
+		Constraints:     []string{"local_only"},
+		SuccessCriteria: []string{"done"},
+		StopCriteria:    []string{"stop"},
+		MaxParallelism:  1,
+		Tasks:           []TaskSpec{task("t1", nil, 1)},
+	}
+	if _, err := manager.StartFromPlan(plan, ""); err != nil {
+		t.Fatalf("StartFromPlan: %v", err)
+	}
+	updated := plan.Tasks[0]
+	updated.Action = TaskAction{
+		Type:   "assist",
+		Prompt: "Use recovery context and continue.",
+	}
+	if err := manager.UpdateTask(runID, updated); err != nil {
+		t.Fatalf("UpdateTask: %v", err)
+	}
+	stored, err := manager.ReadTask(runID, "t1")
+	if err != nil {
+		t.Fatalf("ReadTask t1: %v", err)
+	}
+	if got := stored.Action.Type; got != "assist" {
+		t.Fatalf("expected task file action type assist, got %q", got)
+	}
+	updatedPlan, err := manager.LoadRunPlan(runID)
+	if err != nil {
+		t.Fatalf("LoadRunPlan: %v", err)
+	}
+	if got := updatedPlan.Tasks[0].Action.Type; got != "assist" {
+		t.Fatalf("expected plan action type assist, got %q", got)
+	}
+}

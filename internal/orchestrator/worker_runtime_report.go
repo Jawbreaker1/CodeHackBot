@@ -355,6 +355,84 @@ def cve_line_score(line, target_tokens, file_target_relevant):
         confidence = "medium"
     return score, confidence
 
+def has_error_marker(line):
+    lower = line.lower()
+    markers = (
+        "error",
+        "failed",
+        "timeout",
+        "timed out",
+        "exception",
+        "unable",
+        "could not",
+        "not found",
+        "traceback",
+    )
+    return any(marker in lower for marker in markers)
+
+def source_lookup_marker(item):
+    text = (str(item.get("snippet") or "") + " " + str(item.get("path") or "")).lower()
+    markers = (
+        "reference", "references", "advisory", "mitre", "nvd", "cve:", "searchsploit", "metasploit", "msfconsole", "vulners"
+    )
+    return any(marker in text for marker in markers)
+
+def verification_plan_marker(item):
+    text = (str(item.get("snippet") or "") + " " + str(item.get("path") or "")).lower()
+    markers = (
+        "validation", "validate", "verification", "verify", "proof", "reproduce", "method", "check", "attempt", "cve-validation", "vuln_mapping"
+    )
+    return any(marker in text for marker in markers)
+
+def phase_contract(entries):
+    if not entries:
+        return {
+            "discover_signal": False,
+            "lookup_source": False,
+            "derive_verification_steps": False,
+            "execute_bounded_validation": False,
+            "target_applicability": False,
+            "missing": ["discover_signal", "lookup_source", "derive_verification_steps", "execute_bounded_validation", "target_applicability"],
+        }
+    has_discover_signal = any(bool(item.get("detection_evidence")) for item in entries)
+    has_lookup_source = any(bool(item.get("source_evidence")) and source_lookup_marker(item) for item in entries)
+    has_verification_steps = any(verification_plan_marker(item) for item in entries)
+    has_bounded_validation = any(item.get("score", 0) >= 6 and not item.get("error_signal") for item in entries)
+    has_target_applicability = any(bool(item.get("applicability_evidence")) for item in entries)
+    missing = []
+    if not has_discover_signal:
+        missing.append("discover_signal")
+    if not has_lookup_source:
+        missing.append("lookup_source")
+    if not has_verification_steps:
+        missing.append("derive_verification_steps")
+    if not has_bounded_validation:
+        missing.append("execute_bounded_validation")
+    if not has_target_applicability:
+        missing.append("target_applicability")
+    return {
+        "discover_signal": has_discover_signal,
+        "lookup_source": has_lookup_source,
+        "derive_verification_steps": has_verification_steps,
+        "execute_bounded_validation": has_bounded_validation,
+        "target_applicability": has_target_applicability,
+        "missing": missing,
+    }
+
+def classify_claim_state(entries):
+    if not entries:
+        return "needs_review", "no_evidence_lines", phase_contract(entries)
+    non_error_candidates = [item for item in entries if not item.get("error_signal")]
+    error_entries = [item for item in entries if item.get("error_signal")]
+    contract = phase_contract(entries)
+    if contract["missing"] == []:
+        return "validated", "phase_gate_passed", contract
+    if non_error_candidates:
+        return "candidate", "missing_phase_requirements: " + ", ".join(contract["missing"]), contract
+    if error_entries:
+        return "rejected", "script_or_tool_error_only", contract
+    return "needs_review", "insufficient_signal", contract
+
 def summarize_findings(paths):
     cve_pattern = re.compile(r"\bCVE[-_ ]?(\d{4})[-_](\d{4,})\b", re.IGNORECASE)
     findings = {}
@@ -380,9 +458,24 @@ def summarize_findings(paths):
                     "snippet": snippet,
                     "score": score,
                     "confidence": confidence,
+                    "error_signal": has_error_marker(line),
+                    "target_relevant": file_target_relevant,
+                    "detection_evidence": bool(score >= 3 and not has_error_marker(line)),
+                    "source_evidence": bool(
+                        "http-vuln-" in line.lower() or
+                        "nmap" in line.lower() or
+                        "script" in line.lower() or
+                        "nse:" in line.lower() or
+                        "reference" in line.lower() or
+                        "advisory" in line.lower() or
+                        "mitre" in line.lower() or
+                        "nvd" in line.lower() or
+                        "cve:" in line.lower()
+                    ),
+                    "applicability_evidence": bool(file_target_relevant),
                 })
 
-    reduced = {}
+    claims = {}
     for cve, entries in findings.items():
         if not entries:
             continue
@@ -403,8 +496,81 @@ def summarize_findings(paths):
             chosen = medium
         else:
             chosen = deduped
-        reduced[cve] = chosen[:3]
-    return reduced
+        state, state_reason, contract = classify_claim_state(deduped)
+        claims[cve] = {
+            "cve": cve,
+            "state": state,
+            "state_reason": state_reason,
+            "entries": chosen[:3],
+            "phase_contract": contract,
+        }
+    return claims
+
+def summarize_claim_counts(claims):
+    counts = {
+        "validated": 0,
+        "candidate": 0,
+        "rejected": 0,
+        "needs_review": 0,
+    }
+    for claim in claims.values():
+        state = str(claim.get("state") or "needs_review")
+        if state not in counts:
+            state = "needs_review"
+        counts[state] += 1
+    return counts
+
+def aggregate_claim_flags(entries):
+    return {
+        "detection_evidence": any(bool(item.get("detection_evidence")) for item in entries),
+        "source_evidence": any(bool(item.get("source_evidence")) for item in entries),
+        "applicability_evidence": any(bool(item.get("applicability_evidence")) for item in entries),
+    }
+
+def build_candidate_confirmation_plan(claims, target_value):
+    plan = []
+    ordered = sorted(claims.values(), key=lambda claim: str(claim.get("cve", "")))
+    for claim in ordered:
+        if str(claim.get("state")) != "candidate":
+            continue
+        cve = str(claim.get("cve") or "CVE-UNKNOWN")
+        entries = claim.get("entries") or []
+        flags = aggregate_claim_flags(entries)
+        contract = claim.get("phase_contract") or {}
+        missing_phases = contract.get("missing") or []
+        reasons = []
+        if missing_phases:
+            reasons.append("missing phase requirements: " + ", ".join(missing_phases))
+        if not flags["detection_evidence"]:
+            reasons.append("missing detection evidence")
+        if not flags["source_evidence"]:
+            reasons.append("missing source evidence")
+        if not flags["applicability_evidence"]:
+            reasons.append("missing applicability evidence")
+        reason_text = ", ".join(reasons) if reasons else "candidate requires bounded confirmation by policy"
+        target_display = target_value if target_value else "<target>"
+        safe_steps = [
+            "Run bounded non-intrusive confirmation checks for %s on %s using existing service context." % (cve, target_display),
+            "Record command, raw output, and artifact/log paths for each confirmation attempt.",
+        ]
+        if "lookup_source" in missing_phases:
+            safe_steps.append("Look up authoritative source details for %s (affected product/version + prerequisites) and cite artifacts." % cve)
+        if "derive_verification_steps" in missing_phases:
+            safe_steps.append("Derive explicit verification procedure from source evidence before attempting classification upgrade.")
+        if "execute_bounded_validation" in missing_phases:
+            safe_steps.append("Execute bounded verification checks and capture reproducible proof outcomes (success/failure/inconclusive).")
+        if not flags["source_evidence"]:
+            safe_steps.append("Collect source validation evidence from tool/advisory outputs before any validation upgrade.")
+        if not flags["applicability_evidence"]:
+            safe_steps.append("Collect target-specific applicability evidence (service/version/path mapping) before any validation upgrade.")
+        safe_steps.append("If bounded confirmation remains inconclusive, keep claim state as candidate with explicit blocker.")
+        plan.append({
+            "cve": cve,
+            "reason": reason_text,
+            "precheck_status": "completed",
+            "steps": safe_steps,
+        })
+    return plan
 
 def summarize_execution(paths):
     port_line_pattern = re.compile(r"^\d+/(tcp|udp)\s+\S+", re.IGNORECASE)
@@ -542,16 +708,22 @@ def summarize_task_trace(dep_files):
 
 files = collect_files(artifact_root, deps)
 dep_files = collect_files_by_dep(artifact_root, deps)
-findings = summarize_findings(files)
+claims = summarize_findings(files)
 execution = summarize_execution(files)
 task_traces, notable_results = summarize_task_trace(dep_files)
-finding_count = len(findings)
+claim_counts = summarize_claim_counts(claims)
+validated_count = claim_counts["validated"]
+candidate_count = claim_counts["candidate"]
+rejected_count = claim_counts["rejected"]
+needs_review_count = claim_counts["needs_review"]
+finding_count = validated_count
+candidate_confirmation_plan = build_candidate_confirmation_plan(claims, target)
 
-if finding_count > 0:
-    outcome = "Evidence-backed vulnerabilities identified (%d CVE IDs)." % finding_count
+if validated_count > 0:
+    outcome = "Evidence-backed vulnerabilities identified (%d validated CVE IDs)." % validated_count
     assessment_confidence = "high"
 else:
-    outcome = "No evidence-backed vulnerabilities identified in this run."
+    outcome = "No validated vulnerabilities identified in this run."
     if execution["nmap_reports"] > 0:
         assessment_confidence = "medium"
     else:
@@ -582,11 +754,16 @@ print("## Executive Summary")
 print("- Outcome: %s" % outcome)
 print("- Assessment confidence: %s" % assessment_confidence)
 print("- Assessment model: network-based, unauthenticated evidence synthesis from prior task artifacts.")
+print("- Claim states: validated=%d candidate=%d rejected=%d needs_review=%d" % (validated_count, candidate_count, rejected_count, needs_review_count))
+if candidate_confirmation_plan:
+    print("- Candidate follow-up required: yes (%d candidate claim(s))" % len(candidate_confirmation_plan))
+else:
+    print("- Candidate follow-up required: no")
 if notable_results:
     for line in notable_results[:3]:
         print("- Observed execution result: %s" % line)
-if finding_count == 0:
-    print("- Interpretation: no observed CVE evidence in collected artifacts (this is not proof of absence).")
+if validated_count == 0:
+    print("- Interpretation: no validated CVE claims in collected artifacts (this is not proof of absence).")
 print("")
 print("## Test Execution Summary")
 print("- Source tasks analyzed: %s" % (", ".join(deps) if deps else "none"))
@@ -621,16 +798,61 @@ else:
             print("- Observed result: no structured outcome markers parsed from this task's artifacts.")
         print("")
 print("## Findings")
-if not findings:
+if not claims:
     print("- No explicit CVE identifiers were found in dependency artifacts.")
 else:
-    for cve in sorted(findings.keys()):
-        print("### %s" % cve)
-        entries = findings[cve]
-        for item in entries:
-            print("- Evidence file: %s" % item["path"])
-            print("- Evidence confidence: %s" % item.get("confidence", "unknown"))
-            print("- Evidence excerpt: %s" % item["snippet"])
+    state_order = ("validated", "candidate", "rejected", "needs_review")
+    state_titles = {
+        "validated": "Validated Findings",
+        "candidate": "Candidate Findings",
+        "rejected": "Rejected Findings",
+        "needs_review": "Needs Review",
+    }
+    for state in state_order:
+        print("### %s" % state_titles[state])
+        state_claims = [claim for claim in claims.values() if claim.get("state") == state]
+        if not state_claims:
+            print("- None")
+            print("")
+            continue
+        for claim in sorted(state_claims, key=lambda item: item.get("cve", "")):
+            cve = claim.get("cve", "CVE-UNKNOWN")
+            print("### %s (%s)" % (cve, state))
+            print("- Claim state: %s" % state)
+            print("- Claim reason: %s" % claim.get("state_reason", "not_provided"))
+            contract = claim.get("phase_contract") or {}
+            print("- Phase gate: discover_signal=%s lookup_source=%s derive_verification_steps=%s execute_bounded_validation=%s target_applicability=%s" % (
+                "yes" if contract.get("discover_signal") else "no",
+                "yes" if contract.get("lookup_source") else "no",
+                "yes" if contract.get("derive_verification_steps") else "no",
+                "yes" if contract.get("execute_bounded_validation") else "no",
+                "yes" if contract.get("target_applicability") else "no",
+            ))
+            entries = claim.get("entries") or []
+            for item in entries:
+                print("- Evidence file: %s" % item["path"])
+                print("- Evidence confidence: %s" % item.get("confidence", "unknown"))
+                print("- Detection evidence: %s" % ("yes" if item.get("detection_evidence") else "no"))
+                print("- Source evidence: %s" % ("yes" if item.get("source_evidence") else "no"))
+                print("- Applicability evidence: %s" % ("yes" if item.get("applicability_evidence") else "no"))
+                print("- Evidence excerpt: %s" % item["snippet"])
+            print("")
+print("## Candidate Confirmation Plan")
+if not candidate_confirmation_plan:
+    print("- No candidate CVE claims require follow-up confirmation steps.")
+else:
+    print("- Confirmation policy: bounded non-intrusive checks only; intrusive checks require explicit approval.")
+    for item in candidate_confirmation_plan:
+        print("### %s" % item.get("cve", "CVE-UNKNOWN"))
+        print("- Pre-check status: %s" % item.get("precheck_status", "unknown"))
+        print("- Confirmation blocker/reason: %s" % item.get("reason", "not_provided"))
+        steps = item.get("steps") or []
+        if not steps:
+            print("- Planned bounded steps: none")
+        else:
+            print("- Planned bounded steps:")
+            for step in steps[:5]:
+                print("  - %s" % step)
         print("")
 print("## Limitations")
 print("- Results are limited to network-visible behavior from the analyzed artifacts.")
@@ -648,11 +870,11 @@ else:
         print("- ... %d additional artifact files omitted for brevity" % (len(files) - 40))
 print("")
 print("## Remediation")
-if not findings:
-    print("- No finding-specific remediation generated because no evidence-backed vulnerabilities were identified.")
+if validated_count == 0:
+    print("- No finding-specific remediation generated because no validated vulnerabilities were identified.")
     print("- Optional hardening: maintain current patch levels, minimize exposed services, and repeat the same bounded scan profile during future checks.")
 else:
-    print("- Prioritize remediation for identified CVEs based on exploitability and exposure.")
+    print("- Prioritize remediation for validated CVEs based on exploitability and exposure.")
     print("- Patch affected firmware/services, re-test with the same bounded scan profile, and document closure evidence.")
     print("- Add compensating controls (ACLs, segmentation, management interface restrictions) until patches are deployed.")
 `

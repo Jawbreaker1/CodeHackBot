@@ -15,6 +15,7 @@ const (
 	TaskFailureReasonExecutionTimeout         = "execution_timeout"
 	TaskFailureReasonBudgetExhausted          = "budget_exhausted"
 	TaskFailureReasonRepeatedStepLoop         = "repeated_step_loop"
+	TaskFailureReasonObjectiveNotMet          = "objective_not_met"
 )
 
 var knownTaskFailureReasons = map[string]struct{}{
@@ -52,6 +53,7 @@ var knownTaskFailureReasons = map[string]struct{}{
 	TaskFailureReasonExecutionTimeout:         {},
 	TaskFailureReasonBudgetExhausted:          {},
 	TaskFailureReasonRepeatedStepLoop:         {},
+	TaskFailureReasonObjectiveNotMet:          {},
 }
 
 func NormalizeTaskFailureReason(raw string) string {

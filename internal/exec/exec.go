@@ -177,10 +177,13 @@ func runWithStreamingWithIdleTimeout(parentCtx context.Context, cmd *exec.Cmd, l
 		}
 	}()
 
-	waitErr := cmd.Wait()
+	// Drain stdout/stderr before Wait to avoid dropping short-lived output.
+	// Per os/exec docs, calling Wait before pipe reads complete can race and
+	// lose buffered bytes on fast commands.
+	wg.Wait()
 	close(stopMonitor)
 	monitorWG.Wait()
-	wg.Wait()
+	waitErr := cmd.Wait()
 	if idleTimedOut.Load() {
 		return buf.String(), errIdleTimeout
 	}

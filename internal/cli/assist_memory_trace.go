@@ -76,6 +76,8 @@ func estimateAssistPromptChars(input assist.Input) int {
 
 func (r *Runner) buildAssistContextSections(sessionDir string, artifacts memory.Artifacts, input assist.Input) []assistContextSection {
 	toolsManifest := filepath.Join(sessionDir, "artifacts", "tools", "manifest.json")
+	journalPath := taskJournalPath(sessionDir)
+	journal := readFileTrimmed(journalPath)
 	return []assistContextSection{
 		{Section: "goal", Source: "user_input", Chars: len(input.Goal), Items: boolCount(strings.TrimSpace(input.Goal) != "")},
 		{Section: "scope", Source: "config.scope.networks", Chars: len(strings.Join(input.Scope, " ")), Items: len(input.Scope)},
@@ -89,6 +91,7 @@ func (r *Runner) buildAssistContextSections(sessionDir string, artifacts memory.
 		{Section: "inventory", Source: "session.inventory", Path: filepath.Join(sessionDir, r.cfg.Session.InventoryFilename), Chars: len(input.Inventory), Items: boolCount(strings.TrimSpace(input.Inventory) != "")},
 		{Section: "playbooks", Source: "docs.playbooks", Path: filepath.Join("docs", "playbooks"), Chars: len(input.Playbooks), Items: boolCount(strings.TrimSpace(input.Playbooks) != "")},
 		{Section: "tools", Source: "session.tools.manifest", Path: toolsManifest, Chars: len(input.Tools), Items: boolCount(strings.TrimSpace(input.Tools) != "")},
+		{Section: "task_journal", Source: "session.artifacts.assist", Path: journalPath, Chars: len(journal), Items: boolCount(strings.TrimSpace(journal) != "")},
 	}
 }
 

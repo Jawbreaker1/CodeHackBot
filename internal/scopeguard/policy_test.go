@@ -109,3 +109,27 @@ func TestValidateCommandWrapperIgnoresArchiveExtractionScriptAsNetworkIntent(t *
 		t.Fatalf("expected local archive extraction wrapper not treated as network command, got %v", err)
 	}
 }
+
+func TestValidateCommandWrapperIgnoresQuotedLocalArchivePathAsHostTarget(t *testing.T) {
+	t.Parallel()
+
+	policy := New([]string{"127.0.0.0/8"}, nil)
+	if err := policy.ValidateCommand("bash", []string{"-lc", "ls -la /home/johan/birdhackbot/CodeHackBot/secret.zip 2>&1 || echo ''\"'\"'FILE_NOT_FOUND:secret.zip'\"'\"''"}, ValidateOptions{
+		FailClosedNetwork:  true,
+		FailClosedWrappers: true,
+	}); err != nil {
+		t.Fatalf("expected quoted local archive path wrapper not treated as out-of-scope host, got %v", err)
+	}
+}
+
+func TestValidateCommandAllowsSearchsploitWithoutNetworkTarget(t *testing.T) {
+	t.Parallel()
+
+	policy := New([]string{"192.168.50.0/24"}, nil)
+	if err := policy.ValidateCommand("searchsploit", []string{"openssh 8.2"}, ValidateOptions{
+		FailClosedNetwork:  true,
+		FailClosedWrappers: true,
+	}); err != nil {
+		t.Fatalf("expected local searchsploit query to be allowed without network target, got %v", err)
+	}
+}

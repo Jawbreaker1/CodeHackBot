@@ -292,6 +292,15 @@ func buildRunStatusFromCache(runID string, cache *runEventCache) RunStatus {
 			status.RunningTasks++
 		}
 	}
+	if status.State == runProjectionStateStopped || status.State == runProjectionStateCompleted {
+		// Terminal run status should not expose active/running headline counters.
+		// Preserve raw values in dedicated terminal fields for diagnostics.
+		status.TerminalActiveWorkers = status.ActiveWorkers
+		status.TerminalQueuedTasks = status.QueuedTasks
+		status.TerminalRunningTasks = status.RunningTasks
+		status.ActiveWorkers = 0
+		status.RunningTasks = 0
+	}
 	return status
 }
 

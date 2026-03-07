@@ -242,8 +242,8 @@ func TestCLIAutoSummarize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read summary: %v", err)
 	}
-	if !strings.Contains(string(data), "Recent logs:") {
-		t.Fatalf("expected recent logs in summary:\n%s", string(data))
+	if !strings.Contains(string(data), "Evidence reviewed:") {
+		t.Fatalf("expected evidence line in summary:\n%s", string(data))
 	}
 }
 
