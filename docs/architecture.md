@@ -246,6 +246,7 @@ The conceptual layers are:
 
 1. Behavior frame
    - system/behavior prompt
+   - `AGENTS.md` constraints and repository rules
    - behavior parameters
    - runtime mode
 
@@ -357,6 +358,10 @@ When signals conflict, trust in this order:
 The worker should have a single structured local memory-bank store.
 
 This is not a second reasoning system. It is a support layer for continuity and retrieval.
+
+For v1, memory-bank behavior should remain minimal. The rebuild should not yet solve complex reconciliation between active context and offloaded memory.
+
+Active context remains primary. Memory-bank offloading and retrieval should be introduced conservatively after the core loop is working well in live runs.
 
 Allowed entry types:
 - `fact`

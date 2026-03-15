@@ -3,12 +3,79 @@
 This task list derives from `docs/architecture.md`.
 The architecture document is the source of truth for the rebuild branch.
 
-## Rebuild 0 — Reset
+Planning rules:
+- `TASKS.md` is the executable plan for the current phase and, optionally, the next phase.
+- `ROADMAP.md` is directional only and must not contain detailed task lists.
+- `DISCOVERIES.md` records lessons, risks, and future-phase notes; it is not a task list.
+- If `TASKS.md` and `ROADMAP.md` differ, `TASKS.md` is authoritative for execution.
+
+## Phase 0 — Reset
 - [x] Aggressively archive historical docs into `docs/archive/`
 - [x] Reduce active docs to the minimal set
 - [x] Move the pre-rebuild implementation into `legacy/` so old and new code cannot be confused
-- [ ] Rewrite `README.md` to match the rebuild branch state
 - [x] Write and freeze the v1 baseline architecture document with user review before adoption
+- [x] Rewrite `README.md` to match the rebuild branch state
+
+Exit criteria:
+- architecture frozen at `docs/architecture.md`
+- legacy/new separation is clear
+- active planning/documentation structure is clean
+
+## Phase 1 — Minimal Worker Loop
+
+Goal:
+- build the smallest interactive worker loop that follows `docs/architecture.md`
+
+Tasks:
+- [x] Create the new rebuild-root Go module and minimal package layout
+- [x] Implement the minimal behavior-frame loader, including `AGENTS.md`
+- [x] Implement minimal worker session foundation:
+  - goal
+  - scope
+  - constraints
+  - reporting requirement
+- [x] Implement the minimal worker context packet v1
+- [x] Implement exact-action execution with:
+  - minimal shell wrapping only when needed
+  - full command logging
+  - execution-result capture
+- [x] Implement the minimal worker closed loop:
+  - ask LLM for next action
+  - validate scope/approval/executability
+  - execute exact action
+  - feed result back
+- [x] Implement the minimal approval model:
+  - `this time`
+  - `always allow` (session-scoped)
+  - `no`
+  - `--allow-all`
+- [x] Implement context inspection for live diagnosis
+- [x] Implement state-based session resume
+- [ ] Run live validation on:
+  - one `secret.zip` workflow
+  - one router workflow
+
+Exit criteria:
+- worker loop runs end-to-end with real LLM calls
+- no fallback command synthesis exists in the new path
+- exact commands and execution results are logged
+- active context packet is inspectable during runs
+- both live scenarios complete with understandable behavior, even if not yet perfect
+
+## Phase 2 — Context And Memory Foundations
+
+Goal:
+- make context quality observable and stable before adding more features
+
+Planned tasks:
+- [ ] Implement running summary as an explicit active section
+- [ ] Implement minimal memory-bank v1
+- [ ] Implement memory-bank retrievals conservatively
+- [ ] Implement per-turn rebuild/prune/summary policy from the architecture
+- [ ] Add visibility into included vs excluded context material
+- [ ] Run live validation on:
+  - one `secret.zip` workflow
+  - one router workflow
 
 ## Working Rules
 - [ ] No patch-first behavior on this branch

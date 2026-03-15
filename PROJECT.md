@@ -14,6 +14,8 @@ Current active docs are intentionally minimal:
 - `PROJECT.md`
 - `README.md`
 - `TASKS.md`
+- `ROADMAP.md`
+- `DISCOVERIES.md`
 - `docs/roe/public-test-targets.md`
 - `docs/runbooks/acceptance-gates.md`
 - `docs/architecture.md`
@@ -33,12 +35,13 @@ Historical material lives in `docs/archive/` and is not authoritative.
 
 ## Build
 
-- Build instructions for the rebuild root will be reintroduced once the new Go module and entrypoints exist.
+- `go build -buildvcs=false ./cmd/birdhackbot`
+- `go build -buildvcs=false ./cmd/birdhackbot-orchestrator`
 - The legacy snapshot remains buildable from `legacy/` if needed for reference.
 
 ## Test
 
-- Test instructions for the rebuild root will be reintroduced with the new module.
+- Rebuild-root tests will be added with the first implemented behavior slices.
 
 ## Working Rules
 
