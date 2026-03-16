@@ -21,6 +21,7 @@ Current active docs are intentionally minimal:
 - `docs/architecture.md`
 
 Historical material lives in `docs/archive/` and is not authoritative.
+The `legacy/` tree is also non-authoritative: it is preserved as historical reference only and reflects the pre-rebuild codebase that became too complex and difficult to reason about.
 
 ## Repository Structure
 
@@ -51,3 +52,14 @@ Historical material lives in `docs/archive/` and is not authoritative.
 - Do not implement new behavior that conflicts with `docs/architecture.md`.
 - Validate major implementation slices with real LLM runs.
 - Keep files modular and refactor early when ownership becomes unclear.
+- Do not treat `legacy/` or old main-branch behavior as design truth for the rebuild; use `docs/architecture.md`, `TASKS.md`, and active docs instead.
+
+## Implementation Discipline
+
+Before coding a non-trivial implementation slice, state:
+- `Objective`
+- `Architecture anchor`
+- `Why this is not a patch`
+- `Validation plan`
+
+If these cannot be stated clearly, stop and reassess before changing code.

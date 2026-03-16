@@ -30,6 +30,7 @@ Rules:
 - do not treat `legacy/` as the active implementation
 - do not mix new rebuild code into `legacy/`
 - reuse from `legacy/` only deliberately and selectively
+- do not infer current architecture or product direction from `legacy/` or the old main-branch design; the rebuild intentionally replaces a previously overgrown and hard-to-reason-about system
 
 ## Rebuild Approach
 
