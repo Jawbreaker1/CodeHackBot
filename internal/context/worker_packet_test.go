@@ -29,6 +29,11 @@ func TestWorkerPacketRenderIncludesAllCoreSections(t *testing.T) {
 			ExpectedEvidence: []string{"zipinfo output"},
 			RemainingBudget:  "5 actions",
 		},
+		TaskRuntime: TaskRuntime{
+			State:         "running",
+			CurrentTarget: "secret.zip",
+			MissingFact:   "credential or password required for secret.zip",
+		},
 		PlanState: PlanState{
 			Steps:      []string{"inspect archive", "attempt recovery", "verify result"},
 			ActiveStep: "inspect archive",
@@ -41,6 +46,8 @@ func TestWorkerPacketRenderIncludesAllCoreSections(t *testing.T) {
 			OutputSummary: "Archive readable.",
 			LogRefs:       []string{"logs/cmd-1.log"},
 			ArtifactRefs:  []string{"artifacts/zipinfo.txt"},
+			Assessment:    "success",
+			Signals:       []string{"archive_readable"},
 		},
 		RunningSummary: "Archive identified and metadata readable.",
 		RelevantRecentResults: []ExecutionResult{
@@ -61,6 +68,7 @@ func TestWorkerPacketRenderIncludesAllCoreSections(t *testing.T) {
 		"[behavior_frame]",
 		"[session_foundation]",
 		"[current_step]",
+		"[task_runtime]",
 		"[plan_state]",
 		"[recent_conversation]",
 		"[older_conversation_summary]",
@@ -73,6 +81,10 @@ func TestWorkerPacketRenderIncludesAllCoreSections(t *testing.T) {
 		"Recover the zip password",
 		"zipinfo -v secret.zip",
 		"Archive identified and metadata readable.",
+		"current_target: secret.zip",
+		"missing_fact: credential or password required for secret.zip",
+		"assessment: success",
+		"signals: archive_readable",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("Render() missing %q in:\n%s", want, rendered)

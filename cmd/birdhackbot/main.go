@@ -14,6 +14,7 @@ import (
 	ctxpacket "github.com/Jawbreaker1/CodeHackBot/internal/context"
 	"github.com/Jawbreaker1/CodeHackBot/internal/contextinspect"
 	"github.com/Jawbreaker1/CodeHackBot/internal/execx"
+	"github.com/Jawbreaker1/CodeHackBot/internal/interactivecli"
 	"github.com/Jawbreaker1/CodeHackBot/internal/llmclient"
 	"github.com/Jawbreaker1/CodeHackBot/internal/reporoot"
 	"github.com/Jawbreaker1/CodeHackBot/internal/session"
@@ -60,6 +61,36 @@ func main() {
 		return
 	}
 
+	if strings.TrimSpace(*goal) == "" && strings.TrimSpace(*llmBaseURL) != "" && strings.TrimSpace(*llmModel) != "" {
+		loop := workerloop.Loop{
+			LLM: llmclient.Client{
+				BaseURL: *llmBaseURL,
+				Model:   *llmModel,
+			},
+			Executor: execx.Executor{
+				LogDir: filepath.Join(repoRoot, "sessions", "rebuild-dev", "logs"),
+			},
+			Approver:  newApprover(*allowAll),
+			Inspector: newInspector(repoRoot, *inspectContext),
+		}
+		shell := interactivecli.Shell{
+			Reader:    os.Stdin,
+			Writer:    os.Stdout,
+			Runner:    loop,
+			RepoRoot:  repoRoot,
+			BaseURL:   *llmBaseURL,
+			Model:     *llmModel,
+			MaxSteps:  *maxSteps,
+			AllowAll:  *allowAll,
+			StatePath: defaultSessionStatePath(repoRoot),
+		}
+		if err := shell.Run(context.Background()); err != nil {
+			fmt.Fprintf(os.Stderr, "birdhackbot rebuild: interactive shell failed: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if *goal != "" {
 		foundation, err := session.NewFoundation(session.Input{
 			Goal:                 *goal,
@@ -85,6 +116,7 @@ func main() {
 					Objective:       foundation.Goal,
 					RemainingBudget: "unbounded",
 				},
+				TaskRuntime: ctxpacket.InitialTaskRuntime(foundation.Goal),
 				PlanState: ctxpacket.PlanState{
 					Steps:      []string{"understand goal", "work the named target/task", "finish with a clear result"},
 					ActiveStep: foundation.Goal,
@@ -131,6 +163,7 @@ func main() {
 					ExpectedEvidence: []string{"command logs", "artifacts if produced"},
 					RemainingBudget:  fmt.Sprintf("%d steps", *maxSteps),
 				},
+				TaskRuntime: ctxpacket.InitialTaskRuntime(foundation.Goal),
 				PlanState: ctxpacket.PlanState{
 					Steps:      []string{"understand goal", "work the named target/task", "verify and finish"},
 					ActiveStep: foundation.Goal,

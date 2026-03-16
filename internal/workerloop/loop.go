@@ -33,6 +33,9 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 		maxSteps = 1
 	}
 	current := packet
+	if strings.TrimSpace(current.TaskRuntime.State) == "" {
+		current.TaskRuntime = ctxpacket.InitialTaskRuntime(current.SessionFoundation.Goal)
+	}
 	for step := 1; step <= maxSteps; step++ {
 		if err := captureIfConfigured(l.Inspector, step, "pre-llm", current); err != nil {
 			return Outcome{Packet: current}, fmt.Errorf("capture pre-llm context: %w", err)
@@ -52,12 +55,16 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 
 		switch resp.Type {
 		case "step_complete":
+			current.TaskRuntime.State = "done"
+			current.TaskRuntime = ctxpacket.UpdateTaskRuntime(current.TaskRuntime, current.SessionFoundation.Goal, current.LatestExecutionResult)
+			current.TaskRuntime.MissingFact = "(none)"
 			current.RunningSummary = strings.TrimSpace(resp.Summary)
 			if err := captureIfConfigured(l.Inspector, step, "step-complete", current); err != nil {
 				return Outcome{Packet: current}, fmt.Errorf("capture completion context: %w", err)
 			}
 			return Outcome{Summary: resp.Summary, Packet: current}, nil
 		case "ask_user":
+			current.TaskRuntime.State = "waiting_user"
 			if err := captureIfConfigured(l.Inspector, step, "ask-user", current); err != nil {
 				return Outcome{Packet: current}, fmt.Errorf("capture ask-user context: %w", err)
 			}
@@ -88,10 +95,14 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 				OutputSummary: compactOutputSummary(combineSummaries(result.StdoutSummary, result.StderrSummary)),
 				LogRefs:       []string{result.LogPath},
 				ArtifactRefs:  result.ArtifactRefs,
+				Assessment:    result.Assessment,
+				Signals:       append([]string(nil), result.Signals...),
 				FailureClass:  result.FailureClass,
 			}
 			current.RelevantRecentResults = updateRelevantRecentResults(current.RelevantRecentResults, current.LatestExecutionResult)
 			current.LatestExecutionResult = nextResult
+			current.TaskRuntime.State = "running"
+			current.TaskRuntime = ctxpacket.UpdateTaskRuntime(current.TaskRuntime, current.SessionFoundation.Goal, current.LatestExecutionResult)
 			current.RunningSummary = buildRunningSummary(current.CurrentStep.Objective, current.LatestExecutionResult, current.RelevantRecentResults)
 			if err := captureIfConfigured(l.Inspector, step, "post-action", current); err != nil {
 				return Outcome{Packet: current}, fmt.Errorf("capture post-action context: %w", err)
@@ -101,6 +112,7 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 			}
 		}
 	}
+	current.TaskRuntime.State = "blocked"
 	return Outcome{Packet: current}, fmt.Errorf("step did not complete within %d steps", maxSteps)
 }
 
@@ -112,6 +124,15 @@ func buildUserPrompt(packet ctxpacket.WorkerPacket) string {
 			"If choosing action, use: {\"type\":\"action\",\"command\":\"...\",\"use_shell\":true|false}.",
 			"If choosing step_complete, use: {\"type\":\"step_complete\",\"summary\":\"...\"}.",
 			"If choosing ask_user, use: {\"type\":\"ask_user\",\"question\":\"...\"}.",
+			"Use task_runtime.current_target as the concrete thing currently being worked.",
+			"Use task_runtime.missing_fact as the primary description of what still needs to be learned or verified.",
+			"If task_runtime.missing_fact is not '(none)', prefer an action that establishes that missing fact for the current target.",
+			"Before choosing action, check whether the current goal is already satisfied by the latest execution result or relevant recent results.",
+			"If the goal is already satisfied with evidence in the context packet, choose step_complete.",
+			"Do not spend another turn re-reading or slicing the same log, command output, or artifact when the needed evidence is already present in the context packet.",
+			"Prefer the smallest bounded action that can establish the next needed fact.",
+			"Avoid broad, expensive, or long-running commands when a smaller action can make honest progress.",
+			"For interactive progress, favor commands that return quickly and preserve evidence for follow-up turns.",
 			"Do not invent hidden steps.",
 			"Do not use alternative key names or nested envelopes.",
 		},
@@ -166,16 +187,25 @@ func updateRelevantRecentResults(current []ctxpacket.ExecutionResult, previousLa
 func buildRunningSummary(objective string, latest ctxpacket.ExecutionResult, recent []ctxpacket.ExecutionResult) string {
 	objective = strings.TrimSpace(objective)
 	status := "in progress"
-	if strings.TrimSpace(latest.FailureClass) != "" || strings.TrimSpace(latest.ExitStatus) == "-1" {
+	if strings.TrimSpace(latest.Assessment) == "failed" || strings.TrimSpace(latest.FailureClass) != "" || strings.TrimSpace(latest.ExitStatus) == "-1" {
 		status = "encountered a failure"
 	}
 	if strings.TrimSpace(latest.ExitStatus) != "" && strings.TrimSpace(latest.ExitStatus) != "(none)" && strings.TrimSpace(latest.ExitStatus) != "0" {
 		status = "encountered a failure"
 	}
+	if strings.TrimSpace(latest.Assessment) == "suspicious" || strings.TrimSpace(latest.Assessment) == "ambiguous" {
+		status = "needs interpretation"
+	}
 
 	parts := []string{
 		fmt.Sprintf("Objective: %s.", blankOrFallback(objective, "make progress on the current goal")),
 		fmt.Sprintf("Latest result: %q exited with %s.", latest.Action, blankOrFallback(strings.TrimSpace(latest.ExitStatus), "(none)")),
+	}
+	if strings.TrimSpace(latest.Assessment) != "" && strings.TrimSpace(latest.Assessment) != "(none)" {
+		parts = append(parts, fmt.Sprintf("Assessment: %s.", latest.Assessment))
+	}
+	if len(latest.Signals) > 0 {
+		parts = append(parts, fmt.Sprintf("Signals: %s.", strings.Join(latest.Signals, ", ")))
 	}
 	if strings.TrimSpace(latest.OutputSummary) != "" && strings.TrimSpace(latest.OutputSummary) != "(none)" {
 		parts = append(parts, fmt.Sprintf("Key output: %s.", singleLine(latest.OutputSummary)))

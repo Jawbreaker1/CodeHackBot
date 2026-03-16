@@ -41,7 +41,9 @@ Historical material lives in `docs/archive/` and is not authoritative.
 
 ## Test
 
-- Rebuild-root tests will be added with the first implemented behavior slices.
+- Rebuild-root tests now exist for the implemented core packages.
+- Real LLM validation remains required for major behavior slices.
+- Repeated live validations can be run with `scripts/repeat_worker_run.sh`.
 
 ## Working Rules
 

@@ -62,24 +62,24 @@ func ParseResponse(s string) (Response, error) {
 		if string(nested) == "null" {
 			// allow other envelope keys to decide the type
 		} else {
-		var action struct {
-			Command     string `json:"command"`
-			UseShell    *bool  `json:"use_shell,omitempty"`
-			ShellNeeded *bool  `json:"shell_needed,omitempty"`
-		}
-		if err := json.Unmarshal(nested, &action); err != nil {
-			return Response{}, fmt.Errorf("parse nested action: %w", err)
-		}
-		r := Response{Type: "action", Command: action.Command}
-		if action.UseShell != nil {
-			r.UseShell = *action.UseShell
-		} else if action.ShellNeeded != nil {
-			r.UseShell = *action.ShellNeeded
-		}
-		if strings.TrimSpace(r.Command) == "" {
-			return Response{}, fmt.Errorf("action command is required")
-		}
-		return r, nil
+			var action struct {
+				Command     string `json:"command"`
+				UseShell    *bool  `json:"use_shell,omitempty"`
+				ShellNeeded *bool  `json:"shell_needed,omitempty"`
+			}
+			if err := json.Unmarshal(nested, &action); err != nil {
+				return Response{}, fmt.Errorf("parse nested action: %w", err)
+			}
+			r := Response{Type: "action", Command: action.Command}
+			if action.UseShell != nil {
+				r.UseShell = *action.UseShell
+			} else if action.ShellNeeded != nil {
+				r.UseShell = *action.ShellNeeded
+			}
+			if strings.TrimSpace(r.Command) == "" {
+				return Response{}, fmt.Errorf("action command is required")
+			}
+			return r, nil
 		}
 	}
 	if nested, ok := envelope["step_complete"]; ok {

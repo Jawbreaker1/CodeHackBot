@@ -46,9 +46,10 @@ See `TASKS.md` for the executable plan.
 
 Near-term focus:
 1. minimal worker loop
-2. context and memory foundations
-3. reporting foundations
-4. orchestrator rebuilt on the same worker loop
+2. minimal interactive worker CLI
+3. context and memory foundations
+4. reporting foundations
+5. orchestrator rebuilt on the same worker loop
 
 ## Build And Test
 
@@ -58,6 +59,12 @@ Current build commands:
 - `go build -buildvcs=false ./cmd/birdhackbot`
 - `go build -buildvcs=false ./cmd/birdhackbot-orchestrator`
 
-Tests for the rebuild root will be added with the first implemented behavior slices.
+The rebuild root now has live-validated worker-loop slices:
+- local ZIP workflow
+- local router-style reconnaissance workflow on `127.0.0.1`
+- repeat-run live validation harness:
+  - `scripts/repeat_worker_run.sh`
+- minimal interactive worker CLI shell for direct testing:
+  - `./birdhackbot --llm-base-url <url> --llm-model <model> --allow-all`
 
 The legacy snapshot can still be inspected and built from `legacy/` if needed for reference.

@@ -31,6 +31,8 @@ type ExecutionResult struct {
 	OutputSummary string
 	LogRefs       []string
 	ArtifactRefs  []string
+	Assessment    string
+	Signals       []string
 	FailureClass  string
 }
 
@@ -47,6 +49,7 @@ type WorkerPacket struct {
 	BehaviorFrame            behavior.Frame
 	SessionFoundation        session.Foundation
 	CurrentStep              Step
+	TaskRuntime              TaskRuntime
 	PlanState                PlanState
 	RecentConversation       []string
 	OlderConversationSummary string
@@ -64,6 +67,7 @@ func (p WorkerPacket) Render() string {
 	sections = append(sections, section("behavior_frame", p.BehaviorFrame.PromptText()))
 	sections = append(sections, section("session_foundation", renderSessionFoundation(p.SessionFoundation)))
 	sections = append(sections, section("current_step", renderStep(p.CurrentStep)))
+	sections = append(sections, section("task_runtime", renderTaskRuntime(p.TaskRuntime)))
 	sections = append(sections, section("plan_state", renderPlanState(p.PlanState)))
 	sections = append(sections, section("recent_conversation", renderList(p.RecentConversation)))
 	sections = append(sections, section("older_conversation_summary", blankOrValue(p.OlderConversationSummary)))
@@ -105,6 +109,14 @@ func renderPlanState(p PlanState) string {
 	}, "\n")
 }
 
+func renderTaskRuntime(t TaskRuntime) string {
+	return strings.Join([]string{
+		"state: " + blankOrValue(t.State),
+		"current_target: " + blankOrValue(t.CurrentTarget),
+		"missing_fact: " + blankOrValue(t.MissingFact),
+	}, "\n")
+}
+
 func renderExecutionResult(r ExecutionResult) string {
 	return strings.Join([]string{
 		"action: " + blankOrValue(r.Action),
@@ -112,6 +124,8 @@ func renderExecutionResult(r ExecutionResult) string {
 		"output_summary: " + blankOrValue(r.OutputSummary),
 		"log_refs: " + joinOrNone(r.LogRefs),
 		"artifact_refs: " + joinOrNone(r.ArtifactRefs),
+		"assessment: " + blankOrValue(r.Assessment),
+		"signals: " + joinOrNone(r.Signals),
 		"failure_class: " + blankOrValue(r.FailureClass),
 	}, "\n")
 }

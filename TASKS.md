@@ -51,16 +51,37 @@ Tasks:
   - `--allow-all`
 - [x] Implement context inspection for live diagnosis
 - [x] Implement state-based session resume
-- [ ] Run live validation on:
+- [x] Run live validation on:
   - one `secret.zip` workflow
   - one router workflow
+- [x] Improve generic execution-result assessment:
+  - add result `assessment`
+  - add generic result `signals`
+  - surface ambiguous/suspicious outcomes in active context
+- [x] Improve generic completion judgment:
+  - prefer `step_complete` when the goal is already satisfied by evidence
+  - avoid rereading the same evidence indefinitely
+- [x] Improve generic bounded-action judgment:
+  - prefer actions that fit an interactive loop
+  - avoid broad expensive commands when a smaller action can establish the next fact
+- [x] Add minimal structured worker task context:
+  - task state
+  - current target
+  - missing fact
+- [x] Implement the minimal interactive worker CLI shell:
+  - persistent prompt loop
+  - session continuity across turns
+  - reuse the same worker loop
+  - keep it simple; no full TUI yet
 
 Exit criteria:
 - worker loop runs end-to-end with real LLM calls
 - no fallback command synthesis exists in the new path
 - exact commands and execution results are logged
 - active context packet is inspectable during runs
-- both live scenarios complete with understandable behavior, even if not yet perfect
+- both live scenarios have been exercised with understandable behavior, even if not yet perfect
+- router-style reconnaissance can complete cleanly on a bounded local target
+- a minimal interactive worker CLI shell exists for direct user testing
 
 ## Phase 2 — Context And Memory Foundations
 
@@ -68,7 +89,7 @@ Goal:
 - make context quality observable and stable before adding more features
 
 Planned tasks:
-- [ ] Implement running summary as an explicit active section
+- [x] Implement running summary as an explicit active section
 - [ ] Implement minimal memory-bank v1
 - [ ] Implement memory-bank retrievals conservatively
 - [ ] Implement per-turn rebuild/prune/summary policy from the architecture
@@ -81,4 +102,5 @@ Planned tasks:
 - [ ] No patch-first behavior on this branch
 - [ ] No new behavior that conflicts with the architecture document
 - [ ] Every major implementation slice must be followed by real LLM validation
+- [ ] Behavioral conclusions from live validation should use repeated runs, not single examples
 - [ ] Prefer deletion over adaptation when both solve the same problem

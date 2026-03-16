@@ -14,10 +14,10 @@ import (
 
 // Action is the minimal executable action for the rebuild root.
 type Action struct {
-	Command string
-	Args    []string
-	Cwd     string
-	Env     map[string]string
+	Command  string
+	Args     []string
+	Cwd      string
+	Env      map[string]string
 	UseShell bool
 }
 
@@ -34,6 +34,8 @@ type Result struct {
 	StderrSummary string
 	LogPath       string
 	ArtifactRefs  []string
+	Assessment    string
+	Signals       []string
 	FailureClass  string
 }
 
@@ -42,7 +44,7 @@ type Executor struct {
 	LogDir string
 }
 
-// Run executes the action exactly as requested, with minimal shell use only when requested.
+// Run executes the action exactly as requested, with minimal shell use only when needed.
 func (e Executor) Run(ctx context.Context, action Action) (Result, error) {
 	if strings.TrimSpace(action.Command) == "" {
 		return Result{}, fmt.Errorf("command is required")
@@ -74,6 +76,9 @@ func (e Executor) Run(ctx context.Context, action Action) (Result, error) {
 	if runErr != nil {
 		failureClass = "command_failed"
 	}
+	stdoutSummary := summarize(stdoutBuf.String())
+	stderrSummary := summarize(stderrBuf.String())
+	assessment, signals := assessResult(exitStatus, stdoutSummary, stderrSummary)
 
 	if err := writeLog(logPath, action, started, finished, exitStatus, stdoutBuf.String(), stderrBuf.String()); err != nil {
 		return Result{}, fmt.Errorf("write log: %w", err)
@@ -87,17 +92,19 @@ func (e Executor) Run(ctx context.Context, action Action) (Result, error) {
 		StartedAt:     started,
 		FinishedAt:    finished,
 		ExitStatus:    exitStatus,
-		StdoutSummary: summarize(stdoutBuf.String()),
-		StderrSummary: summarize(stderrBuf.String()),
+		StdoutSummary: stdoutSummary,
+		StderrSummary: stderrSummary,
 		LogPath:       logPath,
 		ArtifactRefs:  nil,
+		Assessment:    assessment,
+		Signals:       signals,
 		FailureClass:  failureClass,
 	}
 	return result, runErr
 }
 
 func buildCommand(ctx context.Context, action Action) *exec.Cmd {
-	if action.UseShell {
+	if needsShell(action) {
 		full := strings.TrimSpace(strings.Join(append([]string{action.Command}, action.Args...), " "))
 		return exec.CommandContext(ctx, "/bin/sh", "-lc", full)
 	}
@@ -105,7 +112,7 @@ func buildCommand(ctx context.Context, action Action) *exec.Cmd {
 }
 
 func executionMode(action Action) string {
-	if action.UseShell {
+	if needsShell(action) {
 		return "shell"
 	}
 	return "argv"
@@ -116,6 +123,36 @@ func renderAction(action Action) string {
 		return strings.TrimSpace(strings.Join(append([]string{action.Command}, action.Args...), " "))
 	}
 	return strings.TrimSpace(strings.Join(append([]string{action.Command}, action.Args...), " "))
+}
+
+func needsShell(action Action) bool {
+	if action.UseShell {
+		return true
+	}
+	return commandNeedsShell(strings.TrimSpace(strings.Join(append([]string{action.Command}, action.Args...), " ")))
+}
+
+func commandNeedsShell(command string) bool {
+	if strings.TrimSpace(command) == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"||",
+		"&&",
+		"|",
+		";",
+		">",
+		"<",
+		"$(",
+		"`",
+		"*",
+		"?",
+	} {
+		if strings.Contains(command, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func flattenEnv(env map[string]string) []string {
@@ -150,6 +187,65 @@ func summarize(s string) string {
 		lines = lines[:5]
 	}
 	return strings.Join(lines, "\n")
+}
+
+func assessResult(exitStatus int, stdoutSummary, stderrSummary string) (string, []string) {
+	signals := make([]string, 0, 4)
+	combined := strings.ToLower(strings.TrimSpace(strings.Join([]string{stdoutSummary, stderrSummary}, "\n")))
+
+	if exitStatus != 0 {
+		signals = append(signals, "nonzero_exit")
+	}
+	if strings.TrimSpace(stdoutSummary) == "" || strings.TrimSpace(stdoutSummary) == "(none)" {
+		if strings.TrimSpace(stderrSummary) == "" || strings.TrimSpace(stderrSummary) == "(none)" {
+			signals = append(signals, "empty_output")
+		}
+	}
+	for _, marker := range []struct {
+		phrase string
+		signal string
+	}{
+		{"permission denied", "permission_denied"},
+		{"no such file or directory", "missing_path"},
+		{"cannot find", "missing_path"},
+		{"not found", "not_found_text"},
+		{"incorrect password", "incorrect_password"},
+		{"syntax error", "syntax_error"},
+		{"usage:", "usage_text"},
+		{"failed", "failure_text"},
+		{"error", "error_text"},
+	} {
+		if strings.Contains(combined, marker.phrase) {
+			signals = appendSignal(signals, marker.signal)
+		}
+	}
+
+	switch {
+	case exitStatus != 0:
+		return "failed", signals
+	case hasSignal(signals, "permission_denied") || hasSignal(signals, "missing_path") || hasSignal(signals, "incorrect_password") || hasSignal(signals, "syntax_error") || hasSignal(signals, "failure_text") || hasSignal(signals, "error_text"):
+		return "suspicious", signals
+	case hasSignal(signals, "empty_output") || hasSignal(signals, "usage_text"):
+		return "ambiguous", signals
+	default:
+		return "success", signals
+	}
+}
+
+func appendSignal(signals []string, signal string) []string {
+	if hasSignal(signals, signal) {
+		return signals
+	}
+	return append(signals, signal)
+}
+
+func hasSignal(signals []string, want string) bool {
+	for _, signal := range signals {
+		if signal == want {
+			return true
+		}
+	}
+	return false
 }
 
 func writeLog(path string, action Action, started, finished time.Time, exitStatus int, stdout, stderr string) error {

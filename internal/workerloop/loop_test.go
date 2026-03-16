@@ -47,6 +47,39 @@ func TestLoopStepComplete(t *testing.T) {
 	}
 }
 
+func TestBuildUserPromptIncludesCompletionGuidance(t *testing.T) {
+	packet := ctxpacket.WorkerPacket{
+		BehaviorFrame: behavior.Frame{SystemPrompt: "prompt", AgentsText: "agents", RuntimeMode: "worker"},
+		SessionFoundation: session.Foundation{
+			Goal:                 "inspect localhost",
+			ReportingRequirement: "owasp",
+		},
+		LatestExecutionResult: ctxpacket.ExecutionResult{
+			Action:        "nmap -sV -p- --open 127.0.0.1",
+			ExitStatus:    "0",
+			OutputSummary: "stdout: 22/tcp open ssh OpenSSH 10.2p1 Debian 3",
+			Assessment:    "success",
+		},
+	}
+
+	prompt := buildUserPrompt(packet)
+	for _, want := range []string{
+		"Use task_runtime.current_target as the concrete thing currently being worked.",
+		"Use task_runtime.missing_fact as the primary description of what still needs to be learned or verified.",
+		"If task_runtime.missing_fact is not '(none)', prefer an action that establishes that missing fact for the current target.",
+		"Before choosing action, check whether the current goal is already satisfied by the latest execution result or relevant recent results.",
+		"If the goal is already satisfied with evidence in the context packet, choose step_complete.",
+		"Do not spend another turn re-reading or slicing the same log, command output, or artifact when the needed evidence is already present in the context packet.",
+		"Prefer the smallest bounded action that can establish the next needed fact.",
+		"Avoid broad, expensive, or long-running commands when a smaller action can make honest progress.",
+		"For interactive progress, favor commands that return quickly and preserve evidence for follow-up turns.",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q", want)
+		}
+	}
+}
+
 func TestLoopWritesInspectionSnapshots(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -129,6 +162,8 @@ func TestBuildRunningSummary(t *testing.T) {
 		ctxpacket.ExecutionResult{
 			Action:        "file ./secret.zip",
 			ExitStatus:    "0",
+			Assessment:    "suspicious",
+			Signals:       []string{"error_text", "incorrect_password"},
 			OutputSummary: "stdout: ./secret.zip: ASCII text",
 		},
 		[]ctxpacket.ExecutionResult{
@@ -138,9 +173,11 @@ func TestBuildRunningSummary(t *testing.T) {
 	for _, want := range []string{
 		"Objective: inspect archive.",
 		`Latest result: "file ./secret.zip" exited with 0.`,
+		"Assessment: suspicious.",
+		"Signals: error_text, incorrect_password.",
 		"Key output: stdout: ./secret.zip: ASCII text.",
 		"Recent prior results retained: 1.",
-		"Current status: in progress.",
+		"Current status: needs interpretation.",
 	} {
 		if !strings.Contains(summary, want) {
 			t.Fatalf("summary missing %q in %q", want, summary)

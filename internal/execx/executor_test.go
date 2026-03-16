@@ -38,8 +38,8 @@ func TestExecutorRunShell(t *testing.T) {
 	exec := Executor{LogDir: logDir}
 
 	result, err := exec.Run(context.Background(), Action{
-		Command: "printf shell-test > shell.txt",
-		Cwd:     logDir,
+		Command:  "printf shell-test > shell.txt",
+		Cwd:      logDir,
 		UseShell: true,
 	})
 	if err != nil {
@@ -54,6 +54,32 @@ func TestExecutorRunShell(t *testing.T) {
 	}
 	if string(content) != "shell-test" {
 		t.Fatalf("shell.txt = %q", string(content))
+	}
+}
+
+func TestExecutorAutoDetectsShellSyntax(t *testing.T) {
+	logDir := t.TempDir()
+	exec := Executor{LogDir: logDir}
+
+	result, err := exec.Run(context.Background(), Action{
+		Command: "printf auto-shell > auto.txt; cat auto.txt",
+		Cwd:     logDir,
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.ExecutionMode != "shell" {
+		t.Fatalf("ExecutionMode = %q", result.ExecutionMode)
+	}
+	if !strings.Contains(result.StdoutSummary, "auto-shell") {
+		t.Fatalf("StdoutSummary = %q", result.StdoutSummary)
+	}
+	content, err := os.ReadFile(filepath.Join(logDir, "auto.txt"))
+	if err != nil {
+		t.Fatalf("read auto.txt: %v", err)
+	}
+	if string(content) != "auto-shell" {
+		t.Fatalf("auto.txt = %q", string(content))
 	}
 }
 
@@ -73,5 +99,46 @@ func TestExecutorRunFailureClassification(t *testing.T) {
 	}
 	if result.FailureClass != "command_failed" {
 		t.Fatalf("FailureClass = %q", result.FailureClass)
+	}
+	if result.Assessment != "failed" {
+		t.Fatalf("Assessment = %q", result.Assessment)
+	}
+}
+
+func TestExecutorRunSuspiciousZeroExit(t *testing.T) {
+	logDir := t.TempDir()
+	exec := Executor{LogDir: logDir}
+
+	result, err := exec.Run(context.Background(), Action{
+		Command: "sh",
+		Args:    []string{"-c", "echo incorrect password"},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Assessment != "suspicious" {
+		t.Fatalf("Assessment = %q", result.Assessment)
+	}
+	if !strings.Contains(strings.Join(result.Signals, ","), "incorrect_password") {
+		t.Fatalf("Signals = %#v", result.Signals)
+	}
+}
+
+func TestExecutorRunAmbiguousEmptyOutput(t *testing.T) {
+	logDir := t.TempDir()
+	exec := Executor{LogDir: logDir}
+
+	result, err := exec.Run(context.Background(), Action{
+		Command: "sh",
+		Args:    []string{"-c", ":"},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Assessment != "ambiguous" {
+		t.Fatalf("Assessment = %q", result.Assessment)
+	}
+	if !strings.Contains(strings.Join(result.Signals, ","), "empty_output") {
+		t.Fatalf("Signals = %#v", result.Signals)
 	}
 }
