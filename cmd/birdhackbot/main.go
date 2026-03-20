@@ -29,8 +29,8 @@ func main() {
 	reporting := flag.String("reporting", "owasp", "reporting requirement")
 	contextPacket := flag.Bool("context-packet", false, "print minimal worker context packet")
 	inspectContext := flag.Bool("inspect-context", false, "write turn-by-turn context snapshots to the default rebuild inspection directory")
-	runCommand := flag.String("run-command", "", "exact command to execute")
-	runShell := flag.Bool("run-shell", false, "execute run-command through /bin/sh -lc")
+	debugRunCommand := flag.String("debug-run-command", "", "development/debugging only: execute an exact command outside the worker loop")
+	debugRunShell := flag.Bool("debug-run-shell", false, "execute debug-run-command through /bin/sh -lc")
 	llmBaseURL := flag.String("llm-base-url", "", "OpenAI-compatible base URL without trailing /chat/completions")
 	llmModel := flag.String("llm-model", "", "LLM model id")
 	maxSteps := flag.Int("max-steps", 3, "maximum bounded worker-loop steps")
@@ -46,6 +46,14 @@ func main() {
 		fmt.Fprintln(os.Stderr, "birdhackbot rebuild: use either --goal or --resume, not both")
 		os.Exit(2)
 	}
+	if strings.TrimSpace(*debugRunCommand) != "" && strings.TrimSpace(*goal) != "" {
+		fmt.Fprintln(os.Stderr, "birdhackbot rebuild: use either --goal or --debug-run-command, not both")
+		os.Exit(2)
+	}
+	if strings.TrimSpace(*debugRunCommand) != "" && *resume {
+		fmt.Fprintln(os.Stderr, "birdhackbot rebuild: use either --resume or --debug-run-command, not both")
+		os.Exit(2)
+	}
 
 	repoRoot, err := resolveRepoRoot()
 	if err != nil {
@@ -56,6 +64,13 @@ func main() {
 	if *resume {
 		if err := runResumedSession(repoRoot, *inspectContext); err != nil {
 			fmt.Fprintf(os.Stderr, "birdhackbot rebuild: resume failed: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if strings.TrimSpace(*debugRunCommand) != "" {
+		if err := runDebugCommand(repoRoot, *debugRunCommand, *debugRunShell); err != nil {
+			fmt.Fprintf(os.Stderr, "birdhackbot rebuild: debug command execution failed: %v\n", err)
 			os.Exit(1)
 		}
 		return
@@ -122,7 +137,7 @@ func main() {
 					ActiveStep: foundation.Goal,
 				},
 				RecentConversation: []string{"User: " + foundation.Goal},
-				RunningSummary:     "Session foundation created; execution loop not implemented yet.",
+				RunningSummary:     "Session foundation created; worker loop ready to run with LLM configuration.",
 				OperatorState: ctxpacket.OperatorState{
 					ScopeState:    "from_session_foundation",
 					ApprovalState: "pending",
@@ -131,24 +146,6 @@ func main() {
 				},
 			}
 			fmt.Println(packet.Render())
-			return
-		}
-
-		if *runCommand != "" {
-			executor := execx.Executor{
-				LogDir: filepath.Join(repoRoot, "sessions", "rebuild-dev", "logs"),
-			}
-			result, err := executor.Run(context.Background(), execx.Action{
-				Command:  *runCommand,
-				Cwd:      ".",
-				UseShell: *runShell,
-			})
-			fmt.Printf("action=%s\nmode=%s\nexit_status=%d\nlog=%s\nstdout_summary=%s\nstderr_summary=%s\n",
-				result.Action, result.ExecutionMode, result.ExitStatus, result.LogPath, result.StdoutSummary, result.StderrSummary)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "birdhackbot rebuild: command execution failed: %v\n", err)
-				os.Exit(1)
-			}
 			return
 		}
 
@@ -237,7 +234,7 @@ func main() {
 		return
 	}
 
-	fmt.Fprintln(os.Stderr, "birdhackbot rebuild: worker loop not implemented yet")
+	fmt.Fprintln(os.Stderr, "birdhackbot rebuild: provide --goal, or use --resume, --debug-run-command, or interactive LLM shell flags")
 }
 
 func approvalState(allowAll bool) string {
@@ -245,6 +242,21 @@ func approvalState(allowAll bool) string {
 		return "approved_session"
 	}
 	return "pending"
+}
+
+func runDebugCommand(repoRoot, command string, useShell bool) error {
+	executor := execx.Executor{
+		LogDir: filepath.Join(repoRoot, "sessions", "rebuild-dev", "logs"),
+	}
+	result, err := executor.Run(context.Background(), execx.Action{
+		Command:  command,
+		Cwd:      ".",
+		UseShell: useShell,
+	})
+	fmt.Fprintln(os.Stderr, "birdhackbot rebuild: running dev/debug exact command outside the worker loop")
+	fmt.Printf("action=%s\nmode=%s\nexit_status=%d\nlog=%s\nstdout_summary=%s\nstderr_summary=%s\n",
+		result.Action, result.ExecutionMode, result.ExitStatus, result.LogPath, result.StdoutSummary, result.StderrSummary)
+	return err
 }
 
 func approvalModeLabel(allowAll bool) string {

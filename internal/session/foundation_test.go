@@ -4,14 +4,14 @@ import "testing"
 
 func TestNewFoundation(t *testing.T) {
 	f, err := NewFoundation(Input{
-		Goal:                 "Gain access to the host",
+		Goal:                 "Recover the zip password",
 		ReportingRequirement: "owasp",
 	})
 	if err != nil {
 		t.Fatalf("NewFoundation() error = %v", err)
 	}
 
-	if f.Goal != "Gain access to the host" {
+	if f.Goal != "Recover the zip password" {
 		t.Fatalf("Goal = %q", f.Goal)
 	}
 	if f.ReportingRequirement != "owasp" {

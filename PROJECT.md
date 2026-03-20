@@ -54,6 +54,31 @@ The `legacy/` tree is also non-authoritative: it is preserved as historical refe
 - Keep files modular and refactor early when ownership becomes unclear.
 - Do not treat `legacy/` or old main-branch behavior as design truth for the rebuild; use `docs/architecture.md`, `TASKS.md`, and active docs instead.
 
+## Locked Invariants
+
+These are stable project truths and must be re-anchored before making non-trivial behavior changes.
+
+- The interactive CLI worker is the primary product surface.
+- Direct single-command execution paths are development/debugging support only and must not become the main behavioral truth of the system.
+- The runtime should guide and enforce hard boundaries, not replace LLM reasoning with hardcoded workflow logic.
+- Do not add scenario-specific guardrails, tool-specific steering, hidden workflow phases, or fallback logic that acts like a second planner.
+- Use the LLM for task logic and adaptive behavior to the greatest extent possible; keep runtime-owned logic minimal and generic.
+- `constraints` and richer policy/permission systems are intentionally deferred until the core mechanics are sound.
+- Every real session must define target boundaries clearly enough for the runtime to enforce scope honestly, but that does not justify adding heavy scope-inference or action-target policy machinery before the core loop is sound.
+
+Canonical live validation scenarios:
+
+- `secret.zip`: recover the password for the protected ZIP, extract its contents, and produce evidence-backed reporting.
+- `192.168.50.1`: analyze the authorized lab router for weaknesses with reproducible evidence.
+
+Testing discipline:
+
+- Major behavior slices require live LLM validation, not only local tests.
+- Repeated live runs are the default for behavioral conclusions because outputs are non-deterministic.
+- Use 3 runs per scenario unless the check is explicitly labeled as a smoke test.
+- Smoke/debug runs must never be presented as acceptance evidence for the canonical scenarios.
+- Live validation is not a pass unless the actual context snapshots and persisted session state are inspected and found sound.
+
 ## Implementation Discipline
 
 Before coding a non-trivial implementation slice, state:

@@ -23,6 +23,9 @@ Exit criteria:
 
 ## Phase 1 — Minimal Worker Loop
 
+Status:
+- complete
+
 Goal:
 - build the smallest interactive worker loop that follows `docs/architecture.md`
 
@@ -31,8 +34,6 @@ Tasks:
 - [x] Implement the minimal behavior-frame loader, including `AGENTS.md`
 - [x] Implement minimal worker session foundation:
   - goal
-  - scope
-  - constraints
   - reporting requirement
 - [x] Implement the minimal worker context packet v1
 - [x] Implement exact-action execution with:
@@ -41,7 +42,7 @@ Tasks:
   - execution-result capture
 - [x] Implement the minimal worker closed loop:
   - ask LLM for next action
-  - validate scope/approval/executability
+  - validate approval/executability
   - execute exact action
   - feed result back
 - [x] Implement the minimal approval model:
@@ -83,20 +84,20 @@ Exit criteria:
 - router-style reconnaissance can complete cleanly on a bounded local target
 - a minimal interactive worker CLI shell exists for direct user testing
 
-## Phase 2 — Context And Memory Foundations
+## Phase 2 — Active Context Quality
 
 Goal:
-- make context quality observable and stable before adding more features
+- make active context truth, target stability, and inspectability reliable before adding deeper memory mechanisms
 
 Planned tasks:
 - [x] Implement running summary as an explicit active section
-- [ ] Implement minimal memory-bank v1
-- [ ] Implement memory-bank retrievals conservatively
-- [ ] Implement per-turn rebuild/prune/summary policy from the architecture
-- [ ] Add visibility into included vs excluded context material
-- [ ] Run live validation on:
-  - one `secret.zip` workflow
-  - one router workflow
+- [ ] Tighten truth ordering inside active context
+- [ ] Improve target stability against noisy latest evidence without adding scenario-specific guardrails
+- [ ] Add visibility into included vs excluded context material and approximate size
+- [ ] Re-run repeated live validation on:
+  - `secret.zip`
+  - router/local recon
+- [ ] Only after active-context quality is stable, begin minimal memory-bank v1
 
 ## Working Rules
 - [ ] No patch-first behavior on this branch

@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -189,12 +191,20 @@ func summarize(s string) string {
 	return strings.Join(lines, "\n")
 }
 
+var (
+	reportedExitPattern = regexp.MustCompile(`(?i)\bexit(?:[_ -]?code)?\s*[:=]\s*([0-9]+)\b`)
+	noLoadedPattern     = regexp.MustCompile(`(?i)\bno [a-z0-9 _-]{1,40} loaded\b`)
+)
+
 func assessResult(exitStatus int, stdoutSummary, stderrSummary string) (string, []string) {
-	signals := make([]string, 0, 4)
+	signals := make([]string, 0, 5)
 	combined := strings.ToLower(strings.TrimSpace(strings.Join([]string{stdoutSummary, stderrSummary}, "\n")))
 
 	if exitStatus != 0 {
 		signals = append(signals, "nonzero_exit")
+	}
+	if reportedNonzeroExit(combined) {
+		signals = appendSignal(signals, "reported_nonzero_exit")
 	}
 	if strings.TrimSpace(stdoutSummary) == "" || strings.TrimSpace(stdoutSummary) == "(none)" {
 		if strings.TrimSpace(stderrSummary) == "" || strings.TrimSpace(stderrSummary) == "(none)" {
@@ -210,8 +220,11 @@ func assessResult(exitStatus int, stdoutSummary, stderrSummary string) (string, 
 		{"cannot find", "missing_path"},
 		{"not found", "not_found_text"},
 		{"incorrect password", "incorrect_password"},
+		{"unable to get password", "incorrect_password"},
 		{"syntax error", "syntax_error"},
 		{"usage:", "usage_text"},
+		{"caution:", "warning_text"},
+		{"not overwritten", "no_effect"},
 		{"failed", "failure_text"},
 		{"error", "error_text"},
 	} {
@@ -219,17 +232,34 @@ func assessResult(exitStatus int, stdoutSummary, stderrSummary string) (string, 
 			signals = appendSignal(signals, marker.signal)
 		}
 	}
+	if noLoadedPattern.MatchString(combined) {
+		signals = appendSignal(signals, "no_effect")
+	}
 
 	switch {
 	case exitStatus != 0:
 		return "failed", signals
+	case hasSignal(signals, "reported_nonzero_exit"):
+		return "suspicious", signals
 	case hasSignal(signals, "permission_denied") || hasSignal(signals, "missing_path") || hasSignal(signals, "incorrect_password") || hasSignal(signals, "syntax_error") || hasSignal(signals, "failure_text") || hasSignal(signals, "error_text"):
 		return "suspicious", signals
-	case hasSignal(signals, "empty_output") || hasSignal(signals, "usage_text"):
+	case hasSignal(signals, "empty_output") || hasSignal(signals, "usage_text") || hasSignal(signals, "warning_text") || hasSignal(signals, "no_effect"):
 		return "ambiguous", signals
 	default:
 		return "success", signals
 	}
+}
+
+func reportedNonzeroExit(text string) bool {
+	matches := reportedExitPattern.FindStringSubmatch(text)
+	if len(matches) != 2 {
+		return false
+	}
+	code, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return false
+	}
+	return code != 0
 }
 
 func appendSignal(signals []string, signal string) []string {

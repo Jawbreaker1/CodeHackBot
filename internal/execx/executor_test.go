@@ -142,3 +142,79 @@ func TestExecutorRunAmbiguousEmptyOutput(t *testing.T) {
 		t.Fatalf("Signals = %#v", result.Signals)
 	}
 }
+
+func TestExecutorRunSuspiciousReportedNonzeroExit(t *testing.T) {
+	logDir := t.TempDir()
+	exec := Executor{LogDir: logDir}
+
+	result, err := exec.Run(context.Background(), Action{
+		Command:  `printf "Exit: 2\n"; :`,
+		UseShell: true,
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Assessment != "suspicious" {
+		t.Fatalf("Assessment = %q", result.Assessment)
+	}
+	if !strings.Contains(strings.Join(result.Signals, ","), "reported_nonzero_exit") {
+		t.Fatalf("Signals = %#v", result.Signals)
+	}
+}
+
+func TestExecutorRunAmbiguousNoEffect(t *testing.T) {
+	logDir := t.TempDir()
+	exec := Executor{LogDir: logDir}
+
+	result, err := exec.Run(context.Background(), Action{
+		Command:  `printf "No password hashes loaded (see FAQ)\n"`,
+		UseShell: true,
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Assessment != "ambiguous" {
+		t.Fatalf("Assessment = %q", result.Assessment)
+	}
+	if !strings.Contains(strings.Join(result.Signals, ","), "no_effect") {
+		t.Fatalf("Signals = %#v", result.Signals)
+	}
+}
+
+func TestExecutorRunAmbiguousWarningText(t *testing.T) {
+	logDir := t.TempDir()
+	exec := Executor{LogDir: logDir}
+
+	result, err := exec.Run(context.Background(), Action{
+		Command:  `printf "caution: filename not matched\n"`,
+		UseShell: true,
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Assessment != "ambiguous" {
+		t.Fatalf("Assessment = %q", result.Assessment)
+	}
+	if !strings.Contains(strings.Join(result.Signals, ","), "warning_text") {
+		t.Fatalf("Signals = %#v", result.Signals)
+	}
+}
+
+func TestExecutorRunSuspiciousUnableToGetPassword(t *testing.T) {
+	logDir := t.TempDir()
+	exec := Executor{LogDir: logDir}
+
+	result, err := exec.Run(context.Background(), Action{
+		Command:  `printf "skipping: treasure-note.txt       unable to get password\n"`,
+		UseShell: true,
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Assessment != "suspicious" {
+		t.Fatalf("Assessment = %q", result.Assessment)
+	}
+	if !strings.Contains(strings.Join(result.Signals, ","), "incorrect_password") {
+		t.Fatalf("Signals = %#v", result.Signals)
+	}
+}

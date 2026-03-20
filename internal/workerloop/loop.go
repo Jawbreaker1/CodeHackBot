@@ -70,6 +70,18 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 			}
 			return Outcome{Packet: current}, fmt.Errorf("worker requires user input: %s", resp.Question)
 		case "action":
+			action, validationFailure := prepareAction(resp)
+			if validationFailure != nil {
+				current.RelevantRecentResults = updateRelevantRecentResults(current.RelevantRecentResults, current.LatestExecutionResult)
+				current.LatestExecutionResult = *validationFailure
+				current.TaskRuntime.State = "running"
+				current.TaskRuntime = ctxpacket.UpdateTaskRuntime(current.TaskRuntime, current.SessionFoundation.Goal, current.LatestExecutionResult)
+				current.RunningSummary = buildRunningSummary(current.CurrentStep.Objective, current.LatestExecutionResult, current.RelevantRecentResults)
+				if err := captureIfConfigured(l.Inspector, step, "post-validation", current); err != nil {
+					return Outcome{Packet: current}, fmt.Errorf("capture validation context: %w", err)
+				}
+				continue
+			}
 			if l.Approver == nil {
 				return Outcome{Packet: current}, fmt.Errorf("execution requires an approver")
 			}
@@ -84,11 +96,7 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 			if decision == approval.DecisionDeny {
 				return Outcome{Packet: current}, fmt.Errorf("execution denied by user")
 			}
-			result, execErr := l.Executor.Run(ctx, execx.Action{
-				Command:  resp.Command,
-				Cwd:      ".",
-				UseShell: resp.UseShell,
-			})
+			result, execErr := l.Executor.Run(ctx, action)
 			nextResult := ctxpacket.ExecutionResult{
 				Action:        result.Action,
 				ExitStatus:    fmt.Sprintf("%d", result.ExitStatus),

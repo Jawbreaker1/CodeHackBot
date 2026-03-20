@@ -184,3 +184,16 @@ func TestBuildRunningSummary(t *testing.T) {
 		}
 	}
 }
+
+func TestPrepareActionSplitsDirectCommandAndChecksExecutability(t *testing.T) {
+	action, validationFailure := prepareAction(Response{Type: "action", Command: "printf hello", UseShell: false})
+	if validationFailure != nil {
+		t.Fatalf("prepareAction() validation failure = %#v", validationFailure)
+	}
+	if action.Command != "printf" {
+		t.Fatalf("action.Command = %q", action.Command)
+	}
+	if len(action.Args) != 1 || action.Args[0] != "hello" {
+		t.Fatalf("action.Args = %#v", action.Args)
+	}
+}

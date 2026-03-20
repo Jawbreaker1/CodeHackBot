@@ -54,3 +54,14 @@ Rules:
 - Referencing `task_runtime` explicitly in the worker prompt was better than the earlier anchoring-only prompt tweak:
   - router still completed
   - ZIP stayed local and became more tool-directed without broadening into old session artifacts
+
+- Phase 1 is effectively complete: the thin worker loop, exact execution, approval model, context inspection, session resume, and minimal interactive shell are all real and validated.
+- The router/local-recon scenario is now good enough for the Phase 1 boundary: it still rereads evidence more than ideal, but it completes cleanly with coherent context and reproducible findings.
+- The ZIP scenario remains the best indicator of the raw closed-loop limit. It is still unstable across repeated runs even though the context is now much cleaner and more inspectable than before.
+- Recent generic result-truth fixes improved the active packet materially:
+  - `missing_path` is now surfaced reliably in bad shell/tool chains
+  - `incorrect_password` covers both direct incorrect-password text and `unable to get password` style output
+- The next active problem is no longer broad architecture confusion. It is the narrower tension between:
+  - stable named target identity in the active task
+  - noisy latest command output that can widen the loop into worse local directions
+- The right immediate next phase is not heavy memory-bank work. It is active-context quality: truth ordering, target stability, and better visibility into what is actually in the packet.

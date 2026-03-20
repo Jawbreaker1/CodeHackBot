@@ -1,6 +1,8 @@
 package context
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestInitialTaskRuntimeInfersTarget(t *testing.T) {
 	got := InitialTaskRuntime("Extract contents of secret.zip and identify the password needed to decrypt it.")

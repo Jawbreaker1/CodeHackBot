@@ -85,10 +85,11 @@ func section(name, content string) string {
 }
 
 func renderSessionFoundation(f session.Foundation) string {
-	return strings.Join([]string{
+	lines := []string{
 		"goal: " + f.Goal,
 		"reporting_requirement: " + f.ReportingRequirement,
-	}, "\n")
+	}
+	return strings.Join(lines, "\n")
 }
 
 func renderStep(s Step) string {

@@ -1122,7 +1122,7 @@ build context packet
 LLM chooses next action
    |
    v
-validate scope/approval/executability
+validate approval/executability
    |
    v
 execute exact action
