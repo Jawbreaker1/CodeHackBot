@@ -2,11 +2,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/approval"
 	"github.com/Jawbreaker1/CodeHackBot/internal/behavior"
@@ -22,13 +26,22 @@ import (
 	"github.com/Jawbreaker1/CodeHackBot/internal/workerloop"
 )
 
+type SessionPaths struct {
+	Root       string
+	LogsDir    string
+	ContextDir string
+	StatePath  string
+}
+
 func main() {
 	version := flag.Bool("version", false, "print version")
 	goal := flag.String("goal", "", "session goal")
-	resume := flag.Bool("resume", false, "resume the default rebuild worker session state")
+	resume := flag.Bool("resume", false, "resume a saved rebuild worker session state")
+	sessionDir := flag.String("session-dir", "", "session directory for state, logs, and context snapshots")
+	sessionsDir := flag.String("sessions-dir", "", "root directory used for newly created session directories")
 	reporting := flag.String("reporting", "owasp", "reporting requirement")
 	contextPacket := flag.Bool("context-packet", false, "print minimal worker context packet")
-	inspectContext := flag.Bool("inspect-context", false, "write turn-by-turn context snapshots to the default rebuild inspection directory")
+	inspectContext := flag.Bool("inspect-context", false, "write turn-by-turn context snapshots to the active session directory")
 	debugRunCommand := flag.String("debug-run-command", "", "development/debugging only: execute an exact command outside the worker loop")
 	debugRunShell := flag.Bool("debug-run-shell", false, "execute debug-run-command through /bin/sh -lc")
 	llmBaseURL := flag.String("llm-base-url", "", "OpenAI-compatible base URL without trailing /chat/completions")
@@ -44,6 +57,10 @@ func main() {
 
 	if *resume && strings.TrimSpace(*goal) != "" {
 		fmt.Fprintln(os.Stderr, "birdhackbot rebuild: use either --goal or --resume, not both")
+		os.Exit(2)
+	}
+	if *resume && strings.TrimSpace(*sessionDir) == "" {
+		fmt.Fprintln(os.Stderr, "birdhackbot rebuild: use --resume with --session-dir")
 		os.Exit(2)
 	}
 	if strings.TrimSpace(*debugRunCommand) != "" && strings.TrimSpace(*goal) != "" {
@@ -62,14 +79,36 @@ func main() {
 	}
 
 	if *resume {
-		if err := runResumedSession(repoRoot, *inspectContext); err != nil {
+		runCtx, stop := signalAwareContext()
+		defer stop()
+		paths, err := existingSessionPaths(*sessionDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "birdhackbot rebuild: invalid session dir: %v\n", err)
+			os.Exit(2)
+		}
+		if err := runResumedSession(runCtx, paths, *inspectContext); err != nil {
+			if isAborted(runCtx, err) {
+				fmt.Fprintln(os.Stderr, "birdhackbot rebuild: aborted by signal")
+				os.Exit(130)
+			}
 			fmt.Fprintf(os.Stderr, "birdhackbot rebuild: resume failed: %v\n", err)
 			os.Exit(1)
 		}
 		return
 	}
 	if strings.TrimSpace(*debugRunCommand) != "" {
-		if err := runDebugCommand(repoRoot, *debugRunCommand, *debugRunShell); err != nil {
+		runCtx, stop := signalAwareContext()
+		defer stop()
+		paths, err := allocateSessionPaths(repoRoot, *sessionsDir, *sessionDir, "debug")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "birdhackbot rebuild: prepare debug session: %v\n", err)
+			os.Exit(2)
+		}
+		if err := runDebugCommand(runCtx, paths, *debugRunCommand, *debugRunShell); err != nil {
+			if isAborted(runCtx, err) {
+				fmt.Fprintln(os.Stderr, "birdhackbot rebuild: aborted by signal")
+				os.Exit(130)
+			}
 			fmt.Fprintf(os.Stderr, "birdhackbot rebuild: debug command execution failed: %v\n", err)
 			os.Exit(1)
 		}
@@ -77,16 +116,21 @@ func main() {
 	}
 
 	if strings.TrimSpace(*goal) == "" && strings.TrimSpace(*llmBaseURL) != "" && strings.TrimSpace(*llmModel) != "" {
+		paths, err := allocateSessionPaths(repoRoot, *sessionsDir, *sessionDir, "interactive")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "birdhackbot rebuild: prepare interactive session: %v\n", err)
+			os.Exit(2)
+		}
 		loop := workerloop.Loop{
 			LLM: llmclient.Client{
 				BaseURL: *llmBaseURL,
 				Model:   *llmModel,
 			},
 			Executor: execx.Executor{
-				LogDir: filepath.Join(repoRoot, "sessions", "rebuild-dev", "logs"),
+				LogDir: paths.LogsDir,
 			},
 			Approver:  newApprover(*allowAll),
-			Inspector: newInspector(repoRoot, *inspectContext),
+			Inspector: newInspector(paths.ContextDir, *inspectContext),
 		}
 		shell := interactivecli.Shell{
 			Reader:    os.Stdin,
@@ -97,9 +141,16 @@ func main() {
 			Model:     *llmModel,
 			MaxSteps:  *maxSteps,
 			AllowAll:  *allowAll,
-			StatePath: defaultSessionStatePath(repoRoot),
+			StatePath: paths.StatePath,
 		}
-		if err := shell.Run(context.Background()); err != nil {
+		runCtx, stop := signalAwareContext()
+		defer stop()
+		fmt.Printf("session dir: %s\n", paths.Root)
+		if err := shell.Run(runCtx); err != nil {
+			if isAborted(runCtx, err) {
+				fmt.Fprintln(os.Stderr, "birdhackbot rebuild: aborted by signal")
+				os.Exit(130)
+			}
 			fmt.Fprintf(os.Stderr, "birdhackbot rebuild: interactive shell failed: %v\n", err)
 			os.Exit(1)
 		}
@@ -107,6 +158,11 @@ func main() {
 	}
 
 	if *goal != "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "birdhackbot rebuild: resolve working directory: %v\n", err)
+			os.Exit(2)
+		}
 		foundation, err := session.NewFoundation(session.Input{
 			Goal:                 *goal,
 			ReportingRequirement: *reporting,
@@ -131,7 +187,7 @@ func main() {
 					Objective:       foundation.Goal,
 					RemainingBudget: "unbounded",
 				},
-				TaskRuntime: ctxpacket.InitialTaskRuntime(foundation.Goal),
+				TaskRuntime: ctxpacket.InitialTaskRuntimeInDir(foundation.Goal, cwd),
 				PlanState: ctxpacket.PlanState{
 					Steps:      []string{"understand goal", "work the named target/task", "finish with a clear result"},
 					ActiveStep: foundation.Goal,
@@ -143,6 +199,7 @@ func main() {
 					ApprovalState: "pending",
 					Model:         "(unset)",
 					ContextUsage:  "(unset)",
+					WorkingDir:    cwd,
 				},
 			}
 			fmt.Println(packet.Render())
@@ -150,6 +207,13 @@ func main() {
 		}
 
 		if strings.TrimSpace(*llmBaseURL) != "" && strings.TrimSpace(*llmModel) != "" {
+			runCtx, stop := signalAwareContext()
+			defer stop()
+			paths, err := allocateSessionPaths(repoRoot, *sessionsDir, *sessionDir, "run")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "birdhackbot rebuild: prepare session: %v\n", err)
+				os.Exit(2)
+			}
 			packet := ctxpacket.WorkerPacket{
 				BehaviorFrame:     frame,
 				SessionFoundation: foundation,
@@ -160,7 +224,7 @@ func main() {
 					ExpectedEvidence: []string{"command logs", "artifacts if produced"},
 					RemainingBudget:  fmt.Sprintf("%d steps", *maxSteps),
 				},
-				TaskRuntime: ctxpacket.InitialTaskRuntime(foundation.Goal),
+				TaskRuntime: ctxpacket.InitialTaskRuntimeInDir(foundation.Goal, cwd),
 				PlanState: ctxpacket.PlanState{
 					Steps:      []string{"understand goal", "work the named target/task", "verify and finish"},
 					ActiveStep: foundation.Goal,
@@ -172,9 +236,10 @@ func main() {
 					ApprovalState: approvalState(*allowAll),
 					Model:         *llmModel,
 					ContextUsage:  "(unset)",
+					WorkingDir:    cwd,
 				},
 			}
-			statePath := defaultSessionStatePath(repoRoot)
+			statePath := paths.StatePath
 			if err := sessionstate.Save(statePath, sessionstate.State{
 				Status:   "active",
 				BaseURL:  *llmBaseURL,
@@ -193,13 +258,14 @@ func main() {
 					Model:   *llmModel,
 				},
 				Executor: execx.Executor{
-					LogDir: filepath.Join(repoRoot, "sessions", "rebuild-dev", "logs"),
+					LogDir: paths.LogsDir,
 				},
 				Approver:  newApprover(*allowAll),
-				Inspector: newInspector(repoRoot, *inspectContext),
+				Inspector: newInspector(paths.ContextDir, *inspectContext),
 			}
-			outcome, err := loop.Run(context.Background(), packet, *maxSteps)
+			outcome, err := loop.Run(runCtx, packet, *maxSteps)
 			if err != nil {
+				lastError := terminalError(runCtx, err)
 				_ = sessionstate.Save(statePath, sessionstate.State{
 					Status:    "stopped",
 					BaseURL:   *llmBaseURL,
@@ -207,8 +273,12 @@ func main() {
 					MaxSteps:  *maxSteps,
 					AllowAll:  *allowAll,
 					Packet:    outcome.Packet,
-					LastError: err.Error(),
+					LastError: lastError,
 				})
+				if isAborted(runCtx, err) {
+					fmt.Fprintln(os.Stderr, "birdhackbot rebuild: aborted by signal")
+					os.Exit(130)
+				}
 				fmt.Fprintf(os.Stderr, "birdhackbot rebuild: worker loop failed: %v\n", err)
 				os.Exit(1)
 			}
@@ -225,6 +295,7 @@ func main() {
 				os.Exit(2)
 			}
 			fmt.Printf("worker summary: %s\n", outcome.Summary)
+			fmt.Printf("session dir: %s\n", paths.Root)
 			fmt.Printf("session state: %s\n", statePath)
 			return
 		}
@@ -244,16 +315,17 @@ func approvalState(allowAll bool) string {
 	return "pending"
 }
 
-func runDebugCommand(repoRoot, command string, useShell bool) error {
+func runDebugCommand(ctx context.Context, paths SessionPaths, command string, useShell bool) error {
 	executor := execx.Executor{
-		LogDir: filepath.Join(repoRoot, "sessions", "rebuild-dev", "logs"),
+		LogDir: paths.LogsDir,
 	}
-	result, err := executor.Run(context.Background(), execx.Action{
+	result, err := executor.Run(ctx, execx.Action{
 		Command:  command,
 		Cwd:      ".",
 		UseShell: useShell,
 	})
 	fmt.Fprintln(os.Stderr, "birdhackbot rebuild: running dev/debug exact command outside the worker loop")
+	fmt.Printf("session dir: %s\n", paths.Root)
 	fmt.Printf("action=%s\nmode=%s\nexit_status=%d\nlog=%s\nstdout_summary=%s\nstderr_summary=%s\n",
 		result.Action, result.ExecutionMode, result.ExitStatus, result.LogPath, result.StdoutSummary, result.StderrSummary)
 	return err
@@ -276,27 +348,91 @@ func newApprover(allowAll bool) approval.Approver {
 	}
 }
 
-func newInspector(repoRoot string, enabled bool) workerloop.Inspector {
+func newInspector(contextDir string, enabled bool) workerloop.Inspector {
 	if !enabled {
 		return nil
 	}
-	return contextinspect.Recorder{
-		Dir: filepath.Join(repoRoot, "sessions", "rebuild-dev", "context"),
+	return contextinspect.Recorder{Dir: contextDir}
+}
+
+func existingSessionPaths(sessionDir string) (SessionPaths, error) {
+	root, err := normalizePath(sessionDir)
+	if err != nil {
+		return SessionPaths{}, err
+	}
+	return sessionPathsForRoot(root), nil
+}
+
+func allocateSessionPaths(repoRoot, sessionsRootFlag, sessionDirFlag, prefix string) (SessionPaths, error) {
+	if strings.TrimSpace(sessionDirFlag) != "" {
+		root, err := normalizePath(sessionDirFlag)
+		if err != nil {
+			return SessionPaths{}, err
+		}
+		paths := sessionPathsForRoot(root)
+		return paths, ensureSessionPaths(paths)
+	}
+	sessionsRoot, err := normalizeSessionsRoot(repoRoot, sessionsRootFlag)
+	if err != nil {
+		return SessionPaths{}, err
+	}
+	paths := sessionPathsForRoot(filepath.Join(sessionsRoot, sessionDirName(prefix)))
+	return paths, ensureSessionPaths(paths)
+}
+
+func normalizeSessionsRoot(repoRoot, override string) (string, error) {
+	if strings.TrimSpace(override) == "" {
+		return filepath.Join(repoRoot, "sessions"), nil
+	}
+	return normalizePath(override)
+}
+
+func normalizePath(path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("path is required")
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	return abs, nil
+}
+
+func sessionPathsForRoot(root string) SessionPaths {
+	return SessionPaths{
+		Root:       root,
+		LogsDir:    filepath.Join(root, "logs"),
+		ContextDir: filepath.Join(root, "context"),
+		StatePath:  filepath.Join(root, "session.json"),
 	}
 }
 
-func defaultSessionStatePath(repoRoot string) string {
-	return filepath.Join(repoRoot, "sessions", "rebuild-dev", "session.json")
+func sessionDirName(prefix string) string {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		prefix = "run"
+	}
+	return fmt.Sprintf("%s-%s", prefix, time.Now().UTC().Format("20060102-150405.000000000"))
 }
 
-func runResumedSession(repoRoot string, inspectContext bool) error {
-	statePath := defaultSessionStatePath(repoRoot)
+func ensureSessionPaths(paths SessionPaths) error {
+	for _, dir := range []string{paths.Root, paths.LogsDir, paths.ContextDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func runResumedSession(ctx context.Context, paths SessionPaths, inspectContext bool) error {
+	statePath := paths.StatePath
 	state, err := sessionstate.Load(statePath)
 	if err != nil {
 		return err
 	}
 	if state.Status == "completed" {
 		fmt.Printf("worker summary: %s\n", strings.TrimSpace(state.Summary))
+		fmt.Printf("session dir: %s\n", paths.Root)
 		fmt.Printf("session state: %s\n", statePath)
 		return nil
 	}
@@ -310,13 +446,14 @@ func runResumedSession(repoRoot string, inspectContext bool) error {
 			Model:   state.Model,
 		},
 		Executor: execx.Executor{
-			LogDir: filepath.Join(repoRoot, "sessions", "rebuild-dev", "logs"),
+			LogDir: paths.LogsDir,
 		},
 		Approver:  newApprover(state.AllowAll),
-		Inspector: newInspector(repoRoot, inspectContext),
+		Inspector: newInspector(paths.ContextDir, inspectContext),
 	}
-	outcome, err := loop.Run(context.Background(), state.Packet, state.MaxSteps)
+	outcome, err := loop.Run(ctx, state.Packet, state.MaxSteps)
 	if err != nil {
+		lastError := terminalError(ctx, err)
 		_ = sessionstate.Save(statePath, sessionstate.State{
 			Status:    "stopped",
 			BaseURL:   state.BaseURL,
@@ -324,7 +461,7 @@ func runResumedSession(repoRoot string, inspectContext bool) error {
 			MaxSteps:  state.MaxSteps,
 			AllowAll:  state.AllowAll,
 			Packet:    outcome.Packet,
-			LastError: err.Error(),
+			LastError: lastError,
 		})
 		return err
 	}
@@ -340,6 +477,7 @@ func runResumedSession(repoRoot string, inspectContext bool) error {
 		return err
 	}
 	fmt.Printf("worker summary: %s\n", outcome.Summary)
+	fmt.Printf("session dir: %s\n", paths.Root)
 	fmt.Printf("session state: %s\n", statePath)
 	return nil
 }
@@ -350,4 +488,25 @@ func resolveRepoRoot() (string, error) {
 		return "", err
 	}
 	return reporoot.Find(cwd)
+}
+
+func signalAwareContext() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+}
+
+func isAborted(ctx context.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	return ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+func terminalError(ctx context.Context, err error) string {
+	if isAborted(ctx, err) {
+		return "aborted by signal"
+	}
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }

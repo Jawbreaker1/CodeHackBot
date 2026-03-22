@@ -91,9 +91,13 @@ Goal:
 
 Planned tasks:
 - [x] Implement running summary as an explicit active section
-- [ ] Tighten truth ordering inside active context
+- [x] Tighten truth ordering inside active context
 - [ ] Improve target stability against noisy latest evidence without adding scenario-specific guardrails
-- [ ] Add visibility into included vs excluded context material and approximate size
+- [x] Add visibility into included vs excluded context material and approximate size
+- [x] Add interactive shell inspection commands for live multi-turn context testing:
+  - `/stats`
+  - `/packet`
+  - `/lastlog`
 - [ ] Re-run repeated live validation on:
   - `secret.zip`
   - router/local recon

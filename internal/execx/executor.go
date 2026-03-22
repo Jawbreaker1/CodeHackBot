@@ -26,6 +26,7 @@ type Action struct {
 // Result is the structured execution result used as canonical truth.
 type Result struct {
 	Action        string
+	ActualExec    string
 	ExecutionMode string
 	Cwd           string
 	EnvDelta      map[string]string
@@ -46,26 +47,56 @@ type Executor struct {
 	LogDir string
 }
 
+type Plan struct {
+	Action        Action
+	LogPath       string
+	Requested     string
+	ActualExec    string
+	ExecutionMode string
+}
+
 // Run executes the action exactly as requested, with minimal shell use only when needed.
 func (e Executor) Run(ctx context.Context, action Action) (Result, error) {
+	plan, err := e.Plan(action)
+	if err != nil {
+		return Result{}, err
+	}
+	return e.RunPlanned(ctx, plan)
+}
+
+func (e Executor) Plan(action Action) (Plan, error) {
 	if strings.TrimSpace(action.Command) == "" {
-		return Result{}, fmt.Errorf("command is required")
+		return Plan{}, fmt.Errorf("command is required")
 	}
 	if strings.TrimSpace(e.LogDir) == "" {
-		return Result{}, fmt.Errorf("log dir is required")
+		return Plan{}, fmt.Errorf("log dir is required")
 	}
 	if err := os.MkdirAll(e.LogDir, 0o755); err != nil {
-		return Result{}, fmt.Errorf("create log dir: %w", err)
+		return Plan{}, fmt.Errorf("create log dir: %w", err)
 	}
 
 	started := time.Now().UTC()
 	logPath := filepath.Join(e.LogDir, fmt.Sprintf("cmd-%s.log", started.Format("20060102-150405.000000000")))
+	return Plan{
+		Action:        action,
+		LogPath:       logPath,
+		Requested:     renderAction(action),
+		ActualExec:    actualInvocation(action),
+		ExecutionMode: executionMode(action),
+	}, nil
+}
 
-	cmd := buildCommand(ctx, action)
-	if strings.TrimSpace(action.Cwd) != "" {
-		cmd.Dir = action.Cwd
+func (e Executor) RunPlanned(ctx context.Context, plan Plan) (Result, error) {
+	started := time.Now().UTC()
+	if err := writeLogStart(plan.LogPath, plan, started); err != nil {
+		return Result{}, fmt.Errorf("write initial log: %w", err)
 	}
-	cmd.Env = append(os.Environ(), flattenEnv(action.Env)...)
+
+	cmd := buildCommand(ctx, plan.Action)
+	if strings.TrimSpace(plan.Action.Cwd) != "" {
+		cmd.Dir = plan.Action.Cwd
+	}
+	cmd.Env = append(os.Environ(), flattenEnv(plan.Action.Env)...)
 
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
@@ -82,21 +113,22 @@ func (e Executor) Run(ctx context.Context, action Action) (Result, error) {
 	stderrSummary := summarize(stderrBuf.String())
 	assessment, signals := assessResult(exitStatus, stdoutSummary, stderrSummary)
 
-	if err := writeLog(logPath, action, started, finished, exitStatus, stdoutBuf.String(), stderrBuf.String()); err != nil {
+	if err := writeLog(plan.LogPath, plan, started, finished, exitStatus, stdoutBuf.String(), stderrBuf.String()); err != nil {
 		return Result{}, fmt.Errorf("write log: %w", err)
 	}
 
 	result := Result{
-		Action:        renderAction(action),
-		ExecutionMode: executionMode(action),
-		Cwd:           action.Cwd,
-		EnvDelta:      cloneEnv(action.Env),
+		Action:        plan.Requested,
+		ActualExec:    plan.ActualExec,
+		ExecutionMode: plan.ExecutionMode,
+		Cwd:           plan.Action.Cwd,
+		EnvDelta:      cloneEnv(plan.Action.Env),
 		StartedAt:     started,
 		FinishedAt:    finished,
 		ExitStatus:    exitStatus,
 		StdoutSummary: stdoutSummary,
 		StderrSummary: stderrSummary,
-		LogPath:       logPath,
+		LogPath:       plan.LogPath,
 		ArtifactRefs:  nil,
 		Assessment:    assessment,
 		Signals:       signals,
@@ -121,10 +153,15 @@ func executionMode(action Action) string {
 }
 
 func renderAction(action Action) string {
-	if action.UseShell {
-		return strings.TrimSpace(strings.Join(append([]string{action.Command}, action.Args...), " "))
-	}
 	return strings.TrimSpace(strings.Join(append([]string{action.Command}, action.Args...), " "))
+}
+
+func actualInvocation(action Action) string {
+	if needsShell(action) {
+		full := strings.TrimSpace(strings.Join(append([]string{action.Command}, action.Args...), " "))
+		return `/bin/sh -lc "` + strings.ReplaceAll(full, `"`, `\"`) + `"`
+	}
+	return strings.Join(append([]string{action.Command}, action.Args...), " ")
 }
 
 func needsShell(action Action) bool {
@@ -278,11 +315,25 @@ func hasSignal(signals []string, want string) bool {
 	return false
 }
 
-func writeLog(path string, action Action, started, finished time.Time, exitStatus int, stdout, stderr string) error {
+func writeLogStart(path string, plan Plan, started time.Time) error {
 	content := strings.Join([]string{
-		"action: " + renderAction(action),
-		"execution_mode: " + executionMode(action),
-		"cwd: " + blankOrNone(action.Cwd),
+		"action: " + plan.Requested,
+		"actual_invocation: " + plan.ActualExec,
+		"execution_mode: " + plan.ExecutionMode,
+		"cwd: " + blankOrNone(plan.Action.Cwd),
+		"started_at: " + started.Format(time.RFC3339Nano),
+		"status: running",
+		"",
+	}, "\n")
+	return os.WriteFile(path, []byte(content), 0o644)
+}
+
+func writeLog(path string, plan Plan, started, finished time.Time, exitStatus int, stdout, stderr string) error {
+	content := strings.Join([]string{
+		"action: " + plan.Requested,
+		"actual_invocation: " + plan.ActualExec,
+		"execution_mode: " + plan.ExecutionMode,
+		"cwd: " + blankOrNone(plan.Action.Cwd),
 		"started_at: " + started.Format(time.RFC3339Nano),
 		"finished_at: " + finished.Format(time.RFC3339Nano),
 		fmt.Sprintf("exit_status: %d", exitStatus),

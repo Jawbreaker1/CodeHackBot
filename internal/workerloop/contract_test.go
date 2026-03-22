@@ -79,3 +79,18 @@ func TestParseResponseSupportsStringStepCompleteEnvelope(t *testing.T) {
 		t.Fatalf("unexpected response: %#v", r)
 	}
 }
+
+func TestParseResponseRepairsLiteralNewlineInsideJSONString(t *testing.T) {
+	input := "<think>reasoning</think>\n\n```json\n{\n  \"type\": \"action\",\n  \"command\": \"printf 'a'\nb\",\n  \"use_shell\": true\n}\n```"
+
+	r, err := ParseResponse(input)
+	if err != nil {
+		t.Fatalf("ParseResponse() error = %v", err)
+	}
+	if r.Type != "action" || !r.UseShell {
+		t.Fatalf("unexpected response: %#v", r)
+	}
+	if r.Command != "printf 'a'\nb" {
+		t.Fatalf("command = %q", r.Command)
+	}
+}

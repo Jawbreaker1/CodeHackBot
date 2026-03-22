@@ -45,6 +45,12 @@ func TestLoopStepComplete(t *testing.T) {
 	if outcome.Summary != "done" {
 		t.Fatalf("summary = %q", outcome.Summary)
 	}
+	if !strings.Contains(outcome.Packet.RunningSummary, "Status: done.") {
+		t.Fatalf("running summary = %q", outcome.Packet.RunningSummary)
+	}
+	if outcome.Packet.RunningSummary == "done" {
+		t.Fatalf("running summary should not be raw model completion text")
+	}
 }
 
 func TestBuildUserPromptIncludesCompletionGuidance(t *testing.T) {
@@ -70,13 +76,19 @@ func TestBuildUserPromptIncludesCompletionGuidance(t *testing.T) {
 		"Before choosing action, check whether the current goal is already satisfied by the latest execution result or relevant recent results.",
 		"If the goal is already satisfied with evidence in the context packet, choose step_complete.",
 		"Do not spend another turn re-reading or slicing the same log, command output, or artifact when the needed evidence is already present in the context packet.",
-		"Prefer the smallest bounded action that can establish the next needed fact.",
-		"Avoid broad, expensive, or long-running commands when a smaller action can make honest progress.",
-		"For interactive progress, favor commands that return quickly and preserve evidence for follow-up turns.",
+		"If the latest result clearly failed, first reconsider whether the failed command structure itself was necessary before repeating or elaborating it.",
+		"After a clear failure, prefer a simpler next action that removes the failure cause or gathers the missing fact directly.",
+		"Do not preserve self-invented scaffolding such as custom output files or new directories unless they are actually needed for the goal.",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q", want)
 		}
+	}
+	if strings.Contains(prompt, "[behavior_frame]") {
+		t.Fatalf("prompt unexpectedly contains behavior_frame packet section: %q", prompt)
+	}
+	if !strings.Contains(prompt, "\"context_packet\":") {
+		t.Fatalf("prompt missing context_packet payload: %q", prompt)
 	}
 }
 
@@ -147,12 +159,43 @@ func TestUpdateRelevantRecentResults(t *testing.T) {
 		{Action: "third", ExitStatus: "1"},
 		{Action: "fourth", ExitStatus: "0"},
 	}
-	got := updateRelevantRecentResults(current, ctxpacket.ExecutionResult{Action: "first", ExitStatus: "0"})
+	got := updateRelevantRecentResults(current, ctxpacket.ExecutionResult{Action: "first", ExitStatus: "0"}, "")
 	if len(got) != 3 {
 		t.Fatalf("len(got) = %d", len(got))
 	}
-	if got[0].Action != "first" || got[1].Action != "second" || got[2].Action != "third" {
+	if got[0].Action != "third" || got[1].Action != "first" || got[2].Action != "second" {
 		t.Fatalf("unexpected ordering: %#v", got)
+	}
+}
+
+func TestUpdateRelevantRecentResultsPrefersTargetRelevantEvidence(t *testing.T) {
+	current := []ctxpacket.ExecutionResult{
+		{
+			Action:        `find . -name "*.txt"`,
+			ExitStatus:    "0",
+			OutputSummary: "(none)",
+			Assessment:    "ambiguous",
+			Signals:       []string{"empty_output"},
+		},
+		{
+			Action:        "unzip -t secret.zip",
+			ExitStatus:    "0",
+			OutputSummary: "unable to get password",
+			Assessment:    "suspicious",
+			Signals:       []string{"incorrect_password"},
+		},
+	}
+	got := updateRelevantRecentResults(current, ctxpacket.ExecutionResult{
+		Action:        "env | grep -i pass",
+		ExitStatus:    "0",
+		OutputSummary: "(none)",
+		Assessment:    "success",
+	}, "secret.zip")
+	if len(got) < 2 {
+		t.Fatalf("len(got) = %d", len(got))
+	}
+	if got[0].Action != "unzip -t secret.zip" {
+		t.Fatalf("got[0].Action = %q", got[0].Action)
 	}
 }
 
@@ -171,16 +214,101 @@ func TestBuildRunningSummary(t *testing.T) {
 		},
 	)
 	for _, want := range []string{
-		"Objective: inspect archive.",
-		`Latest result: "file ./secret.zip" exited with 0.`,
+		"Status: needs interpretation.",
+		`Evidence: "file ./secret.zip" exited with 0.`,
 		"Assessment: suspicious.",
 		"Signals: error_text, incorrect_password.",
 		"Key output: stdout: ./secret.zip: ASCII text.",
-		"Recent prior results retained: 1.",
-		"Current status: needs interpretation.",
 	} {
 		if !strings.Contains(summary, want) {
 			t.Fatalf("summary missing %q in %q", want, summary)
+		}
+	}
+	for _, unwanted := range []string{
+		"Objective:",
+		"Recent prior results retained:",
+		"Current status:",
+	} {
+		if strings.Contains(summary, unwanted) {
+			t.Fatalf("summary unexpectedly contains %q in %q", unwanted, summary)
+		}
+	}
+}
+
+func TestBuildRunningSummaryPrefersStrongerRetainedEvidence(t *testing.T) {
+	summary := buildRunningSummary(
+		"extract archive",
+		ctxpacket.ExecutionResult{
+			Action:        "find /home/johan -name \"secret.zip\"",
+			ExitStatus:    "0",
+			OutputSummary: "stdout: /home/johan/.../secret.zip",
+			Assessment:    "success",
+		},
+		[]ctxpacket.ExecutionResult{
+			{
+				Action:        "unzip -t secret.zip",
+				ExitStatus:    "0",
+				OutputSummary: "stdout: unable to get password",
+				Assessment:    "suspicious",
+				Signals:       []string{"incorrect_password"},
+			},
+		},
+	)
+	for _, want := range []string{
+		"Status: needs interpretation.",
+		`Evidence: "unzip -t secret.zip" exited with 0.`,
+		"Assessment: suspicious.",
+		"Signals: incorrect_password.",
+		"Key output: stdout: unable to get password.",
+		"Latest result was weaker than retained evidence.",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary missing %q in %q", want, summary)
+		}
+	}
+}
+
+func TestBuildRunningSummaryCompactsLongFields(t *testing.T) {
+	longAction := "printf " + strings.Repeat("a", 200)
+	longOutput := "stdout: " + strings.Repeat("b", 400)
+	summary := buildRunningSummary(
+		"inspect archive",
+		ctxpacket.ExecutionResult{
+			Action:        longAction,
+			ExitStatus:    "0",
+			Assessment:    "success",
+			OutputSummary: longOutput,
+		},
+		nil,
+	)
+	if len(summary) >= len(longAction)+len(longOutput) {
+		t.Fatalf("summary was not compacted: len(summary)=%d", len(summary))
+	}
+	if !strings.Contains(summary, "...") {
+		t.Fatalf("summary missing compacted marker: %q", summary)
+	}
+}
+
+func TestBuildCompletionSummary(t *testing.T) {
+	summary := buildCompletionSummary(
+		"Perform local reconnaissance of 127.0.0.1",
+		ctxpacket.ExecutionResult{
+			Action:        "nmap -sV 127.0.0.1",
+			ExitStatus:    "0",
+			Assessment:    "success",
+			OutputSummary: "stdout: 22/tcp open ssh OpenSSH 10.2p1 Debian 3",
+		},
+		nil,
+	)
+	for _, want := range []string{
+		"Status: done.",
+		"Goal: Perform local reconnaissance of 127.0.0.1.",
+		`Completion evidence: "nmap -sV 127.0.0.1" exited with 0.`,
+		"Assessment: success.",
+		"Key output: stdout: 22/tcp open ssh OpenSSH 10.2p1 Debian 3.",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("completion summary missing %q in %q", want, summary)
 		}
 	}
 }

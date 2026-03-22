@@ -31,4 +31,25 @@ func TestRecorderCapture(t *testing.T) {
 	if !strings.Contains(text, "[session_foundation]") || !strings.Contains(text, "test goal") {
 		t.Fatalf("snapshot missing expected content:\n%s", text)
 	}
+
+	metaPath := filepath.Join(dir, "step-001-pre-llm-meta.txt")
+	meta, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("ReadFile(meta) error = %v", err)
+	}
+	metaText := string(meta)
+	for _, want := range []string{
+		"[snapshot]",
+		"total_chars:",
+		"approx_total_tokens:",
+		"section_count:",
+		"[sections]",
+		"behavior_frame: chars=",
+		"approx_tokens=",
+		"session_foundation: chars=",
+	} {
+		if !strings.Contains(metaText, want) {
+			t.Fatalf("meta snapshot missing %q in:\n%s", want, metaText)
+		}
+	}
 }

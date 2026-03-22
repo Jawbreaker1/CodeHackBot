@@ -188,24 +188,85 @@ func extractJSON(s string) (string, error) {
 	candidates := jsonObjectCandidates(s)
 	for i := len(candidates) - 1; i >= 0; i-- {
 		candidate := candidates[i]
-		var probe map[string]json.RawMessage
-		if err := json.Unmarshal([]byte(candidate), &probe); err != nil {
+		normalized, probe, ok := parseResponseCandidate(candidate)
+		if !ok {
 			continue
 		}
 		if _, ok := probe["type"]; ok {
-			return candidate, nil
+			return normalized, nil
 		}
 		if _, ok := probe["action"]; ok {
-			return candidate, nil
+			return normalized, nil
 		}
 		if _, ok := probe["step_complete"]; ok {
-			return candidate, nil
+			return normalized, nil
 		}
 		if _, ok := probe["ask_user"]; ok {
-			return candidate, nil
+			return normalized, nil
 		}
 	}
 	return "", fmt.Errorf("no response json object found")
+}
+
+func parseResponseCandidate(candidate string) (string, map[string]json.RawMessage, bool) {
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(candidate), &probe); err == nil {
+		return candidate, probe, true
+	}
+
+	normalized := escapeLiteralNewlinesInStrings(candidate)
+	if normalized == candidate {
+		return "", nil, false
+	}
+	if err := json.Unmarshal([]byte(normalized), &probe); err != nil {
+		return "", nil, false
+	}
+	return normalized, probe, true
+}
+
+func escapeLiteralNewlinesInStrings(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+
+	inString := false
+	escaped := false
+	changed := false
+
+	for _, r := range s {
+		if inString {
+			if escaped {
+				b.WriteRune(r)
+				escaped = false
+				continue
+			}
+			switch r {
+			case '\\':
+				b.WriteRune(r)
+				escaped = true
+			case '"':
+				b.WriteRune(r)
+				inString = false
+			case '\n':
+				b.WriteString(`\n`)
+				changed = true
+			case '\r':
+				changed = true
+			default:
+				b.WriteRune(r)
+			}
+			continue
+		}
+
+		if r == '"' {
+			inString = true
+		}
+		b.WriteRune(r)
+	}
+
+	if !changed {
+		return s
+	}
+	return b.String()
 }
 
 func jsonObjectCandidates(s string) []string {

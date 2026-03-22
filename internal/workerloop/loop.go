@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/approval"
@@ -58,7 +59,7 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 			current.TaskRuntime.State = "done"
 			current.TaskRuntime = ctxpacket.UpdateTaskRuntime(current.TaskRuntime, current.SessionFoundation.Goal, current.LatestExecutionResult)
 			current.TaskRuntime.MissingFact = "(none)"
-			current.RunningSummary = strings.TrimSpace(resp.Summary)
+			current.RunningSummary = buildCompletionSummary(current.SessionFoundation.Goal, current.LatestExecutionResult, current.RelevantRecentResults)
 			if err := captureIfConfigured(l.Inspector, step, "step-complete", current); err != nil {
 				return Outcome{Packet: current}, fmt.Errorf("capture completion context: %w", err)
 			}
@@ -72,10 +73,11 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 		case "action":
 			action, validationFailure := prepareAction(resp)
 			if validationFailure != nil {
-				current.RelevantRecentResults = updateRelevantRecentResults(current.RelevantRecentResults, current.LatestExecutionResult)
+				current.RelevantRecentResults = updateRelevantRecentResults(current.RelevantRecentResults, current.LatestExecutionResult, current.TaskRuntime.CurrentTarget)
 				current.LatestExecutionResult = *validationFailure
+				truth := ctxpacket.ActiveTruthResult(current.LatestExecutionResult, current.RelevantRecentResults)
 				current.TaskRuntime.State = "running"
-				current.TaskRuntime = ctxpacket.UpdateTaskRuntime(current.TaskRuntime, current.SessionFoundation.Goal, current.LatestExecutionResult)
+				current.TaskRuntime = ctxpacket.UpdateTaskRuntime(current.TaskRuntime, current.SessionFoundation.Goal, truth)
 				current.RunningSummary = buildRunningSummary(current.CurrentStep.Objective, current.LatestExecutionResult, current.RelevantRecentResults)
 				if err := captureIfConfigured(l.Inspector, step, "post-validation", current); err != nil {
 					return Outcome{Packet: current}, fmt.Errorf("capture validation context: %w", err)
@@ -96,7 +98,23 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 			if decision == approval.DecisionDeny {
 				return Outcome{Packet: current}, fmt.Errorf("execution denied by user")
 			}
-			result, execErr := l.Executor.Run(ctx, action)
+			plan, err := l.Executor.Plan(action)
+			if err != nil {
+				return Outcome{Packet: current}, fmt.Errorf("prepare execution: %w", err)
+			}
+			current.OperatorState.PendingAction = plan.Requested
+			current.OperatorState.PendingMode = plan.ExecutionMode
+			current.OperatorState.PendingExec = plan.ActualExec
+			current.OperatorState.PendingLog = plan.LogPath
+			if err := captureIfConfigured(l.Inspector, step, "pre-action", current); err != nil {
+				return Outcome{Packet: current}, fmt.Errorf("capture pre-action context: %w", err)
+			}
+
+			result, execErr := l.Executor.RunPlanned(ctx, plan)
+			current.OperatorState.PendingAction = ""
+			current.OperatorState.PendingMode = ""
+			current.OperatorState.PendingExec = ""
+			current.OperatorState.PendingLog = ""
 			nextResult := ctxpacket.ExecutionResult{
 				Action:        result.Action,
 				ExitStatus:    fmt.Sprintf("%d", result.ExitStatus),
@@ -107,10 +125,11 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 				Signals:       append([]string(nil), result.Signals...),
 				FailureClass:  result.FailureClass,
 			}
-			current.RelevantRecentResults = updateRelevantRecentResults(current.RelevantRecentResults, current.LatestExecutionResult)
+			current.RelevantRecentResults = updateRelevantRecentResults(current.RelevantRecentResults, current.LatestExecutionResult, current.TaskRuntime.CurrentTarget)
 			current.LatestExecutionResult = nextResult
+			truth := ctxpacket.ActiveTruthResult(current.LatestExecutionResult, current.RelevantRecentResults)
 			current.TaskRuntime.State = "running"
-			current.TaskRuntime = ctxpacket.UpdateTaskRuntime(current.TaskRuntime, current.SessionFoundation.Goal, current.LatestExecutionResult)
+			current.TaskRuntime = ctxpacket.UpdateTaskRuntime(current.TaskRuntime, current.SessionFoundation.Goal, truth)
 			current.RunningSummary = buildRunningSummary(current.CurrentStep.Objective, current.LatestExecutionResult, current.RelevantRecentResults)
 			if err := captureIfConfigured(l.Inspector, step, "post-action", current); err != nil {
 				return Outcome{Packet: current}, fmt.Errorf("capture post-action context: %w", err)
@@ -138,13 +157,13 @@ func buildUserPrompt(packet ctxpacket.WorkerPacket) string {
 			"Before choosing action, check whether the current goal is already satisfied by the latest execution result or relevant recent results.",
 			"If the goal is already satisfied with evidence in the context packet, choose step_complete.",
 			"Do not spend another turn re-reading or slicing the same log, command output, or artifact when the needed evidence is already present in the context packet.",
-			"Prefer the smallest bounded action that can establish the next needed fact.",
-			"Avoid broad, expensive, or long-running commands when a smaller action can make honest progress.",
-			"For interactive progress, favor commands that return quickly and preserve evidence for follow-up turns.",
+			"If the latest result clearly failed, first reconsider whether the failed command structure itself was necessary before repeating or elaborating it.",
+			"After a clear failure, prefer a simpler next action that removes the failure cause or gathers the missing fact directly.",
+			"Do not preserve self-invented scaffolding such as custom output files or new directories unless they are actually needed for the goal.",
 			"Do not invent hidden steps.",
 			"Do not use alternative key names or nested envelopes.",
 		},
-		"context_packet": packet.Render(),
+		"context_packet": packet.RenderWithoutBehaviorFrame(),
 	}
 	data, _ := json.MarshalIndent(payload, "", "  ")
 	return string(data)
@@ -181,47 +200,147 @@ func compactOutputSummary(s string) string {
 	return s
 }
 
-func updateRelevantRecentResults(current []ctxpacket.ExecutionResult, previousLatest ctxpacket.ExecutionResult) []ctxpacket.ExecutionResult {
+func updateRelevantRecentResults(current []ctxpacket.ExecutionResult, previousLatest ctxpacket.ExecutionResult, currentTarget string) []ctxpacket.ExecutionResult {
 	if strings.TrimSpace(previousLatest.Action) == "" {
 		return current
 	}
-	next := append([]ctxpacket.ExecutionResult{previousLatest}, current...)
-	if len(next) > 3 {
-		next = next[:3]
+
+	type scoredResult struct {
+		result ctxpacket.ExecutionResult
+		score  int
+		order  int
+	}
+
+	candidates := append([]ctxpacket.ExecutionResult{previousLatest}, current...)
+	scored := make([]scoredResult, 0, len(candidates))
+	seen := make(map[string]bool, len(candidates))
+	for i, candidate := range candidates {
+		key := strings.TrimSpace(candidate.Action) + "|" + strings.TrimSpace(candidate.ExitStatus) + "|" + strings.TrimSpace(candidate.Assessment)
+		if strings.TrimSpace(candidate.Action) == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		scored = append(scored, scoredResult{
+			result: candidate,
+			score:  retainedEvidenceScore(candidate, currentTarget),
+			order:  i,
+		})
+	}
+
+	slices.SortStableFunc(scored, func(a, b scoredResult) int {
+		if a.score != b.score {
+			return b.score - a.score
+		}
+		return a.order - b.order
+	})
+
+	next := make([]ctxpacket.ExecutionResult, 0, min(3, len(scored)))
+	for _, item := range scored {
+		next = append(next, item.result)
+		if len(next) == 3 {
+			break
+		}
 	}
 	return next
 }
 
+func retainedEvidenceScore(result ctxpacket.ExecutionResult, currentTarget string) int {
+	score := 0
+	if mentionsTarget(result, currentTarget) {
+		score += 100
+	}
+	switch strings.TrimSpace(result.Assessment) {
+	case "failed":
+		score += 40
+	case "suspicious":
+		score += 30
+	case "ambiguous":
+		score += 20
+	case "success":
+		score += 10
+	}
+	if strings.TrimSpace(result.FailureClass) != "" {
+		score += 15
+	}
+	if strings.TrimSpace(result.ExitStatus) != "" && strings.TrimSpace(result.ExitStatus) != "0" && strings.TrimSpace(result.ExitStatus) != "(none)" {
+		score += 20
+	}
+	score += len(result.Signals) * 5
+	if strings.TrimSpace(result.OutputSummary) == "" || strings.TrimSpace(result.OutputSummary) == "(none)" {
+		score -= 5
+	}
+	return score
+}
+
+func mentionsTarget(result ctxpacket.ExecutionResult, currentTarget string) bool {
+	currentTarget = strings.TrimSpace(currentTarget)
+	if currentTarget == "" {
+		return false
+	}
+	fields := []string{
+		result.Action,
+		result.OutputSummary,
+		strings.Join(result.ArtifactRefs, " "),
+		strings.Join(result.LogRefs, " "),
+	}
+	for _, field := range fields {
+		if strings.Contains(field, currentTarget) {
+			return true
+		}
+	}
+	return false
+}
+
 func buildRunningSummary(objective string, latest ctxpacket.ExecutionResult, recent []ctxpacket.ExecutionResult) string {
-	objective = strings.TrimSpace(objective)
+	truth := ctxpacket.ActiveTruthResult(latest, recent)
 	status := "in progress"
-	if strings.TrimSpace(latest.Assessment) == "failed" || strings.TrimSpace(latest.FailureClass) != "" || strings.TrimSpace(latest.ExitStatus) == "-1" {
+	if strings.TrimSpace(truth.Assessment) == "failed" || strings.TrimSpace(truth.FailureClass) != "" || strings.TrimSpace(truth.ExitStatus) == "-1" {
 		status = "encountered a failure"
 	}
-	if strings.TrimSpace(latest.ExitStatus) != "" && strings.TrimSpace(latest.ExitStatus) != "(none)" && strings.TrimSpace(latest.ExitStatus) != "0" {
+	if strings.TrimSpace(truth.ExitStatus) != "" && strings.TrimSpace(truth.ExitStatus) != "(none)" && strings.TrimSpace(truth.ExitStatus) != "0" {
 		status = "encountered a failure"
 	}
-	if strings.TrimSpace(latest.Assessment) == "suspicious" || strings.TrimSpace(latest.Assessment) == "ambiguous" {
+	if strings.TrimSpace(truth.Assessment) == "suspicious" || strings.TrimSpace(truth.Assessment) == "ambiguous" {
 		status = "needs interpretation"
 	}
 
-	parts := []string{
-		fmt.Sprintf("Objective: %s.", blankOrFallback(objective, "make progress on the current goal")),
-		fmt.Sprintf("Latest result: %q exited with %s.", latest.Action, blankOrFallback(strings.TrimSpace(latest.ExitStatus), "(none)")),
+	parts := []string{fmt.Sprintf("Status: %s.", status)}
+	if strings.TrimSpace(truth.Action) != "" {
+		parts = append(parts, fmt.Sprintf("Evidence: %q exited with %s.", compactInline(truth.Action, 120), blankOrFallback(strings.TrimSpace(truth.ExitStatus), "(none)")))
 	}
-	if strings.TrimSpace(latest.Assessment) != "" && strings.TrimSpace(latest.Assessment) != "(none)" {
-		parts = append(parts, fmt.Sprintf("Assessment: %s.", latest.Assessment))
+	if strings.TrimSpace(truth.Assessment) != "" && strings.TrimSpace(truth.Assessment) != "(none)" {
+		parts = append(parts, fmt.Sprintf("Assessment: %s.", truth.Assessment))
 	}
-	if len(latest.Signals) > 0 {
-		parts = append(parts, fmt.Sprintf("Signals: %s.", strings.Join(latest.Signals, ", ")))
+	if len(truth.Signals) > 0 {
+		parts = append(parts, fmt.Sprintf("Signals: %s.", strings.Join(truth.Signals, ", ")))
 	}
-	if strings.TrimSpace(latest.OutputSummary) != "" && strings.TrimSpace(latest.OutputSummary) != "(none)" {
-		parts = append(parts, fmt.Sprintf("Key output: %s.", singleLine(latest.OutputSummary)))
+	if strings.TrimSpace(truth.OutputSummary) != "" && strings.TrimSpace(truth.OutputSummary) != "(none)" {
+		parts = append(parts, fmt.Sprintf("Key output: %s.", compactInline(singleLine(truth.OutputSummary), 220)))
 	}
-	if len(recent) > 0 {
-		parts = append(parts, fmt.Sprintf("Recent prior results retained: %d.", len(recent)))
+	if truth.Action != latest.Action && strings.TrimSpace(truth.Action) != "" {
+		parts = append(parts, "Latest result was weaker than retained evidence.")
 	}
-	parts = append(parts, fmt.Sprintf("Current status: %s.", status))
+	return strings.Join(parts, " ")
+}
+
+func buildCompletionSummary(goal string, latest ctxpacket.ExecutionResult, recent []ctxpacket.ExecutionResult) string {
+	truth := ctxpacket.ActiveTruthResult(latest, recent)
+	parts := []string{"Status: done."}
+	if strings.TrimSpace(goal) != "" {
+		parts = append(parts, fmt.Sprintf("Goal: %s.", compactInline(goal, 160)))
+	}
+	if strings.TrimSpace(truth.Action) != "" {
+		parts = append(parts, fmt.Sprintf("Completion evidence: %q exited with %s.", compactInline(truth.Action, 120), blankOrFallback(strings.TrimSpace(truth.ExitStatus), "(none)")))
+	}
+	if strings.TrimSpace(truth.Assessment) != "" && strings.TrimSpace(truth.Assessment) != "(none)" {
+		parts = append(parts, fmt.Sprintf("Assessment: %s.", truth.Assessment))
+	}
+	if len(truth.Signals) > 0 {
+		parts = append(parts, fmt.Sprintf("Signals: %s.", strings.Join(truth.Signals, ", ")))
+	}
+	if strings.TrimSpace(truth.OutputSummary) != "" && strings.TrimSpace(truth.OutputSummary) != "(none)" {
+		parts = append(parts, fmt.Sprintf("Key output: %s.", compactInline(singleLine(truth.OutputSummary), 220)))
+	}
 	return strings.Join(parts, " ")
 }
 
@@ -236,6 +355,17 @@ func blankOrFallback(v, fallback string) string {
 		return fallback
 	}
 	return strings.TrimSpace(v)
+}
+
+func compactInline(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	if max <= 3 {
+		return s[:max]
+	}
+	return strings.TrimSpace(s[:max-3]) + "..."
 }
 
 func captureIfConfigured(inspector Inspector, step int, stage string, packet ctxpacket.WorkerPacket) error {

@@ -65,3 +65,61 @@ Rules:
   - stable named target identity in the active task
   - noisy latest command output that can widen the loop into worse local directions
 - The right immediate next phase is not heavy memory-bank work. It is active-context quality: truth ordering, target stability, and better visibility into what is actually in the packet.
+- Later capability/skills phase: evaluate curated reuse of external security-skill repositories (for example `mukul975/Anthropic-Cybersecurity-Skills`) as inspiration/reference only, not as bulk-imported active runtime behavior.
+- Pre-execution observability was a real gap in the thin loop. Adding `pre-action` snapshots and pre-created execution logs closed it and made long-running or hanging first commands diagnosable before completion.
+- The interactive shell now has enough built-in inspection for Phase 2 live context work:
+  - `/stats` shows packet size and per-section sizes
+  - `/packet` dumps the current packet
+  - `/lastlog` shows the pending or latest execution log path
+- Interactive Phase 2 baseline before pruning/summarization:
+  - `4` user prompts are enough to produce meaningful context-growth signal
+  - ZIP baseline session: `sessions/phase2-baseline-20260321-153019/zip/output.txt`
+    - after first task prompt: total `7473` chars, about `1869` tokens by the current rough estimator (`chars/4`)
+    - after third task prompt: total `9127` chars, about `2282` tokens by the current rough estimator
+    - dominant growth came from `running_summary` (`613` -> `916`) and `relevant_recent_results` (`526` -> `1777`)
+  - Router baseline session: `sessions/phase2-baseline-20260321-153019/router/output.txt`
+    - after first task prompt: total `6992` chars, about `1748` tokens by the current rough estimator
+    - after later follow-up prompts: total `7427` chars, about `1857` tokens by the current rough estimator
+    - growth was smaller and cleaner, dominated by `recent_conversation`
+  - Current interactive baseline packets are still far below the available `262k` token window, so pruning should prioritize truth and stability over aggressive size reduction.
+- The interactive baseline exposed a real active-context truth issue:
+  - ZIP `missing_fact` had been attributing `missing_path` failures to the main target (`secret.zip`) instead of the actually missing artifact (for example a missing wordlist path)
+  - this must be corrected before pruning so later comparisons use truthful baseline state
+- Light Phase 2 pruning should start with `running_summary`, not evidence fields:
+  - narrowing `running_summary` to status + strongest evidence reduced redundant growth without changing the evidence model
+  - ZIP `running_summary` dropped from roughly `613 -> 916` chars in the pre-pruning baseline to roughly `268 -> 394` chars in the post-pruning comparison run
+  - total packet size changed only slightly, which is acceptable because the goal is redundancy cleanup rather than aggressive compression
+- After that light pruning slice, the next growth pressure is clearly `relevant_recent_results`, not `running_summary`.
+- A render-only light pruning pass on `relevant_recent_results` is safe and useful:
+  - keep the underlying retained evidence model unchanged
+  - compact only the packet rendering of prior results:
+    - shorter action/output text
+    - first log/artifact ref only
+  - ZIP comparison:
+    - first post-task packet dropped from about `1881` tokens to about `1866`
+    - later packet dropped from about `2196` tokens to about `2093`
+  - Router comparison:
+    - first post-task packet dropped from about `1766` tokens to about `1742`
+    - later packet dropped from about `2033` tokens to about `1974`
+  - This is the right kind of Phase 2 pruning: small, conservative, and aimed at redundancy rather than aggressive compression.
+- Conversation retention policy for Phase 2:
+  - keep up to `20` raw conversation turns
+  - also cap the raw conversation tail at about `20k` tokens using the same rough `chars/4` estimator
+  - roll older overflow into `older_conversation_summary`
+  - shell-level validation confirms rollover works and preserves older notes instead of dropping them silently
+- In the current live longer sessions, the packet is still well below the available `262k` context window, so the new conversation policy behaves conservatively:
+  - raw recent conversation remains generous
+  - summarization does not activate early just for tidiness
+  - `recent_conversation` is now the main long-session growth source to watch
+- Missing-path attribution also needs to stay conservative:
+  - explicit missing artifacts like `/usr/share/wordlists/rockyou.txt` should be preserved when corroborated by the action/result
+  - malformed output-only paths from shell expansion noise should not be promoted into `missing_fact`
+- The real-router diagnostic showed the exact first command choice clearly:
+  - first useful captured heavy version: `nmap -sV -p- --open 192.168.50.1`
+  - later bounded-but-still-scaffolded version: `nmap -sV --top-ports 100 -oN /tmp/recon_192.168.50.1_scan.txt 192.168.50.1`
+  - later contradictory compromise after more prompt steering: `nmap -sV -p- --top-ports 100 192.168.50.1`
+- This is the current limit of plain prompt steering for first-action behavior:
+  - generic prompt nudges can move the model
+  - but pushing harder starts to distort command construction
+  - correctness is more important than trying to force "fast first" behavior before planning exists
+- Conclusion: fast-first recon strategy should move into the later planning layer rather than keep accumulating in the closed-loop prompt.

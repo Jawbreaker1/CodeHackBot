@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestExecutorRunArgv(t *testing.T) {
@@ -22,6 +23,9 @@ func TestExecutorRunArgv(t *testing.T) {
 	if result.ExecutionMode != "argv" {
 		t.Fatalf("ExecutionMode = %q", result.ExecutionMode)
 	}
+	if result.ActualExec != "printf hello" {
+		t.Fatalf("ActualExec = %q", result.ActualExec)
+	}
 	if result.ExitStatus != 0 {
 		t.Fatalf("ExitStatus = %d", result.ExitStatus)
 	}
@@ -30,6 +34,13 @@ func TestExecutorRunArgv(t *testing.T) {
 	}
 	if _, err := os.Stat(result.LogPath); err != nil {
 		t.Fatalf("log file missing: %v", err)
+	}
+	logData, err := os.ReadFile(result.LogPath)
+	if err != nil {
+		t.Fatalf("ReadFile(log) error = %v", err)
+	}
+	if !strings.Contains(string(logData), "actual_invocation: printf hello") {
+		t.Fatalf("log missing actual_invocation:\n%s", string(logData))
 	}
 }
 
@@ -48,12 +59,46 @@ func TestExecutorRunShell(t *testing.T) {
 	if result.ExecutionMode != "shell" {
 		t.Fatalf("ExecutionMode = %q", result.ExecutionMode)
 	}
+	if !strings.Contains(result.ActualExec, `/bin/sh -lc "printf shell-test > shell.txt"`) {
+		t.Fatalf("ActualExec = %q", result.ActualExec)
+	}
 	content, err := os.ReadFile(filepath.Join(logDir, "shell.txt"))
 	if err != nil {
 		t.Fatalf("read shell.txt: %v", err)
 	}
 	if string(content) != "shell-test" {
 		t.Fatalf("shell.txt = %q", string(content))
+	}
+}
+
+func TestExecutorPlanAndInitialLog(t *testing.T) {
+	logDir := t.TempDir()
+	exec := Executor{LogDir: logDir}
+
+	plan, err := exec.Plan(Action{
+		Command:  "printf hello > out.txt",
+		Cwd:      logDir,
+		UseShell: true,
+	})
+	if err != nil {
+		t.Fatalf("Plan() error = %v", err)
+	}
+	if err := writeLogStart(plan.LogPath, plan, time.Unix(1, 0).UTC()); err != nil {
+		t.Fatalf("writeLogStart() error = %v", err)
+	}
+	data, err := os.ReadFile(plan.LogPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		"action: printf hello > out.txt",
+		"actual_invocation: /bin/sh -lc",
+		"status: running",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("initial log missing %q in:\n%s", want, text)
+		}
 	}
 }
 

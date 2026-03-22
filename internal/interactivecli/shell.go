@@ -3,12 +3,15 @@ package interactivecli
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/behavior"
 	ctxpacket "github.com/Jawbreaker1/CodeHackBot/internal/context"
+	"github.com/Jawbreaker1/CodeHackBot/internal/contextstats"
 	"github.com/Jawbreaker1/CodeHackBot/internal/session"
 	"github.com/Jawbreaker1/CodeHackBot/internal/sessionstate"
 	"github.com/Jawbreaker1/CodeHackBot/internal/workerloop"
@@ -29,6 +32,7 @@ type Shell struct {
 	MaxSteps  int
 	AllowAll  bool
 	StatePath string
+	SaveState func(path string, state sessionstate.State) error
 }
 
 func (s Shell) Run(ctx context.Context) error {
@@ -77,6 +81,17 @@ func (s Shell) Run(ctx context.Context) error {
 		if line == "exit" || line == "quit" {
 			return nil
 		}
+		if strings.HasPrefix(line, "/") {
+			if handled, cmdErr := handleShellCommand(s.Writer, line, started, packet); handled {
+				if cmdErr != nil {
+					_, _ = fmt.Fprintf(s.Writer, "error: %v\n", cmdErr)
+				}
+				if err == io.EOF {
+					return nil
+				}
+				continue
+			}
+		}
 
 		if !started {
 			packet, err = newInitialPacket(frame, line, s.Model, s.AllowAll, s.MaxSteps)
@@ -85,24 +100,30 @@ func (s Shell) Run(ctx context.Context) error {
 			}
 			started = true
 		} else {
-			packet.RecentConversation = appendRecentConversation(packet.RecentConversation, "User: "+line)
-			packet.CurrentStep.Objective = line
-			packet.PlanState.ActiveStep = line
+			packet.RecentConversation, packet.OlderConversationSummary = ctxpacket.AppendConversation(packet.RecentConversation, packet.OlderConversationSummary, "User: "+line)
 		}
 
-		_ = sessionstate.Save(s.StatePath, sessionstate.State{
+		if err := s.saveState(sessionstate.State{
 			Status:   "active",
 			BaseURL:  s.BaseURL,
 			Model:    s.Model,
 			MaxSteps: s.MaxSteps,
 			AllowAll: s.AllowAll,
 			Packet:   packet,
-		})
+		}); err != nil {
+			return fmt.Errorf("save session state: %w", err)
+		}
 
 		outcome, runErr := s.Runner.Run(ctx, packet, s.MaxSteps)
 		packet = outcome.Packet
+		if strings.TrimSpace(packet.CurrentStep.Objective) == "" {
+			packet.CurrentStep.Objective = packet.SessionFoundation.Goal
+		}
+		if strings.TrimSpace(packet.PlanState.ActiveStep) == "" {
+			packet.PlanState.ActiveStep = packet.SessionFoundation.Goal
+		}
 		if strings.TrimSpace(outcome.Summary) != "" {
-			packet.RecentConversation = appendRecentConversation(packet.RecentConversation, "Assistant: "+outcome.Summary)
+			packet.RecentConversation, packet.OlderConversationSummary = ctxpacket.AppendConversation(packet.RecentConversation, packet.OlderConversationSummary, "Assistant: "+outcome.Summary)
 		}
 		state := sessionstate.State{
 			Status:   "active",
@@ -115,11 +136,18 @@ func (s Shell) Run(ctx context.Context) error {
 		}
 		if runErr != nil {
 			state.Status = "stopped"
-			state.LastError = runErr.Error()
-			_ = sessionstate.Save(s.StatePath, state)
+			state.LastError = normalizeRunError(ctx, runErr)
+			if err := s.saveState(state); err != nil {
+				return fmt.Errorf("save session state after run error %q: %w", runErr, err)
+			}
+			if ctx.Err() != nil || errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
+				return runErr
+			}
 			_, _ = fmt.Fprintf(s.Writer, "error: %v\n", runErr)
 		} else {
-			_ = sessionstate.Save(s.StatePath, state)
+			if err := s.saveState(state); err != nil {
+				return fmt.Errorf("save session state after run: %w", err)
+			}
 			_, _ = fmt.Fprintf(s.Writer, "%s\n", strings.TrimSpace(outcome.Summary))
 		}
 
@@ -129,7 +157,61 @@ func (s Shell) Run(ctx context.Context) error {
 	}
 }
 
+func (s Shell) saveState(state sessionstate.State) error {
+	if s.SaveState != nil {
+		return s.SaveState(s.StatePath, state)
+	}
+	return sessionstate.Save(s.StatePath, state)
+}
+
+func normalizeRunError(ctx context.Context, err error) string {
+	if err == nil {
+		return ""
+	}
+	if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return "aborted by signal"
+	}
+	return err.Error()
+}
+
+func handleShellCommand(w io.Writer, line string, started bool, packet ctxpacket.WorkerPacket) (bool, error) {
+	switch strings.TrimSpace(line) {
+	case "/stats":
+		if !started {
+			_, _ = fmt.Fprintln(w, "no active session")
+			return true, nil
+		}
+		_, _ = fmt.Fprintln(w, renderPacketStats(packet))
+		return true, nil
+	case "/packet":
+		if !started {
+			_, _ = fmt.Fprintln(w, "no active session")
+			return true, nil
+		}
+		_, _ = fmt.Fprintln(w, packet.Render())
+		return true, nil
+	case "/lastlog":
+		if !started {
+			_, _ = fmt.Fprintln(w, "no active session")
+			return true, nil
+		}
+		logPath := latestLogPath(packet)
+		if strings.TrimSpace(logPath) == "" {
+			_, _ = fmt.Fprintln(w, "(none)")
+			return true, nil
+		}
+		_, _ = fmt.Fprintln(w, logPath)
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
 func newInitialPacket(frame behavior.Frame, goal, model string, allowAll bool, maxSteps int) (ctxpacket.WorkerPacket, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ctxpacket.WorkerPacket{}, fmt.Errorf("resolve working directory: %w", err)
+	}
 	foundation, err := session.NewFoundation(session.Input{Goal: goal, ReportingRequirement: "owasp"})
 	if err != nil {
 		return ctxpacket.WorkerPacket{}, err
@@ -144,7 +226,7 @@ func newInitialPacket(frame behavior.Frame, goal, model string, allowAll bool, m
 			ExpectedEvidence: []string{"command logs", "artifacts if produced"},
 			RemainingBudget:  fmt.Sprintf("%d steps", maxSteps),
 		},
-		TaskRuntime: ctxpacket.InitialTaskRuntime(foundation.Goal),
+		TaskRuntime: ctxpacket.InitialTaskRuntimeInDir(foundation.Goal, cwd),
 		PlanState: ctxpacket.PlanState{
 			Steps:      []string{"understand goal", "work the named target/task", "verify and finish"},
 			ActiveStep: foundation.Goal,
@@ -156,19 +238,9 @@ func newInitialPacket(frame behavior.Frame, goal, model string, allowAll bool, m
 			ApprovalState: approvalStateLabel(allowAll),
 			Model:         model,
 			ContextUsage:  "(unset)",
+			WorkingDir:    cwd,
 		},
 	}, nil
-}
-
-func appendRecentConversation(current []string, entry string) []string {
-	if strings.TrimSpace(entry) == "" {
-		return current
-	}
-	next := append(current, entry)
-	if len(next) > 8 {
-		next = next[len(next)-8:]
-	}
-	return next
 }
 
 func approvalStateLabel(allowAll bool) string {
@@ -183,4 +255,25 @@ func approvalModeLabel(allowAll bool) string {
 		return "session_allow_all"
 	}
 	return "approve_per_execution"
+}
+
+func renderPacketStats(packet ctxpacket.WorkerPacket) string {
+	rendered := packet.Render()
+	stats := contextstats.Build(rendered, packet.RenderSections())
+	lines := []string{"context stats:"}
+	for _, section := range stats.Sections {
+		lines = append(lines, fmt.Sprintf("- %s: chars=%d lines=%d approx_tokens=%d", section.Name, section.Chars, section.Lines, section.ApproxTokens))
+	}
+	lines = append(lines, fmt.Sprintf("total: chars=%d lines=%d approx_tokens=%d sections=%d", stats.TotalChars, stats.TotalLines, stats.ApproxTotalTokens, stats.SectionCount))
+	return strings.Join(lines, "\n")
+}
+
+func latestLogPath(packet ctxpacket.WorkerPacket) string {
+	if strings.TrimSpace(packet.OperatorState.PendingLog) != "" {
+		return strings.TrimSpace(packet.OperatorState.PendingLog)
+	}
+	if len(packet.LatestExecutionResult.LogRefs) > 0 {
+		return strings.TrimSpace(packet.LatestExecutionResult.LogRefs[0])
+	}
+	return ""
 }
