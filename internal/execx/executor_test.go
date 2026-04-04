@@ -150,6 +150,30 @@ func TestExecutorRunFailureClassification(t *testing.T) {
 	}
 }
 
+func TestExecutorRunInterruptedClassification(t *testing.T) {
+	logDir := t.TempDir()
+	exec := Executor{LogDir: logDir}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	result, err := exec.Run(ctx, Action{
+		Command:  "sleep 1",
+		UseShell: true,
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if result.FailureClass != "execution_interrupted" {
+		t.Fatalf("FailureClass = %q", result.FailureClass)
+	}
+	if result.Assessment != "ambiguous" {
+		t.Fatalf("Assessment = %q", result.Assessment)
+	}
+	if !strings.Contains(strings.Join(result.Signals, ","), "execution_timeout") {
+		t.Fatalf("Signals = %#v", result.Signals)
+	}
+}
+
 func TestExecutorRunSuspiciousZeroExit(t *testing.T) {
 	logDir := t.TempDir()
 	exec := Executor{LogDir: logDir}

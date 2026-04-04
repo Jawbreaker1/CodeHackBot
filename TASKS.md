@@ -94,14 +94,114 @@ Planned tasks:
 - [x] Tighten truth ordering inside active context
 - [ ] Improve target stability against noisy latest evidence without adding scenario-specific guardrails
 - [x] Add visibility into included vs excluded context material and approximate size
+- [x] Add a lightweight packet validation pass:
+  - validate contradictions/redundancy after packet build
+  - log validation results with the session
+  - fail closed on fatally untrustworthy packets
+- [ ] Only after validation is useful and inspectable, design any separate packet repair/rebuild step
 - [x] Add interactive shell inspection commands for live multi-turn context testing:
   - `/stats`
   - `/packet`
   - `/lastlog`
-- [ ] Re-run repeated live validation on:
+- [x] Re-run repeated live validation on:
   - `secret.zip`
   - router/local recon
-- [ ] Only after active-context quality is stable, begin minimal memory-bank v1
+- [x] Confirm current packet validation stays clean across a broader live suite
+- [ ] Phase boundary:
+  - treat Phase 2 as good enough for now
+  - move next work to minimal planning rather than more packet shaping
+
+## Phase 3 — Minimal Planning
+
+Goal:
+- define the smallest useful planning model without recreating the old complexity
+
+Planned tasks:
+- [x] Document worker-vs-orchestrator planning boundaries explicitly
+- [x] Document interaction modes:
+  - worker:
+    - conversation
+    - direct execution
+    - planned execution
+  - orchestrator:
+    - conversation
+    - planned orchestration
+- [x] Document top-level goal vs worker subgoal model
+- [x] Define planning trigger rules so trivial requests do not create plans
+- [x] Write concrete use cases for:
+  - standalone trivial request
+  - standalone multi-step task
+  - orchestrated single-worker task
+  - orchestrated parallel task
+  - orchestrator conversational status / plan-change request
+- [x] Keep initial plans sequential:
+  - no explicit branch tree in the first planner
+  - local alternatives stay in the closed loop
+  - replan only on real blockage or material task change
+- [x] Define worker-plan acceptance criteria
+- [x] Define orchestrator-plan acceptance criteria
+- [x] Keep plan validation separate from packet validation
+- [x] Define planner output schemas/contracts for:
+  - worker planner output
+  - orchestrator planner output
+- [x] Tie planner validation expectations directly to the planner output schemas
+- [x] Implement the minimal worker planner:
+  - planner trigger remains optional
+  - trivial requests bypass planning
+  - planned tasks emit short sequential semantic steps
+  - `step_complete` can advance through plan steps before final completion
+- [x] Add minimal worker-plan inspection to the interactive shell:
+  - `/plan` prints the active plan state for live testing
+- [x] Log planner attempts with the session:
+  - accepted and failed planner outputs become inspectable artifacts
+  - planner prompt, raw response, parsed plan, and validation result are preserved
+- [x] Document generic worker step-execution semantics:
+  - `in_progress`
+  - `satisfied`
+  - `blocked`
+- [x] Document generic worker step-advance and step-blockage rules
+- [ ] Only after worker planning boundaries are stable, design orchestrator planning in detail
+- [x] Implement generic worker step satisfaction/blockage evaluation
+- [x] Implement model-assisted generic step satisfaction evaluation:
+  - evaluate active step from structured packet evidence
+  - log step-evaluation attempts with the session
+  - allow automatic step advancement when the active step is already satisfied
+- [x] Implement model-assisted planned-step action review:
+  - review proposed actions before execution during planned steps
+  - log action-review attempts with the session
+  - allow revise/block decisions without hardcoded command recipes
+- [x] Normalize interrupted execution separately from ordinary command failure:
+  - classify interrupted commands as `execution_interrupted` at the runtime layer
+  - keep interrupted work represented as in-progress rather than ordinary failure in worker summaries
+- [ ] Validate worker step advancement behavior with repeated live runs
+- [ ] Implement generic handling for long-running but reasonable planned-step actions:
+  - distinguish valid in-progress step work from overbuilt action selection
+  - improve planned-step progress interpretation before adding more command-shape guidance
+- [ ] Replace heuristic planner-step text matching with typed step metadata:
+  - planner output should eventually carry explicit step kind/category information
+  - runtime and validation logic should stop inferring semantics from step label text where possible
+- [ ] Implement robust worker input-mode classification before worker-loop execution:
+  - classify each normal user turn as `conversation`, `direct_execution`, or `planned_execution`
+  - validate classifier output against a small contract
+  - fail safe to `conversation` on invalid or ambiguous classification
+- [x] Define worker input-classifier contract and validator skeleton:
+  - structured output limited to `mode` and `reason`
+  - no commands, no plan steps, no essay output
+- [ ] Prioritize the worker interactive UI for manual testing:
+  - add a panel-based layout with:
+    - primary chat/execution pane
+    - persistent right-side status pane
+    - persistent bottom input bar
+  - make always-visible worker state available without opening logs:
+    - active plan
+    - active step
+    - latest command
+    - latest result summary
+    - latest action review
+    - latest step evaluation
+    - scope / approval / model / context usage
+  - keep the visible plan semantic and short
+  - validate the worker UI manually against `secret.zip` and router runs
 
 ## Working Rules
 - [ ] No patch-first behavior on this branch

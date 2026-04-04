@@ -62,10 +62,16 @@ Current build commands:
 
 The rebuild root now has live-validated worker-loop slices:
 - local ZIP workflow
-- local router-style reconnaissance workflow on `127.0.0.1`
+- authorized lab-router reconnaissance workflow on `192.168.50.1`
 - repeat-run live validation harness:
   - `scripts/repeat_worker_run.sh`
 - minimal interactive worker CLI shell for direct testing:
   - `./birdhackbot --llm-base-url <url> --llm-model <model> --allow-all`
+
+Current preferred worker validation model:
+- `qwen3.5-27b`
+
+Keep available for comparison:
+- `qwen/qwen3.5-35b-a3b`
 
 The legacy snapshot can still be inspected and built from `legacy/` if needed for reference.

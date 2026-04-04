@@ -19,9 +19,13 @@ type Step struct {
 
 // PlanState is the minimal high-level semantic plan state.
 type PlanState struct {
-	Steps       []string
-	ActiveStep  string
-	BlockedStep string
+	Mode             string
+	WorkerGoal       string
+	Summary          string
+	Steps            []string
+	ActiveStep       string
+	BlockedStep      string
+	ReplanConditions []string
 }
 
 // ExecutionResult is the minimal latest execution truth for the rebuild path.
@@ -40,6 +44,7 @@ type ExecutionResult struct {
 type OperatorState struct {
 	ScopeState    string
 	ApprovalState string
+	ModeHint      string
 	Model         string
 	ContextUsage  string
 	WorkingDir    string
@@ -139,9 +144,13 @@ func renderStep(s Step) string {
 
 func renderPlanState(p PlanState) string {
 	return strings.Join([]string{
+		"mode: " + blankOrValue(p.Mode),
+		"worker_goal: " + blankOrValue(p.WorkerGoal),
+		"summary: " + blankOrValue(p.Summary),
 		"steps: " + joinOrNone(p.Steps),
 		"active_step: " + blankOrValue(p.ActiveStep),
 		"blocked_step: " + blankOrValue(p.BlockedStep),
+		"replan_conditions: " + joinOrNone(p.ReplanConditions),
 	}, "\n")
 }
 
@@ -194,6 +203,7 @@ func renderOperatorState(s OperatorState) string {
 	return strings.Join([]string{
 		"scope_state: " + blankOrValue(s.ScopeState),
 		"approval_state: " + blankOrValue(s.ApprovalState),
+		"mode_hint: " + blankOrValue(s.ModeHint),
 		"model: " + blankOrValue(s.Model),
 		"context_usage: " + blankOrValue(s.ContextUsage),
 		"working_dir: " + blankOrValue(s.WorkingDir),

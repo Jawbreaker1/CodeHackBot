@@ -64,6 +64,11 @@ Capabilities may:
 - validate or enrich evidence
 - add report sections
 
+For vulnerability-oriented capabilities, this should include:
+- dynamic lookup of relevant vulnerability candidates from current trusted sources
+- retrieval of supporting references needed for validation
+- controlled validation/execution support once a candidate is relevant and in scope
+
 Capabilities must not:
 - become a second planner
 - inject hidden command sequences
@@ -190,7 +195,160 @@ This is semantic, not a fixed command recipe.
 
 The initial rebuild should keep `objective class / phase` simple. It exists so the orchestrator can understand which tasks belong to the same larger objective without needing a complex state machine.
 
-### 5.3 Execution Result
+### 5.3 Worker Planner Output Contract
+
+The worker planner output should be a small structured object.
+The current rebuild still infers a few step semantics from planner step labels. This is acceptable as a temporary bridge, but the intended direction is explicit typed step metadata (for example step kind/category fields) so runtime logic no longer depends on matching planner text.
+
+
+Contains:
+- mode
+  - `conversation`
+  - `direct_execution`
+  - `planned_execution`
+- worker_goal
+- plan_summary
+- plan_steps
+- active_step
+- replan_conditions
+
+Rules:
+- `mode=conversation`
+  - no execution plan required
+  - `plan_steps` should be empty
+- `mode=direct_execution`
+  - no semantic plan required
+  - `plan_steps` should be empty
+- `mode=planned_execution`
+  - `plan_steps` should be short, sequential, and semantic
+  - `active_step` should point to one of those steps
+  - `replan_conditions` should describe when the closed loop should stop adapting locally and request a replan
+
+The worker planner output must not include:
+- parallel branches
+- worker assignments
+- command lists
+- explicit retry trees
+- orchestrator-level decomposition
+
+Worker planner outputs should be considered invalid if:
+- `mode=conversation` and `plan_steps` is non-empty
+- `mode=direct_execution` and `plan_steps` is non-empty
+- `mode=planned_execution` and `plan_steps` is empty
+- `mode=planned_execution` and `active_step` does not match one of the emitted `plan_steps`
+- `mode=planned_execution` and the steps imply branching, parallelism, or procedural command-level detail
+- `worker_goal` is empty when execution is requested
+
+### 5.4 Orchestrator Planner Output Contract
+
+The orchestrator planner output should be a separate structured object.
+
+Contains:
+- mode
+  - `conversation`
+  - `planned_orchestration`
+- top_level_goal
+- plan_summary
+- run_steps
+- active_run_step
+- subtasks
+- dependencies
+- parallel_groups
+- merge_points
+- validation_points
+
+Each subtask should contain:
+- subtask_id
+- worker_goal
+- parent_run_step
+- expected_evidence
+- completion_condition
+- assigned_worker if already assigned
+
+Rules:
+- `mode=conversation`
+  - no subtask graph required
+  - may still reference current plan state for explanation or status
+- `mode=planned_orchestration`
+  - `run_steps` should stay high-level
+  - `subtasks` should be bounded and non-overlapping
+  - `dependencies`, `parallel_groups`, and `merge_points` should be present only when they add coordination value
+
+The orchestrator planner output must not include:
+- per-command worker procedures
+- hidden tactical hints in place of subgoals
+- blind decomposition without clear merge/validation structure
+
+Orchestrator planner outputs should be considered invalid if:
+- `mode=conversation` includes a subtask graph that implies immediate execution changes without an explicit control-bearing decision
+- `mode=planned_orchestration` and `run_steps` is empty
+- `mode=planned_orchestration` and a subtask has no `worker_goal`
+- subtasks overlap without explicit justification
+- `parallel_groups` are present without bounded, non-overlapping subtask definitions
+- the plan reads like worker-local procedure instead of run-level coordination
+
+### 5.4A Worker Step Execution Semantics
+
+For the initial worker planner, the plan defines semantic steps, but the closed loop still owns local tactical adaptation inside the current active step.
+
+The runtime should treat the active step as one of three generic states:
+- `in_progress`
+  - the current step is still being worked
+  - recent evidence is relevant but does not yet satisfy the step
+- `satisfied`
+  - the current step has enough evidence to advance
+  - the loop should prefer `step_complete` for the step instead of adding more local churn
+- `blocked`
+  - the current step cannot honestly continue in its current form
+  - local adaptation is no longer enough
+  - the runtime should trigger a replan or surface the blockage honestly
+
+This must remain generic. The step state logic must not become task-specific command recipes.
+
+### 5.4B Worker Step Advancement Rules
+
+The closed loop should advance the current worker plan step when:
+- the active step's semantic objective has been satisfied by the latest execution result or retained recent evidence
+- the current step's expected evidence has been gathered to a degree that makes further local actions redundant
+- the model explicitly emits `step_complete` and the packet evidence supports that the active step is satisfied
+
+The closed loop should prefer step advancement over more local execution when:
+- the latest action already answered the active step's key question
+- the next likely actions would mainly reread the same output or elaborate evidence that is already sufficient
+- the current step is complete even if the overall task is not
+
+### 5.4C Worker Step Blockage Rules
+
+The closed loop should treat the active step as blocked when:
+- the current step's replan conditions are met
+- multiple local attempts failed without changing the evidence picture meaningfully
+- the active step now requires a different semantic approach rather than another local variation
+- approval, access, or missing prerequisite constraints prevent honest continuation
+
+The runtime should not use blockage as a hidden retry engine.
+Blocked means:
+- stop local tactical churn
+- preserve evidence
+- request a replan or surface the blockage honestly
+
+### 5.4D Worker Step Semantics vs Plan Validation
+
+Plan validation remains separate from step execution semantics.
+
+Plan validation checks:
+- whether the plan is well-formed
+- whether the steps are semantic and properly scoped
+
+Step execution semantics check:
+- whether the active step should continue
+- whether it is satisfied
+- whether it is blocked
+
+This separation matters:
+- the plan validator must not start critiquing tactical command choice
+- the step-execution layer must not silently rewrite the plan structure
+
+### 5.5 Execution Result
 
 This is the canonical truth after every action.
 
@@ -209,7 +367,7 @@ Contains:
 
 All recovery and reporting must consume this same object.
 
-### 5.4 Context Packet
+### 5.6 Context Packet
 
 This is the exact packet shown to the LLM each turn.
 
@@ -219,7 +377,7 @@ For the rebuild, there should be one authoritative packet definition per actor t
 
 The context packet must be inspectable during live runs.
 
-### 5.5 Event Record
+### 5.7 Event Record
 
 Contains:
 - id
@@ -353,7 +511,56 @@ When signals conflict, trust in this order:
 4. retrieved memory
 5. older artifacts or summaries
 
-### 6.6 Worker Memory Bank v1
+### 6.6 Packet Validation
+
+After the worker packet is built, the runtime should perform a lightweight packet validation pass before sending it to the model.
+
+The validation pass should:
+
+1. detect packet issues without mutating the packet
+   - contradictory derived fields
+   - obviously stale or duplicated sections
+   - prompt/context conflicts
+   - section overgrowth beyond configured retention limits
+
+2. classify the result by severity
+   - `info`: redundant but harmless
+   - `warn`: notable but still usable
+   - `error`: packet should be rebuilt before use
+   - `fatal`: packet cannot be trusted; stop and surface the failure
+
+3. log the validation result with the session
+   - packet validation should become inspectable evidence just like command execution and context snapshots
+
+The validation pass should remain observational. It must not repair the packet, invent missing facts, choose next actions, or become a hidden planning layer.
+
+### 6.7 Packet Repair / Rebuild
+
+Packet repair should be a separate later mechanism, not part of validation.
+
+If introduced, it should:
+
+1. rebuild only narrow derived fields from canonical packet truth
+   - acceptable rebuild targets include:
+     - `running_summary`
+     - conversation overflow placement
+     - duplicated rendered sections
+     - stable target identity when canonical evidence already exists
+
+2. prefer rebuild over mutation
+   - recompute derived fields from canonical sources instead of patching text in place
+
+3. avoid semantic or agentic repair
+   - must not invent missing facts
+   - must not choose next actions
+   - must not reinterpret evidence into a nicer story
+   - must not become a hidden planning layer
+
+4. run only after validation has identified a concrete need
+
+Raw execution truth should remain untouched where possible. Repair/rebuild should act mainly on derived packet fields.
+
+### 6.8 Worker Memory Bank v1
 
 The worker should have a single structured local memory-bank store.
 
@@ -421,7 +628,532 @@ Forbidden shared items:
 
 This shared layer should remain narrow. It is a shared evidence ledger, not a shared brain.
 
-### 6.9 Compaction And Rebuild Policy
+### 6.9 Planning Boundaries
+
+Planning should not be treated as a single generic subsystem. Worker planning and orchestrator planning have different owners and different responsibilities.
+
+#### Worker Planning
+
+Worker planning is:
+- local
+- sequential
+- optional
+- execution-oriented
+
+Worker planning is allowed to:
+- decide whether the task should be handled by conversation, direct execution, or planned execution
+- create a short semantic step list for one worker thread
+- guide local execution and verification for that worker's task
+
+Worker planning must not:
+- decompose work across multiple workers
+- create parallel branches
+- take ownership of the global run
+- act like a mini orchestrator
+
+#### Orchestrator Planning
+
+Orchestrator planning is:
+- global
+- coordination-oriented
+- decomposition-aware
+- parallel-aware when useful
+
+Orchestrator planning is allowed to:
+- own the top-level goal
+- decompose the goal into subtasks
+- assign subtasks to workers
+- decide when tasks should run sequentially vs in parallel
+- merge results and update the run-level plan
+
+Orchestrator planning must not:
+- shape worker commands directly
+- become a second worker execution loop
+- hide tactical execution guidance inside worker attachments or notes
+
+#### Goal Levels
+
+The system should distinguish:
+
+1. `top_level_goal`
+   - owned by the orchestrator when orchestration exists
+   - represents the original user objective
+
+2. `worker_goal` / `subgoal`
+   - owned by an individual worker
+   - represents that worker's bounded assigned task
+
+Delegated workers should execute against their `worker_goal`, not against the entire `top_level_goal` as their active execution objective.
+
+#### Interaction Modes
+
+Worker-facing modes:
+- conversation
+- direct execution
+- planned execution
+
+Orchestrator-facing modes:
+- conversation
+- planned orchestration
+
+The orchestrator never executes directly. It either:
+- answers / discusses / explains
+- or updates and advances orchestration state
+
+Conversational turns at the orchestrator may be:
+- informational only
+- control-bearing, meaning they alter the active plan or worker assignments
+
+If a conversational turn would alter execution, the orchestrator should summarize the plan change before applying it.
+
+#### Planning Trigger
+
+Planning should be conditional, not universal.
+
+The trigger decision should happen before planner invocation.
+
+##### Worker Trigger Rules
+
+The worker CLI should not send every user turn into execution. Before invoking the worker loop, it should classify the turn into one of the worker-facing modes and validate that classification.
+
+The worker input classifier should emit only:
+- `mode`
+- `reason`
+
+The worker input classifier must not emit:
+- plan steps
+- commands
+- free-form essays
+- hidden execution guidance
+
+If the classifier output is invalid or ambiguous, the worker CLI should fail safe by choosing `conversation` rather than unexpectedly executing tools.
+
+The worker should choose `conversation` when:
+- the user is asking for explanation, advice, status, or approach discussion
+- no execution is requested
+
+The worker should choose `direct execution` when:
+- the request is obviously one-step or near-one-step
+- no meaningful decomposition is needed
+- examples include:
+  - `pwd`
+  - `ls`
+  - `show me the files here`
+  - other simple inspect/list/show requests
+
+The worker should choose `planned execution` when one or more of these are true:
+- the task is clearly multi-phase
+- verification is required before completion
+- the next useful action depends on intermediate findings
+- the task spans distinct semantic phases such as:
+  - identify target/input
+  - inspect surface/metadata
+  - attempt access or validation
+  - verify result
+  - report outcome
+
+The worker must not trigger planning just because:
+- more than one shell command might be needed
+- retries are possible
+- the request sounds “important”
+
+The worker CLI should validate the classifier output before routing:
+- unsupported modes are invalid
+- empty reasons are invalid
+- structured blobs pretending to be a reason are invalid
+- invalid classification should fall back conservatively to `conversation`
+
+##### Orchestrator Trigger Rules
+
+The orchestrator should choose `conversation` when:
+- the user is asking for status, explanation, or advice
+- the user is proposing a plan change or asking how work should proceed
+- no immediate worker tasking is required yet
+
+The orchestrator should choose `planned orchestration` when one or more of these are true:
+- the task benefits from decomposition into bounded subtasks
+- the task benefits from parallel execution
+- the task requires coordination across workers
+- the task requires validation branches or staged handoffs
+- the task requires the orchestrator to decide whether to keep work single-worker vs decompose it
+
+The orchestrator must not trigger decomposition just because:
+- the task is multi-step
+- the task is important
+- more than one command will likely be needed
+
+If one worker can reasonably own the task sequentially, the orchestrator may still keep a top-level plan while assigning only a single bounded subgoal.
+
+#### Initial Plan Execution Model
+
+The first planner should stay simple:
+- plans should be sequential semantic steps only
+- no explicit branch tree in the first planner
+- no fallback explosion inside the plan structure
+
+The closed loop should retain responsibility for local tactical adaptation within the current step.
+
+That means:
+- the plan says what semantic step the worker is in
+- the closed loop decides which exact command to try
+- if a command fails, the closed loop may try local alternatives on the fly while staying inside the same step
+
+Replanning should happen only when:
+- the current step is genuinely blocked
+- the task understanding changes materially
+- a higher-priority finding changes the path
+- the user or orchestrator changes direction
+
+This keeps the first planner small and avoids duplicating tactical logic between:
+- the plan
+- and the closed loop
+
+#### Planning Validation
+
+Plan validation is separate from packet validation.
+
+They exist at different layers:
+- packet validation checks whether the active context packet is structurally trustworthy
+- plan validation checks whether a proposed worker plan or orchestrator plan is well-formed, appropriately scoped, and responsibility-correct
+
+Packet validation must not judge planning quality.
+Plan validation must not be folded into packet validation or packet repair logic.
+
+The planner design should eventually include:
+- worker-plan validation
+- orchestrator-plan validation
+
+Those checks should evaluate whether a proposed plan:
+- is too detailed or explodes into micro-steps
+- duplicates responsibilities across worker and orchestrator
+- omits necessary verification or reporting phases
+- uses parallelism in the wrong place
+- assigns the wrong goal level to a worker
+
+Use cases should drive these validation criteria rather than abstract planning theory alone.
+
+##### Worker-Plan Acceptance Criteria
+
+A worker plan is acceptable only if all of the following are true:
+
+1. it is optional
+   - trivial requests must still be allowed to bypass planning entirely
+
+2. it is sequential
+   - no parallel branches
+   - no decomposition into multiple workers
+
+3. it is semantic rather than procedural
+   - step names should describe meaningful task phases
+   - not shell commands, retries, or file reads
+
+4. it is short
+   - it should remain human-readable in the worker UI
+   - it should not explode into micro-steps
+
+5. it is local
+   - it applies only to the worker's current task or subgoal
+   - it must not re-own the top-level orchestrator objective
+
+6. it leaves tactical adaptation to the closed loop
+   - the plan should not encode explicit retry trees or fallback branches in the first version
+
+7. it includes completion pressure where appropriate
+   - plans for genuinely multi-step execution should normally include a verification/result phase
+   - reporting/summary should appear when the user task actually requires an outcome, not as noise for trivial commands
+
+8. it does not create fake complexity
+   - a task should not receive a plan just because multiple shell commands might be needed
+   - a task should not receive a plan just because it sounds important
+
+Examples of acceptable worker plan shapes:
+- identify archive -> inspect encryption -> attempt recovery -> verify extraction -> report
+- identify web surface -> validate small set of checks -> summarize findings
+
+Examples of unacceptable worker plan shapes:
+- `ls` -> `cat` -> `grep` -> `pwd`
+- step per port range
+- step per retry
+- step per file read
+- any plan that implies worker-level parallelism
+
+These acceptance criteria should be enforced against the worker planner output contract, not against free-form prose.
+
+##### Orchestrator-Plan Validation Focus
+
+The orchestrator-plan validator should primarily check:
+- whether decomposition is justified
+- whether subtasks are bounded and non-overlapping
+- whether parallel groups are explicit and sensible
+- whether merge/validation points exist where needed
+- whether the plan stays at run-level rather than collapsing into worker procedure
+- whether the subgoal structure matches the orchestrator planner output contract
+
+##### Orchestrator-Plan Acceptance Criteria
+
+An orchestrator plan is acceptable only if all of the following are true:
+
+1. it owns the top-level objective
+   - the orchestrator plan should remain anchored to the user’s original objective
+   - it may assign subgoals, but it should not lose the parent objective
+
+2. decomposition is justified
+   - subtasks should exist only when they add coordination value
+   - the orchestrator should be allowed to keep a single-worker plan when decomposition adds little or no value
+
+3. subtasks are bounded and non-overlapping
+   - each worker should receive a clear subgoal
+   - parallel branches should not duplicate effort without a good reason
+
+4. the plan is coordination-oriented, not worker-procedural
+   - orchestrator steps should describe run-level phases, branches, or decisions
+   - they should not descend into per-command or per-retry detail
+
+5. parallelism is used only where it helps
+   - parallel branches should be explicit and justifiable
+   - tasks that are inherently sequential should not be forced into artificial parallelism
+
+6. validation and merge points are explicit where needed
+   - plans that involve decomposition, candidate validation, or staged access should show where results are checked before the larger objective advances
+
+7. user control remains possible
+   - the plan should support status queries, explanation, and plan-change requests while work is running
+   - control-bearing conversational turns must be able to alter the active orchestration state
+
+8. worker autonomy remains bounded
+   - workers should receive subgoals and local responsibility
+   - workers should not be expected to replan the orchestrator’s top-level objective
+
+9. it does not create fake complexity
+   - multi-step does not automatically imply decomposition
+   - importance does not automatically imply multiple workers
+
+Examples of acceptable orchestrator plan shapes:
+- map web surface -> validate auth-related branch -> validate follow-up branch if warranted -> merge findings -> report
+- assign router ports 1-1000 to worker A -> assign ports 1001-5000 to worker B -> merge service map -> choose follow-up validation
+- assign one worker to inspect ZIP sequentially while orchestrator tracks status and final report coverage
+
+Examples of unacceptable orchestrator plan shapes:
+- one worker per trivial command
+- overlapping workers all asked to “inspect the target”
+- hidden worker guidance embedded instead of explicit subgoals
+- decomposition with no merge or validation point
+- orchestrator plan that looks like a worker shell script
+
+These acceptance criteria should be enforced against the orchestrator planner output contract, not against free-form prose.
+
+### 6.10 Planning Use Cases
+
+The initial planning design should be grounded in concrete use cases.
+
+#### Worker Use Case A — Trivial Standalone Request
+
+User request:
+- `what files are in this folder?`
+
+Expected behavior:
+- no plan
+- no orchestration
+- direct execution path
+- answer with the result
+
+Failure mode to avoid:
+- generating a multi-step plan for a one-step command
+
+#### Worker Use Case B — Conversational Guidance
+
+User request:
+- `how would you approach testing this ZIP safely?`
+
+Expected behavior:
+- conversation mode
+- no execution
+- no plan unless the user explicitly asks to proceed
+
+Failure mode to avoid:
+- jumping into execution or generating a procedural plan when the user asked for advice only
+
+#### Worker Use Case C — Standalone Multi-Step Local Task
+
+User request:
+- `extract contents of secret.zip and identify the password needed to decrypt it`
+
+Expected behavior:
+- worker-owned planning may trigger
+- plan remains short, semantic, and sequential
+- worker executes and verifies locally
+
+Good plan shape:
+- identify target/input
+- inspect archive/encryption
+- attempt bounded recovery
+- verify extraction
+- report result
+
+Failure modes to avoid:
+- micro-steps for every command
+- branching or parallel worker logic
+- worker behaving like an orchestrator
+
+#### Orchestrator Use Case A — Single-Worker Orchestration
+
+User request:
+- `inspect the ZIP and report the result`
+
+Expected behavior:
+- orchestrator may decide this does not benefit from decomposition
+- orchestrator still owns the top-level plan
+- one worker receives a bounded subgoal
+
+Failure mode to avoid:
+- forcing decomposition when a single delegated worker is sufficient
+
+#### Orchestrator Use Case B — Parallelizable Recon
+
+User request:
+- `assess router exposure and identify open ports and services`
+
+Expected behavior:
+- orchestrator may decompose the work
+- orchestrator may assign disjoint port ranges or service-focused subtasks to separate workers
+- workers operate on subgoals
+- orchestrator merges results
+
+Failure modes to avoid:
+- parallelism inside one worker plan
+- overlapping worker assignments
+- workers receiving the full global objective as their active local goal
+
+#### Orchestrator Use Case C — Conversational Status Query
+
+User request:
+- `what are the workers doing right now?`
+
+Expected behavior:
+- conversation mode
+- no new worker execution required
+- answer from orchestrator state:
+  - current run plan
+  - worker statuses
+  - completed/blocked/pending branches
+
+Failure mode to avoid:
+- treating a status question as a new execution task
+
+#### Orchestrator Use Case D — Conversational Plan Change
+
+User request:
+- `stop the deep port scan and focus on the web UI first`
+
+Expected behavior:
+- conversational turn is control-bearing
+- orchestrator summarizes the proposed plan change
+- then updates worker assignments / plan state
+
+Failure modes to avoid:
+- silently mutating execution without surfacing the plan change
+- workers independently re-planning the top-level objective
+
+#### Worker Use Case D — Bounded Security Scan
+
+User request:
+- `perform a simple security scan of this existing web application`
+
+Expected behavior:
+- worker planning may trigger
+- plan remains sequential and bounded
+- plan should stay semantic rather than decomposing into every HTTP request
+
+Good plan shape:
+- identify target/scope
+- map key surface
+- validate a small set of meaningful checks
+- summarize findings and evidence
+
+Failure modes to avoid:
+- over-decomposing a bounded scan into micro-steps
+- acting like an orchestrator when one worker is enough
+
+#### Worker Use Case E — Multi-Phase Local Objective
+
+User request:
+- `gain access to this Linux system, find the target file, and extract it`
+
+Expected behavior:
+- worker planning may trigger
+- plan remains sequential and phase-oriented
+- phases may include:
+  - initial access
+  - local enumeration
+  - locate target artifact
+  - access/extract
+  - verify/report
+
+Failure modes to avoid:
+- turning every command into its own plan step
+- losing the higher-level phase structure
+- parallelizing within a single worker plan
+
+#### Orchestrator Use Case E — Web Application Assessment
+
+User request:
+- `assess this web application for security issues and report meaningful findings`
+
+Expected behavior:
+- orchestrator may decide whether the work should stay single-worker or be decomposed
+- if decomposed, workers receive bounded subgoals such as:
+  - surface mapping
+  - authentication flow validation
+  - targeted follow-up on specific components
+- orchestrator merges findings and owns the final plan state
+
+Failure modes to avoid:
+- giving every worker the full top-level objective as its local goal
+- overlapping exploratory work with no clear subgoal boundaries
+
+#### Orchestrator Use Case F — Access-Oriented Web Path
+
+User request:
+- `use the web application to gain further access, possibly toward system access`
+
+Expected behavior:
+- orchestrator owns the top-level progression
+- plan should remain phase-based, for example:
+  - surface mapping
+  - candidate access path validation
+  - post-access verification
+  - follow-on objective only if justified
+- workers may execute bounded validation branches, but should not own the global access strategy
+
+Failure modes to avoid:
+- workers independently escalating the scope of the objective
+- plan steps that jump ahead without verification gates
+
+#### Orchestrator Use Case G — Parallel Host Investigation
+
+User request:
+- `gain access to the Linux target, locate the requested file, and extract it`
+
+Expected behavior:
+- orchestrator may choose either:
+  - one worker, if the task is still effectively sequential
+  - multiple workers, if there are clearly separable branches such as:
+    - access validation
+    - post-access enumeration
+    - artifact search in distinct locations
+- orchestrator owns the dependency order and worker coordination
+
+Failure modes to avoid:
+- forced decomposition when the task does not benefit from it
+- workers receiving ambiguous overlapping responsibilities
+- orchestrator duplicating the worker's local execution reasoning
+
+These use cases should drive:
+- planning trigger rules
+- plan validation criteria
+- worker vs orchestrator responsibility boundaries
+
+### 6.11 Compaction And Rebuild Policy
 
 Compaction is a support mechanism, not the default operating mode.
 
@@ -444,7 +1176,7 @@ Per-turn rebuild order:
    - summarize older history second
    - do not compact current-step or latest-result truth
 
-### 6.10 Inspectability
+### 6.12 Inspectability
 
 The system must let the operator inspect:
 - the current context packet
@@ -787,6 +1519,25 @@ For the worker-facing interactive UI, the operator should always be able to see:
 - current scope, permissions, model, and context usage
 - an always-visible input area
 
+The default worker layout should be panel-based:
+- a primary left pane for the live chat and execution stream
+- a persistent right-side status pane for operator state
+- a persistent bottom input bar
+
+The right-side status pane should make the current worker state visible without opening separate inspection screens. At minimum it should show:
+- run goal or worker goal
+- active semantic plan
+- current active step
+- step state:
+  - `in_progress`
+  - `satisfied`
+  - `blocked`
+- latest action-review decision
+- latest step-evaluation decision
+- latest execution summary
+- current scope, approval mode, model, and context usage
+- session identifier and working directory when useful for debugging
+
 The semantic plan shown to the user should remain short and human-readable. It should not explode into micro-steps for every shell action.
 
 In the worker UI, the visible plan should represent only the core semantic steps of the current task. It should not show gritty execution details as separate plan items.
@@ -931,7 +1682,7 @@ Vulnerability testing should eventually follow a generic evidence flow:
 
 1. fingerprint target
 2. generate candidates
-3. validate candidate existence from trusted sources
+3. dynamically validate candidate existence from trusted/current sources
 4. derive validation method
 5. attempt controlled validation
 6. classify result:
@@ -940,6 +1691,14 @@ Vulnerability testing should eventually follow a generic evidence flow:
    - inconclusive
 
 This is a capability, not part of the minimal core loop.
+
+Additional architecture requirements:
+- vulnerability lookup should not rely only on static prompt knowledge when current source validation is available
+- retrieved vulnerability references should remain inspectable and attributable
+- controlled validation/execution must stay scoped, evidence-driven, and consistent with approval/safety rules
+- lookup and validation should remain separate steps:
+  - lookup proposes or strengthens candidates
+  - validation/execution tests them against the live target
 
 ## 12. Minimal Safety And Approval Model
 

@@ -105,13 +105,14 @@ func (e Executor) RunPlanned(ctx context.Context, plan Plan) (Result, error) {
 	runErr := cmd.Run()
 	finished := time.Now().UTC()
 	exitStatus := exitCode(runErr)
-	failureClass := ""
-	if runErr != nil {
-		failureClass = "command_failed"
-	}
 	stdoutSummary := summarize(stdoutBuf.String())
 	stderrSummary := summarize(stderrBuf.String())
 	assessment, signals := assessResult(exitStatus, stdoutSummary, stderrSummary)
+	failureClass := classifyFailure(ctx, runErr)
+	if failureClass == "execution_interrupted" {
+		assessment = "ambiguous"
+		signals = appendSignal(signals, interruptionSignal(ctx, runErr))
+	}
 
 	if err := writeLog(plan.LogPath, plan, started, finished, exitStatus, stdoutBuf.String(), stderrBuf.String()); err != nil {
 		return Result{}, fmt.Errorf("write log: %w", err)
@@ -135,6 +136,26 @@ func (e Executor) RunPlanned(ctx context.Context, plan Plan) (Result, error) {
 		FailureClass:  failureClass,
 	}
 	return result, runErr
+}
+
+func classifyFailure(ctx context.Context, err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return "execution_interrupted"
+	}
+	if ctx != nil && (errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded)) {
+		return "execution_interrupted"
+	}
+	return "command_failed"
+}
+
+func interruptionSignal(ctx context.Context, err error) string {
+	if errors.Is(err, context.DeadlineExceeded) || (ctx != nil && errors.Is(ctx.Err(), context.DeadlineExceeded)) {
+		return "execution_timeout"
+	}
+	return "execution_interrupted"
 }
 
 func buildCommand(ctx context.Context, action Action) *exec.Cmd {

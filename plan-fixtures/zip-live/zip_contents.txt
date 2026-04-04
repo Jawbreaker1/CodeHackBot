@@ -1,0 +1,8 @@
+Archive:  secret.zip
+  Length      Date    Time    Name
+---------  ---------- -----   ----
+      243  2026-03-15 18:31   treasure-note.txt
+---------                     -------
+      243                     1 file
+---
+fcrackzip failed, trying other methods

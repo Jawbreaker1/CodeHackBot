@@ -11,10 +11,16 @@ import (
 	ctxpacket "github.com/Jawbreaker1/CodeHackBot/internal/context"
 	"github.com/Jawbreaker1/CodeHackBot/internal/execx"
 	"github.com/Jawbreaker1/CodeHackBot/internal/llmclient"
+	"github.com/Jawbreaker1/CodeHackBot/internal/workeraction"
+	"github.com/Jawbreaker1/CodeHackBot/internal/workerplan"
+	"github.com/Jawbreaker1/CodeHackBot/internal/workerstep"
 )
 
 type Inspector interface {
 	Capture(step int, stage string, packet ctxpacket.WorkerPacket) error
+	CapturePlannerAttempt(attempt workerplan.AttemptRecord) error
+	CaptureActionReviewAttempt(attempt workeraction.AttemptRecord) error
+	CaptureStepEvaluationAttempt(attempt workerstep.AttemptRecord) error
 }
 
 type Loop struct {
@@ -37,9 +43,18 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 	if strings.TrimSpace(current.TaskRuntime.State) == "" {
 		current.TaskRuntime = ctxpacket.InitialTaskRuntime(current.SessionFoundation.Goal)
 	}
+	var err error
+	current, err = ensureWorkerPlan(ctx, l.LLM, l.Inspector, current)
+	if err != nil {
+		return Outcome{Packet: current}, err
+	}
 	for step := 1; step <= maxSteps; step++ {
+		validation := ctxpacket.ValidatePacket(current)
 		if err := captureIfConfigured(l.Inspector, step, "pre-llm", current); err != nil {
 			return Outcome{Packet: current}, fmt.Errorf("capture pre-llm context: %w", err)
+		}
+		if validation.IsFatal() {
+			return Outcome{Packet: current}, fmt.Errorf("packet validation failed: %s", validation.Summary())
 		}
 		respText, err := l.LLM.Chat(ctx, []llmclient.Message{
 			{Role: "system", Content: current.BehaviorFrame.PromptText()},
@@ -56,6 +71,32 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 
 		switch resp.Type {
 		case "step_complete":
+			if strings.TrimSpace(current.PlanState.Mode) == "planned_execution" {
+				stepEval := evaluateActivePlanStep(ctx, l.LLM, l.Inspector, current, resp.Summary)
+				switch stepEval.Status {
+				case StepBlocked:
+					current.PlanState.BlockedStep = current.PlanState.ActiveStep
+					current.TaskRuntime.State = "blocked"
+					current.RunningSummary = "Plan step blocked: " + blank(stepEval.Reason, current.PlanState.ActiveStep)
+					if err := captureIfConfigured(l.Inspector, step, "step-blocked", current); err != nil {
+						return Outcome{Packet: current}, fmt.Errorf("capture step-blocked context: %w", err)
+					}
+					return Outcome{Packet: current}, fmt.Errorf("planned step blocked: %s", blank(stepEval.Reason, current.PlanState.ActiveStep))
+				case StepInProgress:
+					current.RunningSummary = "Plan step still in progress: " + blank(stepEval.Reason, current.PlanState.ActiveStep)
+					if err := captureIfConfigured(l.Inspector, step, "step-in-progress", current); err != nil {
+						return Outcome{Packet: current}, fmt.Errorf("capture step-in-progress context: %w", err)
+					}
+					continue
+				}
+			}
+			if nextPacket, advanced := advancePlanStep(current, resp.Summary); advanced {
+				current = nextPacket
+				if err := captureIfConfigured(l.Inspector, step, "step-advance", current); err != nil {
+					return Outcome{Packet: current}, fmt.Errorf("capture step-advance context: %w", err)
+				}
+				continue
+			}
 			current.TaskRuntime.State = "done"
 			current.TaskRuntime = ctxpacket.UpdateTaskRuntime(current.TaskRuntime, current.SessionFoundation.Goal, current.LatestExecutionResult)
 			current.TaskRuntime.MissingFact = "(none)"
@@ -83,6 +124,39 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 					return Outcome{Packet: current}, fmt.Errorf("capture validation context: %w", err)
 				}
 				continue
+			}
+			if strings.TrimSpace(current.PlanState.Mode) == "planned_execution" {
+				review, err := reviewPlannedAction(ctx, l.LLM, l.Inspector, current, resp)
+				if err == nil {
+					switch review.Decision {
+					case workeraction.DecisionBlocked:
+						current.PlanState.BlockedStep = current.PlanState.ActiveStep
+						current.TaskRuntime.State = "blocked"
+						current.RunningSummary = "Plan step blocked before execution: " + blank(review.Reason, current.PlanState.ActiveStep)
+						if err := captureIfConfigured(l.Inspector, step, "step-blocked", current); err != nil {
+							return Outcome{Packet: current}, fmt.Errorf("capture step-blocked context: %w", err)
+						}
+						return Outcome{Packet: current}, fmt.Errorf("planned step blocked: %s", blank(review.Reason, current.PlanState.ActiveStep))
+					case workeraction.DecisionRevise:
+						current.RelevantRecentResults = updateRelevantRecentResults(current.RelevantRecentResults, current.LatestExecutionResult, current.TaskRuntime.CurrentTarget)
+						current.LatestExecutionResult = ctxpacket.ExecutionResult{
+							Action:        resp.Command,
+							ExitStatus:    "not_executed",
+							OutputSummary: review.Reason,
+							Assessment:    "failed",
+							Signals:       []string{"action_needs_revision"},
+							FailureClass:  "pre_execution_review",
+						}
+						truth := ctxpacket.ActiveTruthResult(current.LatestExecutionResult, current.RelevantRecentResults)
+						current.TaskRuntime.State = "running"
+						current.TaskRuntime = ctxpacket.UpdateTaskRuntime(current.TaskRuntime, current.SessionFoundation.Goal, truth)
+						current.RunningSummary = buildRunningSummary(current.CurrentStep.Objective, current.LatestExecutionResult, current.RelevantRecentResults)
+						if err := captureIfConfigured(l.Inspector, step, "post-validation", current); err != nil {
+							return Outcome{Packet: current}, fmt.Errorf("capture validation context: %w", err)
+						}
+						continue
+					}
+				}
 			}
 			if l.Approver == nil {
 				return Outcome{Packet: current}, fmt.Errorf("execution requires an approver")
@@ -134,6 +208,31 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 			if err := captureIfConfigured(l.Inspector, step, "post-action", current); err != nil {
 				return Outcome{Packet: current}, fmt.Errorf("capture post-action context: %w", err)
 			}
+			if strings.TrimSpace(current.PlanState.Mode) == "planned_execution" {
+				stepEval := evaluateActivePlanStep(ctx, l.LLM, l.Inspector, current, "")
+				switch stepEval.Status {
+				case StepBlocked:
+					current.PlanState.BlockedStep = current.PlanState.ActiveStep
+					current.TaskRuntime.State = "blocked"
+					current.RunningSummary = "Plan step blocked: " + blank(stepEval.Reason, current.PlanState.ActiveStep)
+					if err := captureIfConfigured(l.Inspector, step, "step-blocked", current); err != nil {
+						return Outcome{Packet: current}, fmt.Errorf("capture step-blocked context: %w", err)
+					}
+					return Outcome{Packet: current}, fmt.Errorf("planned step blocked: %s", blank(stepEval.Reason, current.PlanState.ActiveStep))
+				case StepSatisfied:
+					if nextPacket, advanced := advancePlanStep(current, blank(stepEval.Summary, stepEval.Reason)); advanced {
+						current = nextPacket
+						if err := captureIfConfigured(l.Inspector, step, "step-advance", current); err != nil {
+							return Outcome{Packet: current}, fmt.Errorf("capture step-advance context: %w", err)
+						}
+					}
+				case StepInProgress:
+					current.RunningSummary = "Plan step still in progress: " + blank(stepEval.Reason, current.PlanState.ActiveStep)
+					if err := captureIfConfigured(l.Inspector, step, "step-in-progress", current); err != nil {
+						return Outcome{Packet: current}, fmt.Errorf("capture step-in-progress context: %w", err)
+					}
+				}
+			}
 			if execErr != nil {
 				// Still feed the failure result into the next turn.
 			}
@@ -156,6 +255,7 @@ func buildUserPrompt(packet ctxpacket.WorkerPacket) string {
 			"If task_runtime.missing_fact is not '(none)', prefer an action that establishes that missing fact for the current target.",
 			"Before choosing action, check whether the current goal is already satisfied by the latest execution result or relevant recent results.",
 			"If the goal is already satisfied with evidence in the context packet, choose step_complete.",
+			"If operator_state.mode_hint is direct_execution, prefer the simplest sufficient action and complete the task as soon as one supported result satisfies it.",
 			"Do not spend another turn re-reading or slicing the same log, command output, or artifact when the needed evidence is already present in the context packet.",
 			"If the latest result clearly failed, first reconsider whether the failed command structure itself was necessary before repeating or elaborating it.",
 			"After a clear failure, prefer a simpler next action that removes the failure cause or gathers the missing fact directly.",
@@ -294,19 +394,29 @@ func mentionsTarget(result ctxpacket.ExecutionResult, currentTarget string) bool
 func buildRunningSummary(objective string, latest ctxpacket.ExecutionResult, recent []ctxpacket.ExecutionResult) string {
 	truth := ctxpacket.ActiveTruthResult(latest, recent)
 	status := "in progress"
-	if strings.TrimSpace(truth.Assessment) == "failed" || strings.TrimSpace(truth.FailureClass) != "" || strings.TrimSpace(truth.ExitStatus) == "-1" {
+	if ctxpacket.IsInterruptedResult(truth) {
+		status = "in progress"
+	} else if strings.TrimSpace(truth.Assessment) == "failed" || strings.TrimSpace(truth.FailureClass) != "" || strings.TrimSpace(truth.ExitStatus) == "-1" {
 		status = "encountered a failure"
 	}
 	if strings.TrimSpace(truth.ExitStatus) != "" && strings.TrimSpace(truth.ExitStatus) != "(none)" && strings.TrimSpace(truth.ExitStatus) != "0" {
-		status = "encountered a failure"
+		if !ctxpacket.IsInterruptedResult(truth) {
+			status = "encountered a failure"
+		}
 	}
 	if strings.TrimSpace(truth.Assessment) == "suspicious" || strings.TrimSpace(truth.Assessment) == "ambiguous" {
 		status = "needs interpretation"
+	}
+	if ctxpacket.IsInterruptedResult(truth) {
+		status = "in progress"
 	}
 
 	parts := []string{fmt.Sprintf("Status: %s.", status)}
 	if strings.TrimSpace(truth.Action) != "" {
 		parts = append(parts, fmt.Sprintf("Evidence: %q exited with %s.", compactInline(truth.Action, 120), blankOrFallback(strings.TrimSpace(truth.ExitStatus), "(none)")))
+	}
+	if ctxpacket.IsInterruptedResult(truth) {
+		parts = append(parts, "Execution was interrupted before the active work completed.")
 	}
 	if strings.TrimSpace(truth.Assessment) != "" && strings.TrimSpace(truth.Assessment) != "(none)" {
 		parts = append(parts, fmt.Sprintf("Assessment: %s.", truth.Assessment))

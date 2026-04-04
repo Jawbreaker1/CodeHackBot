@@ -78,6 +78,8 @@ Testing discipline:
 - Use 3 runs per scenario unless the check is explicitly labeled as a smoke test.
 - Smoke/debug runs must never be presented as acceptance evidence for the canonical scenarios.
 - Live validation is not a pass unless the actual context snapshots and persisted session state are inspected and found sound.
+- Current preferred worker validation model on the local LM Studio server is `qwen3.5-27b`.
+- Keep `qwen/qwen3.5-35b-a3b` available as a comparison model, not the default worker benchmark.
 
 ## Implementation Discipline
 

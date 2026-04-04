@@ -111,6 +111,41 @@ Rules:
   - raw recent conversation remains generous
   - summarization does not activate early just for tidiness
   - `recent_conversation` is now the main long-session growth source to watch
+- Packet sanity work should start with validation, not repair:
+  - validation and repair/rebuild should be separate mechanisms
+  - validation alone is already valuable if it is logged with the session and used to troubleshoot packet quality
+  - repair/rebuild should come later and should only touch derived fields
+- Implemented lightweight packet validation:
+  - current structural checks cover:
+    - duplicate rendered sections
+    - missing behavior frame
+    - missing goal
+    - missing current objective
+    - empty running summary
+    - recent-conversation overflow beyond configured limits
+    - `task_runtime.state=done` while `missing_fact != (none)`
+    - session runtime artifact leakage into `current_target`
+    - inconsistent pending execution fields in `operator_state`
+    - partially populated `latest_execution_result`
+  - validation reports are now written alongside context snapshots as `step-XXX-<stage>-validation.txt`
+  - fatal packet issues now stop the loop before the LLM call
+  - live proof:
+    - `sessions/packet-validation-check-20260322/router2/context/step-001-pre-llm-validation.txt`
+    - `sessions/packet-validation-check-20260322/zip-expanded/context/step-001-pre-llm-validation.txt`
+- Broader live suite with validator in place:
+  - suite root:
+    - `sessions/live-suite-validation-20260322-215546`
+  - router/local:
+    - `2/2` completed
+  - ZIP:
+    - `0/2` completed
+  - every validation file across all four runs reported:
+    - `summary: ok`
+    - `highest_severity: info`
+  - conclusion:
+    - current packet structure is good enough for now
+    - the main remaining limitation is behavioral follow-through, not packet integrity
+    - this is the right point to move next attention toward planning
 - Missing-path attribution also needs to stay conservative:
   - explicit missing artifacts like `/usr/share/wordlists/rockyou.txt` should be preserved when corroborated by the action/result
   - malformed output-only paths from shell expansion noise should not be promoted into `missing_fact`
@@ -123,3 +158,220 @@ Rules:
   - but pushing harder starts to distort command construction
   - correctness is more important than trying to force "fast first" behavior before planning exists
 - Conclusion: fast-first recon strategy should move into the later planning layer rather than keep accumulating in the closed-loop prompt.
+- Minimal worker planner implementation findings:
+  - planner trigger is currently optional and heuristic:
+    - trivial requests like `what files are in this folder?` bypass planning and go straight into the closed loop
+    - multi-step ZIP and router goals can establish a worker plan before the first loop turn
+  - current worker plans are visible in packet state through:
+    - `plan_state.mode`
+    - `plan_state.worker_goal`
+    - `plan_state.summary`
+    - `plan_state.steps`
+    - `plan_state.active_step`
+    - `plan_state.replan_conditions`
+  - the loop now advances through planned steps when the model emits `step_complete` before final task completion
+  - packet validation remained clean during successful plan advancement:
+    - `sessions/plan-live-20260330/zip-3/context/step-004-step-advance-validation.txt`
+    - `sessions/plan-live-20260330/zip-3/context/step-008-step-complete-validation.txt`
+- Live worker-planner behavior so far:
+  - trivial direct request:
+    - planning correctly bypassed for `what files are in this folder?`
+    - session:
+      - `sessions/plan-live-20260330/trivial`
+  - ZIP runs:
+    - `zip-2`: planned, but blocked after 8 steps
+    - `zip-3`: planned and completed; plan advanced through intermediate steps before final completion
+    - successful run artifacts:
+      - `sessions/plan-live-20260330/zip-3/session.json`
+      - `sessions/plan-live-20260330/zip-3/context/step-004-step-advance.txt`
+  - router runs:
+    - `router-1`: planner call failed with upstream `500`
+    - `router-2`: plan established, but run blocked after 6 steps
+    - `router-3`: plan established, but run blocked after 6 steps
+  - conclusion:
+    - planner integration itself is real and not obviously corrupting the packet
+    - ZIP shows at least one successful planned path
+    - router planning still tends to overbuild commands and stall on the first plan step
+    - planner stability against upstream model/server errors is still weak and should stay under observation
+- Interactive-shell observability for planning:
+  - new `/plan` command prints the active worker plan for live testing
+  - this is shell-side inspection only; it does not change planning behavior
+- Planner-attempt observability is now part of the runtime:
+  - planned-task runs write `planner-attempt-001.txt` style artifacts into the session `context/` directory
+  - artifact contents include:
+    - accepted/rejected status
+    - final error
+    - parsed plan fields
+    - planner validation issues
+    - exact planner prompt
+    - raw planner response
+  - live proof:
+    - `sessions/plan-live-20260330/router-planner-log-3/context/planner-attempt-001.txt`
+  - conclusion:
+    - planner failures and weak plans are now inspectable session evidence instead of disappearing into generic worker-loop errors
+- Generic worker step-status evaluation is now implemented:
+  - planned steps are evaluated as:
+    - `in_progress`
+    - `satisfied`
+    - `blocked`
+  - advancement now requires supporting execution evidence rather than trusting every `step_complete` blindly
+  - blockage is based on:
+    - explicit replan-condition matches
+    - or generic blocking execution signals such as `missing_path`, `permission_denied`, `invalid_action`, `command_not_found`
+- Live effect of the step-status slice:
+  - router:
+    - `sessions/plan-live-20260330/router-step-1`
+    - the run advanced through planned steps and reached the documentation/report phase rather than staying pinned on the initial scan step
+  - ZIP:
+    - `sessions/plan-live-20260330/zip-step-1`
+    - the run stayed coherent but did not advance beyond the first semantic step
+    - it accumulated useful evidence, but the model did not emit a supported `step_complete`
+  - conclusion:
+    - the new generic evaluator improved advancement discipline without obvious packet drift
+    - router progression looked cleaner
+    - ZIP still shows that step completion depends heavily on the model actually recognizing when a semantic step is satisfied
+- Generic model-assisted step evaluation is now implemented as a separate, inspectable layer:
+  - step evaluation uses a small JSON contract:
+    - `status`
+    - `reason`
+    - `summary`
+  - step-evaluation attempts are now logged into session context as:
+    - `step-eval-attempt-001.txt`
+  - this keeps semantic step satisfaction model-driven while low-level failure normalization remains in code
+- Live effect of the model-assisted step evaluator:
+  - ZIP:
+    - `sessions/step-eval-live-20260330/zip-2/context/step-001-step-advance.txt`
+    - the run automatically advanced past the first semantic step without requiring the model to emit `step_complete`
+    - `step-eval-attempt-001.txt` correctly judged the file-verification step as satisfied from structured evidence
+    - the run still stopped later at the hint-search step, but it no longer stayed stuck on step 1
+  - ZIP run `zip-1` also showed semantic progression, but that run was confounded by an upstream model-server connection reset:
+    - `last_error: ... connection reset by peer`
+  - real router:
+    - `sessions/step-eval-live-20260330/router-real-1`
+    - the plan was still structurally fine, but the first action remained a heavy full-port scan:
+      - `nmap -sV -p- --open 192.168.50.1 > .../portscan-results.txt 2>&1`
+    - this run timed out before the new step evaluator had a meaningful chance to improve within-step behavior
+- Current conclusion after the new step-evaluation slice:
+  - ZIP progression improved materially in a generic way
+  - the remaining weakness is later-step follow-through, not step-1 recognition
+  - router remains limited mainly by heavy or overbuilt execution inside the first planned step, not by planner shape or packet integrity
+- Generic planned-step action review is now implemented as a separate, inspectable layer:
+  - action review uses a small JSON contract:
+    - `decision`
+    - `reason`
+  - review decisions are logged into the session context as:
+    - `action-review-attempt-001.txt`
+  - the worker can now:
+    - `execute`
+    - `revise`
+    - `block`
+    before running a proposed action during planned execution
+- Live effect of the action-review slice:
+  - ZIP:
+    - `sessions/action-review-live-20260330/zip-1/context/action-review-attempt-001.txt`
+    - `sessions/action-review-live-20260330/zip-1/context/action-review-attempt-002.txt`
+    - the reviewer accepted focused archive-inspection actions, which is reasonable
+  - real router:
+    - `sessions/action-review-live-20260330/router-real-1/context/action-review-attempt-001.txt`
+    - the reviewer still accepted a heavy full-port scan with output-file scaffolding
+    - conclusion:
+      - the new layer is working and inspectable
+      - but the current review prompt is still too permissive to catch this class of overbuilt router action
+- Current conclusion after the action-review slice:
+  - the mechanism itself is sound and generic
+  - it did not yet materially improve the real-router first-action choice
+  - the next improvement, if we continue here, should be better generic action-review criteria rather than task-specific command rules
+- Tightening the generic action-review prompt improved the router benchmark further without hardcoding:
+  - live session:
+    - `sessions/action-review-tighten-20260401/router-qwen27b-1`
+  - step 1 was approved and completed cleanly:
+    - `ping -c 3 192.168.50.1`
+  - step 2 action review approved:
+    - `nmap -sV -T4 --top-ports 1000 192.168.50.1`
+    - artifact:
+      - `sessions/action-review-tighten-20260401/router-qwen27b-1/context/action-review-attempt-002.txt`
+  - this is a meaningful improvement over earlier patterns because it avoided:
+    - full `-p-` scans
+    - invented output-file scaffolding
+    - `&& cat ...` chaining
+  - current conclusion:
+    - the tightened review is behaving sensibly
+    - the remaining router limitation is now long-running but reasonable step actions, not obviously malformed actions
+    - the next generic improvement should target planned-step progress and long-running action handling, not more command-shape steering
+- Worker-model A/B result on the local LM Studio server:
+  - after reducing the LM Studio context window for `qwen3.5-27b`, the earlier planner `400 Bad Request` failures disappeared
+  - this indicates the earlier incompatibility was environmental, not a worker-code issue
+  - current recommendation:
+    - prefer `qwen3.5-27b` as the default worker validation model
+    - keep `qwen/qwen3.5-35b-a3b` as a comparison model
+- A/B comparison summary so far:
+  - ZIP:
+    - both models can plan and advance past the initial metadata step
+    - both currently block on missing wordlist/path issues during password-recovery attempts
+    - `qwen3.5-27b` tends to keep the phases cleaner
+    - `qwen/qwen3.5-35b-a3b` more often mixes inspection and cracking behavior too early
+  - real router `192.168.50.1`:
+    - `qwen3.5-27b` currently chooses the cleaner scan shape:
+      - `nmap -sV --top-ports 1000 -oA ...`
+    - `qwen/qwen3.5-35b-a3b` tends to choose heavier or more overbuilt scan actions earlier
+    - both models still fail later on output-path / follow-through issues, but `qwen3.5-27b` is currently the cleaner worker
+- Interrupted execution is now normalized separately from ordinary command failure:
+  - runtime layer changes classify interrupted commands as:
+    - `failure_class: execution_interrupted`
+    - signals such as `execution_timeout`
+  - running summaries now keep interrupted work as in-progress rather than ordinary failure
+  - unit validation passed for:
+    - `internal/execx`
+    - `internal/context`
+    - `internal/workerloop`
+  - direct runtime proof:
+    - `sessions/interrupted-progress-20260402/debug-scan-interrupt`
+    - interrupted command:
+      - `nmap -sV -T4 --top-ports 1000 192.168.50.1`
+    - log artifact:
+      - `sessions/interrupted-progress-20260402/debug-scan-interrupt/logs/cmd-20260402-142459.640649474.log`
+- Latest live validation after the interrupted-execution change:
+  - router planning/action review remained sound:
+    - `sessions/interrupted-progress-20260402/router-qwen27b-live2`
+    - action review rejected an overbuilt first scan before execution:
+      - artifact: `sessions/interrupted-progress-20260402/router-qwen27b-live2/context/action-review-attempt-001.txt`
+  - ZIP planning/execution remained coherent:
+    - `sessions/interrupted-progress-20260402/zip-qwen27b-1`
+    - step 1 advanced
+    - step 2 blocked on a real missing prerequisite:
+      - `/usr/share/wordlists/rockyou.txt`
+    - blocked-step artifact:
+      - `sessions/interrupted-progress-20260402/zip-qwen27b-1/context/step-003-step-blocked.txt`
+- Current conclusion after these validations:
+  - the interrupted-execution runtime change is sound enough to keep
+  - router behavior is now more limited by planned-step progress and planner variance than by obviously malformed actions
+  - ZIP still blocks on genuine prerequisite gaps rather than packet or planner corruption
+
+- Current scope-step normalization still uses heuristic matching on planner-generated step labels. This is acceptable as a temporary bridge because it is not parsing raw execution output, but it should later be replaced by typed planner step metadata so runtime semantics do not depend on step-label text.
+- Worker interactive UI now has a usable first TUI slice:
+  - left stream pane
+  - right status pane
+  - bottom input bar
+  - operator commands:
+    - `/status`
+    - `/step`
+    - `/plan`
+    - `/lastlog`
+    - `/stats`
+    - `/packet`
+    - `/help`
+  - the first live TUI check against the worker model showed a session-status inconsistency (`task_runtime.state=done` while top-level `status=active`), which is now fixed in the interactive shell persistence path
+- Worker CLI now guarantees an end-of-run assistant summary in the chat stream:
+  - summarizes what was done
+  - reports the strongest result
+  - gives at least one concrete next way to progress
+  - this now applies to completed and blocked runs in the interactive shell
+- Worker CLI input-mode routing is now explicit:
+  - `conversation`
+  - `direct_execution`
+  - `planned_execution`
+  - the classifier is validated against a small contract (`mode`, `reason`) and fails safe to `conversation` on invalid or ambiguous output
+  - live validation showed:
+    - `Who are you?` stays in conversation mode without entering the worker loop
+    - `what files are in this folder?` routes to direct execution and completes with `ModeHint=direct_execution`
+    - ZIP extraction routes to planned execution and persists `ModeHint=planned_execution` with a real semantic plan
