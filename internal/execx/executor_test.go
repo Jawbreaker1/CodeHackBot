@@ -71,6 +71,31 @@ func TestExecutorRunShell(t *testing.T) {
 	}
 }
 
+func TestBuildCommandUsesNonInteractiveInput(t *testing.T) {
+	cmd := buildCommand(context.Background(), Action{
+		Command: "printf hello",
+	})
+	if cmd.Stdin == nil {
+		t.Fatal("expected non-nil stdin to prevent interactive reads")
+	}
+}
+
+func TestExecutorRunTreatsStdinAsClosed(t *testing.T) {
+	logDir := t.TempDir()
+	exec := Executor{LogDir: logDir}
+
+	result, err := exec.Run(context.Background(), Action{
+		Command: "sh",
+		Args:    []string{"-c", `cat >/dev/null; printf stdin-closed`},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !strings.Contains(result.StdoutSummary, "stdin-closed") {
+		t.Fatalf("StdoutSummary = %q", result.StdoutSummary)
+	}
+}
+
 func TestExecutorPlanAndInitialLog(t *testing.T) {
 	logDir := t.TempDir()
 	exec := Executor{LogDir: logDir}

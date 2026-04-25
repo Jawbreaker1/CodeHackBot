@@ -135,7 +135,7 @@ func main() {
 		shell := interactivecli.Shell{
 			Reader:    os.Stdin,
 			Writer:    os.Stdout,
-			Runner:    loop,
+			Runner:    &loop,
 			RepoRoot:  repoRoot,
 			BaseURL:   *llmBaseURL,
 			Model:     *llmModel,
@@ -180,28 +180,10 @@ func main() {
 			os.Exit(2)
 		}
 		if *contextPacket {
-			packet := ctxpacket.WorkerPacket{
-				BehaviorFrame:     frame,
-				SessionFoundation: foundation,
-				CurrentStep: ctxpacket.Step{
-					Objective:       foundation.Goal,
-					RemainingBudget: "unbounded",
-				},
-				TaskRuntime: ctxpacket.InitialTaskRuntimeInDir(foundation.Goal, cwd),
-				PlanState: ctxpacket.PlanState{
-					Steps:      []string{"understand goal", "work the named target/task", "finish with a clear result"},
-					ActiveStep: foundation.Goal,
-				},
-				RecentConversation: []string{"User: " + foundation.Goal},
-				RunningSummary:     "Session foundation created; worker loop ready to run with LLM configuration.",
-				OperatorState: ctxpacket.OperatorState{
-					ScopeState:    "from_session_foundation",
-					ApprovalState: "pending",
-					Model:         "(unset)",
-					ContextUsage:  "(unset)",
-					WorkingDir:    cwd,
-				},
-			}
+			packet := ctxpacket.NewInitialWorkerPacket(frame, foundation, cwd, "(unset)", "pending", 1)
+			packet.CurrentStep.RemainingBudget = "unbounded"
+			packet.PlanState.Steps = []string{"understand goal", "work the named target/task", "finish with a clear result"}
+			packet.RunningSummary = "Session foundation created; worker loop ready to run with LLM configuration."
 			fmt.Println(packet.Render())
 			return
 		}
@@ -214,31 +196,7 @@ func main() {
 				fmt.Fprintf(os.Stderr, "birdhackbot rebuild: prepare session: %v\n", err)
 				os.Exit(2)
 			}
-			packet := ctxpacket.WorkerPacket{
-				BehaviorFrame:     frame,
-				SessionFoundation: foundation,
-				CurrentStep: ctxpacket.Step{
-					Objective:        foundation.Goal,
-					DoneCondition:    "the stated user goal has been satisfied with evidence",
-					FailCondition:    "cannot make honest progress on the stated user goal",
-					ExpectedEvidence: []string{"command logs", "artifacts if produced"},
-					RemainingBudget:  fmt.Sprintf("%d steps", *maxSteps),
-				},
-				TaskRuntime: ctxpacket.InitialTaskRuntimeInDir(foundation.Goal, cwd),
-				PlanState: ctxpacket.PlanState{
-					Steps:      []string{"understand goal", "work the named target/task", "verify and finish"},
-					ActiveStep: foundation.Goal,
-				},
-				RecentConversation: []string{"User: " + foundation.Goal},
-				RunningSummary:     "Worker loop starting from the stated user goal.",
-				OperatorState: ctxpacket.OperatorState{
-					ScopeState:    "from_session_foundation",
-					ApprovalState: approvalState(*allowAll),
-					Model:         *llmModel,
-					ContextUsage:  "(unset)",
-					WorkingDir:    cwd,
-				},
-			}
+			packet := ctxpacket.NewInitialWorkerPacket(frame, foundation, cwd, *llmModel, approvalState(*allowAll), *maxSteps)
 			statePath := paths.StatePath
 			if err := sessionstate.Save(statePath, sessionstate.State{
 				Status:   "active",

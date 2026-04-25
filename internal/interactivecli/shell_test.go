@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -13,9 +14,10 @@ import (
 	"github.com/Jawbreaker1/CodeHackBot/internal/llmclient"
 	"github.com/Jawbreaker1/CodeHackBot/internal/session"
 	"github.com/Jawbreaker1/CodeHackBot/internal/sessionstate"
+	"github.com/Jawbreaker1/CodeHackBot/internal/workerloop"
 	"github.com/Jawbreaker1/CodeHackBot/internal/workermode"
 	"github.com/Jawbreaker1/CodeHackBot/internal/workerplan"
-	"github.com/Jawbreaker1/CodeHackBot/internal/workerloop"
+	"github.com/Jawbreaker1/CodeHackBot/internal/workertask"
 )
 
 type stubRunner struct {
@@ -30,6 +32,59 @@ func (s *stubRunner) Run(_ context.Context, packet ctxpacket.WorkerPacket, _ int
 	return s.outcomes[idx], s.errs[idx]
 }
 
+type progressRunner struct {
+	outcome  workerloop.Outcome
+	err      error
+	progress workerloop.ProgressSink
+}
+
+func (p *progressRunner) SetProgressSink(sink workerloop.ProgressSink) {
+	p.progress = sink
+}
+
+func (p *progressRunner) Run(_ context.Context, packet ctxpacket.WorkerPacket, _ int) (workerloop.Outcome, error) {
+	packet.TaskRuntime.State = "running"
+	packet.PlanState.ActiveStep = "Inspect archive"
+	packet.CurrentStep.Objective = "Inspect archive"
+	packet.RunningSummary = "Inspecting archive metadata."
+	_ = workerloopEmitTestProgress(p.progress, workerloop.ProgressEvent{
+		Kind:       workerloop.EventPlanFinished,
+		Message:    "Archive inspection plan established.",
+		ActiveStep: packet.PlanState.ActiveStep,
+	}, packet)
+
+	packet.LatestExecutionResult.Action = "zipinfo -v secret.zip"
+	_ = workerloopEmitTestProgress(p.progress, workerloop.ProgressEvent{
+		Kind:       workerloop.EventExecutionStarted,
+		Message:    "zipinfo -v secret.zip",
+		Action:     "zipinfo -v secret.zip",
+		ActiveStep: packet.PlanState.ActiveStep,
+	}, packet)
+
+	packet.TaskRuntime.State = "done"
+	packet.LatestExecutionResult.ExitStatus = "0"
+	packet.LatestExecutionResult.OutputSummary = "stdout: Archive: secret.zip"
+	_ = workerloopEmitTestProgress(p.progress, workerloop.ProgressEvent{
+		Kind:       workerloop.EventExecutionFinished,
+		Message:    "execution finished",
+		Action:     packet.LatestExecutionResult.Action,
+		ExitStatus: packet.LatestExecutionResult.ExitStatus,
+		ActiveStep: packet.PlanState.ActiveStep,
+	}, packet)
+
+	if p.outcome.Packet.SessionFoundation.Goal == "" {
+		p.outcome.Packet = packet
+	}
+	return p.outcome, p.err
+}
+
+func workerloopEmitTestProgress(sink workerloop.ProgressSink, event workerloop.ProgressEvent, packet ctxpacket.WorkerPacket) error {
+	if sink == nil {
+		return nil
+	}
+	return sink.EmitProgress(event, packet)
+}
+
 type echoRunner struct {
 	summary string
 	calls   []ctxpacket.WorkerPacket
@@ -40,15 +95,47 @@ func (e *echoRunner) Run(_ context.Context, packet ctxpacket.WorkerPacket, _ int
 	return workerloop.Outcome{Summary: e.summary, Packet: packet}, nil
 }
 
-func TestShellRunMaintainsConversationAcrossTurns(t *testing.T) {
+type preservingRunner struct {
+	summary string
+	calls   []ctxpacket.WorkerPacket
+}
+
+func (p *preservingRunner) Run(_ context.Context, packet ctxpacket.WorkerPacket, _ int) (workerloop.Outcome, error) {
+	p.calls = append(p.calls, packet)
+	packet.TaskRuntime.State = "running"
+	if strings.TrimSpace(packet.PlanState.ActiveStep) == "" {
+		packet.PlanState.ActiveStep = packet.SessionFoundation.Goal
+	}
+	if strings.TrimSpace(packet.CurrentStep.Objective) == "" {
+		packet.CurrentStep.Objective = packet.SessionFoundation.Goal
+	}
+	return workerloop.Outcome{Summary: p.summary, Packet: packet}, nil
+}
+
+func TestShellRunStartsNewTaskAfterCompletedTurn(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, root+"/AGENTS.md", "rules")
 	mustWrite(t, root+"/go.mod", "module example.com/test\n")
 
 	runner := &stubRunner{
 		outcomes: []workerloop.Outcome{
-			{Summary: "first done", Packet: ctxpacket.WorkerPacket{BehaviorFrame: behavior.Frame{SystemPrompt: "prompt", AgentsText: "rules", RuntimeMode: "worker"}, SessionFoundation: session.Foundation{Goal: "first goal", ReportingRequirement: "owasp"}, RecentConversation: []string{"User: first goal"}}},
-			{Summary: "second done", Packet: ctxpacket.WorkerPacket{BehaviorFrame: behavior.Frame{SystemPrompt: "prompt", AgentsText: "rules", RuntimeMode: "worker"}, SessionFoundation: session.Foundation{Goal: "first goal", ReportingRequirement: "owasp"}, RecentConversation: []string{"User: first goal", "Assistant: first done", "User: next step"}}},
+			{Summary: "first done", Packet: ctxpacket.WorkerPacket{
+				BehaviorFrame:     behavior.Frame{SystemPrompt: "prompt", AgentsText: "rules", RuntimeMode: "worker"},
+				SessionFoundation: session.Foundation{Goal: "first goal", ReportingRequirement: "owasp"},
+				TaskRuntime:       ctxpacket.TaskRuntime{State: "done"},
+				LatestExecutionResult: ctxpacket.ExecutionResult{
+					Action:        "pwd",
+					OutputSummary: "stdout: /tmp/work",
+					LogRefs:       []string{"/tmp/cmd.log"},
+				},
+				RecentConversation: []string{"User: first goal"},
+			}},
+			{Summary: "second done", Packet: ctxpacket.WorkerPacket{
+				BehaviorFrame:      behavior.Frame{SystemPrompt: "prompt", AgentsText: "rules", RuntimeMode: "worker"},
+				SessionFoundation:  session.Foundation{Goal: "next step", ReportingRequirement: "owasp"},
+				TaskRuntime:        ctxpacket.TaskRuntime{State: "done"},
+				RecentConversation: []string{"User: next step"},
+			}},
 		},
 		errs: []error{nil, nil},
 	}
@@ -73,19 +160,59 @@ func TestShellRunMaintainsConversationAcrossTurns(t *testing.T) {
 	if len(runner.calls) != 2 {
 		t.Fatalf("runner calls = %d", len(runner.calls))
 	}
-	for _, needle := range []string{"Stream", "Status", "Input", "Assistant: Run updated. What I did: first done", "Assistant: Run updated. What I did: second done"} {
+	for _, needle := range []string{"BirdHackBot interactive session.", "User: first goal", "User: next step", "Assistant: Done."} {
 		if !strings.Contains(out.String(), needle) {
 			t.Fatalf("output missing %q: %q", needle, out.String())
 		}
 	}
-	if got := runner.calls[1].RecentConversation; len(got) == 0 || got[len(got)-1] != "User: next step" {
-		t.Fatalf("second call conversation = %#v", got)
+	if got := runner.calls[1].SessionFoundation.Goal; got != "next step" {
+		t.Fatalf("second call goal = %q, want %q", got, "next step")
 	}
-	if got := runner.calls[1].CurrentStep.Objective; got != "first goal" {
-		t.Fatalf("second call objective = %q, want %q", got, "first goal")
+	if got := runner.calls[1].CurrentStep.Objective; got != "next step" {
+		t.Fatalf("second call objective = %q, want %q", got, "next step")
 	}
-	if got := runner.calls[1].PlanState.ActiveStep; got != "first goal" {
-		t.Fatalf("second call active step = %q, want %q", got, "first goal")
+	if got := runner.calls[1].PlanState.ActiveStep; got != "next step" {
+		t.Fatalf("second call active step = %q, want %q", got, "next step")
+	}
+	if !strings.Contains(runner.calls[1].OlderConversationSummary, "User: first goal") {
+		t.Fatalf("second call older summary missing prior conversation: %q", runner.calls[1].OlderConversationSummary)
+	}
+	if len(runner.calls[1].RelevantRecentResults) == 0 || runner.calls[1].RelevantRecentResults[0].Action != "pwd" {
+		t.Fatalf("second call relevant results = %#v", runner.calls[1].RelevantRecentResults)
+	}
+}
+
+func TestPrepareTaskPacketContinuesActiveTaskWhenBoundarySaysContinue(t *testing.T) {
+	shell := Shell{
+		Model:     "test-model",
+		MaxSteps:  3,
+		AllowAll:  true,
+		StatePath: filepath.Join(t.TempDir(), "session.json"),
+		Boundary: func(ctx context.Context, frame behavior.Frame, packet ctxpacket.WorkerPacket, line string) (workertask.Decision, error) {
+			return workertask.Decision{Action: workertask.ActionContinueActiveTask, Reason: "latest turn refines current task"}, nil
+		},
+	}
+	packet := ctxpacket.WorkerPacket{
+		SessionFoundation: session.Foundation{Goal: "extract zip"},
+		TaskRuntime:       ctxpacket.TaskRuntime{State: "running"},
+		PlanState:         ctxpacket.PlanState{ActiveStep: "Recover password"},
+		RecentConversation: []string{
+			"User: extract zip",
+			"Assistant: plan created",
+		},
+	}
+	next, startedNew, err := shell.prepareTaskPacket(context.Background(), behavior.Frame{}, packet, true, "try a dictionary attack first")
+	if err != nil {
+		t.Fatalf("prepareTaskPacket() error = %v", err)
+	}
+	if startedNew {
+		t.Fatal("expected active task continuation")
+	}
+	if next.SessionFoundation.Goal != "extract zip" {
+		t.Fatalf("goal = %q, want %q", next.SessionFoundation.Goal, "extract zip")
+	}
+	if got := next.RecentConversation[len(next.RecentConversation)-1]; got != "User: try a dictionary attack first" {
+		t.Fatalf("recent conversation tail = %q", got)
 	}
 }
 
@@ -137,8 +264,119 @@ func TestShellRunPersistsCompletedStatusAndSummary(t *testing.T) {
 	if saves[1].Status != "completed" {
 		t.Fatalf("final save status = %q, want %q", saves[1].Status, "completed")
 	}
-	if !strings.Contains(saves[1].Summary, "What I did: listed files") || !strings.Contains(saves[1].Summary, "Next progress: ask me to produce or refine the final report") {
+	if !strings.Contains(saves[1].Summary, "Done.") || !strings.Contains(saves[1].Summary, "If you want, I can continue with a new target.") {
 		t.Fatalf("final save summary = %q", saves[1].Summary)
+	}
+}
+
+func TestShellRunPersistsProgressSnapshots(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, root+"/AGENTS.md", "rules")
+	mustWrite(t, root+"/go.mod", "module example.com/test\n")
+
+	var saves []sessionstate.State
+	runner := &progressRunner{
+		outcome: workerloop.Outcome{
+			Summary: "archive inspected",
+			Packet: ctxpacket.WorkerPacket{
+				SessionFoundation: session.Foundation{Goal: "inspect secret.zip", ReportingRequirement: "owasp"},
+				TaskRuntime:       ctxpacket.TaskRuntime{State: "done"},
+			},
+		},
+	}
+	shell := Shell{
+		Reader:    strings.NewReader("inspect secret.zip\nexit\n"),
+		Writer:    io.Discard,
+		Runner:    runner,
+		RepoRoot:  root,
+		BaseURL:   "http://127.0.0.1:1234/v1",
+		Model:     "test-model",
+		MaxSteps:  2,
+		AllowAll:  true,
+		StatePath: root + "/session.json",
+		Classify: func(ctx context.Context, frame behavior.Frame, packet ctxpacket.WorkerPacket, line string, started bool) (workermode.Decision, error) {
+			return workermode.Decision{Mode: workerplan.ModeDirectExecution, Reason: "test execution turn"}, nil
+		},
+		SaveState: func(path string, state sessionstate.State) error {
+			saves = append(saves, state)
+			return nil
+		},
+	}
+	if err := shell.Run(context.Background()); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(saves) < 4 {
+		t.Fatalf("save calls = %d, want at least 4", len(saves))
+	}
+	if got := saves[1].Packet.PlanState.ActiveStep; got != "Inspect archive" {
+		t.Fatalf("progress save active step = %q", got)
+	}
+	if got := saves[len(saves)-1].Status; got != "completed" {
+		t.Fatalf("final save status = %q, want completed", got)
+	}
+}
+
+func TestShellRunHeadlessWritesEventAndTranscriptArtifacts(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, root+"/AGENTS.md", "rules")
+	mustWrite(t, root+"/go.mod", "module example.com/test\n")
+
+	runner := &progressRunner{
+		outcome: workerloop.Outcome{
+			Summary: "archive inspected",
+			Packet: ctxpacket.WorkerPacket{
+				SessionFoundation: session.Foundation{Goal: "inspect secret.zip", ReportingRequirement: "owasp"},
+				TaskRuntime:       ctxpacket.TaskRuntime{State: "done"},
+			},
+		},
+	}
+	shell := Shell{
+		Reader:    strings.NewReader("inspect secret.zip\nexit\n"),
+		Writer:    io.Discard,
+		Runner:    runner,
+		RepoRoot:  root,
+		BaseURL:   "http://127.0.0.1:1234/v1",
+		Model:     "test-model",
+		MaxSteps:  2,
+		AllowAll:  true,
+		StatePath: root + "/session.json",
+		Classify: func(ctx context.Context, frame behavior.Frame, packet ctxpacket.WorkerPacket, line string, started bool) (workermode.Decision, error) {
+			return workermode.Decision{Mode: workerplan.ModeDirectExecution, Reason: "test execution turn"}, nil
+		},
+	}
+	if err := shell.RunHeadless(context.Background()); err != nil {
+		t.Fatalf("RunHeadless() error = %v", err)
+	}
+
+	eventsPath := filepath.Join(root, "events.ndjson")
+	transcriptPath := filepath.Join(root, "transcript.ndjson")
+	events, err := os.ReadFile(eventsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(events.ndjson) error = %v", err)
+	}
+	transcript, err := os.ReadFile(transcriptPath)
+	if err != nil {
+		t.Fatalf("ReadFile(transcript.ndjson) error = %v", err)
+	}
+	for _, want := range []string{
+		`"kind":"classification.accepted"`,
+		`"kind":"task.started"`,
+		`"kind":"progress.execution_started"`,
+		`"kind":"run.completed"`,
+	} {
+		if !strings.Contains(string(events), want) {
+			t.Fatalf("events missing %q in:\n%s", want, string(events))
+		}
+	}
+	for _, want := range []string{
+		`"role":"user"`,
+		`"content":"inspect secret.zip"`,
+		`"role":"assistant"`,
+		`"content":"Done.`,
+	} {
+		if !strings.Contains(string(transcript), want) {
+			t.Fatalf("transcript missing %q in:\n%s", want, string(transcript))
+		}
 	}
 }
 
@@ -167,7 +405,7 @@ func TestShellRunShowsShellCommandOutputInStream(t *testing.T) {
 		t.Fatalf("Run() error = %v", err)
 	}
 	rendered := out.String()
-	for _, needle := range []string{"Command: /plan", "System: no active plan", "understand goal"} {
+	for _, needle := range []string{"Command: /plan", "System: no active plan", "Assistant: Run updated.\nWhat I did:\n- ok"} {
 		if !strings.Contains(rendered, needle) {
 			t.Fatalf("output missing %q: %q", needle, rendered)
 		}
@@ -207,6 +445,138 @@ func TestShellRunConversationModeBypassesRunner(t *testing.T) {
 	for _, want := range []string{"User: Who are you?", "Assistant: I am BirdHackBot."} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("output missing %q in %q", want, out.String())
+		}
+	}
+}
+
+func TestBuildConversationPromptKeepsSessionContextLightweight(t *testing.T) {
+	packet := ctxpacket.WorkerPacket{
+		SessionFoundation: session.Foundation{Goal: "inspect secret.zip"},
+		TaskRuntime:       ctxpacket.TaskRuntime{State: "running"},
+		RecentConversation: []string{
+			"User: hello",
+			"Assistant: hi",
+		},
+		OlderConversationSummary: "User asked about secret.zip",
+		LatestExecutionResult: ctxpacket.ExecutionResult{
+			Action:         "zipinfo secret.zip",
+			OutputSummary:  "stdout: treasure-note.txt",
+			OutputEvidence: "stdout: treasure-note.txt\nstdout: another line",
+		},
+		OperatorState: ctxpacket.OperatorState{
+			WorkingDir: "/tmp/testrepo",
+		},
+	}
+
+	prompt := buildConversationPrompt(packet, "Who are you?", true)
+
+	for _, want := range []string{
+		`"session_context"`,
+		`"active_goal": "inspect secret.zip"`,
+		`"task_state": "running"`,
+		`"recent_conversation"`,
+		`"working_dir": "/tmp/testrepo"`,
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q in:\n%s", want, prompt)
+		}
+	}
+	for _, unwanted := range []string{
+		`"current_worker_state"`,
+		`"latest_execution_result"`,
+		`zipinfo secret.zip`,
+		`treasure-note.txt`,
+	} {
+		if strings.Contains(prompt, unwanted) {
+			t.Fatalf("prompt unexpectedly contained %q in:\n%s", unwanted, prompt)
+		}
+	}
+}
+
+func TestBuildModeClassifierPromptKeepsSessionContextLightweight(t *testing.T) {
+	packet := ctxpacket.WorkerPacket{
+		SessionFoundation: session.Foundation{Goal: "inspect secret.zip"},
+		TaskRuntime:       ctxpacket.TaskRuntime{State: "done"},
+		PlanState:         ctxpacket.PlanState{ActiveStep: "verify zip presence"},
+		RecentConversation: []string{
+			"User: list zip files",
+			"Assistant: found secret.zip",
+		},
+		OlderConversationSummary: "Earlier the user asked about the archive.",
+		LatestExecutionResult: ctxpacket.ExecutionResult{
+			Action:         "zipinfo secret.zip",
+			OutputSummary:  "stdout: treasure-note.txt",
+			OutputEvidence: "stdout: treasure-note.txt\nstdout: another line",
+		},
+		OperatorState: ctxpacket.OperatorState{
+			WorkingDir: "/tmp/testrepo",
+		},
+	}
+
+	prompt := buildModeClassifierPrompt(packet, "Extract the zip file", true)
+
+	for _, want := range []string{
+		`"session_context"`,
+		`"active_goal": "inspect secret.zip"`,
+		`"task_state": "done"`,
+		`"active_step": "verify zip presence"`,
+		`"working_dir": "/tmp/testrepo"`,
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q in:\n%s", want, prompt)
+		}
+	}
+	for _, unwanted := range []string{
+		`"current_worker_state"`,
+		`"latest_execution_result"`,
+		`zipinfo secret.zip`,
+		`treasure-note.txt`,
+	} {
+		if strings.Contains(prompt, unwanted) {
+			t.Fatalf("prompt unexpectedly contained %q in:\n%s", unwanted, prompt)
+		}
+	}
+}
+
+func TestApplyTaskStartPreservesSharedCapabilityInputs(t *testing.T) {
+	root := t.TempDir()
+	shell := Shell{
+		BaseURL:   "http://127.0.0.1:1234/v1",
+		Model:     "test-model",
+		MaxSteps:  2,
+		AllowAll:  true,
+		StatePath: root + "/session.json",
+	}
+	ui := NewUIState()
+	packet := ctxpacket.NewInitialWorkerPacket(
+		behavior.Frame{SystemPrompt: "prompt", AgentsText: "rules", RuntimeMode: "worker"},
+		session.Foundation{Goal: "inspect secret.zip", ReportingRequirement: "owasp"},
+		"/tmp/testrepo",
+		"test-model",
+		"approved_session",
+		2,
+	)
+
+	if err := shell.applyTaskStart(&ui, packet, string(workerplan.ModePlannedExecution)); err != nil {
+		t.Fatalf("applyTaskStart() error = %v", err)
+	}
+	if len(ui.Packet.CapabilityInputs) == 0 {
+		t.Fatalf("CapabilityInputs should not be empty for worker mode")
+	}
+	for _, want := range []string{
+		"operating_environment: standard Kali Linux environment",
+		"Metasploit Framework",
+		"tooling_preference:",
+	} {
+		found := false
+		for _, item := range ui.Packet.CapabilityInputs {
+			if strings.Contains(item, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("CapabilityInputs missing %q: %#v", want, ui.Packet.CapabilityInputs)
 		}
 	}
 }
@@ -309,10 +679,60 @@ func TestShellRunFallsBackToConversationOnClassifierError(t *testing.T) {
 	if len(runner.calls) != 0 {
 		t.Fatalf("runner calls = %d, want 0", len(runner.calls))
 	}
-	for _, want := range []string{"System: input classification failed; fell back to conversation mode", "Assistant: Can you clarify what you want me to inspect?"} {
+	for _, want := range []string{"System: input classification failed; fell back to conversation mode", "error: bad classifier response", "Assistant: Can you clarify what you want me to inspect?"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("output missing %q in %q", want, out.String())
 		}
+	}
+	attemptPath := filepath.Join(root, "context", "classification-attempt-001.txt")
+	data, err := os.ReadFile(attemptPath)
+	if err != nil {
+		t.Fatalf("ReadFile(classification attempt) error = %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{"[classification_attempt]", "accepted: false", "final_error: classify input: bad classifier response"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("classification attempt missing %q in:\n%s", want, text)
+		}
+	}
+}
+
+func TestClassifyInputAcceptsVerboseReasonByNormalizingIt(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, root+"/AGENTS.md", "rules")
+	mustWrite(t, root+"/go.mod", "module example.com/test\n")
+
+	shell := Shell{
+		RepoRoot:  root,
+		BaseURL:   "http://127.0.0.1:1234/v1",
+		Model:     "test-model",
+		MaxSteps:  2,
+		AllowAll:  true,
+		StatePath: root + "/session.json",
+		Classify: func(ctx context.Context, frame behavior.Frame, packet ctxpacket.WorkerPacket, line string, started bool) (workermode.Decision, error) {
+			return workermode.Decision{
+				Mode:   workerplan.ModePlannedExecution,
+				Reason: strings.Repeat("too many words ", 20),
+			}, nil
+		},
+	}
+	frame, err := behavior.Load(root, "worker", map[string]string{
+		"approval_mode": approvalModeLabel(true),
+		"surface":       "interactive_worker_cli",
+	})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	decision, err := shell.classifyInput(context.Background(), frame, ctxpacket.WorkerPacket{}, "Extract the zip file", false)
+	if err != nil {
+		t.Fatalf("classifyInput() error = %v", err)
+	}
+	if decision.Mode != workerplan.ModePlannedExecution {
+		t.Fatalf("mode = %q", decision.Mode)
+	}
+	if decision.Reason != "task requires multiple execution phases" {
+		t.Fatalf("reason = %q", decision.Reason)
 	}
 }
 
@@ -321,7 +741,7 @@ func TestShellRunRollsOlderConversationAfterRecentCap(t *testing.T) {
 	mustWrite(t, root+"/AGENTS.md", "rules")
 	mustWrite(t, root+"/go.mod", "module example.com/test\n")
 
-	runner := &echoRunner{summary: "ok"}
+	runner := &preservingRunner{summary: "ok"}
 	var in strings.Builder
 	in.WriteString("first goal\n")
 	for i := 0; i < 12; i++ {
@@ -341,6 +761,9 @@ func TestShellRunRollsOlderConversationAfterRecentCap(t *testing.T) {
 		StatePath: root + "/session.json",
 		Classify: func(ctx context.Context, frame behavior.Frame, packet ctxpacket.WorkerPacket, line string, started bool) (workermode.Decision, error) {
 			return workermode.Decision{Mode: workerplan.ModeDirectExecution, Reason: "test execution turn"}, nil
+		},
+		Boundary: func(ctx context.Context, frame behavior.Frame, packet ctxpacket.WorkerPacket, line string) (workertask.Decision, error) {
+			return workertask.Decision{Action: workertask.ActionContinueActiveTask, Reason: "test continuation"}, nil
 		},
 	}
 	if err := shell.Run(context.Background()); err != nil {
@@ -493,12 +916,91 @@ func TestBuildTerminalChatSummaryForBlockedRun(t *testing.T) {
 	got := buildTerminalChatSummary(packet, "", errors.New("step did not complete within 8 steps"))
 	for _, want := range []string{
 		"Run stopped.",
-		`What I did: executed "zipinfo -v secret.zip" (exit 0)`,
-		"Result: stdout: There is no zipfile comment.",
-		"Next progress: inspect the latest log or ask me to try a different method",
+		"What I did:\n- executed \"zipinfo -v secret.zip\" (exit 0)",
+		"Result:\n  stdout: There is no zipfile comment.",
+		"Next progress:\n- inspect the latest log or ask me to try a different method",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("summary missing %q in %q", want, got)
+		}
+	}
+}
+
+func TestBuildTerminalChatSummaryUsesConciseResultForCompletedVerboseOutput(t *testing.T) {
+	packet := ctxpacket.WorkerPacket{
+		SessionFoundation: session.Foundation{Goal: "Can you list the files in the current folder please"},
+		TaskRuntime:       ctxpacket.TaskRuntime{State: "done"},
+		LatestExecutionResult: ctxpacket.ExecutionResult{
+			Action:         "ls -la",
+			ExitStatus:     "0",
+			OutputSummary:  "stdout: total 10\ndrwxr-xr-x .",
+			OutputEvidence: "stdout: total 10\ndrwxr-xr-x .\n-rw-r--r-- AGENTS.md",
+			Assessment:     "success",
+			LogRefs:        []string{"/tmp/cmd.log"},
+		},
+	}
+	got := buildTerminalChatSummary(packet, "listed files", nil)
+	for _, want := range []string{
+		"Done.",
+		"listed files",
+		"Preview:\n  total 10\n  drwxr-xr-x .\n  -rw-r--r-- AGENTS.md",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("summary missing %q in %q", want, got)
+		}
+	}
+	if strings.Contains(got, "stdout: total 10") {
+		t.Fatalf("summary should not dump raw verbose output: %q", got)
+	}
+}
+
+func TestHandleShellCommandFullOutputReadsLatestLogStdout(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, root+"/AGENTS.md", "rules")
+	mustWrite(t, root+"/go.mod", "module example.com/test\n")
+	logPath := filepath.Join(root, "cmd.log")
+	mustWrite(t, logPath, strings.Join([]string{
+		"action: ls -la",
+		"actual_invocation: /bin/sh -lc \"ls -la\"",
+		"",
+		"[stdout]",
+		"total 10",
+		"AGENTS.md",
+		"TASKS.md",
+		"",
+		"[stderr]",
+		"",
+	}, "\n"))
+
+	packet := ctxpacket.WorkerPacket{
+		SessionFoundation: session.Foundation{Goal: "list files"},
+		TaskRuntime:       ctxpacket.TaskRuntime{State: "done"},
+		LatestExecutionResult: ctxpacket.ExecutionResult{
+			Action:  "ls -la",
+			LogRefs: []string{logPath},
+		},
+		OperatorState: ctxpacket.OperatorState{
+			PendingLog: logPath,
+		},
+	}
+	var out strings.Builder
+	handled, err := handleShellCommand(&out, "/fulloutput", true, packet)
+	if err != nil {
+		t.Fatalf("handleShellCommand(/fulloutput) error = %v", err)
+	}
+	if !handled {
+		t.Fatal("expected handled = true")
+	}
+	reply := out.String()
+	for _, want := range []string{
+		"Done.",
+		"Here is the full output from `ls -la`.",
+		"stdout:",
+		"AGENTS.md",
+		"TASKS.md",
+	} {
+		if !strings.Contains(reply, want) {
+			t.Fatalf("reply missing %q in:\n%s", want, reply)
 		}
 	}
 }

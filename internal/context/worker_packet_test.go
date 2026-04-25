@@ -92,34 +92,70 @@ func TestWorkerPacketRenderIncludesAllCoreSections(t *testing.T) {
 	}
 }
 
-func TestRenderExecutionResultsCompactsRetainedEntries(t *testing.T) {
+func TestNewInitialWorkerPacketSetsSharedExecutionDefaults(t *testing.T) {
+	frame := behavior.Frame{SystemPrompt: "prompt", AgentsText: "agents", RuntimeMode: "worker"}
+	foundation := session.Foundation{
+		Goal:                 "Inspect secret.zip",
+		ReportingRequirement: "owasp",
+	}
+
+	packet := NewInitialWorkerPacket(frame, foundation, "/tmp/testrepo", "test-model", "approved_session", 8)
+
+	if packet.SessionFoundation.Goal != foundation.Goal {
+		t.Fatalf("goal = %q", packet.SessionFoundation.Goal)
+	}
+	if packet.CurrentStep.Objective != foundation.Goal {
+		t.Fatalf("objective = %q", packet.CurrentStep.Objective)
+	}
+	if packet.PlanState.ActiveStep != foundation.Goal {
+		t.Fatalf("active_step = %q", packet.PlanState.ActiveStep)
+	}
+	if packet.OperatorState.WorkingDir != "/tmp/testrepo" {
+		t.Fatalf("working_dir = %q", packet.OperatorState.WorkingDir)
+	}
+	if packet.OperatorState.Model != "test-model" {
+		t.Fatalf("model = %q", packet.OperatorState.Model)
+	}
+	if len(packet.CapabilityInputs) == 0 {
+		t.Fatalf("CapabilityInputs should not be empty")
+	}
+	if !strings.Contains(strings.Join(packet.CapabilityInputs, "\n"), "Metasploit Framework") {
+		t.Fatalf("CapabilityInputs missing tooling context: %#v", packet.CapabilityInputs)
+	}
+}
+
+func TestRenderExecutionResultsPreservesRetainedEntriesForModelContext(t *testing.T) {
 	results := []ExecutionResult{
 		{
-			Action:        "printf " + strings.Repeat("a", 200),
-			ExitStatus:    "0",
-			OutputSummary: "stdout: " + strings.Repeat("b", 300),
-			LogRefs:       []string{"logs/cmd-1.log", "logs/cmd-2.log"},
-			ArtifactRefs:  []string{"artifacts/a.txt", "artifacts/b.txt"},
-			Assessment:    "success",
-			Signals:       []string{"archive_readable"},
+			Action:         "printf " + strings.Repeat("a", 200),
+			ExitStatus:     "0",
+			OutputSummary:  "stdout: " + strings.Repeat("b", 300),
+			OutputEvidence: "stdout: first line\nstdout: second line\nstdout: third line",
+			LogRefs:        []string{"logs/cmd-1.log", "logs/cmd-2.log"},
+			ArtifactRefs:   []string{"artifacts/a.txt", "artifacts/b.txt"},
+			Assessment:     "success",
+			Signals:        []string{"archive_readable"},
 		},
 	}
 
 	rendered := renderExecutionResults(results)
 	for _, want := range []string{
 		"result_1:",
-		"log_ref: logs/cmd-1.log",
-		"artifact_ref: artifacts/a.txt",
+		"printf " + strings.Repeat("a", 200),
+		"output_evidence: stdout: first line",
+		"stdout: second line",
+		"stdout: third line",
+		"log_refs: logs/cmd-1.log | logs/cmd-2.log",
+		"artifact_refs: artifacts/a.txt | artifacts/b.txt",
 		"assessment: success",
 		"signals: archive_readable",
-		"...",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("renderExecutionResults() missing %q in:\n%s", want, rendered)
 		}
 	}
-	if strings.Contains(rendered, "logs/cmd-2.log") || strings.Contains(rendered, "artifacts/b.txt") {
-		t.Fatalf("renderExecutionResults() kept extra refs in:\n%s", rendered)
+	if strings.Contains(rendered, "...") {
+		t.Fatalf("renderExecutionResults() should not compact retained evidence in:\n%s", rendered)
 	}
 }
 

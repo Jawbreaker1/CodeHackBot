@@ -9,8 +9,8 @@ import (
 const (
 	recentConversationTurnLimit  = 20
 	recentConversationTokenLimit = 20000
-	olderSummaryNoteLimit        = 20
-	olderSummaryNoteMaxChars     = 220
+	olderSummaryNoteLimit        = 40
+	olderSummaryNoteMaxChars     = 800
 )
 
 func AppendConversation(recent []string, olderSummary, entry string) ([]string, string) {
@@ -32,6 +32,10 @@ func AppendConversation(recent []string, olderSummary, entry string) ([]string, 
 		return next, olderSummary
 	}
 	return next, appendOlderConversationSummary(olderSummary, overflow)
+}
+
+func CarryConversationSummary(olderSummary string, entries []string) string {
+	return appendOlderConversationSummary(olderSummary, entries)
 }
 
 func approxConversationTokens(turns []string) int {

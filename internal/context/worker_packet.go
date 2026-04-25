@@ -30,14 +30,15 @@ type PlanState struct {
 
 // ExecutionResult is the minimal latest execution truth for the rebuild path.
 type ExecutionResult struct {
-	Action        string
-	ExitStatus    string
-	OutputSummary string
-	LogRefs       []string
-	ArtifactRefs  []string
-	Assessment    string
-	Signals       []string
-	FailureClass  string
+	Action         string
+	ExitStatus     string
+	OutputSummary  string
+	OutputEvidence string
+	LogRefs        []string
+	ArtifactRefs   []string
+	Assessment     string
+	Signals        []string
+	FailureClass   string
 }
 
 // OperatorState is the visible operator/runtime state in the context packet.
@@ -69,6 +70,47 @@ type WorkerPacket struct {
 	MemoryBankRetrievals     []string
 	CapabilityInputs         []string
 	OperatorState            OperatorState
+}
+
+func DefaultExecutionCapabilityInputs() []string {
+	return []string{
+		"operating_environment: standard Kali Linux environment with common offensive security tooling available",
+		"tooling_preference: prefer established security tools and workflows over improvised shell logic when a standard tool fits the task",
+		"tooling_examples: common tooling may include Nmap, Metasploit Framework, Burp Suite, Wireshark, Gobuster, ffuf, sqlmap, Hydra, John the Ripper, Hashcat, Aircrack-ng, enum4linux, smbclient, and Impacket tooling",
+		"execution_expectations: choose bounded, reproducible, evidence-producing actions and judge progress from real command output and artifacts",
+	}
+}
+
+func NewInitialWorkerPacket(frame behavior.Frame, foundation session.Foundation, cwd, model, approvalState string, maxSteps int) WorkerPacket {
+	if maxSteps <= 0 {
+		maxSteps = 1
+	}
+	return WorkerPacket{
+		BehaviorFrame:     frame,
+		SessionFoundation: foundation,
+		CurrentStep: Step{
+			Objective:        foundation.Goal,
+			DoneCondition:    "the stated user goal has been satisfied with evidence",
+			FailCondition:    "cannot make honest progress on the stated user goal",
+			ExpectedEvidence: []string{"command logs", "artifacts if produced"},
+			RemainingBudget:  fmt.Sprintf("%d steps", maxSteps),
+		},
+		TaskRuntime: InitialTaskRuntimeInDir(foundation.Goal, cwd),
+		PlanState: PlanState{
+			Steps:      []string{"understand goal", "work the named target/task", "verify and finish"},
+			ActiveStep: foundation.Goal,
+		},
+		RecentConversation: []string{"User: " + foundation.Goal},
+		RunningSummary:     "Worker loop starting from the stated user goal.",
+		CapabilityInputs:   DefaultExecutionCapabilityInputs(),
+		OperatorState: OperatorState{
+			ScopeState:    "from_session_foundation",
+			ApprovalState: approvalState,
+			Model:         model,
+			ContextUsage:  "(unset)",
+			WorkingDir:    cwd,
+		},
+	}
 }
 
 // RenderedSection is one named rendered packet section.
@@ -167,6 +209,7 @@ func renderExecutionResult(r ExecutionResult) string {
 		"action: " + blankOrValue(r.Action),
 		"exit_status: " + blankOrValue(r.ExitStatus),
 		"output_summary: " + blankOrValue(r.OutputSummary),
+		"output_evidence: " + blankOrValue(r.OutputEvidence),
 		"log_refs: " + joinOrNone(r.LogRefs),
 		"artifact_refs: " + joinOrNone(r.ArtifactRefs),
 		"assessment: " + blankOrValue(r.Assessment),
@@ -188,11 +231,12 @@ func renderExecutionResults(results []ExecutionResult) string {
 
 func renderRetainedExecutionResult(r ExecutionResult) string {
 	return strings.Join([]string{
-		"action: " + blankOrValue(compactText(r.Action, 140)),
+		"action: " + blankOrValue(r.Action),
 		"exit_status: " + blankOrValue(r.ExitStatus),
-		"output_summary: " + blankOrValue(compactText(r.OutputSummary, 180)),
-		"log_ref: " + firstOrNone(r.LogRefs),
-		"artifact_ref: " + firstOrNone(r.ArtifactRefs),
+		"output_summary: " + blankOrValue(r.OutputSummary),
+		"output_evidence: " + blankOrValue(firstNonBlank(r.OutputEvidence, r.OutputSummary)),
+		"log_refs: " + joinOrNone(r.LogRefs),
+		"artifact_refs: " + joinOrNone(r.ArtifactRefs),
 		"assessment: " + blankOrValue(r.Assessment),
 		"signals: " + joinOrNone(r.Signals),
 		"failure_class: " + blankOrValue(r.FailureClass),
@@ -244,6 +288,15 @@ func firstOrNone(items []string) string {
 		return "(none)"
 	}
 	return blankOrValue(items[0])
+}
+
+func firstNonBlank(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func blankOrValue(v string) string {

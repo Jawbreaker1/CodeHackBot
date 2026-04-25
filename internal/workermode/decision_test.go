@@ -61,3 +61,27 @@ func TestFallbackDecisionIsSafeConversation(t *testing.T) {
 		t.Fatalf("reason must not be empty")
 	}
 }
+
+func TestNormalizeConciseReasonReplacesVerboseReasonForSupportedMode(t *testing.T) {
+	got := NormalizeConciseReason(Decision{
+		Mode:   workerplan.ModePlannedExecution,
+		Reason: strings.Repeat("too many words ", 20),
+	})
+	if got.Mode != workerplan.ModePlannedExecution {
+		t.Fatalf("mode = %q", got.Mode)
+	}
+	if got.Reason != "task requires multiple execution phases" {
+		t.Fatalf("reason = %q", got.Reason)
+	}
+}
+
+func TestNormalizeConciseReasonLeavesStructuredNoiseUntouched(t *testing.T) {
+	raw := `{"mode":"conversation"}`
+	got := NormalizeConciseReason(Decision{
+		Mode:   workerplan.ModeConversation,
+		Reason: raw,
+	})
+	if got.Reason != raw {
+		t.Fatalf("reason = %q, want original", got.Reason)
+	}
+}

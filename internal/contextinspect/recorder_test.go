@@ -10,8 +10,11 @@ import (
 	ctxpacket "github.com/Jawbreaker1/CodeHackBot/internal/context"
 	"github.com/Jawbreaker1/CodeHackBot/internal/session"
 	"github.com/Jawbreaker1/CodeHackBot/internal/workeraction"
+	"github.com/Jawbreaker1/CodeHackBot/internal/workerdirect"
+	"github.com/Jawbreaker1/CodeHackBot/internal/workermode"
 	"github.com/Jawbreaker1/CodeHackBot/internal/workerplan"
 	"github.com/Jawbreaker1/CodeHackBot/internal/workerstep"
+	"github.com/Jawbreaker1/CodeHackBot/internal/workertask"
 )
 
 func TestRecorderCapture(t *testing.T) {
@@ -185,6 +188,107 @@ func TestRecorderCaptureStepEvaluationAttempt(t *testing.T) {
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("step evaluation attempt missing %q in:\n%s", want, text)
+		}
+	}
+}
+
+func TestRecorderCaptureDirectEvaluationAttempt(t *testing.T) {
+	dir := t.TempDir()
+	recorder := Recorder{Dir: dir}
+	attempt := workerdirect.AttemptRecord{
+		Prompt:      "direct prompt",
+		RawResponse: `{"status":"satisfied","reason":"file listing is complete","summary":"listed files"}`,
+		Parsed: workerdirect.Evaluation{
+			Status:  workerdirect.StatusSatisfied,
+			Reason:  "file listing is complete",
+			Summary: "listed files",
+		},
+		Accepted: true,
+	}
+	if err := recorder.CaptureDirectEvaluationAttempt(attempt); err != nil {
+		t.Fatalf("CaptureDirectEvaluationAttempt() error = %v", err)
+	}
+	path := filepath.Join(dir, "direct-eval-attempt-001.txt")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(direct evaluation attempt) error = %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		"[direct_evaluation_attempt]",
+		"accepted: true",
+		"status: satisfied",
+		"reason: file listing is complete",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("direct evaluation attempt missing %q in:\n%s", want, text)
+		}
+	}
+}
+
+func TestRecorderCaptureTaskBoundaryAttempt(t *testing.T) {
+	dir := t.TempDir()
+	recorder := Recorder{Dir: dir}
+	attempt := workertask.AttemptRecord{
+		Prompt:      "boundary prompt",
+		RawResponse: `{"action":"start_new_task","reason":"latest turn introduces a new goal"}`,
+		Parsed: workertask.Decision{
+			Action: workertask.ActionStartNewTask,
+			Reason: "latest turn introduces a new goal",
+		},
+		Accepted: true,
+	}
+	if err := recorder.CaptureTaskBoundaryAttempt(attempt); err != nil {
+		t.Fatalf("CaptureTaskBoundaryAttempt() error = %v", err)
+	}
+	path := filepath.Join(dir, "task-boundary-attempt-001.txt")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(task boundary attempt) error = %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		"[task_boundary_attempt]",
+		"accepted: true",
+		"action: start_new_task",
+		"reason: latest turn introduces a new goal",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("task boundary attempt missing %q in:\n%s", want, text)
+		}
+	}
+}
+
+func TestRecorderCaptureClassificationAttempt(t *testing.T) {
+	dir := t.TempDir()
+	recorder := Recorder{Dir: dir}
+	attempt := workermode.AttemptRecord{
+		Prompt:      "classification prompt",
+		RawResponse: `{"mode":"conversation","reason":"identity question"}`,
+		Parsed: workermode.Decision{
+			Mode:   workerplan.ModeConversation,
+			Reason: "identity question",
+		},
+		Accepted: true,
+	}
+	if err := recorder.CaptureClassificationAttempt(attempt); err != nil {
+		t.Fatalf("CaptureClassificationAttempt() error = %v", err)
+	}
+	path := filepath.Join(dir, "classification-attempt-001.txt")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(classification attempt) error = %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		"[classification_attempt]",
+		"accepted: true",
+		"mode: conversation",
+		"reason: identity question",
+		"classification prompt",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("classification attempt missing %q in:\n%s", want, text)
 		}
 	}
 }

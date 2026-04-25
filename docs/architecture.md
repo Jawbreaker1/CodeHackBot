@@ -1542,6 +1542,120 @@ The semantic plan shown to the user should remain short and human-readable. It s
 
 In the worker UI, the visible plan should represent only the core semantic steps of the current task. It should not show gritty execution details as separate plan items.
 
+The worker UI must be a real terminal UI, not a repeated text snapshot dump.
+
+That means the implementation must provide:
+- a renderer loop that owns screen drawing
+- fixed layout regions that redraw in place
+- a bottom-anchored input region
+- stable left/right panes that update without printing a new full dashboard into scrollback each turn
+
+The worker UI architecture should be split into four parts:
+
+1. `ui state`
+   - current input buffer
+   - left-pane stream entries
+   - right-pane status model
+   - session/run status
+
+2. `event model`
+   - user input submitted
+   - worker run started
+   - worker run completed
+   - command/result update
+   - step/action-review update
+   - shell-command output
+   - error update
+
+3. `renderer`
+   - alternate-screen lifecycle
+   - full redraw in place on state change
+   - cursor placement and restore
+   - resize-safe layout calculation
+
+4. `controller`
+   - reads input
+   - routes slash commands
+   - starts conversation/direct/planned worker handling
+   - updates UI state and emits events
+
+The renderer must not contain worker behavior logic. It should render existing state only.
+
+The controller must not duplicate planner or execution logic. It should route input and publish UI updates only.
+
+The interactive worker CLI must support multiple tasks within the same long-lived session.
+
+This means:
+- the interactive session transcript may span many requests over time
+- the active worker packet represents only the current active task
+- when the operator starts a new task, the active packet must be replaced with a fresh task packet
+- transcript continuity and relevant prior evidence may carry forward
+- stale goal, plan, and task-runtime state must not carry into the new active task
+
+For the worker CLI, the packet remains the durable source of truth for the current task.
+
+The UI/runtime layer may additionally consume structured worker progress events, but those events are observational only.
+They must not become a second source of truth.
+
+The initial worker progress event set should remain small and explicit:
+- `task_started`
+- `plan_started`
+- `plan_finished`
+- `action_proposed`
+- `action_review_started`
+- `action_review_finished`
+- `execution_started`
+- `execution_finished`
+- `post_exec_eval_started`
+- `post_exec_eval_finished`
+- `task_completed`
+- `task_blocked`
+- `task_failed`
+
+These events exist so the interactive UI and later orchestrator can observe live execution progress without inferring lifecycle from packet diffs or chat text.
+
+The worker CLI must not behave like a single black-box `Runner.Run(...)` call that only updates the UI when the entire run returns.
+
+Meaningful in-flight state should be surfaced and persisted during long-running work.
+
+At minimum, the worker CLI should update/persist after:
+- task start
+- plan establishment
+- execution start
+- execution finish
+- task blocked/completed/failed
+
+For post-execution semantics, execution truth is primary and post-execution LLM judgment is secondary refinement.
+
+This means:
+- if execution already clearly establishes a blocking outcome, the worker should surface `blocked` promptly
+- if execution already clearly establishes completion, the worker should surface `completed` promptly
+- post-execution LLM evaluation should only be used when execution truth is genuinely ambiguous
+
+This same packet-plus-events model should compose directly with the orchestrator later:
+- packet = durable worker task state
+- events = live worker transition stream for supervision, coordination, and UI
+
+For the Worker CLI, use a real terminal UI foundation rather than a homegrown redraw loop. The current preferred implementation is:
+- `Bubble Tea` for the TUI event loop and terminal lifecycle
+- `Bubbles` components for input and viewport management
+- `Lip Gloss` for layout/styling
+
+Do not rebuild the worker TUI around fixed-width string rendering plus ad hoc ANSI clearing. That approach is not robust enough for input ownership, cursor placement, or resize-safe layouts.
+
+The first real worker TUI should support:
+- alternate-screen entry and clean exit
+- redraw in place instead of appending snapshots
+- a stable left stream pane
+- a stable right status pane
+- a stable bottom input region
+- live updates for:
+  - conversation replies
+  - latest command/result
+  - plan changes
+  - step state changes
+  - shell-command outputs
+
 Examples of good worker-plan steps:
 - identify target or input
 - inspect metadata or surface

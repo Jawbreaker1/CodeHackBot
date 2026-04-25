@@ -48,3 +48,23 @@ func TestAppendConversationCapsOlderSummaryNotes(t *testing.T) {
 		t.Fatalf("len(notes) = %d, want <= %d", len(notes), olderSummaryNoteLimit)
 	}
 }
+
+func TestCarryConversationSummaryAppendsEntriesToOlderSummary(t *testing.T) {
+	got := CarryConversationSummary("User: first task", []string{"Assistant: done", "User: next task"})
+	for _, want := range []string{"User: first task", "Assistant: done", "User: next task"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("carry summary missing %q in %q", want, got)
+		}
+	}
+}
+
+func TestCarryConversationSummaryKeepsLongerEntriesWithoutEarlyTruncation(t *testing.T) {
+	long := "Assistant: " + strings.Repeat("detail ", 60)
+	got := CarryConversationSummary("", []string{long})
+	if strings.Contains(got, "...") {
+		t.Fatalf("carry summary truncated too early: %q", got)
+	}
+	if !strings.Contains(got, "detail detail detail") {
+		t.Fatalf("carry summary lost detail content: %q", got)
+	}
+}

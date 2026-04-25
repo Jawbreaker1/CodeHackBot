@@ -42,7 +42,7 @@ func TestEvaluateActivePlanStepSatisfiedFromStepJudge(t *testing.T) {
 	}
 }
 
-func TestEvaluateActivePlanStepBlockedOnMissingPath(t *testing.T) {
+func TestEvaluateActivePlanStepStaysInProgressOnRecoverableMissingPath(t *testing.T) {
 	packet := ctxpacket.WorkerPacket{
 		PlanState: ctxpacket.PlanState{
 			Mode:             "planned_execution",
@@ -54,6 +54,28 @@ func TestEvaluateActivePlanStepBlockedOnMissingPath(t *testing.T) {
 			ExitStatus:    "1",
 			Assessment:    "failed",
 			OutputSummary: "stderr: /usr/share/wordlists/rockyou.txt: No such file or directory",
+			Signals:       []string{"missing_path", "nonzero_exit"},
+			FailureClass:  "command_failed",
+		},
+	}
+	got := evaluateActivePlanStep(context.Background(), llmclient.Client{}, nil, packet, "step complete")
+	if got.Status != StepInProgress {
+		t.Fatalf("status = %q, want %q", got.Status, StepInProgress)
+	}
+}
+
+func TestEvaluateActivePlanStepBlockedWhenReplanConditionMatchesEvidence(t *testing.T) {
+	packet := ctxpacket.WorkerPacket{
+		PlanState: ctxpacket.PlanState{
+			Mode:             "planned_execution",
+			ActiveStep:       "Attempt recovery",
+			ReplanConditions: []string{"wordlist missing"},
+		},
+		LatestExecutionResult: ctxpacket.ExecutionResult{
+			Action:        "fcrackzip -D -p /usr/share/wordlists/rockyou.txt secret.zip",
+			ExitStatus:    "1",
+			Assessment:    "failed",
+			OutputSummary: "stderr: wordlist missing",
 			Signals:       []string{"missing_path", "nonzero_exit"},
 			FailureClass:  "command_failed",
 		},

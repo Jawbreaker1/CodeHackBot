@@ -1,28 +1,35 @@
 package interactivecli
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/behavior"
 	ctxpacket "github.com/Jawbreaker1/CodeHackBot/internal/context"
+	"github.com/Jawbreaker1/CodeHackBot/internal/contextinspect"
 	"github.com/Jawbreaker1/CodeHackBot/internal/contextstats"
 	"github.com/Jawbreaker1/CodeHackBot/internal/llmclient"
 	"github.com/Jawbreaker1/CodeHackBot/internal/session"
 	"github.com/Jawbreaker1/CodeHackBot/internal/sessionstate"
-	"github.com/Jawbreaker1/CodeHackBot/internal/workermode"
-	"github.com/Jawbreaker1/CodeHackBot/internal/workerplan"
 	"github.com/Jawbreaker1/CodeHackBot/internal/workerloop"
+	"github.com/Jawbreaker1/CodeHackBot/internal/workermode"
+	"github.com/Jawbreaker1/CodeHackBot/internal/workertask"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 type Runner interface {
 	Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps int) (workerloop.Outcome, error)
+}
+
+type progressConfigurableRunner interface {
+	Runner
+	SetProgressSink(sink workerloop.ProgressSink)
 }
 
 type Shell struct {
@@ -39,9 +46,42 @@ type Shell struct {
 	SaveState func(path string, state sessionstate.State) error
 	Chat      func(ctx context.Context, messages []llmclient.Message) (string, error)
 	Classify  func(ctx context.Context, frame behavior.Frame, packet ctxpacket.WorkerPacket, line string, started bool) (workermode.Decision, error)
+	Boundary  func(ctx context.Context, frame behavior.Frame, packet ctxpacket.WorkerPacket, line string) (workertask.Decision, error)
+}
+
+type runnerProgress struct {
+	Event  workerloop.ProgressEvent
+	Packet ctxpacket.WorkerPacket
+}
+
+type runResult struct {
+	outcome workerloop.Outcome
+	err     error
+}
+
+type channelProgressSink struct {
+	ctx context.Context
+	ch  chan<- runnerProgress
+}
+
+func (s channelProgressSink) EmitProgress(event workerloop.ProgressEvent, packet ctxpacket.WorkerPacket) error {
+	select {
+	case <-s.ctx.Done():
+		return s.ctx.Err()
+	case s.ch <- runnerProgress{Event: event, Packet: packet}:
+		return nil
+	}
 }
 
 func (s Shell) Run(ctx context.Context) error {
+	return s.runInteractive(ctx, true)
+}
+
+func (s Shell) RunHeadless(ctx context.Context) error {
+	return s.runInteractive(ctx, false)
+}
+
+func (s Shell) runInteractive(ctx context.Context, allowTUI bool) error {
 	if s.Reader == nil || s.Writer == nil {
 		return fmt.Errorf("reader and writer are required")
 	}
@@ -66,150 +106,32 @@ func (s Shell) Run(ctx context.Context) error {
 		return err
 	}
 
-	reader := bufio.NewReader(s.Reader)
-	var packet ctxpacket.WorkerPacket
-	started := false
-	stream := []string{"BirdHackBot interactive session."}
-	needsRender := true
-
-	for {
-		if needsRender {
-			view := BuildViewState(packet, shellSessionStatus(started, packet))
-			_, _ = fmt.Fprintln(s.Writer, renderDashboard(view, stream, "birdhackbot> "))
-			needsRender = false
-		}
-		line, err := reader.ReadString('\n')
-		if err != nil && err != io.EOF {
-			return fmt.Errorf("read input: %w", err)
-		}
-		line = strings.TrimSpace(line)
-		if line == "" {
-			if err == io.EOF {
-				return nil
-			}
-			continue
-		}
-		if line == "exit" || line == "quit" {
-			return nil
-		}
-		if strings.HasPrefix(line, "/") {
-			var cmdOut strings.Builder
-			if handled, cmdErr := handleShellCommand(&cmdOut, line, started, packet); handled {
-				stream = append(stream, "Command: "+line)
-				if out := strings.TrimSpace(cmdOut.String()); out != "" {
-					stream = append(stream, "System: "+compactForStream(out, 280))
-				}
-				if cmdErr != nil {
-					stream = append(stream, "Error: "+cmdErr.Error())
-				}
-				needsRender = true
-				if err == io.EOF {
-					return nil
-				}
-				continue
-			}
-		}
-		stream = append(stream, "User: "+line)
-		modeDecision, classifyErr := s.classifyInput(ctx, frame, packet, line, started)
-		if classifyErr != nil {
-			modeDecision = workermode.FallbackDecision()
-			stream = append(stream, "System: input classification failed; fell back to conversation mode")
-		}
-		if modeDecision.Mode == workerplan.ModeConversation {
-			reply, convoErr := s.answerConversation(ctx, frame, packet, line, started)
-			if convoErr != nil {
-				stream = append(stream, "Error: "+convoErr.Error())
-			} else {
-				stream = append(stream, "Assistant: "+strings.TrimSpace(reply))
-				if started {
-					packet.RecentConversation, packet.OlderConversationSummary = ctxpacket.AppendConversation(packet.RecentConversation, packet.OlderConversationSummary, "User: "+line)
-					packet.RecentConversation, packet.OlderConversationSummary = ctxpacket.AppendConversation(packet.RecentConversation, packet.OlderConversationSummary, "Assistant: "+strings.TrimSpace(reply))
-					state := sessionstate.State{
-						Status:   persistedSessionStatus(packet, nil),
-						BaseURL:  s.BaseURL,
-						Model:    s.Model,
-						MaxSteps: s.MaxSteps,
-						AllowAll: s.AllowAll,
-						Packet:   packet,
-						Summary:  strings.TrimSpace(reply),
-					}
-					if err := s.saveState(state); err != nil {
-						return fmt.Errorf("save session state after conversation: %w", err)
-					}
-				}
-			}
-			needsRender = true
-			if err == io.EOF {
-				return nil
-			}
-			continue
-		}
-
-		if !started {
-			packet, err = newInitialPacket(frame, line, s.Model, s.AllowAll, s.MaxSteps)
-			if err != nil {
-				return err
-			}
-			started = true
-		} else {
-			packet.RecentConversation, packet.OlderConversationSummary = ctxpacket.AppendConversation(packet.RecentConversation, packet.OlderConversationSummary, "User: "+line)
-		}
-		packet.OperatorState.ModeHint = string(modeDecision.Mode)
-
-		if err := s.saveState(sessionstate.State{
-			Status:   "active",
-			BaseURL:  s.BaseURL,
-			Model:    s.Model,
-			MaxSteps: s.MaxSteps,
-			AllowAll: s.AllowAll,
-			Packet:   packet,
-		}); err != nil {
-			return fmt.Errorf("save session state: %w", err)
-		}
-
-		outcome, runErr := s.Runner.Run(ctx, packet, s.MaxSteps)
-		packet = outcome.Packet
-		if strings.TrimSpace(packet.CurrentStep.Objective) == "" {
-			packet.CurrentStep.Objective = packet.SessionFoundation.Goal
-		}
-		if strings.TrimSpace(packet.PlanState.ActiveStep) == "" {
-			packet.PlanState.ActiveStep = packet.SessionFoundation.Goal
-		}
-		stream = appendRunEvents(stream, packet)
-		terminalSummary := buildTerminalChatSummary(packet, outcome.Summary, runErr)
-		if strings.TrimSpace(terminalSummary) != "" {
-			packet.RecentConversation, packet.OlderConversationSummary = ctxpacket.AppendConversation(packet.RecentConversation, packet.OlderConversationSummary, "Assistant: "+terminalSummary)
-			stream = append(stream, "Assistant: "+strings.TrimSpace(terminalSummary))
-		}
-		state := sessionstate.State{
-			Status:   persistedSessionStatus(packet, runErr),
-			BaseURL:  s.BaseURL,
-			Model:    s.Model,
-			MaxSteps: s.MaxSteps,
-			AllowAll: s.AllowAll,
-			Packet:   packet,
-			Summary:  terminalSummary,
-		}
-		if runErr != nil {
-			state.LastError = normalizeRunError(ctx, runErr)
-			if err := s.saveState(state); err != nil {
-				return fmt.Errorf("save session state after run error %q: %w", runErr, err)
-			}
-			if ctx.Err() != nil || errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
-				return runErr
-			}
-			stream = append(stream, "Error: "+runErr.Error())
-		} else {
-			if err := s.saveState(state); err != nil {
-				return fmt.Errorf("save session state after run: %w", err)
-			}
-		}
-		needsRender = true
-
-		if err == io.EOF {
-			return nil
-		}
+	if !allowTUI || !usesTerminalTUI(s.Reader, s.Writer) {
+		return s.runScripted(ctx, frame)
 	}
+
+	model := newBubbleModel(ctx, &s, frame)
+	options := []tea.ProgramOption{
+		tea.WithContext(ctx),
+		tea.WithInput(s.Reader),
+		tea.WithOutput(s.Writer),
+		tea.WithoutSignalHandler(),
+	}
+	if file, ok := s.Writer.(*os.File); ok && isCharacterDevice(file) {
+		options = append(options, tea.WithAltScreen())
+	}
+	finalModel, err := tea.NewProgram(model, options...).Run()
+	if err != nil {
+		return fmt.Errorf("run interactive tui: %w", err)
+	}
+	if fm, ok := finalModel.(bubbleModel); ok && fm.exitErr != nil {
+		return fm.exitErr
+	}
+	return nil
+}
+
+func (s Shell) artifacts() artifactRecorder {
+	return newArtifactRecorder(s.StatePath)
 }
 
 func shellSessionStatus(started bool, packet ctxpacket.WorkerPacket) string {
@@ -259,6 +181,151 @@ func (s Shell) saveState(state sessionstate.State) error {
 	return sessionstate.Save(s.StatePath, state)
 }
 
+func (s Shell) persistPacketState(packet ctxpacket.WorkerPacket, summary string, runErr error) error {
+	state := sessionstate.State{
+		Status:   persistedSessionStatus(packet, runErr),
+		BaseURL:  s.BaseURL,
+		Model:    s.Model,
+		MaxSteps: s.MaxSteps,
+		AllowAll: s.AllowAll,
+		Packet:   packet,
+		Summary:  summary,
+	}
+	if runErr != nil {
+		state.LastError = normalizeRunError(context.Background(), runErr)
+	}
+	return s.saveState(state)
+}
+
+func (s Shell) startWorkerRunAsync(ctx context.Context, packet ctxpacket.WorkerPacket) (<-chan runnerProgress, <-chan runResult) {
+	var progressCh chan runnerProgress
+	if _, ok := s.Runner.(progressConfigurableRunner); ok {
+		progressCh = make(chan runnerProgress, 32)
+	}
+	resultCh := make(chan runResult, 1)
+	go func() {
+		if runner, ok := s.Runner.(progressConfigurableRunner); ok && progressCh != nil {
+			runner.SetProgressSink(channelProgressSink{ctx: ctx, ch: progressCh})
+			defer func() {
+				runner.SetProgressSink(nil)
+				close(progressCh)
+			}()
+		}
+		outcome, err := s.Runner.Run(ctx, packet, s.MaxSteps)
+		resultCh <- runResult{outcome: outcome, err: err}
+		close(resultCh)
+	}()
+	return progressCh, resultCh
+}
+
+func (s Shell) applyUserInput(ui *UIState, line string) {
+	ui.AddUserInput(line)
+	_ = s.artifacts().recordTranscript("user", line, ui.Packet)
+	_ = s.artifacts().recordEvent("input.received", line, ui.Packet)
+}
+
+func (s Shell) recordClassificationResult(packet ctxpacket.WorkerPacket, decision workermode.Decision, classifyErr error) {
+	if classifyErr != nil {
+		_ = s.artifacts().recordEvent("classification.fallback", artifactEventMessageForClassification(string(decision.Mode), classifyErr), packet)
+		return
+	}
+	_ = s.artifacts().recordEvent("classification.accepted", string(decision.Mode), packet)
+}
+
+func (s Shell) applyClassification(ui *UIState, decision workermode.Decision, classifyErr error) workermode.Decision {
+	if classifyErr != nil {
+		decision = workermode.FallbackDecision()
+		ui.AddShellCommand("classification", fmt.Sprintf("input classification failed; fell back to conversation mode\nerror: %v", classifyErr), nil)
+	}
+	s.recordClassificationResult(ui.Packet, decision, classifyErr)
+	return decision
+}
+
+func (s Shell) applyConversationReply(ui *UIState, line, reply string) error {
+	reply = strings.TrimSpace(reply)
+	if reply == "" {
+		return nil
+	}
+	ui.AddAssistantReply(reply)
+	_ = s.artifacts().recordTranscript("assistant", reply, ui.Packet)
+	_ = s.artifacts().recordEvent("conversation.replied", reply, ui.Packet)
+	if !ui.Started {
+		return nil
+	}
+	ui.Packet.RecentConversation, ui.Packet.OlderConversationSummary = ctxpacket.AppendConversation(ui.Packet.RecentConversation, ui.Packet.OlderConversationSummary, "User: "+line)
+	ui.Packet.RecentConversation, ui.Packet.OlderConversationSummary = ctxpacket.AppendConversation(ui.Packet.RecentConversation, ui.Packet.OlderConversationSummary, "Assistant: "+reply)
+	state := sessionstate.State{
+		Status:   persistedSessionStatus(ui.Packet, nil),
+		BaseURL:  s.BaseURL,
+		Model:    s.Model,
+		MaxSteps: s.MaxSteps,
+		AllowAll: s.AllowAll,
+		Packet:   ui.Packet,
+		Summary:  reply,
+	}
+	return s.saveState(state)
+}
+
+func (s Shell) applyConversationResult(ui *UIState, line, reply string, err error) error {
+	if err != nil {
+		ui.AddShellCommand("conversation", "", err)
+		_ = s.artifacts().recordEvent("conversation.error", err.Error(), ui.Packet)
+		return nil
+	}
+	return s.applyConversationReply(ui, line, reply)
+}
+
+func (s Shell) applyTaskStart(ui *UIState, packet ctxpacket.WorkerPacket, mode string) error {
+	ui.Packet = packet
+	ui.Started = true
+	ui.Packet.OperatorState.ModeHint = mode
+	_ = s.artifacts().recordEvent("task.started", ui.Packet.SessionFoundation.Goal, ui.Packet)
+	return s.saveState(sessionstate.State{
+		Status:   "active",
+		BaseURL:  s.BaseURL,
+		Model:    s.Model,
+		MaxSteps: s.MaxSteps,
+		AllowAll: s.AllowAll,
+		Packet:   ui.Packet,
+	})
+}
+
+func (s Shell) applyProgress(ui *UIState, progress runnerProgress) error {
+	ui.AddProgressEvent(progress.Event, progress.Packet)
+	_ = s.artifacts().recordProgress(progress)
+	return s.persistPacketState(ui.Packet, "", nil)
+}
+
+func (s Shell) finalizeRun(ctx context.Context, ui *UIState, outcome workerloop.Outcome, runErr error) error {
+	ui.Packet = outcome.Packet
+	if strings.TrimSpace(ui.Packet.CurrentStep.Objective) == "" {
+		ui.Packet.CurrentStep.Objective = ui.Packet.SessionFoundation.Goal
+	}
+	if strings.TrimSpace(ui.Packet.PlanState.ActiveStep) == "" {
+		ui.Packet.PlanState.ActiveStep = ui.Packet.SessionFoundation.Goal
+	}
+	terminalSummary := buildTerminalChatSummary(ui.Packet, outcome.Summary, runErr)
+	if strings.TrimSpace(terminalSummary) != "" {
+		ui.Packet.RecentConversation, ui.Packet.OlderConversationSummary = ctxpacket.AppendConversation(ui.Packet.RecentConversation, ui.Packet.OlderConversationSummary, "Assistant: "+terminalSummary)
+		_ = s.artifacts().recordTranscript("assistant", terminalSummary, ui.Packet)
+	}
+	_ = s.artifacts().recordEvent(artifactEventKindForOutcome(ui.Packet, runErr), artifactEventMessageForOutcome(terminalSummary, runErr), ui.Packet)
+	ui.AddRunOutcome(ui.Packet, terminalSummary, runErr)
+	state := sessionstate.State{
+		Status:   persistedSessionStatus(ui.Packet, runErr),
+		BaseURL:  s.BaseURL,
+		Model:    s.Model,
+		MaxSteps: s.MaxSteps,
+		AllowAll: s.AllowAll,
+		Packet:   ui.Packet,
+		Summary:  terminalSummary,
+	}
+	if runErr != nil {
+		state.LastError = normalizeRunError(ctx, runErr)
+	}
+	return s.saveState(state)
+}
+
 func (s Shell) chat(ctx context.Context, messages []llmclient.Message) (string, error) {
 	if s.Chat != nil {
 		return s.Chat(ctx, messages)
@@ -267,25 +334,57 @@ func (s Shell) chat(ctx context.Context, messages []llmclient.Message) (string, 
 }
 
 func (s Shell) classifyInput(ctx context.Context, frame behavior.Frame, packet ctxpacket.WorkerPacket, line string, started bool) (workermode.Decision, error) {
-	if s.Classify != nil {
-		return s.Classify(ctx, frame, packet, line, started)
+	attempt := workermode.AttemptRecord{
+		Prompt: buildModeClassifierPrompt(packet, line, started),
 	}
-	prompt := buildModeClassifierPrompt(packet, line, started)
+	acceptDecision := func(decision workermode.Decision) (workermode.Decision, error) {
+		attempt.Parsed = decision
+		attempt.Validation = workermode.Validate(decision)
+		if !attempt.Validation.Valid() {
+			normalized := workermode.NormalizeConciseReason(decision)
+			if normalized != decision {
+				attempt.Parsed = normalized
+				attempt.Validation = workermode.Validate(normalized)
+				if attempt.Validation.Valid() {
+					attempt.Accepted = true
+					_ = s.captureClassificationAttempt(attempt)
+					return normalized, nil
+				}
+			}
+			attempt.FinalError = attempt.Validation.Error().Error()
+			_ = s.captureClassificationAttempt(attempt)
+			return workermode.Decision{}, fmt.Errorf("validate input classification: %w", attempt.Validation.Error())
+		}
+		attempt.Accepted = true
+		_ = s.captureClassificationAttempt(attempt)
+		return decision, nil
+	}
+	if s.Classify != nil {
+		decision, err := s.Classify(ctx, frame, packet, line, started)
+		if err != nil {
+			attempt.FinalError = fmt.Sprintf("classify input: %v", err)
+			_ = s.captureClassificationAttempt(attempt)
+			return workermode.Decision{}, err
+		}
+		return acceptDecision(decision)
+	}
 	resp, err := s.chat(ctx, []llmclient.Message{
 		{Role: "system", Content: frame.PromptText()},
-		{Role: "user", Content: prompt},
+		{Role: "user", Content: attempt.Prompt},
 	})
+	attempt.RawResponse = resp
 	if err != nil {
+		attempt.FinalError = fmt.Sprintf("classify input: %v", err)
+		_ = s.captureClassificationAttempt(attempt)
 		return workermode.Decision{}, fmt.Errorf("classify input: %w", err)
 	}
 	decision, err := workermode.Parse(resp)
 	if err != nil {
+		attempt.FinalError = fmt.Sprintf("parse input classification: %v", err)
+		_ = s.captureClassificationAttempt(attempt)
 		return workermode.Decision{}, fmt.Errorf("parse input classification: %w", err)
 	}
-	if report := workermode.Validate(decision); !report.Valid() {
-		return workermode.Decision{}, fmt.Errorf("validate input classification: %w", report.Error())
-	}
-	return decision, nil
+	return acceptDecision(decision)
 }
 
 func (s Shell) answerConversation(ctx context.Context, frame behavior.Frame, packet ctxpacket.WorkerPacket, line string, started bool) (string, error) {
@@ -308,6 +407,90 @@ func normalizeRunError(ctx context.Context, err error) string {
 		return "aborted by signal"
 	}
 	return err.Error()
+}
+
+func (s Shell) captureClassificationAttempt(attempt workermode.AttemptRecord) error {
+	contextDir := filepath.Join(filepath.Dir(s.StatePath), "context")
+	return contextinspect.Recorder{Dir: contextDir}.CaptureClassificationAttempt(attempt)
+}
+
+func (s Shell) captureTaskBoundaryAttempt(attempt workertask.AttemptRecord) error {
+	contextDir := filepath.Join(filepath.Dir(s.StatePath), "context")
+	return contextinspect.Recorder{Dir: contextDir}.CaptureTaskBoundaryAttempt(attempt)
+}
+
+func (s Shell) decideTaskBoundary(ctx context.Context, frame behavior.Frame, packet ctxpacket.WorkerPacket, line string) (workertask.Decision, error) {
+	attempt := workertask.AttemptRecord{
+		Prompt: buildTaskBoundaryPrompt(packet, line),
+	}
+	if s.Boundary != nil {
+		decision, err := s.Boundary(ctx, frame, packet, line)
+		attempt.Parsed = decision
+		if err != nil {
+			attempt.FinalError = fmt.Sprintf("decide task boundary: %v", err)
+			_ = s.captureTaskBoundaryAttempt(attempt)
+			return workertask.Decision{}, err
+		}
+		attempt.Validation = workertask.Validate(decision)
+		attempt.Accepted = attempt.Validation.Valid()
+		if !attempt.Accepted {
+			attempt.FinalError = attempt.Validation.Error().Error()
+		}
+		_ = s.captureTaskBoundaryAttempt(attempt)
+		if !attempt.Accepted {
+			return workertask.Decision{}, fmt.Errorf("validate task boundary decision: %w", attempt.Validation.Error())
+		}
+		return decision, nil
+	}
+	resp, err := s.chat(ctx, []llmclient.Message{
+		{Role: "system", Content: frame.PromptText()},
+		{Role: "user", Content: attempt.Prompt},
+	})
+	attempt.RawResponse = resp
+	if err != nil {
+		attempt.FinalError = fmt.Sprintf("decide task boundary: %v", err)
+		_ = s.captureTaskBoundaryAttempt(attempt)
+		return workertask.Decision{}, fmt.Errorf("decide task boundary: %w", err)
+	}
+	decision, err := workertask.Parse(resp)
+	if err != nil {
+		attempt.FinalError = fmt.Sprintf("parse task boundary: %v", err)
+		_ = s.captureTaskBoundaryAttempt(attempt)
+		return workertask.Decision{}, fmt.Errorf("parse task boundary: %w", err)
+	}
+	attempt.Parsed = decision
+	attempt.Validation = workertask.Validate(decision)
+	if !attempt.Validation.Valid() {
+		attempt.FinalError = fmt.Sprintf("validate task boundary decision: %v", attempt.Validation.Error())
+		_ = s.captureTaskBoundaryAttempt(attempt)
+		return workertask.Decision{}, fmt.Errorf("validate task boundary decision: %w", attempt.Validation.Error())
+	}
+	attempt.Accepted = true
+	_ = s.captureTaskBoundaryAttempt(attempt)
+	return decision, nil
+}
+
+func (s Shell) prepareTaskPacket(ctx context.Context, frame behavior.Frame, packet ctxpacket.WorkerPacket, started bool, line string) (ctxpacket.WorkerPacket, bool, error) {
+	if !started {
+		next, err := newInitialPacket(frame, line, s.Model, s.AllowAll, s.MaxSteps)
+		return next, true, err
+	}
+	state := strings.TrimSpace(packet.TaskRuntime.State)
+	switch state {
+	case "", "done", "blocked":
+		next, err := newTaskPacketFromPrevious(frame, packet, line, s.Model, s.AllowAll, s.MaxSteps)
+		return next, true, err
+	}
+	decision, err := s.decideTaskBoundary(ctx, frame, packet, line)
+	if err != nil {
+		decision = workertask.FallbackDecision()
+	}
+	if decision.Action == workertask.ActionStartNewTask {
+		next, err := newTaskPacketFromPrevious(frame, packet, line, s.Model, s.AllowAll, s.MaxSteps)
+		return next, true, err
+	}
+	packet.RecentConversation, packet.OlderConversationSummary = ctxpacket.AppendConversation(packet.RecentConversation, packet.OlderConversationSummary, "User: "+line)
+	return packet, false, nil
 }
 
 func persistedSessionStatus(packet ctxpacket.WorkerPacket, runErr error) string {
@@ -336,13 +519,23 @@ func buildTerminalChatSummary(packet ctxpacket.WorkerPacket, outcomeSummary stri
 		"Completed a worker run.",
 	)
 
-	result := firstNonEmpty(
-		strings.TrimSpace(packet.LatestExecutionResult.OutputSummary),
-		strings.TrimSpace(packet.RunningSummary),
-		"(none)",
-	)
+	result := deriveChatResultSummary(packet, runErr)
 
 	next := firstNonEmpty(nextProgressSuggestion(packet, runErr), "ask me to inspect the current state and choose the next step")
+
+	if done && runErr == nil {
+		lines := []string{"Done.", "Completed your request."}
+		if concise := conciseSuccessSummary(outcomeSummary); concise != "" {
+			lines[1] = concise
+		}
+		if strings.TrimSpace(result) != "" && result != "(none)" {
+			lines = append(lines, result)
+		}
+		if strings.TrimSpace(next) != "" {
+			lines = append(lines, "If you want, I can "+strings.TrimSuffix(strings.TrimSpace(next), ".")+".")
+		}
+		return strings.Join(lines, "\n")
+	}
 
 	status := "Run complete."
 	switch {
@@ -354,7 +547,30 @@ func buildTerminalChatSummary(packet ctxpacket.WorkerPacket, outcomeSummary stri
 		status = "Run updated."
 	}
 
-	return fmt.Sprintf("%s What I did: %s Result: %s Next progress: %s.", status, whatDone, compactForStream(result, 220), next)
+	return strings.Join([]string{
+		status,
+		"What I did:",
+		"- " + strings.TrimSpace(whatDone),
+		"Result:",
+		indentBlock(formatStreamBody(result, 8, 700), "  "),
+		"Next progress:",
+		"- " + strings.TrimSpace(next),
+	}, "\n")
+}
+
+func conciseSuccessSummary(outcomeSummary string) string {
+	outcomeSummary = strings.TrimSpace(outcomeSummary)
+	if outcomeSummary == "" {
+		return ""
+	}
+	line := strings.TrimSpace(strings.Split(outcomeSummary, "\n")[0])
+	if line == "" {
+		return ""
+	}
+	if len(line) > 160 {
+		line = line[:157] + "..."
+	}
+	return line
 }
 
 func deriveWhatDone(packet ctxpacket.WorkerPacket) string {
@@ -376,7 +592,10 @@ func nextProgressSuggestion(packet ctxpacket.WorkerPacket, runErr error) string 
 		return "inspect the latest log or ask me to try a different method from the current state"
 	}
 	if strings.TrimSpace(packet.TaskRuntime.State) == "done" {
-		return "ask me to produce or refine the final report, or continue with a new target"
+		if latestLogPath(packet) != "" {
+			return "use /fulloutput, inspect the latest log, or continue with a new target"
+		}
+		return "continue with a new target"
 	}
 	if mf := strings.TrimSpace(packet.TaskRuntime.MissingFact); mf != "" && mf != "(none)" {
 		return "help me resolve the missing fact or tell me to try a different method"
@@ -385,6 +604,177 @@ func nextProgressSuggestion(packet ctxpacket.WorkerPacket, runErr error) string 
 		return "tell me to continue the active step or adjust the plan if you want a different approach"
 	}
 	return "tell me what to investigate next"
+}
+
+func indentBlock(s, prefix string) string {
+	if strings.TrimSpace(s) == "" {
+		return prefix + "(none)"
+	}
+	lines := strings.Split(s, "\n")
+	for i := range lines {
+		lines[i] = prefix + lines[i]
+	}
+	return strings.Join(lines, "\n")
+}
+
+func deriveChatResultSummary(packet ctxpacket.WorkerPacket, runErr error) string {
+	raw := firstNonEmpty(
+		strings.TrimSpace(preferredOutputForChat(packet.LatestExecutionResult)),
+		strings.TrimSpace(packet.RunningSummary),
+		"(none)",
+	)
+	if shouldShowRawResult(packet, runErr) {
+		return formatStreamBody(raw, 8, 700)
+	}
+	if preview := deriveSuccessfulOutputPreview(packet); preview != "" {
+		return preview
+	}
+	if snippet := conciseOutputSnippet(raw); snippet != "" {
+		return snippet
+	}
+	if latestLogPath(packet) != "" {
+		return "Output captured successfully. Use /fulloutput to inspect the full command output."
+	}
+	return "Output captured successfully."
+}
+
+func deriveSuccessfulOutputPreview(packet ctxpacket.WorkerPacket) string {
+	preview := latestOutputPreview(packet)
+	if strings.TrimSpace(preview) == "" {
+		return ""
+	}
+	lines := []string{"Preview:"}
+	lines = append(lines, indentBlock(preview, "  "))
+	if latestLogPath(packet) != "" {
+		lines = append(lines, "Use /fulloutput to inspect the full command output.")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func latestOutputPreview(packet ctxpacket.WorkerPacket) string {
+	if logPath := latestLogPath(packet); strings.TrimSpace(logPath) != "" {
+		stdout, stderr, err := readExecutionLogOutput(logPath)
+		if err == nil {
+			if preview := boundedPreviewBlock(stdout, 4, 320); preview != "" {
+				return preview
+			}
+			if preview := boundedPreviewBlock(stderr, 4, 320); preview != "" {
+				return preview
+			}
+		}
+	}
+	return boundedPreviewBlock(normalizeOutputSnippet(preferredOutputForChat(packet.LatestExecutionResult)), 4, 320)
+}
+
+func boundedPreviewBlock(raw string, maxLines, maxChars int) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "(none)" {
+		return ""
+	}
+	return limitOutputForChat(raw, maxLines, maxChars)
+}
+
+func readExecutionLogOutput(path string) (string, string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", "", err
+	}
+	text := string(data)
+	stdout := extractLogSection(text, "[stdout]", "[stderr]")
+	stderr := extractLogSection(text, "[stderr]", "")
+	return strings.TrimSpace(stdout), strings.TrimSpace(stderr), nil
+}
+
+func extractLogSection(text, startMarker, endMarker string) string {
+	start := strings.Index(text, startMarker)
+	if start < 0 {
+		return ""
+	}
+	section := text[start+len(startMarker):]
+	section = strings.TrimPrefix(section, "\n")
+	if endMarker != "" {
+		if end := strings.Index(section, endMarker); end >= 0 {
+			section = section[:end]
+		}
+	}
+	return strings.TrimSpace(section)
+}
+
+func renderFullOutputReply(packet ctxpacket.WorkerPacket, stdout, stderr string) string {
+	action := strings.TrimSpace(packet.LatestExecutionResult.Action)
+	lines := []string{"Done."}
+	if action != "" {
+		lines = append(lines, fmt.Sprintf("Here is the full output from `%s`.", action))
+	} else {
+		lines = append(lines, "Here is the full output from the latest command.")
+	}
+	if strings.TrimSpace(stdout) != "" && stdout != "(none)" {
+		lines = append(lines, "stdout:")
+		lines = append(lines, indentBlock(limitOutputForChat(stdout, 80, 12000), "  "))
+	}
+	if strings.TrimSpace(stderr) != "" && stderr != "(none)" {
+		lines = append(lines, "stderr:")
+		lines = append(lines, indentBlock(limitOutputForChat(stderr, 40, 6000), "  "))
+	}
+	if latestLogPath(packet) != "" {
+		lines = append(lines, fmt.Sprintf("Latest log: %s", latestLogPath(packet)))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func limitOutputForChat(s string, maxLines, maxChars int) string {
+	s = strings.TrimSpace(s)
+	if maxChars > 0 && len(s) > maxChars {
+		s = strings.TrimSpace(s[:maxChars]) + "\n..."
+	}
+	lines := strings.Split(s, "\n")
+	if maxLines > 0 && len(lines) > maxLines {
+		lines = append(lines[:maxLines], "...")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func shouldShowRawResult(packet ctxpacket.WorkerPacket, runErr error) bool {
+	if runErr != nil {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(packet.TaskRuntime.State), "blocked") {
+		return true
+	}
+	assessment := strings.TrimSpace(packet.LatestExecutionResult.Assessment)
+	if assessment != "" && assessment != "success" {
+		return true
+	}
+	if strings.TrimSpace(packet.LatestExecutionResult.FailureClass) != "" {
+		return true
+	}
+	return false
+}
+
+func conciseOutputSnippet(raw string) string {
+	raw = normalizeOutputSnippet(raw)
+	if raw == "" || raw == "(none)" {
+		return ""
+	}
+	lines := strings.Split(raw, "\n")
+	if len(lines) == 1 && len(strings.TrimSpace(lines[0])) <= 120 {
+		return strings.TrimSpace(lines[0])
+	}
+	return ""
+}
+
+func preferredOutputForChat(result ctxpacket.ExecutionResult) string {
+	if strings.TrimSpace(result.OutputEvidence) != "" && strings.TrimSpace(result.OutputEvidence) != "(none)" {
+		return result.OutputEvidence
+	}
+	return result.OutputSummary
+}
+
+func normalizeOutputSnippet(raw string) string {
+	raw = strings.TrimSpace(raw)
+	raw = strings.TrimPrefix(raw, "stdout: ")
+	raw = strings.TrimPrefix(raw, "stderr: ")
+	return strings.TrimSpace(raw)
 }
 
 func handleShellCommand(w io.Writer, line string, started bool, packet ctxpacket.WorkerPacket) (bool, error) {
@@ -432,6 +822,22 @@ func handleShellCommand(w io.Writer, line string, started bool, packet ctxpacket
 		}
 		_, _ = fmt.Fprintln(w, logPath)
 		return true, nil
+	case "/fulloutput":
+		if !started {
+			_, _ = fmt.Fprintln(w, "no active session")
+			return true, nil
+		}
+		logPath := latestLogPath(packet)
+		if strings.TrimSpace(logPath) == "" {
+			_, _ = fmt.Fprintln(w, "(none)")
+			return true, nil
+		}
+		stdout, stderr, err := readExecutionLogOutput(logPath)
+		if err != nil {
+			return true, fmt.Errorf("read latest command output: %w", err)
+		}
+		_, _ = fmt.Fprintln(w, renderFullOutputReply(packet, stdout, stderr))
+		return true, nil
 	case "/plan":
 		if !started {
 			_, _ = fmt.Fprintln(w, "no active session")
@@ -453,31 +859,7 @@ func newInitialPacket(frame behavior.Frame, goal, model string, allowAll bool, m
 	if err != nil {
 		return ctxpacket.WorkerPacket{}, err
 	}
-	return ctxpacket.WorkerPacket{
-		BehaviorFrame:     frame,
-		SessionFoundation: foundation,
-		CurrentStep: ctxpacket.Step{
-			Objective:        foundation.Goal,
-			DoneCondition:    "the stated user goal has been satisfied with evidence",
-			FailCondition:    "cannot make honest progress on the stated user goal",
-			ExpectedEvidence: []string{"command logs", "artifacts if produced"},
-			RemainingBudget:  fmt.Sprintf("%d steps", maxSteps),
-		},
-		TaskRuntime: ctxpacket.InitialTaskRuntimeInDir(foundation.Goal, cwd),
-		PlanState: ctxpacket.PlanState{
-			Steps:      []string{"understand goal", "work the named target/task", "verify and finish"},
-			ActiveStep: foundation.Goal,
-		},
-		RecentConversation: []string{"User: " + foundation.Goal},
-		RunningSummary:     "Worker loop starting from the stated user goal.",
-		OperatorState: ctxpacket.OperatorState{
-			ScopeState:    "from_session_foundation",
-			ApprovalState: approvalStateLabel(allowAll),
-			Model:         model,
-			ContextUsage:  "(unset)",
-			WorkingDir:    cwd,
-		},
-	}, nil
+	return ctxpacket.NewInitialWorkerPacket(frame, foundation, cwd, model, approvalStateLabel(allowAll), maxSteps), nil
 }
 
 func approvalStateLabel(allowAll bool) string {
@@ -513,6 +895,43 @@ func latestLogPath(packet ctxpacket.WorkerPacket) string {
 		return strings.TrimSpace(packet.LatestExecutionResult.LogRefs[0])
 	}
 	return ""
+}
+
+func newTaskPacketFromPrevious(frame behavior.Frame, previous ctxpacket.WorkerPacket, goal, model string, allowAll bool, maxSteps int) (ctxpacket.WorkerPacket, error) {
+	next, err := newInitialPacket(frame, goal, model, allowAll, maxSteps)
+	if err != nil {
+		return ctxpacket.WorkerPacket{}, err
+	}
+	next.OlderConversationSummary = ctxpacket.CarryConversationSummary(previous.OlderConversationSummary, previous.RecentConversation)
+	next.RelevantRecentResults = carryRecentResults(previous)
+	return next, nil
+}
+
+func carryRecentResults(previous ctxpacket.WorkerPacket) []ctxpacket.ExecutionResult {
+	results := make([]ctxpacket.ExecutionResult, 0, 1+len(previous.RelevantRecentResults))
+	if hasExecutionEvidence(previous.LatestExecutionResult) {
+		results = append(results, previous.LatestExecutionResult)
+	}
+	for _, result := range previous.RelevantRecentResults {
+		if !hasExecutionEvidence(result) {
+			continue
+		}
+		results = append(results, result)
+		if len(results) >= 4 {
+			break
+		}
+	}
+	if len(results) == 0 {
+		return nil
+	}
+	return results
+}
+
+func hasExecutionEvidence(result ctxpacket.ExecutionResult) bool {
+	return strings.TrimSpace(result.Action) != "" ||
+		strings.TrimSpace(result.OutputSummary) != "" ||
+		len(result.LogRefs) > 0 ||
+		len(result.ArtifactRefs) > 0
 }
 
 func renderPlan(packet ctxpacket.WorkerPacket) string {
@@ -595,6 +1014,7 @@ func renderHelp() string {
 		"- /status: compact current worker status",
 		"- /step: active step detail and plan step states",
 		"- /plan: semantic plan and replan conditions",
+		"- /fulloutput: show full stdout/stderr from the latest command",
 		"- /lastlog: latest command log path",
 		"- /stats: packet/context size summary",
 		"- /packet: full rendered worker packet",
@@ -617,7 +1037,36 @@ func buildModeClassifierPrompt(packet ctxpacket.WorkerPacket, line string, start
 		"started":   started,
 	}
 	if started {
-		payload["current_worker_state"] = packet.RenderWithoutBehaviorFrame()
+		payload["session_context"] = map[string]any{
+			"active_goal":         blankOrNone(packet.SessionFoundation.Goal),
+			"task_state":          blankOrNone(packet.TaskRuntime.State),
+			"active_step":         blankOrNone(packet.PlanState.ActiveStep),
+			"recent_conversation": packet.RecentConversation,
+			"older_conversation":  blankOrNone(packet.OlderConversationSummary),
+			"working_dir":         blankOrNone(packet.OperatorState.WorkingDir),
+		}
+	}
+	data, _ := json.MarshalIndent(payload, "", "  ")
+	return string(data)
+}
+
+func buildTaskBoundaryPrompt(packet ctxpacket.WorkerPacket, line string) string {
+	payload := map[string]any{
+		"instructions": []string{
+			"Respond with JSON only.",
+			`Use: {"action":"continue_active_task|start_new_task","reason":"short explanation"}.`,
+			"Choose continue_active_task only when the latest user turn clearly refines, continues, or redirects the current active task without replacing it.",
+			"Choose start_new_task when the latest user turn introduces a new goal that should replace the current active task.",
+			"If uncertain, choose start_new_task.",
+			"Do not emit commands, plan steps, or extra fields.",
+		},
+		"user_turn": line,
+		"current_task": map[string]any{
+			"goal":        packet.SessionFoundation.Goal,
+			"state":       packet.TaskRuntime.State,
+			"active_step": packet.PlanState.ActiveStep,
+		},
+		"current_worker_state": packet.RenderWithoutBehaviorFrame(),
 	}
 	data, _ := json.MarshalIndent(payload, "", "  ")
 	return string(data)
@@ -628,12 +1077,20 @@ func buildConversationPrompt(packet ctxpacket.WorkerPacket, line string, started
 		"instructions": []string{
 			"Respond conversationally to the user.",
 			"Do not propose or perform tool execution in this reply.",
-			"Be concise and helpful.",
+			"Be concise, natural, and helpful.",
+			"Do not restate authorization or policy unless the user asks or it is directly relevant.",
 		},
 		"user_turn": line,
 	}
 	if started {
-		payload["current_worker_state"] = packet.RenderWithoutBehaviorFrame()
+		sessionContext := map[string]any{
+			"active_goal":         blankOrNone(packet.SessionFoundation.Goal),
+			"task_state":          blankOrNone(packet.TaskRuntime.State),
+			"recent_conversation": packet.RecentConversation,
+			"older_conversation":  blankOrNone(packet.OlderConversationSummary),
+			"working_dir":         blankOrNone(packet.OperatorState.WorkingDir),
+		}
+		payload["session_context"] = sessionContext
 	}
 	data, _ := json.MarshalIndent(payload, "", "  ")
 	return string(data)

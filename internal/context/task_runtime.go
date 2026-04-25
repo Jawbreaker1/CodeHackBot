@@ -152,9 +152,16 @@ func hasSignal(signals []string, want string) bool {
 	return false
 }
 
+func preferredExecutionEvidence(latest ExecutionResult) string {
+	if strings.TrimSpace(latest.OutputEvidence) != "" {
+		return latest.OutputEvidence
+	}
+	return latest.OutputSummary
+}
+
 func inferMissingArtifactIdentity(latest ExecutionResult, currentTarget string) string {
 	actionText := strings.Join([]string{latest.Action, strings.Join(latest.ArtifactRefs, " ")}, " ")
-	for _, candidate := range extractPathLikeCandidates(latest.OutputSummary) {
+	for _, candidate := range extractPathLikeCandidates(preferredExecutionEvidence(latest)) {
 		candidate = strings.TrimSpace(candidate)
 		if candidate == "" {
 			continue
@@ -229,7 +236,7 @@ func missingPathMentionsTarget(latest ExecutionResult, currentTarget string) boo
 	}
 	fields := []string{
 		latest.Action,
-		latest.OutputSummary,
+		preferredExecutionEvidence(latest),
 		strings.Join(latest.ArtifactRefs, " "),
 	}
 	for _, field := range fields {

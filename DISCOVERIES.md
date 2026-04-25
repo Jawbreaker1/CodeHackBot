@@ -375,3 +375,54 @@ Rules:
     - `Who are you?` stays in conversation mode without entering the worker loop
     - `what files are in this folder?` routes to direct execution and completes with `ModeHint=direct_execution`
     - ZIP extraction routes to planned execution and persists `ModeHint=planned_execution` with a real semantic plan
+- Direct execution needed its own completion path:
+  - a simple request like `what files are in this folder?` could execute a correct command (`ls`) and still block at the step limit
+  - the fix was not command hardcoding; it was a generic direct-execution evaluation pass after each action
+  - the worker loop now asks whether the direct request is already satisfied by the structured evidence and completes immediately when it is
+  - live validation after the fix showed `what files are in this folder?` finishing cleanly with top-level `status=completed` and a user-facing terminal summary
+- The custom renderer approach was the wrong foundation for a real TUI:
+  - the old implementation mixed cooked terminal input, full-frame string rendering, and ad hoc ANSI clearing
+  - that architecture could not reliably own the cursor, input line, width/height handling, or viewports
+- The worker CLI is now rebuilt on Bubble Tea + Bubbles + Lip Gloss:
+  - Bubble Tea owns the event loop and alternate-screen terminal lifecycle
+  - `bubbles/textinput` owns the input field instead of raw `ReadString`
+  - `bubbles/viewport` owns the chat and status panes instead of fixed-width string slicing
+  - Lip Gloss handles pane layout/styling
+  - the old custom renderer files were removed rather than patched further
+- The interactive CLI now has an explicit split between:
+  - a Bubble Tea TUI path for real terminals
+  - a scripted non-terminal path for tests and piped input
+- Live validation against the worker model showed the Bubble Tea UI rendering a real pane layout instead of the previous terminal dump:
+  - left chat pane
+  - right status pane
+  - bottom input area managed by Bubble Tea
+  - `Ctrl-C` now exits through the Bubble Tea input loop instead of leaving the old shell stuck
+- The next Worker CLI problem is not just presentation polish; it is run-lifecycle visibility and correctness:
+  - a new interactive request can correctly start a fresh active task while staying in the same session
+  - but the TUI still treats a worker run as a black box and only receives the final result
+  - that makes the right pane look frozen on the initial generic task scaffold during long runs
+  - and it hides post-execution waits while the worker performs additional LLM judgment
+- The correct architectural direction is:
+  - keep `WorkerPacket` as the durable source of truth for the current task
+  - add explicit worker progress events as a live runtime surface for the TUI and later orchestrator
+  - treat execution truth as primary and post-execution LLM judgment as secondary refinement
+  - this is a lifecycle design issue, not a timeout-only issue
+- That lifecycle refactor is now partially in place:
+  - the worker loop emits structured progress events for planning, execution, post-exec evaluation, and terminal states
+  - the Bubble Tea CLI and scripted CLI consume those events during the run instead of waiting only for the final `Runner.Run(...)` return
+  - in-flight `session.json` snapshots now persist packet updates during long-running work
+  - direct execution can now terminate from clear structured success evidence without requiring an extra post-execution LLM round
+- Live validation on April 6, 2026 showed the new lifecycle behavior working against the real worker model:
+  - direct execution (`what files are in this folder?`) completed with live `Command` / `System` progress entries and `session.json` ended in `completed`
+  - the two-turn ZIP flow started a fresh active task on the second request, executed `unzip`, and ended promptly in `blocked` with `MissingFact = credential or password required for secret.zip`
+  - remaining debt is narrower now:
+    - planned/direct blocked semantics still rely on post-execution judgment more than they should
+    - per-phase LLM budgets are still needed to keep evaluation waits bounded
+- The next post-exec refinement stayed on the right side of the architectural boundary:
+  - direct execution now blocks immediately from the existing typed `incorrect_password` signal instead of waiting on another LLM judgment round
+  - this uses the executor's structured `Signals` / `Assessment` / `FailureClass`, not new command-name heuristics or raw-output parsing in the worker loop
+- The interactive worker session is now observable without depending on Bubble Tea rendering:
+  - `Shell.RunHeadless(...)` exercises the same classification / task rollover / conversation / worker-run logic without a terminal UI
+  - live sessions now append `events.ndjson` with runtime transitions such as classification, task start, worker progress, and terminal outcomes
+  - live sessions now append `transcript.ndjson` with structured user/assistant conversation entries
+  - a real non-TTY run against the local model produced both artifacts and showed the full direct-execution lifecycle in machine-readable form

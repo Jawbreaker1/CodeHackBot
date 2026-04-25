@@ -12,6 +12,7 @@ import (
 	"github.com/Jawbreaker1/CodeHackBot/internal/execx"
 	"github.com/Jawbreaker1/CodeHackBot/internal/llmclient"
 	"github.com/Jawbreaker1/CodeHackBot/internal/workeraction"
+	"github.com/Jawbreaker1/CodeHackBot/internal/workerdirect"
 	"github.com/Jawbreaker1/CodeHackBot/internal/workerplan"
 	"github.com/Jawbreaker1/CodeHackBot/internal/workerstep"
 )
@@ -20,6 +21,7 @@ type Inspector interface {
 	Capture(step int, stage string, packet ctxpacket.WorkerPacket) error
 	CapturePlannerAttempt(attempt workerplan.AttemptRecord) error
 	CaptureActionReviewAttempt(attempt workeraction.AttemptRecord) error
+	CaptureDirectEvaluationAttempt(attempt workerdirect.AttemptRecord) error
 	CaptureStepEvaluationAttempt(attempt workerstep.AttemptRecord) error
 }
 
@@ -28,11 +30,16 @@ type Loop struct {
 	Executor  execx.Executor
 	Approver  approval.Approver
 	Inspector Inspector
+	Progress  ProgressSink
 }
 
 type Outcome struct {
 	Summary string
 	Packet  ctxpacket.WorkerPacket
+}
+
+func (l *Loop) SetProgressSink(sink ProgressSink) {
+	l.Progress = sink
 }
 
 func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps int) (Outcome, error) {
@@ -43,17 +50,66 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 	if strings.TrimSpace(current.TaskRuntime.State) == "" {
 		current.TaskRuntime = ctxpacket.InitialTaskRuntime(current.SessionFoundation.Goal)
 	}
+	_ = emitProgressIfConfigured(l.Progress, ProgressEvent{
+		Kind:       EventTaskStarted,
+		At:         newProgressEvent(EventTaskStarted, 0, "").At,
+		StepIndex:  0,
+		Message:    blank(current.SessionFoundation.Goal, "task started"),
+		ActiveStep: current.PlanState.ActiveStep,
+	}, current)
 	var err error
+	if shouldUseWorkerPlanner(current) {
+		_ = emitProgressIfConfigured(l.Progress, ProgressEvent{
+			Kind:       EventPlanStarted,
+			At:         newProgressEvent(EventPlanStarted, 0, "").At,
+			StepIndex:  0,
+			Message:    "worker planning started",
+			ActiveStep: current.PlanState.ActiveStep,
+		}, current)
+	}
 	current, err = ensureWorkerPlan(ctx, l.LLM, l.Inspector, current)
 	if err != nil {
+		_ = emitProgressIfConfigured(l.Progress, ProgressEvent{
+			Kind:         EventTaskFailed,
+			At:           newProgressEvent(EventTaskFailed, 0, "").At,
+			StepIndex:    0,
+			Message:      err.Error(),
+			ActiveStep:   current.PlanState.ActiveStep,
+			FailureClass: "planner_error",
+		}, current)
 		return Outcome{Packet: current}, err
+	}
+	if strings.TrimSpace(current.PlanState.Mode) == string(workerplan.ModePlannedExecution) {
+		_ = emitProgressIfConfigured(l.Progress, ProgressEvent{
+			Kind:       EventPlanFinished,
+			At:         newProgressEvent(EventPlanFinished, 0, "").At,
+			StepIndex:  0,
+			Message:    blank(current.PlanState.Summary, "worker planning finished"),
+			ActiveStep: current.PlanState.ActiveStep,
+		}, current)
 	}
 	for step := 1; step <= maxSteps; step++ {
 		validation := ctxpacket.ValidatePacket(current)
 		if err := captureIfConfigured(l.Inspector, step, "pre-llm", current); err != nil {
+			_ = emitProgressIfConfigured(l.Progress, ProgressEvent{
+				Kind:         EventTaskFailed,
+				At:           newProgressEvent(EventTaskFailed, step, "").At,
+				StepIndex:    step,
+				Message:      err.Error(),
+				ActiveStep:   current.PlanState.ActiveStep,
+				FailureClass: "inspection_error",
+			}, current)
 			return Outcome{Packet: current}, fmt.Errorf("capture pre-llm context: %w", err)
 		}
 		if validation.IsFatal() {
+			_ = emitProgressIfConfigured(l.Progress, ProgressEvent{
+				Kind:         EventTaskFailed,
+				At:           newProgressEvent(EventTaskFailed, step, "").At,
+				StepIndex:    step,
+				Message:      validation.Summary(),
+				ActiveStep:   current.PlanState.ActiveStep,
+				FailureClass: "packet_validation",
+			}, current)
 			return Outcome{Packet: current}, fmt.Errorf("packet validation failed: %s", validation.Summary())
 		}
 		respText, err := l.LLM.Chat(ctx, []llmclient.Message{
@@ -61,11 +117,27 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 			{Role: "user", Content: buildUserPrompt(current)},
 		})
 		if err != nil {
+			_ = emitProgressIfConfigured(l.Progress, ProgressEvent{
+				Kind:         EventTaskFailed,
+				At:           newProgressEvent(EventTaskFailed, step, "").At,
+				StepIndex:    step,
+				Message:      err.Error(),
+				ActiveStep:   current.PlanState.ActiveStep,
+				FailureClass: "llm_chat",
+			}, current)
 			return Outcome{Packet: current}, fmt.Errorf("llm chat: %w", err)
 		}
 
 		resp, err := ParseResponse(respText)
 		if err != nil {
+			_ = emitProgressIfConfigured(l.Progress, ProgressEvent{
+				Kind:         EventTaskFailed,
+				At:           newProgressEvent(EventTaskFailed, step, "").At,
+				StepIndex:    step,
+				Message:      err.Error(),
+				ActiveStep:   current.PlanState.ActiveStep,
+				FailureClass: "llm_response_parse",
+			}, current)
 			return Outcome{Packet: current}, fmt.Errorf("parse llm response: %w; raw=%q", err, respText)
 		}
 
@@ -78,6 +150,13 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 					current.PlanState.BlockedStep = current.PlanState.ActiveStep
 					current.TaskRuntime.State = "blocked"
 					current.RunningSummary = "Plan step blocked: " + blank(stepEval.Reason, current.PlanState.ActiveStep)
+					_ = emitProgressIfConfigured(l.Progress, ProgressEvent{
+						Kind:       EventTaskBlocked,
+						At:         newProgressEvent(EventTaskBlocked, step, "").At,
+						StepIndex:  step,
+						Message:    blank(stepEval.Reason, current.PlanState.ActiveStep),
+						ActiveStep: current.PlanState.ActiveStep,
+					}, current)
 					if err := captureIfConfigured(l.Inspector, step, "step-blocked", current); err != nil {
 						return Outcome{Packet: current}, fmt.Errorf("capture step-blocked context: %w", err)
 					}
@@ -101,6 +180,17 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 			current.TaskRuntime = ctxpacket.UpdateTaskRuntime(current.TaskRuntime, current.SessionFoundation.Goal, current.LatestExecutionResult)
 			current.TaskRuntime.MissingFact = "(none)"
 			current.RunningSummary = buildCompletionSummary(current.SessionFoundation.Goal, current.LatestExecutionResult, current.RelevantRecentResults)
+			_ = emitProgressIfConfigured(l.Progress, ProgressEvent{
+				Kind:         EventTaskCompleted,
+				At:           newProgressEvent(EventTaskCompleted, step, "").At,
+				StepIndex:    step,
+				Message:      blank(resp.Summary, current.SessionFoundation.Goal),
+				ActiveStep:   current.PlanState.ActiveStep,
+				Action:       current.LatestExecutionResult.Action,
+				ExitStatus:   current.LatestExecutionResult.ExitStatus,
+				Assessment:   current.LatestExecutionResult.Assessment,
+				FailureClass: current.LatestExecutionResult.FailureClass,
+			}, current)
 			if err := captureIfConfigured(l.Inspector, step, "step-complete", current); err != nil {
 				return Outcome{Packet: current}, fmt.Errorf("capture completion context: %w", err)
 			}
@@ -112,6 +202,14 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 			}
 			return Outcome{Packet: current}, fmt.Errorf("worker requires user input: %s", resp.Question)
 		case "action":
+			_ = emitProgressIfConfigured(l.Progress, ProgressEvent{
+				Kind:       EventActionProposed,
+				At:         newProgressEvent(EventActionProposed, step, "").At,
+				StepIndex:  step,
+				Message:    "worker proposed action",
+				ActiveStep: current.PlanState.ActiveStep,
+				Action:     strings.TrimSpace(resp.Command),
+			}, current)
 			action, validationFailure := prepareAction(resp)
 			if validationFailure != nil {
 				current.RelevantRecentResults = updateRelevantRecentResults(current.RelevantRecentResults, current.LatestExecutionResult, current.TaskRuntime.CurrentTarget)
@@ -126,13 +224,37 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 				continue
 			}
 			if strings.TrimSpace(current.PlanState.Mode) == "planned_execution" {
+				_ = emitProgressIfConfigured(l.Progress, ProgressEvent{
+					Kind:       EventActionReviewStarted,
+					At:         newProgressEvent(EventActionReviewStarted, step, "").At,
+					StepIndex:  step,
+					Message:    "action review started",
+					ActiveStep: current.PlanState.ActiveStep,
+					Action:     strings.TrimSpace(resp.Command),
+				}, current)
 				review, err := reviewPlannedAction(ctx, l.LLM, l.Inspector, current, resp)
+				_ = emitProgressIfConfigured(l.Progress, ProgressEvent{
+					Kind:       EventActionReviewFinished,
+					At:         newProgressEvent(EventActionReviewFinished, step, "").At,
+					StepIndex:  step,
+					Message:    blank(review.Reason, "action review finished"),
+					ActiveStep: current.PlanState.ActiveStep,
+					Action:     strings.TrimSpace(resp.Command),
+				}, current)
 				if err == nil {
 					switch review.Decision {
 					case workeraction.DecisionBlocked:
 						current.PlanState.BlockedStep = current.PlanState.ActiveStep
 						current.TaskRuntime.State = "blocked"
 						current.RunningSummary = "Plan step blocked before execution: " + blank(review.Reason, current.PlanState.ActiveStep)
+						_ = emitProgressIfConfigured(l.Progress, ProgressEvent{
+							Kind:       EventTaskBlocked,
+							At:         newProgressEvent(EventTaskBlocked, step, "").At,
+							StepIndex:  step,
+							Message:    blank(review.Reason, current.PlanState.ActiveStep),
+							ActiveStep: current.PlanState.ActiveStep,
+							Action:     strings.TrimSpace(resp.Command),
+						}, current)
 						if err := captureIfConfigured(l.Inspector, step, "step-blocked", current); err != nil {
 							return Outcome{Packet: current}, fmt.Errorf("capture step-blocked context: %w", err)
 						}
@@ -183,24 +305,45 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 			if err := captureIfConfigured(l.Inspector, step, "pre-action", current); err != nil {
 				return Outcome{Packet: current}, fmt.Errorf("capture pre-action context: %w", err)
 			}
+			_ = emitProgressIfConfigured(l.Progress, ProgressEvent{
+				Kind:       EventExecutionStarted,
+				At:         newProgressEvent(EventExecutionStarted, step, "").At,
+				StepIndex:  step,
+				Message:    "execution started",
+				ActiveStep: current.PlanState.ActiveStep,
+				Action:     plan.Requested,
+			}, current)
 
 			result, execErr := l.Executor.RunPlanned(ctx, plan)
 			current.OperatorState.PendingAction = ""
 			current.OperatorState.PendingMode = ""
 			current.OperatorState.PendingExec = ""
 			current.OperatorState.PendingLog = ""
+			evidence := combineSummaries(result.StdoutSummary, result.StderrSummary)
 			nextResult := ctxpacket.ExecutionResult{
-				Action:        result.Action,
-				ExitStatus:    fmt.Sprintf("%d", result.ExitStatus),
-				OutputSummary: compactOutputSummary(combineSummaries(result.StdoutSummary, result.StderrSummary)),
-				LogRefs:       []string{result.LogPath},
-				ArtifactRefs:  result.ArtifactRefs,
-				Assessment:    result.Assessment,
-				Signals:       append([]string(nil), result.Signals...),
-				FailureClass:  result.FailureClass,
+				Action:         result.Action,
+				ExitStatus:     fmt.Sprintf("%d", result.ExitStatus),
+				OutputSummary:  compactOutputSummary(evidence),
+				OutputEvidence: evidence,
+				LogRefs:        []string{result.LogPath},
+				ArtifactRefs:   result.ArtifactRefs,
+				Assessment:     result.Assessment,
+				Signals:        append([]string(nil), result.Signals...),
+				FailureClass:   result.FailureClass,
 			}
 			current.RelevantRecentResults = updateRelevantRecentResults(current.RelevantRecentResults, current.LatestExecutionResult, current.TaskRuntime.CurrentTarget)
 			current.LatestExecutionResult = nextResult
+			_ = emitProgressIfConfigured(l.Progress, ProgressEvent{
+				Kind:         EventExecutionFinished,
+				At:           newProgressEvent(EventExecutionFinished, step, "").At,
+				StepIndex:    step,
+				Message:      "execution finished",
+				ActiveStep:   current.PlanState.ActiveStep,
+				Action:       nextResult.Action,
+				ExitStatus:   nextResult.ExitStatus,
+				Assessment:   nextResult.Assessment,
+				FailureClass: nextResult.FailureClass,
+			}, current)
 			truth := ctxpacket.ActiveTruthResult(current.LatestExecutionResult, current.RelevantRecentResults)
 			current.TaskRuntime.State = "running"
 			current.TaskRuntime = ctxpacket.UpdateTaskRuntime(current.TaskRuntime, current.SessionFoundation.Goal, truth)
@@ -209,12 +352,36 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 				return Outcome{Packet: current}, fmt.Errorf("capture post-action context: %w", err)
 			}
 			if strings.TrimSpace(current.PlanState.Mode) == "planned_execution" {
+				_ = emitProgressIfConfigured(l.Progress, ProgressEvent{
+					Kind:       EventPostExecEvalStarted,
+					At:         newProgressEvent(EventPostExecEvalStarted, step, "").At,
+					StepIndex:  step,
+					Message:    "post-execution step evaluation started",
+					ActiveStep: current.PlanState.ActiveStep,
+					Action:     nextResult.Action,
+				}, current)
 				stepEval := evaluateActivePlanStep(ctx, l.LLM, l.Inspector, current, "")
+				_ = emitProgressIfConfigured(l.Progress, ProgressEvent{
+					Kind:       EventPostExecEvalFinished,
+					At:         newProgressEvent(EventPostExecEvalFinished, step, "").At,
+					StepIndex:  step,
+					Message:    blank(stepEval.Reason, "post-execution step evaluation finished"),
+					ActiveStep: current.PlanState.ActiveStep,
+					Action:     nextResult.Action,
+				}, current)
 				switch stepEval.Status {
 				case StepBlocked:
 					current.PlanState.BlockedStep = current.PlanState.ActiveStep
 					current.TaskRuntime.State = "blocked"
 					current.RunningSummary = "Plan step blocked: " + blank(stepEval.Reason, current.PlanState.ActiveStep)
+					_ = emitProgressIfConfigured(l.Progress, ProgressEvent{
+						Kind:       EventTaskBlocked,
+						At:         newProgressEvent(EventTaskBlocked, step, "").At,
+						StepIndex:  step,
+						Message:    blank(stepEval.Reason, current.PlanState.ActiveStep),
+						ActiveStep: current.PlanState.ActiveStep,
+						Action:     nextResult.Action,
+					}, current)
 					if err := captureIfConfigured(l.Inspector, step, "step-blocked", current); err != nil {
 						return Outcome{Packet: current}, fmt.Errorf("capture step-blocked context: %w", err)
 					}
@@ -232,6 +399,61 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 						return Outcome{Packet: current}, fmt.Errorf("capture step-in-progress context: %w", err)
 					}
 				}
+			} else if strings.TrimSpace(current.OperatorState.ModeHint) == string(workerplan.ModeDirectExecution) {
+				_ = emitProgressIfConfigured(l.Progress, ProgressEvent{
+					Kind:       EventPostExecEvalStarted,
+					At:         newProgressEvent(EventPostExecEvalStarted, step, "").At,
+					StepIndex:  step,
+					Message:    "post-execution direct evaluation started",
+					ActiveStep: current.PlanState.ActiveStep,
+					Action:     nextResult.Action,
+				}, current)
+				directEval := evaluateDirectExecution(ctx, l.LLM, l.Inspector, current)
+				_ = emitProgressIfConfigured(l.Progress, ProgressEvent{
+					Kind:       EventPostExecEvalFinished,
+					At:         newProgressEvent(EventPostExecEvalFinished, step, "").At,
+					StepIndex:  step,
+					Message:    blank(directEval.Reason, "post-execution direct evaluation finished"),
+					ActiveStep: current.PlanState.ActiveStep,
+					Action:     nextResult.Action,
+				}, current)
+				switch directEval.Status {
+				case StepBlocked:
+					current.TaskRuntime.State = "blocked"
+					current.RunningSummary = "Direct request blocked: " + blank(directEval.Reason, current.SessionFoundation.Goal)
+					_ = emitProgressIfConfigured(l.Progress, ProgressEvent{
+						Kind:       EventTaskBlocked,
+						At:         newProgressEvent(EventTaskBlocked, step, "").At,
+						StepIndex:  step,
+						Message:    blank(directEval.Reason, current.SessionFoundation.Goal),
+						ActiveStep: current.PlanState.ActiveStep,
+						Action:     nextResult.Action,
+					}, current)
+					if err := captureIfConfigured(l.Inspector, step, "step-blocked", current); err != nil {
+						return Outcome{Packet: current}, fmt.Errorf("capture step-blocked context: %w", err)
+					}
+					return Outcome{Packet: current}, fmt.Errorf("direct request blocked: %s", blank(directEval.Reason, current.SessionFoundation.Goal))
+				case StepSatisfied:
+					current.TaskRuntime.State = "done"
+					current.TaskRuntime = ctxpacket.UpdateTaskRuntime(current.TaskRuntime, current.SessionFoundation.Goal, current.LatestExecutionResult)
+					current.TaskRuntime.MissingFact = "(none)"
+					current.RunningSummary = buildCompletionSummary(current.SessionFoundation.Goal, current.LatestExecutionResult, current.RelevantRecentResults)
+					_ = emitProgressIfConfigured(l.Progress, ProgressEvent{
+						Kind:         EventTaskCompleted,
+						At:           newProgressEvent(EventTaskCompleted, step, "").At,
+						StepIndex:    step,
+						Message:      blank(directEval.Summary, directEval.Reason),
+						ActiveStep:   current.PlanState.ActiveStep,
+						Action:       current.LatestExecutionResult.Action,
+						ExitStatus:   current.LatestExecutionResult.ExitStatus,
+						Assessment:   current.LatestExecutionResult.Assessment,
+						FailureClass: current.LatestExecutionResult.FailureClass,
+					}, current)
+					if err := captureIfConfigured(l.Inspector, step, "step-complete", current); err != nil {
+						return Outcome{Packet: current}, fmt.Errorf("capture completion context: %w", err)
+					}
+					return Outcome{Summary: strings.TrimSpace(directEval.Summary), Packet: current}, nil
+				}
 			}
 			if execErr != nil {
 				// Still feed the failure result into the next turn.
@@ -239,6 +461,14 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 		}
 	}
 	current.TaskRuntime.State = "blocked"
+	_ = emitProgressIfConfigured(l.Progress, ProgressEvent{
+		Kind:       EventTaskBlocked,
+		At:         newProgressEvent(EventTaskBlocked, maxSteps, "").At,
+		StepIndex:  maxSteps,
+		Message:    fmt.Sprintf("step did not complete within %d steps", maxSteps),
+		ActiveStep: current.PlanState.ActiveStep,
+		Action:     current.LatestExecutionResult.Action,
+	}, current)
 	return Outcome{Packet: current}, fmt.Errorf("step did not complete within %d steps", maxSteps)
 }
 
@@ -391,8 +621,19 @@ func mentionsTarget(result ctxpacket.ExecutionResult, currentTarget string) bool
 	return false
 }
 
+func preferredExecutionEvidence(result ctxpacket.ExecutionResult) string {
+	if strings.TrimSpace(result.OutputEvidence) != "" && strings.TrimSpace(result.OutputEvidence) != "(none)" {
+		return result.OutputEvidence
+	}
+	return result.OutputSummary
+}
+
 func buildRunningSummary(objective string, latest ctxpacket.ExecutionResult, recent []ctxpacket.ExecutionResult) string {
 	truth := ctxpacket.ActiveTruthResult(latest, recent)
+	const (
+		runningSummaryActionMax   = 320
+		runningSummaryEvidenceMax = 1200
+	)
 	status := "in progress"
 	if ctxpacket.IsInterruptedResult(truth) {
 		status = "in progress"
@@ -413,7 +654,7 @@ func buildRunningSummary(objective string, latest ctxpacket.ExecutionResult, rec
 
 	parts := []string{fmt.Sprintf("Status: %s.", status)}
 	if strings.TrimSpace(truth.Action) != "" {
-		parts = append(parts, fmt.Sprintf("Evidence: %q exited with %s.", compactInline(truth.Action, 120), blankOrFallback(strings.TrimSpace(truth.ExitStatus), "(none)")))
+		parts = append(parts, fmt.Sprintf("Evidence: %q exited with %s.", compactInline(truth.Action, runningSummaryActionMax), blankOrFallback(strings.TrimSpace(truth.ExitStatus), "(none)")))
 	}
 	if ctxpacket.IsInterruptedResult(truth) {
 		parts = append(parts, "Execution was interrupted before the active work completed.")
@@ -424,8 +665,8 @@ func buildRunningSummary(objective string, latest ctxpacket.ExecutionResult, rec
 	if len(truth.Signals) > 0 {
 		parts = append(parts, fmt.Sprintf("Signals: %s.", strings.Join(truth.Signals, ", ")))
 	}
-	if strings.TrimSpace(truth.OutputSummary) != "" && strings.TrimSpace(truth.OutputSummary) != "(none)" {
-		parts = append(parts, fmt.Sprintf("Key output: %s.", compactInline(singleLine(truth.OutputSummary), 220)))
+	if evidence := preferredExecutionEvidence(truth); strings.TrimSpace(evidence) != "" && strings.TrimSpace(evidence) != "(none)" {
+		parts = append(parts, fmt.Sprintf("Key output: %s.", compactInline(singleLine(evidence), runningSummaryEvidenceMax)))
 	}
 	if truth.Action != latest.Action && strings.TrimSpace(truth.Action) != "" {
 		parts = append(parts, "Latest result was weaker than retained evidence.")
@@ -435,12 +676,17 @@ func buildRunningSummary(objective string, latest ctxpacket.ExecutionResult, rec
 
 func buildCompletionSummary(goal string, latest ctxpacket.ExecutionResult, recent []ctxpacket.ExecutionResult) string {
 	truth := ctxpacket.ActiveTruthResult(latest, recent)
+	const (
+		completionSummaryActionMax   = 320
+		completionSummaryEvidenceMax = 1200
+		completionSummaryGoalMax     = 400
+	)
 	parts := []string{"Status: done."}
 	if strings.TrimSpace(goal) != "" {
-		parts = append(parts, fmt.Sprintf("Goal: %s.", compactInline(goal, 160)))
+		parts = append(parts, fmt.Sprintf("Goal: %s.", compactInline(goal, completionSummaryGoalMax)))
 	}
 	if strings.TrimSpace(truth.Action) != "" {
-		parts = append(parts, fmt.Sprintf("Completion evidence: %q exited with %s.", compactInline(truth.Action, 120), blankOrFallback(strings.TrimSpace(truth.ExitStatus), "(none)")))
+		parts = append(parts, fmt.Sprintf("Completion evidence: %q exited with %s.", compactInline(truth.Action, completionSummaryActionMax), blankOrFallback(strings.TrimSpace(truth.ExitStatus), "(none)")))
 	}
 	if strings.TrimSpace(truth.Assessment) != "" && strings.TrimSpace(truth.Assessment) != "(none)" {
 		parts = append(parts, fmt.Sprintf("Assessment: %s.", truth.Assessment))
@@ -448,8 +694,8 @@ func buildCompletionSummary(goal string, latest ctxpacket.ExecutionResult, recen
 	if len(truth.Signals) > 0 {
 		parts = append(parts, fmt.Sprintf("Signals: %s.", strings.Join(truth.Signals, ", ")))
 	}
-	if strings.TrimSpace(truth.OutputSummary) != "" && strings.TrimSpace(truth.OutputSummary) != "(none)" {
-		parts = append(parts, fmt.Sprintf("Key output: %s.", compactInline(singleLine(truth.OutputSummary), 220)))
+	if evidence := preferredExecutionEvidence(truth); strings.TrimSpace(evidence) != "" && strings.TrimSpace(evidence) != "(none)" {
+		parts = append(parts, fmt.Sprintf("Key output: %s.", compactInline(singleLine(evidence), completionSummaryEvidenceMax)))
 	}
 	return strings.Join(parts, " ")
 }

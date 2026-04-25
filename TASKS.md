@@ -180,28 +180,67 @@ Planned tasks:
 - [ ] Replace heuristic planner-step text matching with typed step metadata:
   - planner output should eventually carry explicit step kind/category information
   - runtime and validation logic should stop inferring semantics from step label text where possible
-- [ ] Implement robust worker input-mode classification before worker-loop execution:
+- [x] Implement robust worker input-mode classification before worker-loop execution:
   - classify each normal user turn as `conversation`, `direct_execution`, or `planned_execution`
   - validate classifier output against a small contract
   - fail safe to `conversation` on invalid or ambiguous classification
+- [x] Add direct-execution completion evaluation in the worker loop:
+  - after a successful simple action, evaluate whether the request is already satisfied
+  - complete immediately on supported evidence instead of waiting for another free-form worker turn
+  - keep this generic and evidence-driven; no task-specific rules or raw output parsing
 - [x] Define worker input-classifier contract and validator skeleton:
   - structured output limited to `mode` and `reason`
   - no commands, no plan steps, no essay output
-- [ ] Prioritize the worker interactive UI for manual testing:
-  - add a panel-based layout with:
+- [x] Replace the broken custom worker TUI renderer with a Bubble Tea foundation:
+  - use Bubble Tea + Bubbles + Lip Gloss for the interactive worker CLI
+  - retire the old snapshot/ANSI renderer path for real terminal usage
+  - keep a separate scripted non-terminal path for tests and piped input
+- [ ] Continue refining the worker interactive UI for manual testing:
+  - keep the panel-based layout:
     - primary chat/execution pane
     - persistent right-side status pane
     - persistent bottom input bar
-  - make always-visible worker state available without opening logs:
-    - active plan
-    - active step
-    - latest command
-    - latest result summary
-    - latest action review
-    - latest step evaluation
+  - keep the separation between:
+    - UI state
+    - UI events/messages
+    - renderer/view
+    - input/controller loop
+  - improve operator polish:
+    - active plan visibility
+    - active step visibility
+    - latest command and result visibility
+    - latest action review / step evaluation visibility
+    - smoother manual diagnostics during long-running work
     - scope / approval / model / context usage
   - keep the visible plan semantic and short
   - validate the worker UI manually against `secret.zip` and router runs
+- [x] Refactor the worker CLI run lifecycle around explicit progress events:
+  - keep `WorkerPacket` as the authoritative current-task state
+  - add a small structured worker progress event model for live runtime transitions
+  - do not use events as a second source of truth
+  - support multiple tasks inside one interactive session:
+    - transcript/session persists
+    - active task packet resets per new task
+- [x] Remove black-box run behavior from the Worker CLI:
+  - do not wait until the entire `Runner.Run(...)` returns before updating the TUI
+  - surface in-flight progress during planning, execution, and post-execution evaluation
+  - persist meaningful in-flight session state during long-running runs
+- [x] Make the interactive worker logic observable and reusable without Bubble Tea rendering:
+  - add an explicit headless interactive entrypoint
+  - write append-only `events.ndjson` runtime artifacts during live sessions
+  - write append-only `transcript.ndjson` conversation artifacts during live sessions
+  - validate that a non-TTY run exercises the same classification / task rollover / worker execution logic
+- [ ] Make post-execution terminal semantics execution-truth-first:
+  - if execution already clearly implies `blocked`, surface it promptly
+  - if execution already clearly implies `completed`, surface it promptly
+  - use post-execution LLM judgment only when execution truth is genuinely ambiguous
+- [ ] Add per-phase time budgets to worker LLM phases:
+  - classification
+  - planner
+  - action review
+  - direct evaluation
+  - step evaluation
+  - keep execution timeout policy separate
 
 ## Working Rules
 - [ ] No patch-first behavior on this branch
@@ -209,3 +248,8 @@ Planned tasks:
 - [ ] Every major implementation slice must be followed by real LLM validation
 - [ ] Behavioral conclusions from live validation should use repeated runs, not single examples
 - [ ] Prefer deletion over adaptation when both solve the same problem
+- [ ] Add a recurring architecture drift review at phase boundaries:
+  - catch hardcoded task behavior
+  - catch brittle natural-language trigger matching
+  - catch raw stdout/stderr parsing in behavior logic
+  - catch machine state leaking into human-facing chat text

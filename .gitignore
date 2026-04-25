@@ -1,6 +1,7 @@
 # Binaries / build output
 /birdhackbot
 /birdhackbot-orchestrator
+/.cache/
 /bin/
 /dist/
 
@@ -8,6 +9,7 @@
 /sessions/
 /reports/
 /artifacts/
+/evidence/
 /logs/
 
 # Logs and temp
@@ -68,10 +70,14 @@
 # Local lab run scratch directories
 .birdhackbot/
 /extracted_content/
+/extracted_secret_attempt/
 /extracted_secret/
 /nmap_results/
 /systemverification/
 /tools/sessions/
+
+# Local Codex scratch
+/.codex
 
 # OS files
 .DS_Store

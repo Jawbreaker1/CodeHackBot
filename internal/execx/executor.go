@@ -159,11 +159,16 @@ func interruptionSignal(ctx context.Context, err error) string {
 }
 
 func buildCommand(ctx context.Context, action Action) *exec.Cmd {
+	var cmd *exec.Cmd
 	if needsShell(action) {
 		full := strings.TrimSpace(strings.Join(append([]string{action.Command}, action.Args...), " "))
-		return exec.CommandContext(ctx, "/bin/sh", "-lc", full)
+		cmd = exec.CommandContext(ctx, "/bin/sh", "-lc", full)
+	} else {
+		cmd = exec.CommandContext(ctx, action.Command, action.Args...)
 	}
-	return exec.CommandContext(ctx, action.Command, action.Args...)
+	cmd.Stdin = bytes.NewReader(nil)
+	configureNonInteractiveProcess(cmd)
+	return cmd
 }
 
 func executionMode(action Action) string {

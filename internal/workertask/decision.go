@@ -1,17 +1,22 @@
-package workermode
+package workertask
 
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+)
 
-	"github.com/Jawbreaker1/CodeHackBot/internal/workerplan"
+type Action string
+
+const (
+	ActionContinueActiveTask Action = "continue_active_task"
+	ActionStartNewTask       Action = "start_new_task"
 )
 
 type Decision struct {
-	Mode   workerplan.Mode `json:"mode"`
-	Reason string          `json:"reason"`
+	Action Action `json:"action"`
+	Reason string `json:"reason"`
 }
 
 type ValidationIssue struct {
@@ -38,46 +43,28 @@ func Parse(s string) (Decision, error) {
 	}
 	var d Decision
 	if err := json.Unmarshal([]byte(cleaned), &d); err != nil {
-		return Decision{}, fmt.Errorf("parse worker mode json: %w", err)
+		return Decision{}, fmt.Errorf("parse task boundary json: %w", err)
 	}
 	return d, nil
 }
 
 func Validate(d Decision) ValidationReport {
 	var report ValidationReport
-	switch workerplan.Mode(strings.TrimSpace(string(d.Mode))) {
-	case workerplan.ModeConversation, workerplan.ModeDirectExecution, workerplan.ModePlannedExecution:
+	switch Action(strings.TrimSpace(string(d.Action))) {
+	case ActionContinueActiveTask, ActionStartNewTask:
 	default:
-		report.add("unsupported worker mode")
+		report.add("unsupported task boundary action")
 	}
 	if strings.TrimSpace(d.Reason) == "" {
-		report.add("worker mode requires reason")
+		report.add("task boundary action requires reason")
 	}
 	if containsJSONLikeNoise(d.Reason) {
-		report.add("worker mode reason must be a short explanation, not structured output")
+		report.add("task boundary reason must be a short explanation, not structured output")
 	}
 	if strings.Count(d.Reason, "\n") > 2 || len(strings.Fields(d.Reason)) > 40 {
-		report.add("worker mode reason must remain concise")
+		report.add("task boundary reason must remain concise")
 	}
 	return report
-}
-
-func NormalizeConciseReason(d Decision) Decision {
-	d.Mode = workerplan.Mode(strings.TrimSpace(string(d.Mode)))
-	d.Reason = strings.TrimSpace(d.Reason)
-	if !supportedMode(d.Mode) {
-		return d
-	}
-	if d.Reason == "" {
-		return d
-	}
-	if containsJSONLikeNoise(d.Reason) {
-		return d
-	}
-	if strings.Count(d.Reason, "\n") > 2 || len(strings.Fields(d.Reason)) > 40 {
-		d.Reason = defaultReasonForMode(d.Mode)
-	}
-	return d
 }
 
 func (r ValidationReport) Valid() bool { return len(r.Issues) == 0 }
@@ -95,30 +82,8 @@ func (r ValidationReport) Error() error {
 
 func FallbackDecision() Decision {
 	return Decision{
-		Mode:   workerplan.ModeConversation,
-		Reason: "classifier invalid or ambiguous; defaulting to safe conversation mode",
-	}
-}
-
-func supportedMode(mode workerplan.Mode) bool {
-	switch workerplan.Mode(strings.TrimSpace(string(mode))) {
-	case workerplan.ModeConversation, workerplan.ModeDirectExecution, workerplan.ModePlannedExecution:
-		return true
-	default:
-		return false
-	}
-}
-
-func defaultReasonForMode(mode workerplan.Mode) string {
-	switch workerplan.Mode(strings.TrimSpace(string(mode))) {
-	case workerplan.ModeConversation:
-		return "user needs a conversational reply"
-	case workerplan.ModeDirectExecution:
-		return "request is a direct actionable check"
-	case workerplan.ModePlannedExecution:
-		return "task requires multiple execution phases"
-	default:
-		return "classifier selected a worker mode"
+		Action: ActionStartNewTask,
+		Reason: "boundary classifier invalid or ambiguous; defaulting to a fresh task",
 	}
 }
 
@@ -128,7 +93,7 @@ func (r *ValidationReport) add(msg string) {
 
 func containsJSONLikeNoise(s string) bool {
 	s = strings.TrimSpace(s)
-	return strings.ContainsAny(s, "{}[]") || strings.Contains(s, `"mode"`) || strings.Contains(s, `"reason"`)
+	return strings.ContainsAny(s, "{}[]") || strings.Contains(s, `"action"`) || strings.Contains(s, `"reason"`)
 }
 
 func extractJSON(s string) (string, error) {

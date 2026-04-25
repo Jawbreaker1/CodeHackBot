@@ -10,8 +10,11 @@ import (
 	ctxpacket "github.com/Jawbreaker1/CodeHackBot/internal/context"
 	"github.com/Jawbreaker1/CodeHackBot/internal/contextstats"
 	"github.com/Jawbreaker1/CodeHackBot/internal/workeraction"
+	"github.com/Jawbreaker1/CodeHackBot/internal/workerdirect"
+	"github.com/Jawbreaker1/CodeHackBot/internal/workermode"
 	"github.com/Jawbreaker1/CodeHackBot/internal/workerplan"
 	"github.com/Jawbreaker1/CodeHackBot/internal/workerstep"
+	"github.com/Jawbreaker1/CodeHackBot/internal/workertask"
 )
 
 // Recorder writes human-readable context packet snapshots for live diagnosis.
@@ -77,6 +80,48 @@ func (r Recorder) CaptureActionReviewAttempt(attempt workeraction.AttemptRecord)
 	return nil
 }
 
+func (r Recorder) CaptureDirectEvaluationAttempt(attempt workerdirect.AttemptRecord) error {
+	if r.Dir == "" {
+		return fmt.Errorf("dir is required")
+	}
+	if err := os.MkdirAll(r.Dir, 0o755); err != nil {
+		return fmt.Errorf("mkdir inspect dir: %w", err)
+	}
+	path := filepath.Join(r.Dir, fmt.Sprintf("direct-eval-attempt-%03d.txt", nextDirectEvalAttemptIndex(r.Dir)))
+	if err := os.WriteFile(path, []byte(renderDirectEvaluationAttempt(path, attempt)), 0o644); err != nil {
+		return fmt.Errorf("write direct evaluation attempt: %w", err)
+	}
+	return nil
+}
+
+func (r Recorder) CaptureClassificationAttempt(attempt workermode.AttemptRecord) error {
+	if r.Dir == "" {
+		return fmt.Errorf("dir is required")
+	}
+	if err := os.MkdirAll(r.Dir, 0o755); err != nil {
+		return fmt.Errorf("mkdir inspect dir: %w", err)
+	}
+	path := filepath.Join(r.Dir, fmt.Sprintf("classification-attempt-%03d.txt", nextClassificationAttemptIndex(r.Dir)))
+	if err := os.WriteFile(path, []byte(renderClassificationAttempt(path, attempt)), 0o644); err != nil {
+		return fmt.Errorf("write classification attempt: %w", err)
+	}
+	return nil
+}
+
+func (r Recorder) CaptureTaskBoundaryAttempt(attempt workertask.AttemptRecord) error {
+	if r.Dir == "" {
+		return fmt.Errorf("dir is required")
+	}
+	if err := os.MkdirAll(r.Dir, 0o755); err != nil {
+		return fmt.Errorf("mkdir inspect dir: %w", err)
+	}
+	path := filepath.Join(r.Dir, fmt.Sprintf("task-boundary-attempt-%03d.txt", nextTaskBoundaryAttemptIndex(r.Dir)))
+	if err := os.WriteFile(path, []byte(renderTaskBoundaryAttempt(path, attempt)), 0o644); err != nil {
+		return fmt.Errorf("write task boundary attempt: %w", err)
+	}
+	return nil
+}
+
 func (r Recorder) CaptureStepEvaluationAttempt(attempt workerstep.AttemptRecord) error {
 	if r.Dir == "" {
 		return fmt.Errorf("dir is required")
@@ -89,6 +134,103 @@ func (r Recorder) CaptureStepEvaluationAttempt(attempt workerstep.AttemptRecord)
 		return fmt.Errorf("write step evaluation attempt: %w", err)
 	}
 	return nil
+}
+
+func renderTaskBoundaryAttempt(path string, attempt workertask.AttemptRecord) string {
+	lines := []string{
+		"[task_boundary_attempt]",
+		"path: " + path,
+		fmt.Sprintf("accepted: %t", attempt.Accepted),
+		"final_error: " + blankOrNone(attempt.FinalError),
+		"",
+		"[decision]",
+		"action: " + blankOrNone(string(attempt.Parsed.Action)),
+		"reason: " + blankOrNone(attempt.Parsed.Reason),
+		"",
+		"[validation]",
+		fmt.Sprintf("issue_count: %d", len(attempt.Validation.Issues)),
+	}
+	if len(attempt.Validation.Issues) == 0 {
+		lines = append(lines, "(none)")
+	} else {
+		for i, issue := range attempt.Validation.Issues {
+			lines = append(lines, fmt.Sprintf("%d. message=%s", i+1, issue.Message))
+		}
+	}
+	lines = append(lines,
+		"",
+		"[prompt]",
+		blankOrNone(attempt.Prompt),
+		"",
+		"[raw_response]",
+		blankOrNone(attempt.RawResponse),
+	)
+	return strings.Join(lines, "\n") + "\n"
+}
+
+func renderClassificationAttempt(path string, attempt workermode.AttemptRecord) string {
+	lines := []string{
+		"[classification_attempt]",
+		"path: " + path,
+		fmt.Sprintf("accepted: %t", attempt.Accepted),
+		"final_error: " + blankOrNone(attempt.FinalError),
+		"",
+		"[decision]",
+		"mode: " + blankOrNone(string(attempt.Parsed.Mode)),
+		"reason: " + blankOrNone(attempt.Parsed.Reason),
+		"",
+		"[validation]",
+		fmt.Sprintf("issue_count: %d", len(attempt.Validation.Issues)),
+	}
+	if len(attempt.Validation.Issues) == 0 {
+		lines = append(lines, "(none)")
+	} else {
+		for i, issue := range attempt.Validation.Issues {
+			lines = append(lines, fmt.Sprintf("%d. message=%s", i+1, issue.Message))
+		}
+	}
+	lines = append(lines,
+		"",
+		"[prompt]",
+		blankOrNone(attempt.Prompt),
+		"",
+		"[raw_response]",
+		blankOrNone(attempt.RawResponse),
+	)
+	return strings.Join(lines, "\n") + "\n"
+}
+
+func renderDirectEvaluationAttempt(path string, attempt workerdirect.AttemptRecord) string {
+	lines := []string{
+		"[direct_evaluation_attempt]",
+		"path: " + path,
+		fmt.Sprintf("accepted: %t", attempt.Accepted),
+		"final_error: " + blankOrNone(attempt.FinalError),
+		"",
+		"[evaluation]",
+		"status: " + blankOrNone(string(attempt.Parsed.Status)),
+		"reason: " + blankOrNone(attempt.Parsed.Reason),
+		"summary: " + blankOrNone(attempt.Parsed.Summary),
+		"",
+		"[validation]",
+		fmt.Sprintf("issue_count: %d", len(attempt.Validation.Issues)),
+	}
+	if len(attempt.Validation.Issues) == 0 {
+		lines = append(lines, "(none)")
+	} else {
+		for i, issue := range attempt.Validation.Issues {
+			lines = append(lines, fmt.Sprintf("%d. message=%s", i+1, issue.Message))
+		}
+	}
+	lines = append(lines,
+		"",
+		"[prompt]",
+		blankOrNone(attempt.Prompt),
+		"",
+		"[raw_response]",
+		blankOrNone(attempt.RawResponse),
+	)
+	return strings.Join(lines, "\n") + "\n"
 }
 
 func renderMeta(snapshotPath, rendered string, sections []ctxpacket.RenderedSection) string {
@@ -252,6 +394,33 @@ func nextActionReviewAttemptIndex(dir string) int {
 
 func nextStepEvalAttemptIndex(dir string) int {
 	matches, err := filepath.Glob(filepath.Join(dir, "step-eval-attempt-*.txt"))
+	if err != nil || len(matches) == 0 {
+		return 1
+	}
+	sort.Strings(matches)
+	return len(matches) + 1
+}
+
+func nextDirectEvalAttemptIndex(dir string) int {
+	matches, err := filepath.Glob(filepath.Join(dir, "direct-eval-attempt-*.txt"))
+	if err != nil || len(matches) == 0 {
+		return 1
+	}
+	sort.Strings(matches)
+	return len(matches) + 1
+}
+
+func nextClassificationAttemptIndex(dir string) int {
+	matches, err := filepath.Glob(filepath.Join(dir, "classification-attempt-*.txt"))
+	if err != nil || len(matches) == 0 {
+		return 1
+	}
+	sort.Strings(matches)
+	return len(matches) + 1
+}
+
+func nextTaskBoundaryAttemptIndex(dir string) int {
+	matches, err := filepath.Glob(filepath.Join(dir, "task-boundary-attempt-*.txt"))
 	if err != nil || len(matches) == 0 {
 		return 1
 	}

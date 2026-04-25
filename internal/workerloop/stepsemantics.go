@@ -60,7 +60,7 @@ func stepBlockedReason(packet ctxpacket.WorkerPacket, latest ctxpacket.Execution
 	searchSpace := strings.ToLower(strings.Join([]string{
 		packet.RunningSummary,
 		completedSummary,
-		latest.OutputSummary,
+		preferredExecutionEvidence(latest),
 		latest.Action,
 	}, "\n"))
 	for _, condition := range packet.PlanState.ReplanConditions {
@@ -71,9 +71,6 @@ func stepBlockedReason(packet ctxpacket.WorkerPacket, latest ctxpacket.Execution
 		if strings.Contains(searchSpace, strings.ToLower(condition)) {
 			return condition
 		}
-	}
-	if ctxpacket.ImpactOfResult(latest) == ctxpacket.ResultImpactBlocking {
-		return "latest result indicates the active step is blocked"
 	}
 	return ""
 }

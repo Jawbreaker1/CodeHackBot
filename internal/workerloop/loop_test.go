@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -246,6 +247,148 @@ func TestLoopAppliesWorkerPlanAndAdvancesStep(t *testing.T) {
 	}
 }
 
+func TestLoopEmitsProgressEventsForDirectExecution(t *testing.T) {
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"role": "assistant", "content": `{"type":"action","command":"pwd","use_shell":false}`}},
+			},
+		})
+	}))
+	defer server.Close()
+
+	progress := &recordingProgressSink{}
+	loop := Loop{
+		LLM:      llmclient.Client{BaseURL: server.URL, Model: "test-model", HTTPClient: server.Client()},
+		Executor: execx.Executor{LogDir: t.TempDir()},
+		Approver: approval.StaticApprover{Decision: approval.DecisionApproveSession},
+		Progress: progress,
+	}
+	packet := ctxpacket.WorkerPacket{
+		BehaviorFrame:      behavior.Frame{SystemPrompt: "prompt", AgentsText: "agents", RuntimeMode: "worker"},
+		SessionFoundation:  session.Foundation{Goal: "what is the current working directory?", ReportingRequirement: "owasp"},
+		OperatorState:      ctxpacket.OperatorState{ModeHint: "direct_execution"},
+		RecentConversation: []string{"User: what is the current working directory?"},
+	}
+	outcome, err := loop.Run(context.Background(), packet, 1)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Packet.TaskRuntime.State != "done" {
+		t.Fatalf("task state = %q, want done", outcome.Packet.TaskRuntime.State)
+	}
+	gotKinds := make([]ProgressEventKind, 0, len(progress.events))
+	for _, event := range progress.events {
+		gotKinds = append(gotKinds, event.Kind)
+	}
+	want := []ProgressEventKind{
+		EventTaskStarted,
+		EventActionProposed,
+		EventExecutionStarted,
+		EventExecutionFinished,
+		EventPostExecEvalStarted,
+		EventPostExecEvalFinished,
+		EventTaskCompleted,
+	}
+	if !slices.Equal(gotKinds, want) {
+		t.Fatalf("event kinds = %#v, want %#v", gotKinds, want)
+	}
+	if calls != 1 {
+		t.Fatalf("llm calls = %d, want 1", calls)
+	}
+}
+
+func TestLoopDirectExecutionCompletesFromStructuredSuccessWithoutPostExecLLM(t *testing.T) {
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"role": "assistant", "content": `{"type":"action","command":"pwd","use_shell":false}`}},
+			},
+		})
+	}))
+	defer server.Close()
+
+	loop := Loop{
+		LLM:      llmclient.Client{BaseURL: server.URL, Model: "test-model", HTTPClient: server.Client()},
+		Executor: execx.Executor{LogDir: t.TempDir()},
+		Approver: approval.StaticApprover{Decision: approval.DecisionApproveSession},
+	}
+	packet := ctxpacket.WorkerPacket{
+		BehaviorFrame:      behavior.Frame{SystemPrompt: "prompt", AgentsText: "agents", RuntimeMode: "worker"},
+		SessionFoundation:  session.Foundation{Goal: "what is the current working directory?", ReportingRequirement: "owasp"},
+		OperatorState:      ctxpacket.OperatorState{ModeHint: "direct_execution"},
+		RecentConversation: []string{"User: what is the current working directory?"},
+	}
+	outcome, err := loop.Run(context.Background(), packet, 1)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Packet.TaskRuntime.State != "done" {
+		t.Fatalf("task state = %q, want done", outcome.Packet.TaskRuntime.State)
+	}
+	if calls != 1 {
+		t.Fatalf("llm calls = %d, want 1", calls)
+	}
+}
+
+func TestLoopEmitsProgressEventsForPlannedExecution(t *testing.T) {
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		content := `{"status":"satisfied","reason":"step satisfied","summary":"identified archive"}`
+		switch calls {
+		case 1:
+			content = `{"mode":"planned_execution","worker_goal":"inspect secret.zip","plan_summary":"Inspect archive.","plan_steps":["inspect archive"],"active_step":"inspect archive","replan_conditions":["archive missing"]}`
+		case 2:
+			content = `{"type":"step_complete","summary":"identified archive"}`
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"role": "assistant", "content": content}},
+			},
+		})
+	}))
+	defer server.Close()
+
+	progress := &recordingProgressSink{}
+	loop := Loop{
+		LLM:      llmclient.Client{BaseURL: server.URL, Model: "test-model", HTTPClient: server.Client()},
+		Executor: execx.Executor{LogDir: t.TempDir()},
+		Approver: approval.StaticApprover{Decision: approval.DecisionApproveSession},
+		Progress: progress,
+	}
+	packet := ctxpacket.WorkerPacket{
+		BehaviorFrame:      behavior.Frame{SystemPrompt: "prompt", AgentsText: "agents", RuntimeMode: "worker"},
+		SessionFoundation:  session.Foundation{Goal: "Extract contents of secret.zip and identify the password needed to decrypt it.", ReportingRequirement: "owasp"},
+		RecentConversation: []string{"User: Extract contents of secret.zip and identify the password needed to decrypt it."},
+		OperatorState:      ctxpacket.OperatorState{ModeHint: "planned_execution"},
+	}
+	outcome, err := loop.Run(context.Background(), packet, 1)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Packet.TaskRuntime.State != "done" {
+		t.Fatalf("task state = %q, want done", outcome.Packet.TaskRuntime.State)
+	}
+	gotKinds := make([]ProgressEventKind, 0, len(progress.events))
+	for _, event := range progress.events {
+		gotKinds = append(gotKinds, event.Kind)
+	}
+	want := []ProgressEventKind{
+		EventTaskStarted,
+		EventPlanStarted,
+		EventPlanFinished,
+		EventTaskCompleted,
+	}
+	if !slices.Equal(gotKinds, want) {
+		t.Fatalf("event kinds = %#v, want %#v", gotKinds, want)
+	}
+}
+
 func TestLoopWritesPlannerAttemptSnapshot(t *testing.T) {
 	var calls int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -345,6 +488,82 @@ func TestLoopAutoAdvancesPlannedStepFromStepEvaluation(t *testing.T) {
 	}
 }
 
+func TestLoopDirectExecutionCompletesFromStructuredSuccess(t *testing.T) {
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"role": "assistant", "content": `{"type":"action","command":"pwd","use_shell":false}`}},
+			},
+		})
+	}))
+	defer server.Close()
+
+	loop := Loop{
+		LLM:      llmclient.Client{BaseURL: server.URL, Model: "test-model", HTTPClient: server.Client()},
+		Executor: execx.Executor{LogDir: t.TempDir()},
+		Approver: approval.StaticApprover{Decision: approval.DecisionApproveSession},
+	}
+	packet := ctxpacket.WorkerPacket{
+		BehaviorFrame:     behavior.Frame{SystemPrompt: "prompt", AgentsText: "agents", RuntimeMode: "worker"},
+		SessionFoundation: session.Foundation{Goal: "what files are in this folder?", ReportingRequirement: "concise"},
+		OperatorState:     ctxpacket.OperatorState{ModeHint: "direct_execution"},
+		CurrentStep:       ctxpacket.Step{RemainingBudget: "1 step"},
+	}
+	outcome, err := loop.Run(context.Background(), packet, 1)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Packet.TaskRuntime.State != "done" {
+		t.Fatalf("task state = %q", outcome.Packet.TaskRuntime.State)
+	}
+	if outcome.Summary != "" {
+		t.Fatalf("summary = %q, want empty direct outcome summary", outcome.Summary)
+	}
+	if calls != 1 {
+		t.Fatalf("llm calls = %d, want 1", calls)
+	}
+	if !strings.Contains(outcome.Packet.RunningSummary, "Status: done.") {
+		t.Fatalf("running summary = %q", outcome.Packet.RunningSummary)
+	}
+}
+
+func TestLoopDirectExecutionBlocksFromStructuredIncorrectPasswordWithoutPostExecLLM(t *testing.T) {
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"role": "assistant", "content": `{"type":"action","command":"printf 'unable to get password\n'; exit 5","use_shell":true}`}},
+			},
+		})
+	}))
+	defer server.Close()
+
+	loop := Loop{
+		LLM:      llmclient.Client{BaseURL: server.URL, Model: "test-model", HTTPClient: server.Client()},
+		Executor: execx.Executor{LogDir: t.TempDir()},
+		Approver: approval.StaticApprover{Decision: approval.DecisionApproveSession},
+	}
+	packet := ctxpacket.WorkerPacket{
+		BehaviorFrame:     behavior.Frame{SystemPrompt: "prompt", AgentsText: "agents", RuntimeMode: "worker"},
+		SessionFoundation: session.Foundation{Goal: "extract secret.zip and tell me what is inside", ReportingRequirement: "concise"},
+		OperatorState:     ctxpacket.OperatorState{ModeHint: "direct_execution"},
+		CurrentStep:       ctxpacket.Step{RemainingBudget: "1 step"},
+	}
+	outcome, err := loop.Run(context.Background(), packet, 1)
+	if err == nil || !strings.Contains(err.Error(), "direct request blocked") {
+		t.Fatalf("Run() error = %v, want direct request blocked", err)
+	}
+	if outcome.Packet.TaskRuntime.State != "blocked" {
+		t.Fatalf("task state = %q, want blocked", outcome.Packet.TaskRuntime.State)
+	}
+	if calls != 1 {
+		t.Fatalf("llm calls = %d, want 1", calls)
+	}
+}
+
 func TestLoopWritesActionReviewAttemptAndRequestsRevision(t *testing.T) {
 	var calls int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -434,7 +653,7 @@ func TestLoopBlocksPlannedStepOnBlockingFailure(t *testing.T) {
 			Action:        "fcrackzip -D -p /usr/share/wordlists/rockyou.txt secret.zip",
 			ExitStatus:    "1",
 			Assessment:    "failed",
-			OutputSummary: "stderr: /usr/share/wordlists/rockyou.txt: No such file or directory",
+			OutputSummary: "stderr: wordlist missing",
 			Signals:       []string{"missing_path", "nonzero_exit"},
 			FailureClass:  "command_failed",
 		},
@@ -566,9 +785,9 @@ func TestBuildRunningSummaryPrefersStrongerRetainedEvidence(t *testing.T) {
 	}
 }
 
-func TestBuildRunningSummaryCompactsLongFields(t *testing.T) {
-	longAction := "printf " + strings.Repeat("a", 200)
-	longOutput := "stdout: " + strings.Repeat("b", 400)
+func TestBuildRunningSummaryCompactsOnlyVeryLongFields(t *testing.T) {
+	longAction := "printf " + strings.Repeat("a", 700)
+	longOutput := "stdout: " + strings.Repeat("b", 2200)
 	summary := buildRunningSummary(
 		"inspect archive",
 		ctxpacket.ExecutionResult{
@@ -584,6 +803,27 @@ func TestBuildRunningSummaryCompactsLongFields(t *testing.T) {
 	}
 	if !strings.Contains(summary, "...") {
 		t.Fatalf("summary missing compacted marker: %q", summary)
+	}
+}
+
+func TestBuildRunningSummaryKeepsModeratelyLongFields(t *testing.T) {
+	longAction := "printf " + strings.Repeat("a", 260)
+	longOutput := "stdout: " + strings.Repeat("b", 700)
+	summary := buildRunningSummary(
+		"inspect archive",
+		ctxpacket.ExecutionResult{
+			Action:        longAction,
+			ExitStatus:    "0",
+			Assessment:    "success",
+			OutputSummary: longOutput,
+		},
+		nil,
+	)
+	if !strings.Contains(summary, longAction) {
+		t.Fatalf("summary should preserve action without compaction: %q", summary)
+	}
+	if !strings.Contains(summary, longOutput) {
+		t.Fatalf("summary should preserve evidence without compaction: %q", summary)
 	}
 }
 
