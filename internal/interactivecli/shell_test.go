@@ -521,6 +521,8 @@ func TestBuildModeClassifierPromptKeepsSessionContextLightweight(t *testing.T) {
 		`"task_state": "done"`,
 		`"active_step": "verify zip presence"`,
 		`"working_dir": "/tmp/testrepo"`,
+		"Classify by requested interaction shape only",
+		"do not use conversation solely to verify authorization",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q in:\n%s", want, prompt)
@@ -535,6 +537,92 @@ func TestBuildModeClassifierPromptKeepsSessionContextLightweight(t *testing.T) {
 		if strings.Contains(prompt, unwanted) {
 			t.Fatalf("prompt unexpectedly contained %q in:\n%s", unwanted, prompt)
 		}
+	}
+}
+
+func TestClassifyInputUsesRouterPromptWithoutBehaviorFrame(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, root+"/AGENTS.md", "AGENTS safety rules should not be in classifier system prompt")
+	mustWrite(t, root+"/go.mod", "module example.com/test\n")
+
+	var captured []llmclient.Message
+	shell := Shell{
+		RepoRoot:  root,
+		BaseURL:   "http://127.0.0.1:1234/v1",
+		Model:     "test-model",
+		MaxSteps:  2,
+		AllowAll:  true,
+		StatePath: root + "/session.json",
+		Chat: func(ctx context.Context, messages []llmclient.Message) (string, error) {
+			captured = append([]llmclient.Message(nil), messages...)
+			return `{"mode":"planned_execution","reason":"router scan requires multiple phases"}`, nil
+		},
+	}
+	frame, err := behavior.Load(root, "worker", map[string]string{
+		"approval_mode": approvalModeLabel(true),
+		"surface":       "interactive_worker_cli",
+	})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	decision, err := shell.classifyInput(context.Background(), frame, ctxpacket.WorkerPacket{}, "Scan the router at 192.168.50.1", false)
+	if err != nil {
+		t.Fatalf("classifyInput() error = %v", err)
+	}
+	if decision.Mode != workerplan.ModePlannedExecution {
+		t.Fatalf("mode = %q", decision.Mode)
+	}
+	if len(captured) != 2 {
+		t.Fatalf("captured %d messages, want 2", len(captured))
+	}
+	if !strings.Contains(captured[0].Content, "interaction-mode classifier") {
+		t.Fatalf("classifier system prompt missing router role: %q", captured[0].Content)
+	}
+	if strings.Contains(captured[0].Content, "AGENTS safety rules") {
+		t.Fatalf("classifier system prompt should not include behavior frame: %q", captured[0].Content)
+	}
+}
+
+func TestClassifyInputUsesStructuredChatProfile(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, root+"/AGENTS.md", "rules")
+	mustWrite(t, root+"/go.mod", "module example.com/test\n")
+
+	structuredCalled := false
+	shell := Shell{
+		RepoRoot:  root,
+		BaseURL:   "http://127.0.0.1:1234/v1",
+		Model:     "test-model",
+		MaxSteps:  2,
+		AllowAll:  true,
+		StatePath: root + "/session.json",
+		Chat: func(ctx context.Context, messages []llmclient.Message) (string, error) {
+			t.Fatal("conversation chat should not be used for mode classification")
+			return "", nil
+		},
+		StructuredChat: func(ctx context.Context, messages []llmclient.Message) (string, error) {
+			structuredCalled = true
+			return `{"mode":"direct_execution","reason":"one-step file inspection"}`, nil
+		},
+	}
+	frame, err := behavior.Load(root, "worker", map[string]string{
+		"approval_mode": approvalModeLabel(true),
+		"surface":       "interactive_worker_cli",
+	})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	decision, err := shell.classifyInput(context.Background(), frame, ctxpacket.WorkerPacket{}, "Are there zip files here?", false)
+	if err != nil {
+		t.Fatalf("classifyInput() error = %v", err)
+	}
+	if !structuredCalled {
+		t.Fatal("StructuredChat was not called")
+	}
+	if decision.Mode != workerplan.ModeDirectExecution {
+		t.Fatalf("mode = %q", decision.Mode)
 	}
 }
 

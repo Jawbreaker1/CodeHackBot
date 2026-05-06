@@ -73,6 +73,7 @@ func TestBuildUserPromptIncludesCompletionGuidance(t *testing.T) {
 	for _, want := range []string{
 		"Use task_runtime.current_target as the concrete thing currently being worked.",
 		"Use task_runtime.missing_fact as the primary description of what still needs to be learned or verified.",
+		"Use active_execution_facts as curated execution truth with provenance; prefer these facts over summaries when they disagree.",
 		"If task_runtime.missing_fact is not '(none)', prefer an action that establishes that missing fact for the current target.",
 		"Before choosing action, check whether the current goal is already satisfied by the latest execution result or relevant recent results.",
 		"If the goal is already satisfied with evidence in the context packet, choose step_complete.",
@@ -329,6 +330,12 @@ func TestLoopDirectExecutionCompletesFromStructuredSuccessWithoutPostExecLLM(t *
 	}
 	if outcome.Packet.TaskRuntime.State != "done" {
 		t.Fatalf("task state = %q, want done", outcome.Packet.TaskRuntime.State)
+	}
+	if !hasLoopExecutionFact(outcome.Packet.ActiveExecutionFacts, "latest_execution_status", "pwd") {
+		t.Fatalf("ActiveExecutionFacts missing latest_execution_status: %#v", outcome.Packet.ActiveExecutionFacts)
+	}
+	if !hasLoopExecutionFactKind(outcome.Packet.ActiveExecutionFacts, "log_ref") {
+		t.Fatalf("ActiveExecutionFacts missing log_ref: %#v", outcome.Packet.ActiveExecutionFacts)
 	}
 	if calls != 1 {
 		t.Fatalf("llm calls = %d, want 1", calls)
@@ -891,4 +898,22 @@ func TestPrepareActionSplitsDirectCommandAndChecksExecutability(t *testing.T) {
 	if len(action.Args) != 1 || action.Args[0] != "hello" {
 		t.Fatalf("action.Args = %#v", action.Args)
 	}
+}
+
+func hasLoopExecutionFact(facts []ctxpacket.ExecutionFact, kind, subject string) bool {
+	for _, fact := range facts {
+		if fact.Kind == kind && fact.Subject == subject {
+			return true
+		}
+	}
+	return false
+}
+
+func hasLoopExecutionFactKind(facts []ctxpacket.ExecutionFact, kind string) bool {
+	for _, fact := range facts {
+		if fact.Kind == kind {
+			return true
+		}
+	}
+	return false
 }

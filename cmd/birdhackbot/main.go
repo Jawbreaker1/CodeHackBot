@@ -27,10 +27,11 @@ import (
 )
 
 type SessionPaths struct {
-	Root       string
-	LogsDir    string
-	ContextDir string
-	StatePath  string
+	Root        string
+	LogsDir     string
+	ContextDir  string
+	EvidenceDir string
+	StatePath   string
 }
 
 func main() {
@@ -358,10 +359,11 @@ func normalizePath(path string) (string, error) {
 
 func sessionPathsForRoot(root string) SessionPaths {
 	return SessionPaths{
-		Root:       root,
-		LogsDir:    filepath.Join(root, "logs"),
-		ContextDir: filepath.Join(root, "context"),
-		StatePath:  filepath.Join(root, "session.json"),
+		Root:        root,
+		LogsDir:     filepath.Join(root, "logs"),
+		ContextDir:  filepath.Join(root, "context"),
+		EvidenceDir: filepath.Join(root, "evidence"),
+		StatePath:   filepath.Join(root, "session.json"),
 	}
 }
 
@@ -374,7 +376,7 @@ func sessionDirName(prefix string) string {
 }
 
 func ensureSessionPaths(paths SessionPaths) error {
-	for _, dir := range []string{paths.Root, paths.LogsDir, paths.ContextDir} {
+	for _, dir := range []string{paths.Root, paths.LogsDir, paths.ContextDir, paths.EvidenceDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}

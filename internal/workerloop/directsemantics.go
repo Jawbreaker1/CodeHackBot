@@ -108,10 +108,12 @@ func judgeDirectExecution(ctx context.Context, llm llmclient.Client, inspector I
 	attempt := workerdirect.AttemptRecord{
 		Prompt: buildDirectEvaluationPrompt(packet),
 	}
-	respText, err := llm.Chat(ctx, []llmclient.Message{
+	completion, err := llm.Complete(ctx, []llmclient.Message{
 		{Role: "system", Content: packet.BehaviorFrame.PromptText()},
 		{Role: "user", Content: attempt.Prompt},
-	})
+	}, llmclient.ChatOptions{Profile: llmclient.ProfileStructuredControl})
+	attempt.ResponseSource = string(completion.Source)
+	respText := completion.Text
 	if err != nil {
 		attempt.FinalError = fmt.Sprintf("direct evaluation chat: %v", err)
 		_ = captureDirectEvaluationAttemptIfConfigured(inspector, attempt)
@@ -149,6 +151,7 @@ func buildDirectEvaluationPrompt(packet ctxpacket.WorkerPacket) string {
 			"status must be blocked only when the request cannot continue without a missing prerequisite or a clearly blocking failure.",
 			"Otherwise use in_progress.",
 			"Judge from structured evidence already present in the packet; do not invent commands, outputs, or new facts.",
+			"Use active_execution_facts as curated execution truth with provenance; prefer these facts over summaries when they disagree.",
 			"Be strict about direct_execution: if one simple successful action already answered the request, return satisfied.",
 		},
 		"context_packet": packet.RenderWithoutBehaviorFrame(),

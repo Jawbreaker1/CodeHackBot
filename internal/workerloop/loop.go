@@ -50,6 +50,7 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 	if strings.TrimSpace(current.TaskRuntime.State) == "" {
 		current.TaskRuntime = ctxpacket.InitialTaskRuntime(current.SessionFoundation.Goal)
 	}
+	refreshExecutionFacts(&current)
 	_ = emitProgressIfConfigured(l.Progress, ProgressEvent{
 		Kind:       EventTaskStarted,
 		At:         newProgressEvent(EventTaskStarted, 0, "").At,
@@ -112,7 +113,7 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 			}, current)
 			return Outcome{Packet: current}, fmt.Errorf("packet validation failed: %s", validation.Summary())
 		}
-		respText, err := l.LLM.Chat(ctx, []llmclient.Message{
+		respText, err := l.LLM.ChatStructured(ctx, []llmclient.Message{
 			{Role: "system", Content: current.BehaviorFrame.PromptText()},
 			{Role: "user", Content: buildUserPrompt(current)},
 		})
@@ -149,6 +150,7 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 				case StepBlocked:
 					current.PlanState.BlockedStep = current.PlanState.ActiveStep
 					current.TaskRuntime.State = "blocked"
+					refreshExecutionFacts(&current)
 					current.RunningSummary = "Plan step blocked: " + blank(stepEval.Reason, current.PlanState.ActiveStep)
 					_ = emitProgressIfConfigured(l.Progress, ProgressEvent{
 						Kind:       EventTaskBlocked,
@@ -179,6 +181,7 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 			current.TaskRuntime.State = "done"
 			current.TaskRuntime = ctxpacket.UpdateTaskRuntime(current.TaskRuntime, current.SessionFoundation.Goal, current.LatestExecutionResult)
 			current.TaskRuntime.MissingFact = "(none)"
+			refreshExecutionFacts(&current)
 			current.RunningSummary = buildCompletionSummary(current.SessionFoundation.Goal, current.LatestExecutionResult, current.RelevantRecentResults)
 			_ = emitProgressIfConfigured(l.Progress, ProgressEvent{
 				Kind:         EventTaskCompleted,
@@ -197,6 +200,7 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 			return Outcome{Summary: resp.Summary, Packet: current}, nil
 		case "ask_user":
 			current.TaskRuntime.State = "waiting_user"
+			refreshExecutionFacts(&current)
 			if err := captureIfConfigured(l.Inspector, step, "ask-user", current); err != nil {
 				return Outcome{Packet: current}, fmt.Errorf("capture ask-user context: %w", err)
 			}
@@ -217,6 +221,7 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 				truth := ctxpacket.ActiveTruthResult(current.LatestExecutionResult, current.RelevantRecentResults)
 				current.TaskRuntime.State = "running"
 				current.TaskRuntime = ctxpacket.UpdateTaskRuntime(current.TaskRuntime, current.SessionFoundation.Goal, truth)
+				refreshExecutionFacts(&current)
 				current.RunningSummary = buildRunningSummary(current.CurrentStep.Objective, current.LatestExecutionResult, current.RelevantRecentResults)
 				if err := captureIfConfigured(l.Inspector, step, "post-validation", current); err != nil {
 					return Outcome{Packet: current}, fmt.Errorf("capture validation context: %w", err)
@@ -246,6 +251,7 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 					case workeraction.DecisionBlocked:
 						current.PlanState.BlockedStep = current.PlanState.ActiveStep
 						current.TaskRuntime.State = "blocked"
+						refreshExecutionFacts(&current)
 						current.RunningSummary = "Plan step blocked before execution: " + blank(review.Reason, current.PlanState.ActiveStep)
 						_ = emitProgressIfConfigured(l.Progress, ProgressEvent{
 							Kind:       EventTaskBlocked,
@@ -272,6 +278,7 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 						truth := ctxpacket.ActiveTruthResult(current.LatestExecutionResult, current.RelevantRecentResults)
 						current.TaskRuntime.State = "running"
 						current.TaskRuntime = ctxpacket.UpdateTaskRuntime(current.TaskRuntime, current.SessionFoundation.Goal, truth)
+						refreshExecutionFacts(&current)
 						current.RunningSummary = buildRunningSummary(current.CurrentStep.Objective, current.LatestExecutionResult, current.RelevantRecentResults)
 						if err := captureIfConfigured(l.Inspector, step, "post-validation", current); err != nil {
 							return Outcome{Packet: current}, fmt.Errorf("capture validation context: %w", err)
@@ -347,6 +354,7 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 			truth := ctxpacket.ActiveTruthResult(current.LatestExecutionResult, current.RelevantRecentResults)
 			current.TaskRuntime.State = "running"
 			current.TaskRuntime = ctxpacket.UpdateTaskRuntime(current.TaskRuntime, current.SessionFoundation.Goal, truth)
+			refreshExecutionFacts(&current)
 			current.RunningSummary = buildRunningSummary(current.CurrentStep.Objective, current.LatestExecutionResult, current.RelevantRecentResults)
 			if err := captureIfConfigured(l.Inspector, step, "post-action", current); err != nil {
 				return Outcome{Packet: current}, fmt.Errorf("capture post-action context: %w", err)
@@ -373,6 +381,7 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 				case StepBlocked:
 					current.PlanState.BlockedStep = current.PlanState.ActiveStep
 					current.TaskRuntime.State = "blocked"
+					refreshExecutionFacts(&current)
 					current.RunningSummary = "Plan step blocked: " + blank(stepEval.Reason, current.PlanState.ActiveStep)
 					_ = emitProgressIfConfigured(l.Progress, ProgressEvent{
 						Kind:       EventTaskBlocked,
@@ -420,6 +429,7 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 				switch directEval.Status {
 				case StepBlocked:
 					current.TaskRuntime.State = "blocked"
+					refreshExecutionFacts(&current)
 					current.RunningSummary = "Direct request blocked: " + blank(directEval.Reason, current.SessionFoundation.Goal)
 					_ = emitProgressIfConfigured(l.Progress, ProgressEvent{
 						Kind:       EventTaskBlocked,
@@ -437,6 +447,7 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 					current.TaskRuntime.State = "done"
 					current.TaskRuntime = ctxpacket.UpdateTaskRuntime(current.TaskRuntime, current.SessionFoundation.Goal, current.LatestExecutionResult)
 					current.TaskRuntime.MissingFact = "(none)"
+					refreshExecutionFacts(&current)
 					current.RunningSummary = buildCompletionSummary(current.SessionFoundation.Goal, current.LatestExecutionResult, current.RelevantRecentResults)
 					_ = emitProgressIfConfigured(l.Progress, ProgressEvent{
 						Kind:         EventTaskCompleted,
@@ -461,6 +472,7 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 		}
 	}
 	current.TaskRuntime.State = "blocked"
+	refreshExecutionFacts(&current)
 	_ = emitProgressIfConfigured(l.Progress, ProgressEvent{
 		Kind:       EventTaskBlocked,
 		At:         newProgressEvent(EventTaskBlocked, maxSteps, "").At,
@@ -482,6 +494,7 @@ func buildUserPrompt(packet ctxpacket.WorkerPacket) string {
 			"If choosing ask_user, use: {\"type\":\"ask_user\",\"question\":\"...\"}.",
 			"Use task_runtime.current_target as the concrete thing currently being worked.",
 			"Use task_runtime.missing_fact as the primary description of what still needs to be learned or verified.",
+			"Use active_execution_facts as curated execution truth with provenance; prefer these facts over summaries when they disagree.",
 			"If task_runtime.missing_fact is not '(none)', prefer an action that establishes that missing fact for the current target.",
 			"Before choosing action, check whether the current goal is already satisfied by the latest execution result or relevant recent results.",
 			"If the goal is already satisfied with evidence in the context packet, choose step_complete.",
@@ -729,4 +742,8 @@ func captureIfConfigured(inspector Inspector, step int, stage string, packet ctx
 		return nil
 	}
 	return inspector.Capture(step, stage, packet)
+}
+
+func refreshExecutionFacts(packet *ctxpacket.WorkerPacket) {
+	packet.ActiveExecutionFacts = ctxpacket.UpdateExecutionFacts(packet.ActiveExecutionFacts, packet.TaskRuntime, packet.LatestExecutionResult)
 }

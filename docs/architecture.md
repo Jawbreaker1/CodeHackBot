@@ -435,13 +435,18 @@ The conceptual layers are:
    - logs
    - artifacts
 
-7. Running summary
+7. Active execution facts
+   - curated facts derived from structured execution truth
+   - current target, latest status, unresolved blocker, signals, logs, artifacts
+   - facts must include provenance and must not be inferred from raw output scraping
+
+8. Running summary
    - short current narrative of what has happened and what remains unclear
 
-8. Retrieved relevant history
+9. Retrieved relevant history
    - only prior facts or evidence relevant to the current task
 
-9. Capability contributions
+10. Capability contributions
    - optional hints or validated external knowledge
 
 ### 6.2 Worker Active Context v1
@@ -455,11 +460,12 @@ The initial worker context packet should contain:
 5. `recent_conversation`
 6. `older_conversation_summary`
 7. `latest_execution_result`
-8. `running_summary`
-9. `relevant_recent_results`
-10. `memory_bank_retrievals`
-11. `capability_inputs`
-12. `operator_state`
+8. `active_execution_facts`
+9. `running_summary`
+10. `relevant_recent_results`
+11. `memory_bank_retrievals`
+12. `capability_inputs`
+13. `operator_state`
 
 `operator_state` includes:
 - current scope and permission state
@@ -477,6 +483,18 @@ This is intentionally structured and generous. It should not be squeezed into a 
 - what remains unclear
 - what the current blocker is, if any
 
+`active_execution_facts` is an explicit packet section. It is a small curated view derived from structured runtime truth, not a second memory system and not a recipe layer.
+
+Allowed sources:
+- task runtime target and missing fact
+- latest execution status, assessment, failure class, and signals
+- log refs and artifact refs already present in structured execution results
+
+Forbidden sources:
+- raw stdout/stderr scraping to invent facts
+- model guesses
+- task-specific command recipes
+
 ### 6.3 Non-Droppable Core
 
 During an active step, the system must always preserve:
@@ -485,6 +503,7 @@ During an active step, the system must always preserve:
 - `current_step`
 - `plan_state`
 - `latest_execution_result`
+- `active_execution_facts`
 - current unresolved blocker
 - currently relevant artifact references
 
@@ -507,9 +526,10 @@ When signals conflict, trust in this order:
 
 1. latest execution result
 2. artifacts/logs referenced by the latest result
-3. running summary
-4. retrieved memory
-5. older artifacts or summaries
+3. active execution facts derived from structured truth
+4. running summary
+5. retrieved memory
+6. older artifacts or summaries
 
 ### 6.6 Packet Validation
 
@@ -1211,7 +1231,23 @@ This is the simplest possible worker loop we should build first.
 9. Repeat until the step is done or honestly blocked.
 10. When all steps are done, render the report from evidence.
 
-### 7.2 Worker Progress Rule
+### 7.2 LLM Request And Response Contract
+
+The LLM client is a provider boundary, not part of task logic.
+
+All LLM calls must declare their interaction profile:
+- `conversation`: natural-language assistant output for the operator
+- `structured_control`: machine-readable control output such as classification, planning, action proposal, action review, direct evaluation, or step evaluation
+
+The client must preserve a compatibility boundary between provider response fields and worker semantics:
+- prefer `message.content` when it contains text
+- for `structured_control` only, if `message.content` is empty, allow `message.reasoning_content` as a compatibility fallback
+- do not use `message.reasoning_content` as normal user-facing conversation or reporting output
+- validation of the selected structured text remains the responsibility of the existing parser and contract validator for that call type
+
+This supports reasoning-model providers that expose structured output in provider-specific fields while keeping the closed loop generic. The fallback must not depend on model names, task names, command output, or brittle string heuristics.
+
+### 7.3 Worker Progress Rule
 
 Only one generic progress rule should exist:
 - the next action must materially differ by command, target, evidence, or purpose
@@ -1223,7 +1259,7 @@ If not, the worker must:
 
 We should avoid many specialized anti-loop rules.
 
-### 7.3 Worker Fallback Rule
+### 7.4 Worker Fallback Rule
 
 Fallback must stay narrow.
 
@@ -1395,6 +1431,8 @@ The system should keep four separate evidence layers:
    - produced or collected files
 
 These layers must stay separate. Logs are not a substitute for structured results, and structured results are not a substitute for full logs.
+
+Each session runtime owns a standard local artifact workspace under the session directory. At minimum, session setup must create `logs/`, `context/`, and `evidence/` before worker execution starts so command-produced artifacts have a valid local destination without relying on task-specific command repair.
 
 ### 9.2 Every Executed Command Must Record
 

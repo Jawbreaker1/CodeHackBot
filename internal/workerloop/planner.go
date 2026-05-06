@@ -70,10 +70,12 @@ func ensureWorkerPlan(ctx context.Context, llm llmclient.Client, inspector Inspe
 	attempt := workerplan.AttemptRecord{
 		Prompt: buildPlannerPrompt(packet),
 	}
-	respText, err := llm.Chat(ctx, []llmclient.Message{
+	completion, err := llm.Complete(ctx, []llmclient.Message{
 		{Role: "system", Content: packet.BehaviorFrame.PromptText()},
 		{Role: "user", Content: attempt.Prompt},
-	})
+	}, llmclient.ChatOptions{Profile: llmclient.ProfileStructuredControl})
+	attempt.ResponseSource = string(completion.Source)
+	respText := completion.Text
 	if err != nil {
 		attempt.FinalError = fmt.Sprintf("planner chat: %v", err)
 		_ = capturePlannerAttemptIfConfigured(inspector, attempt)

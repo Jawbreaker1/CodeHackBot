@@ -25,6 +25,9 @@ func TestAllocateSessionPathsUsesExplicitSessionDir(t *testing.T) {
 	if paths.ContextDir != filepath.Join(explicit, "context") {
 		t.Fatalf("ContextDir = %q", paths.ContextDir)
 	}
+	if paths.EvidenceDir != filepath.Join(explicit, "evidence") {
+		t.Fatalf("EvidenceDir = %q", paths.EvidenceDir)
+	}
 	if paths.StatePath != filepath.Join(explicit, "session.json") {
 		t.Fatalf("StatePath = %q", paths.StatePath)
 	}
@@ -40,7 +43,7 @@ func TestAllocateSessionPathsCreatesFreshRunUnderSessionsRoot(t *testing.T) {
 	if !strings.HasPrefix(paths.Root, sessionsRoot+string(filepath.Separator)+"router-") {
 		t.Fatalf("Root = %q, want prefix %q", paths.Root, sessionsRoot+string(filepath.Separator)+"router-")
 	}
-	for _, want := range []string{paths.Root, paths.LogsDir, paths.ContextDir} {
+	for _, want := range []string{paths.Root, paths.LogsDir, paths.ContextDir, paths.EvidenceDir} {
 		if infoErr := assertDirExists(want); infoErr != nil {
 			t.Fatalf("expected dir %q: %v", want, infoErr)
 		}

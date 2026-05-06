@@ -98,6 +98,10 @@ Planned tasks:
   - validate contradictions/redundancy after packet build
   - log validation results with the session
   - fail closed on fatally untrustworthy packets
+- [x] Add curated active execution facts:
+  - derive only from structured runtime truth such as task target, latest execution status, signals, log refs, and artifact refs
+  - render facts as a small context-packet section with provenance
+  - do not infer new facts from raw command output or task-specific recipes
 - [ ] Only after validation is useful and inspectable, design any separate packet repair/rebuild step
 - [x] Add interactive shell inspection commands for live multi-turn context testing:
   - `/stats`

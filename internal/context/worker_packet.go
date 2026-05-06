@@ -41,6 +41,15 @@ type ExecutionResult struct {
 	FailureClass   string
 }
 
+// ExecutionFact is a curated active fact derived from structured runtime truth.
+type ExecutionFact struct {
+	Kind         string
+	Subject      string
+	Status       string
+	Source       string
+	EvidenceRefs []string
+}
+
 // OperatorState is the visible operator/runtime state in the context packet.
 type OperatorState struct {
 	ScopeState    string
@@ -65,6 +74,7 @@ type WorkerPacket struct {
 	RecentConversation       []string
 	OlderConversationSummary string
 	LatestExecutionResult    ExecutionResult
+	ActiveExecutionFacts     []ExecutionFact
 	RunningSummary           string
 	RelevantRecentResults    []ExecutionResult
 	MemoryBankRetrievals     []string
@@ -85,6 +95,7 @@ func NewInitialWorkerPacket(frame behavior.Frame, foundation session.Foundation,
 	if maxSteps <= 0 {
 		maxSteps = 1
 	}
+	taskRuntime := InitialTaskRuntimeInDir(foundation.Goal, cwd)
 	return WorkerPacket{
 		BehaviorFrame:     frame,
 		SessionFoundation: foundation,
@@ -95,14 +106,15 @@ func NewInitialWorkerPacket(frame behavior.Frame, foundation session.Foundation,
 			ExpectedEvidence: []string{"command logs", "artifacts if produced"},
 			RemainingBudget:  fmt.Sprintf("%d steps", maxSteps),
 		},
-		TaskRuntime: InitialTaskRuntimeInDir(foundation.Goal, cwd),
+		TaskRuntime: taskRuntime,
 		PlanState: PlanState{
 			Steps:      []string{"understand goal", "work the named target/task", "verify and finish"},
 			ActiveStep: foundation.Goal,
 		},
-		RecentConversation: []string{"User: " + foundation.Goal},
-		RunningSummary:     "Worker loop starting from the stated user goal.",
-		CapabilityInputs:   DefaultExecutionCapabilityInputs(),
+		RecentConversation:   []string{"User: " + foundation.Goal},
+		ActiveExecutionFacts: UpdateExecutionFacts(nil, taskRuntime, ExecutionResult{}),
+		RunningSummary:       "Worker loop starting from the stated user goal.",
+		CapabilityInputs:     DefaultExecutionCapabilityInputs(),
 		OperatorState: OperatorState{
 			ScopeState:    "from_session_foundation",
 			ApprovalState: approvalState,
@@ -154,6 +166,7 @@ func (p WorkerPacket) RenderSections() []RenderedSection {
 		{Name: "recent_conversation", Content: renderConversation(p.RecentConversation)},
 		{Name: "older_conversation_summary", Content: blankOrValue(p.OlderConversationSummary)},
 		{Name: "latest_execution_result", Content: renderExecutionResult(p.LatestExecutionResult)},
+		{Name: "active_execution_facts", Content: renderExecutionFacts(p.ActiveExecutionFacts)},
 		{Name: "running_summary", Content: blankOrValue(p.RunningSummary)},
 		{Name: "relevant_recent_results", Content: renderExecutionResults(p.RelevantRecentResults)},
 		{Name: "memory_bank_retrievals", Content: renderList(p.MemoryBankRetrievals)},
@@ -241,6 +254,24 @@ func renderRetainedExecutionResult(r ExecutionResult) string {
 		"signals: " + joinOrNone(r.Signals),
 		"failure_class: " + blankOrValue(r.FailureClass),
 	}, "\n")
+}
+
+func renderExecutionFacts(facts []ExecutionFact) string {
+	if len(facts) == 0 {
+		return "(none)"
+	}
+	parts := make([]string, 0, len(facts))
+	for i, fact := range facts {
+		lines := []string{
+			"kind: " + blankOrValue(fact.Kind),
+			"subject: " + blankOrValue(fact.Subject),
+			"status: " + blankOrValue(fact.Status),
+			"source: " + blankOrValue(fact.Source),
+			"evidence_refs: " + joinOrNone(fact.EvidenceRefs),
+		}
+		parts = append(parts, fmt.Sprintf("fact_%d:\n%s", i+1, indent(strings.Join(lines, "\n"), "  ")))
+	}
+	return strings.Join(parts, "\n")
 }
 
 func renderOperatorState(s OperatorState) string {

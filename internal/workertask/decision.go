@@ -28,12 +28,13 @@ type ValidationReport struct {
 }
 
 type AttemptRecord struct {
-	Prompt      string
-	RawResponse string
-	Parsed      Decision
-	Validation  ValidationReport
-	Accepted    bool
-	FinalError  string
+	Prompt         string
+	RawResponse    string
+	ResponseSource string
+	Parsed         Decision
+	Validation     ValidationReport
+	Accepted       bool
+	FinalError     string
 }
 
 func Parse(s string) (Decision, error) {

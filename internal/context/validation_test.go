@@ -135,3 +135,24 @@ func TestValidatePacketErrorsOnPartialLatestExecutionResult(t *testing.T) {
 		t.Fatalf("HighestSeverity() = %q, want %q", got, ValidationError)
 	}
 }
+
+func TestValidatePacketErrorsOnActiveExecutionFactsOverflow(t *testing.T) {
+	packet := WorkerPacket{
+		BehaviorFrame:     behavior.Frame{SystemPrompt: "prompt", AgentsText: "rules", RuntimeMode: "worker"},
+		SessionFoundation: session.Foundation{Goal: "inspect target", ReportingRequirement: "owasp"},
+		CurrentStep:       Step{Objective: "inspect target"},
+		RunningSummary:    "running",
+	}
+	for i := 0; i < executionFactLimit+1; i++ {
+		packet.ActiveExecutionFacts = append(packet.ActiveExecutionFacts, ExecutionFact{
+			Kind:    "artifact_ref",
+			Subject: "artifact",
+			Status:  "available",
+		})
+	}
+
+	report := ValidatePacket(packet)
+	if got := report.HighestSeverity(); got != ValidationError {
+		t.Fatalf("HighestSeverity() = %q, want %q", got, ValidationError)
+	}
+}

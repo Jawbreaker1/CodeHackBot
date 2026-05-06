@@ -75,6 +75,9 @@ func ValidatePacket(packet WorkerPacket) ValidationReport {
 	if hasPartialLatestExecution(packet.LatestExecutionResult) {
 		report.add(ValidationError, "partial_latest_execution_result", "latest_execution_result is partially populated")
 	}
+	if len(packet.ActiveExecutionFacts) > executionFactLimit {
+		report.add(ValidationError, "active_execution_facts_overflow", fmt.Sprintf("active_execution_facts has %d facts; limit is %d", len(packet.ActiveExecutionFacts), executionFactLimit))
+	}
 
 	return report
 }

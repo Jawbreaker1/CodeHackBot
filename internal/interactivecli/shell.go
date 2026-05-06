@@ -38,15 +38,17 @@ type Shell struct {
 	Runner   Runner
 	RepoRoot string
 
-	BaseURL   string
-	Model     string
-	MaxSteps  int
-	AllowAll  bool
-	StatePath string
-	SaveState func(path string, state sessionstate.State) error
-	Chat      func(ctx context.Context, messages []llmclient.Message) (string, error)
-	Classify  func(ctx context.Context, frame behavior.Frame, packet ctxpacket.WorkerPacket, line string, started bool) (workermode.Decision, error)
-	Boundary  func(ctx context.Context, frame behavior.Frame, packet ctxpacket.WorkerPacket, line string) (workertask.Decision, error)
+	BaseURL            string
+	Model              string
+	MaxSteps           int
+	AllowAll           bool
+	StatePath          string
+	SaveState          func(path string, state sessionstate.State) error
+	Chat               func(ctx context.Context, messages []llmclient.Message) (string, error)
+	StructuredComplete func(ctx context.Context, messages []llmclient.Message) (llmclient.Completion, error)
+	StructuredChat     func(ctx context.Context, messages []llmclient.Message) (string, error)
+	Classify           func(ctx context.Context, frame behavior.Frame, packet ctxpacket.WorkerPacket, line string, started bool) (workermode.Decision, error)
+	Boundary           func(ctx context.Context, frame behavior.Frame, packet ctxpacket.WorkerPacket, line string) (workertask.Decision, error)
 }
 
 type runnerProgress struct {
@@ -333,6 +335,21 @@ func (s Shell) chat(ctx context.Context, messages []llmclient.Message) (string, 
 	return llmclient.Client{BaseURL: s.BaseURL, Model: s.Model}.Chat(ctx, messages)
 }
 
+func (s Shell) structuredCompletion(ctx context.Context, messages []llmclient.Message) (llmclient.Completion, error) {
+	if s.StructuredComplete != nil {
+		return s.StructuredComplete(ctx, messages)
+	}
+	if s.StructuredChat != nil {
+		resp, err := s.StructuredChat(ctx, messages)
+		return llmclient.Completion{Text: resp, Source: llmclient.ResponseSourceContent, Content: resp}, err
+	}
+	if s.Chat != nil {
+		resp, err := s.Chat(ctx, messages)
+		return llmclient.Completion{Text: resp, Source: llmclient.ResponseSourceContent, Content: resp}, err
+	}
+	return llmclient.Client{BaseURL: s.BaseURL, Model: s.Model}.Complete(ctx, messages, llmclient.ChatOptions{Profile: llmclient.ProfileStructuredControl})
+}
+
 func (s Shell) classifyInput(ctx context.Context, frame behavior.Frame, packet ctxpacket.WorkerPacket, line string, started bool) (workermode.Decision, error) {
 	attempt := workermode.AttemptRecord{
 		Prompt: buildModeClassifierPrompt(packet, line, started),
@@ -368,10 +385,12 @@ func (s Shell) classifyInput(ctx context.Context, frame behavior.Frame, packet c
 		}
 		return acceptDecision(decision)
 	}
-	resp, err := s.chat(ctx, []llmclient.Message{
-		{Role: "system", Content: frame.PromptText()},
+	completion, err := s.structuredCompletion(ctx, []llmclient.Message{
+		{Role: "system", Content: modeClassifierSystemPrompt()},
 		{Role: "user", Content: attempt.Prompt},
 	})
+	attempt.ResponseSource = string(completion.Source)
+	resp := completion.Text
 	attempt.RawResponse = resp
 	if err != nil {
 		attempt.FinalError = fmt.Sprintf("classify input: %v", err)
@@ -442,10 +461,12 @@ func (s Shell) decideTaskBoundary(ctx context.Context, frame behavior.Frame, pac
 		}
 		return decision, nil
 	}
-	resp, err := s.chat(ctx, []llmclient.Message{
+	completion, err := s.structuredCompletion(ctx, []llmclient.Message{
 		{Role: "system", Content: frame.PromptText()},
 		{Role: "user", Content: attempt.Prompt},
 	})
+	attempt.ResponseSource = string(completion.Source)
+	resp := completion.Text
 	attempt.RawResponse = resp
 	if err != nil {
 		attempt.FinalError = fmt.Sprintf("decide task boundary: %v", err)
@@ -1030,6 +1051,7 @@ func buildModeClassifierPrompt(packet ctxpacket.WorkerPacket, line string, start
 			"Choose conversation for explanation, advice, identity, status, or discussion requests that should not execute tools.",
 			"Choose direct_execution for obviously one-step actionable requests such as list/show/pwd/file inspection requests.",
 			"Choose planned_execution for multi-phase tasks that require decomposition, verification, or distinct semantic phases.",
+			"Classify by requested interaction shape only; do not use conversation solely to verify authorization, scope, or safety.",
 			"If uncertain, choose conversation.",
 			"Do not emit commands, plan steps, or extra fields.",
 		},
@@ -1048,6 +1070,14 @@ func buildModeClassifierPrompt(packet ctxpacket.WorkerPacket, line string, start
 	}
 	data, _ := json.MarshalIndent(payload, "", "  ")
 	return string(data)
+}
+
+func modeClassifierSystemPrompt() string {
+	return strings.Join([]string{
+		"You are BirdHackBot's interaction-mode classifier.",
+		"Return only the requested JSON classification.",
+		"Do not enforce authorization, scope, approval, or execution safety; those are handled by worker and approval layers after classification.",
+	}, "\n")
 }
 
 func buildTaskBoundaryPrompt(packet ctxpacket.WorkerPacket, line string) string {

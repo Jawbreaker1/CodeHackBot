@@ -2,6 +2,7 @@ package workerplan
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -32,12 +33,13 @@ type ValidationReport struct {
 }
 
 type AttemptRecord struct {
-	Prompt      string
-	RawResponse string
-	Parsed      Plan
-	Validation  ValidationReport
-	Accepted    bool
-	FinalError  string
+	Prompt         string
+	RawResponse    string
+	ResponseSource string
+	Parsed         Plan
+	Validation     ValidationReport
+	Accepted       bool
+	FinalError     string
 }
 
 func Parse(s string) (Plan, error) {
@@ -115,7 +117,7 @@ func (r ValidationReport) Error() error {
 	for _, issue := range r.Issues {
 		parts = append(parts, issue.Message)
 	}
-	return fmt.Errorf(strings.Join(parts, "; "))
+	return errors.New(strings.Join(parts, "; "))
 }
 
 func (r *ValidationReport) add(msg string) {

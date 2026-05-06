@@ -101,10 +101,12 @@ func judgeActivePlanStep(ctx context.Context, llm llmclient.Client, inspector In
 	attempt := workerstep.AttemptRecord{
 		Prompt: buildStepEvaluationPrompt(packet, completionClaim),
 	}
-	respText, err := llm.Chat(ctx, []llmclient.Message{
+	completion, err := llm.Complete(ctx, []llmclient.Message{
 		{Role: "system", Content: packet.BehaviorFrame.PromptText()},
 		{Role: "user", Content: attempt.Prompt},
-	})
+	}, llmclient.ChatOptions{Profile: llmclient.ProfileStructuredControl})
+	attempt.ResponseSource = string(completion.Source)
+	respText := completion.Text
 	if err != nil {
 		attempt.FinalError = fmt.Sprintf("step evaluation chat: %v", err)
 		_ = captureStepEvaluationAttemptIfConfigured(inspector, attempt)
@@ -140,6 +142,7 @@ func buildStepEvaluationPrompt(packet ctxpacket.WorkerPacket, completionClaim st
 			"status must be blocked only when the active step cannot continue without replanning, a missing prerequisite, or a clearly blocking failure.",
 			"Otherwise use in_progress.",
 			"Judge from structured evidence already present in the packet; do not invent commands, outputs, or new facts.",
+			"Use active_execution_facts as curated execution truth with provenance; prefer these facts over summaries when they disagree.",
 			"If a completion_claim is present, decide whether the current evidence supports it.",
 		},
 		"context_packet":   packet.RenderWithoutBehaviorFrame(),

@@ -15,10 +15,12 @@ func reviewPlannedAction(ctx context.Context, llm llmclient.Client, inspector In
 	attempt := workeraction.AttemptRecord{
 		Prompt: buildActionReviewPrompt(packet, resp),
 	}
-	respText, err := llm.Chat(ctx, []llmclient.Message{
+	completion, err := llm.Complete(ctx, []llmclient.Message{
 		{Role: "system", Content: packet.BehaviorFrame.PromptText()},
 		{Role: "user", Content: attempt.Prompt},
-	})
+	}, llmclient.ChatOptions{Profile: llmclient.ProfileStructuredControl})
+	attempt.ResponseSource = string(completion.Source)
+	respText := completion.Text
 	if err != nil {
 		attempt.FinalError = fmt.Sprintf("action review chat: %v", err)
 		_ = captureActionReviewAttemptIfConfigured(inspector, attempt)
@@ -56,6 +58,7 @@ func buildActionReviewPrompt(packet ctxpacket.WorkerPacket, resp Response) strin
 			"Prefer revise when the action bundles multiple concerns that should be separated, such as running a command and immediately re-reading a saved file in the same step.",
 			"Prefer revise when the action invents custom output-file scaffolding that is not necessary to advance the active step.",
 			"Prefer revise when the action is materially broader than needed to establish the next evidence for the active step.",
+			"Use active_execution_facts as curated execution truth with provenance; prefer these facts over summaries when they disagree.",
 			"Do not require the absolute smallest action; long-running but well-scoped actions may still be execute.",
 			"Do not suggest exact replacement commands.",
 			"Do not judge based on hidden preferences for a specific tool; judge fit, scope, and whether the action is unnecessarily elaborate for the active step.",
