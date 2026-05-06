@@ -145,7 +145,7 @@ func TestValidatePacketErrorsOnActiveExecutionFactsOverflow(t *testing.T) {
 	}
 	for i := 0; i < executionFactLimit+1; i++ {
 		packet.ActiveExecutionFacts = append(packet.ActiveExecutionFacts, ExecutionFact{
-			Kind:    "artifact_ref",
+			Kind:    ExecutionFactKindArtifactRef,
 			Subject: "artifact",
 			Status:  "available",
 		})
@@ -155,4 +155,62 @@ func TestValidatePacketErrorsOnActiveExecutionFactsOverflow(t *testing.T) {
 	if got := report.HighestSeverity(); got != ValidationError {
 		t.Fatalf("HighestSeverity() = %q, want %q", got, ValidationError)
 	}
+}
+
+func TestValidatePacketAllowsUnknownExecutionFactKindWithProvenance(t *testing.T) {
+	packet := WorkerPacket{
+		BehaviorFrame:     behavior.Frame{SystemPrompt: "prompt", AgentsText: "rules", RuntimeMode: "worker"},
+		SessionFoundation: session.Foundation{Goal: "inspect target", ReportingRequirement: "owasp"},
+		CurrentStep:       Step{Objective: "inspect target"},
+		RunningSummary:    "running",
+		ActiveExecutionFacts: []ExecutionFact{
+			{
+				Kind:         "service_banner",
+				Subject:      "127.0.0.1:22 OpenSSH",
+				Status:       "observed",
+				Source:       "capability.port_inventory",
+				EvidenceRefs: []string{"logs/cmd-1.log"},
+			},
+		},
+	}
+
+	report := ValidatePacket(packet)
+	if got := report.HighestSeverity(); got != ValidationInfo {
+		t.Fatalf("HighestSeverity() = %q, want %q: %#v", got, ValidationInfo, report.Issues)
+	}
+}
+
+func TestValidatePacketErrorsOnMalformedExecutionFact(t *testing.T) {
+	packet := WorkerPacket{
+		BehaviorFrame:     behavior.Frame{SystemPrompt: "prompt", AgentsText: "rules", RuntimeMode: "worker"},
+		SessionFoundation: session.Foundation{Goal: "inspect target", ReportingRequirement: "owasp"},
+		CurrentStep:       Step{Objective: "inspect target"},
+		RunningSummary:    "running",
+		ActiveExecutionFacts: []ExecutionFact{
+			{
+				Kind:    "service_banner",
+				Subject: "127.0.0.1:22 OpenSSH",
+			},
+		},
+	}
+
+	report := ValidatePacket(packet)
+	if got := report.HighestSeverity(); got != ValidationError {
+		t.Fatalf("HighestSeverity() = %q, want %q", got, ValidationError)
+	}
+	if !hasValidationIssue(report, "execution_fact_missing_status") {
+		t.Fatalf("missing execution_fact_missing_status issue: %#v", report.Issues)
+	}
+	if !hasValidationIssue(report, "execution_fact_missing_source") {
+		t.Fatalf("missing execution_fact_missing_source issue: %#v", report.Issues)
+	}
+}
+
+func hasValidationIssue(report ValidationReport, code string) bool {
+	for _, issue := range report.Issues {
+		if issue.Code == code {
+			return true
+		}
+	}
+	return false
 }

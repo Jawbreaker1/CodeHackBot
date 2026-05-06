@@ -4,13 +4,50 @@ import "strings"
 
 const executionFactLimit = 12
 
+const (
+	ExecutionFactKindCurrentTarget         = "current_target"
+	ExecutionFactKindUnresolvedMissingFact = "unresolved_missing_fact"
+	ExecutionFactKindLatestExecutionStatus = "latest_execution_status"
+	ExecutionFactKindExecutionSignal       = "execution_signal"
+	ExecutionFactKindRecoverySemantic      = "recovery_semantic"
+	ExecutionFactKindLogRef                = "log_ref"
+	ExecutionFactKindArtifactRef           = "artifact_ref"
+)
+
+const (
+	RecoverySemanticMissingFileOrPath       = "missing_file_or_path"
+	RecoverySemanticMissingToolOrCommand    = "missing_tool_or_command"
+	RecoverySemanticPermissionDenied        = "permission_denied"
+	RecoverySemanticMissingCredential       = "missing_credential"
+	RecoverySemanticExecutionInterrupted    = "execution_interrupted"
+	RecoverySemanticNoOutputOrNoEffect      = "no_output_or_no_effect"
+	RecoverySemanticNonzeroWithUsefulOutput = "nonzero_with_useful_output"
+	RecoverySemanticGenericFailure          = "generic_execution_failure"
+)
+
+const (
+	RecoveryStatusEstablishMissingPrerequisite       = "establish_missing_prerequisite"
+	RecoveryStatusEstablishOrChooseAvailableTool     = "establish_or_choose_available_tool"
+	RecoveryStatusChangePermissionScopeOrTarget      = "change_permission_scope_or_target"
+	RecoveryStatusRetryWithTighterBoundsOrRequestRun = "retry_with_tighter_bounds_or_request_deeper_run"
+	RecoveryStatusChooseEvidenceProducingAction      = "choose_evidence_producing_action"
+	RecoveryStatusInterpretEvidenceOrReviseAction    = "interpret_evidence_or_revise_action"
+	RecoveryStatusReviseActionOrEstablishPrereq      = "revise_action_or_establish_prerequisite"
+)
+
+const (
+	RecoverySourceLatestResult             = "latest_execution_result"
+	RecoverySourceLatestResultSignals      = "latest_execution_result.signals"
+	RecoverySourceLatestResultFailureClass = "latest_execution_result.failure_class"
+)
+
 // UpdateExecutionFacts returns a small active slice of facts derived from
 // structured runtime truth. It intentionally does not parse raw command output.
 func UpdateExecutionFacts(current []ExecutionFact, runtime TaskRuntime, latest ExecutionResult) []ExecutionFact {
 	fresh := make([]ExecutionFact, 0, 8)
 	if target := strings.TrimSpace(runtime.CurrentTarget); target != "" {
 		fresh = append(fresh, ExecutionFact{
-			Kind:    "current_target",
+			Kind:    ExecutionFactKindCurrentTarget,
 			Subject: target,
 			Status:  "selected",
 			Source:  "task_runtime.current_target",
@@ -18,7 +55,7 @@ func UpdateExecutionFacts(current []ExecutionFact, runtime TaskRuntime, latest E
 	}
 	if missing := strings.TrimSpace(runtime.MissingFact); missing != "" && missing != "(none)" {
 		fresh = append(fresh, ExecutionFact{
-			Kind:         "unresolved_missing_fact",
+			Kind:         ExecutionFactKindUnresolvedMissingFact,
 			Subject:      missing,
 			Status:       "unresolved",
 			Source:       "task_runtime.missing_fact",
@@ -27,16 +64,19 @@ func UpdateExecutionFacts(current []ExecutionFact, runtime TaskRuntime, latest E
 	}
 	if strings.TrimSpace(latest.Action) != "" {
 		fresh = append(fresh, ExecutionFact{
-			Kind:         "latest_execution_status",
+			Kind:         ExecutionFactKindLatestExecutionStatus,
 			Subject:      latest.Action,
 			Status:       executionStatus(latest),
 			Source:       "latest_execution_result",
 			EvidenceRefs: cloneStrings(latest.LogRefs),
 		})
+		if fact, ok := recoverySemanticFact(latest); ok {
+			fresh = append(fresh, fact)
+		}
 		for _, signal := range latest.Signals {
 			if signal = strings.TrimSpace(signal); signal != "" {
 				fresh = append(fresh, ExecutionFact{
-					Kind:         "execution_signal",
+					Kind:         ExecutionFactKindExecutionSignal,
 					Subject:      signal,
 					Status:       "observed",
 					Source:       "latest_execution_result.signals",
@@ -47,7 +87,7 @@ func UpdateExecutionFacts(current []ExecutionFact, runtime TaskRuntime, latest E
 		for _, ref := range latest.LogRefs {
 			if ref = strings.TrimSpace(ref); ref != "" {
 				fresh = append(fresh, ExecutionFact{
-					Kind:         "log_ref",
+					Kind:         ExecutionFactKindLogRef,
 					Subject:      ref,
 					Status:       "recorded",
 					Source:       "latest_execution_result.log_refs",
@@ -58,7 +98,7 @@ func UpdateExecutionFacts(current []ExecutionFact, runtime TaskRuntime, latest E
 		for _, ref := range latest.ArtifactRefs {
 			if ref = strings.TrimSpace(ref); ref != "" {
 				fresh = append(fresh, ExecutionFact{
-					Kind:         "artifact_ref",
+					Kind:         ExecutionFactKindArtifactRef,
 					Subject:      ref,
 					Status:       "available",
 					Source:       "latest_execution_result.artifact_refs",
@@ -93,11 +133,79 @@ func executionStatus(result ExecutionResult) string {
 
 func isVolatileExecutionFact(fact ExecutionFact) bool {
 	switch strings.TrimSpace(fact.Kind) {
-	case "current_target", "unresolved_missing_fact", "latest_execution_status", "execution_signal":
+	case ExecutionFactKindCurrentTarget, ExecutionFactKindUnresolvedMissingFact, ExecutionFactKindLatestExecutionStatus, ExecutionFactKindExecutionSignal, ExecutionFactKindRecoverySemantic:
 		return true
 	default:
 		return false
 	}
+}
+
+func recoverySemanticFact(result ExecutionResult) (ExecutionFact, bool) {
+	subject, status, source := recoverySemantic(result)
+	if subject == "" {
+		return ExecutionFact{}, false
+	}
+	return ExecutionFact{
+		Kind:         ExecutionFactKindRecoverySemantic,
+		Subject:      subject,
+		Status:       status,
+		Source:       source,
+		EvidenceRefs: cloneStrings(result.LogRefs),
+	}, true
+}
+
+func recoverySemantic(result ExecutionResult) (subject, status, source string) {
+	if strings.TrimSpace(result.Action) == "" {
+		return "", "", ""
+	}
+	switch {
+	case hasSignal(result.Signals, "missing_path"):
+		return RecoverySemanticMissingFileOrPath, RecoveryStatusEstablishMissingPrerequisite, RecoverySourceLatestResultSignals
+	case hasAnySignal(result.Signals, "not_executable", "command_not_found"):
+		return RecoverySemanticMissingToolOrCommand, RecoveryStatusEstablishOrChooseAvailableTool, RecoverySourceLatestResultSignals
+	case hasSignal(result.Signals, "permission_denied"):
+		return RecoverySemanticPermissionDenied, RecoveryStatusChangePermissionScopeOrTarget, RecoverySourceLatestResultSignals
+	case hasSignal(result.Signals, "incorrect_password"):
+		return RecoverySemanticMissingCredential, RecoveryStatusEstablishMissingPrerequisite, RecoverySourceLatestResultSignals
+	case IsInterruptedResult(result):
+		return RecoverySemanticExecutionInterrupted, RecoveryStatusRetryWithTighterBoundsOrRequestRun, recoverySource(result)
+	case hasAnySignal(result.Signals, "empty_output", "no_effect"):
+		return RecoverySemanticNoOutputOrNoEffect, RecoveryStatusChooseEvidenceProducingAction, RecoverySourceLatestResultSignals
+	case nonzeroExit(result.ExitStatus) && hasUsefulExecutionOutput(result):
+		return RecoverySemanticNonzeroWithUsefulOutput, RecoveryStatusInterpretEvidenceOrReviseAction, RecoverySourceLatestResult
+	case nonzeroExit(result.ExitStatus) || strings.TrimSpace(result.FailureClass) != "" || strings.TrimSpace(result.Assessment) == "failed":
+		return RecoverySemanticGenericFailure, RecoveryStatusReviseActionOrEstablishPrereq, recoverySource(result)
+	default:
+		return "", "", ""
+	}
+}
+
+func recoverySource(result ExecutionResult) string {
+	if strings.TrimSpace(result.FailureClass) != "" {
+		return RecoverySourceLatestResultFailureClass
+	}
+	if len(result.Signals) > 0 {
+		return RecoverySourceLatestResultSignals
+	}
+	return RecoverySourceLatestResult
+}
+
+func hasAnySignal(signals []string, wants ...string) bool {
+	for _, want := range wants {
+		if hasSignal(signals, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasUsefulExecutionOutput(result ExecutionResult) bool {
+	return meaningfulExecutionText(result.OutputEvidence) || meaningfulExecutionText(result.OutputSummary)
+}
+
+func meaningfulExecutionText(text string) bool {
+	text = strings.TrimSpace(text)
+	return text != "" && text != "(none)"
 }
 
 func mergeExecutionFacts(facts []ExecutionFact) []ExecutionFact {

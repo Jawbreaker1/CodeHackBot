@@ -113,6 +113,24 @@ func TestUpdateTaskRuntimeMissingPathDoesNotPromoteUncorroboratedMalformedOutput
 	}
 }
 
+func TestUpdateTaskRuntimeMissingPathDoesNotPromoteSessionLogAsMissingArtifact(t *testing.T) {
+	got := UpdateTaskRuntime(
+		TaskRuntime{State: "running"},
+		"Inspect missing local file",
+		ExecutionResult{
+			Action:        "ls -la /tmp/definitely-missing-birdhackbot-file",
+			ExitStatus:    "2",
+			OutputSummary: "stderr: ls: cannot access '/tmp/definitely-missing-birdhackbot-file': No such file or directory",
+			LogRefs:       []string{"/tmp/session/logs/cmd-20260506-214707.156509010.log"},
+			Assessment:    "failed",
+			Signals:       []string{"nonzero_exit", "missing_path"},
+		},
+	)
+	if got.MissingFact != "correct path or artifact needed" {
+		t.Fatalf("MissingFact = %q", got.MissingFact)
+	}
+}
+
 func TestInitialTaskRuntimeIgnoresSessionRuntimeArtifacts(t *testing.T) {
 	got := InitialTaskRuntime("Inspect /tmp/session/logs/cmd-20260321.log and /tmp/session/context/step-001-pre-llm.txt before touching /tmp/session/session.json")
 	if got.CurrentTarget != "" {

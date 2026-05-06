@@ -485,6 +485,15 @@ This is intentionally structured and generous. It should not be squeezed into a 
 
 `active_execution_facts` is an explicit packet section. It is a small curated view derived from structured runtime truth, not a second memory system and not a recipe layer.
 
+Each fact has:
+- `kind`: extensible classification, such as current target, artifact reference, or execution signal
+- `subject`: the concrete target, artifact, signal, or assertion
+- `status`: current state of that subject
+- `source`: structured provenance for where the fact came from
+- `evidence_refs`: optional local logs/artifacts supporting the fact
+
+Fact kinds are intentionally not a closed taxonomy. First-party producers should use named, documented kinds when they exist, but the system must not drop or reject a fact solely because its kind is new. Trust comes from structured provenance and evidence references, not from pre-registration of the kind.
+
 Allowed sources:
 - task runtime target and missing fact
 - latest execution status, assessment, failure class, and signals
@@ -494,6 +503,23 @@ Forbidden sources:
 - raw stdout/stderr scraping to invent facts
 - model guesses
 - task-specific command recipes
+
+Validation requirements:
+- missing `kind`, `subject`, `status`, or `source` is an invalid fact
+- unknown `kind` is not invalid by itself
+- validation must preserve generic extensibility and must not become a task-specific guardrail
+
+`recovery_semantic` is a first-party fact kind used to tell the closed loop what kind of generic recovery is needed after an execution result. It is derived from structured result state, failure class, and result signals. It must not be inferred by scraping raw output for task-specific phrases.
+
+Examples:
+- missing file/path -> establish the missing prerequisite before repeating the action
+- missing tool -> choose an available tool or establish/install the prerequisite if approved
+- permission denied -> change scope, permissions, or target rather than repeating unchanged
+- timeout/interruption -> retry with a tighter bounded action or ask for approval to deepen
+- nonzero with useful output -> interpret retained evidence before deciding whether to revise
+- no output/no effect -> choose a different evidence-producing action
+
+Recovery semantics are advisory execution truth. They do not synthesize replacement commands and do not override the latest execution result.
 
 ### 6.3 Non-Droppable Core
 

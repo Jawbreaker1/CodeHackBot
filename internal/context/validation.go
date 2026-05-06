@@ -78,6 +78,7 @@ func ValidatePacket(packet WorkerPacket) ValidationReport {
 	if len(packet.ActiveExecutionFacts) > executionFactLimit {
 		report.add(ValidationError, "active_execution_facts_overflow", fmt.Sprintf("active_execution_facts has %d facts; limit is %d", len(packet.ActiveExecutionFacts), executionFactLimit))
 	}
+	validateExecutionFacts(&report, packet.ActiveExecutionFacts)
 
 	return report
 }
@@ -144,4 +145,22 @@ func hasPartialLatestExecution(result ExecutionResult) bool {
 		return exit != "" || assessment != "" || output != "" || hasRefs || strings.TrimSpace(result.FailureClass) != "" || len(result.Signals) > 0
 	}
 	return exit == ""
+}
+
+func validateExecutionFacts(report *ValidationReport, facts []ExecutionFact) {
+	for i, fact := range facts {
+		location := fmt.Sprintf("active_execution_facts[%d]", i)
+		if strings.TrimSpace(fact.Kind) == "" {
+			report.add(ValidationError, "execution_fact_missing_kind", location+" missing kind")
+		}
+		if strings.TrimSpace(fact.Subject) == "" {
+			report.add(ValidationError, "execution_fact_missing_subject", location+" missing subject")
+		}
+		if strings.TrimSpace(fact.Status) == "" {
+			report.add(ValidationError, "execution_fact_missing_status", location+" missing status")
+		}
+		if strings.TrimSpace(fact.Source) == "" {
+			report.add(ValidationError, "execution_fact_missing_source", location+" missing source")
+		}
+	}
 }

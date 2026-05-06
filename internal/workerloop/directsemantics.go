@@ -152,6 +152,7 @@ func buildDirectEvaluationPrompt(packet ctxpacket.WorkerPacket) string {
 			"Otherwise use in_progress.",
 			"Judge from structured evidence already present in the packet; do not invent commands, outputs, or new facts.",
 			"Use active_execution_facts as curated execution truth with provenance; prefer these facts over summaries when they disagree.",
+			"If active_execution_facts contains recovery_semantic, do not mark satisfied unless the direct request is already answered by stronger evidence.",
 			"Be strict about direct_execution: if one simple successful action already answered the request, return satisfied.",
 		},
 		"context_packet": packet.RenderWithoutBehaviorFrame(),

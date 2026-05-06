@@ -59,6 +59,7 @@ func buildActionReviewPrompt(packet ctxpacket.WorkerPacket, resp Response) strin
 			"Prefer revise when the action invents custom output-file scaffolding that is not necessary to advance the active step.",
 			"Prefer revise when the action is materially broader than needed to establish the next evidence for the active step.",
 			"Use active_execution_facts as curated execution truth with provenance; prefer these facts over summaries when they disagree.",
+			"If active_execution_facts contains recovery_semantic, prefer revise when the proposed action repeats the failed pattern without addressing that recovery need.",
 			"Do not require the absolute smallest action; long-running but well-scoped actions may still be execute.",
 			"Do not suggest exact replacement commands.",
 			"Do not judge based on hidden preferences for a specific tool; judge fit, scope, and whether the action is unnecessarily elaborate for the active step.",

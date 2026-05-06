@@ -74,6 +74,7 @@ func TestBuildUserPromptIncludesCompletionGuidance(t *testing.T) {
 		"Use task_runtime.current_target as the concrete thing currently being worked.",
 		"Use task_runtime.missing_fact as the primary description of what still needs to be learned or verified.",
 		"Use active_execution_facts as curated execution truth with provenance; prefer these facts over summaries when they disagree.",
+		"If active_execution_facts contains recovery_semantic, address that recovery need before repeating a failed action.",
 		"If task_runtime.missing_fact is not '(none)', prefer an action that establishes that missing fact for the current target.",
 		"Before choosing action, check whether the current goal is already satisfied by the latest execution result or relevant recent results.",
 		"If the goal is already satisfied with evidence in the context packet, choose step_complete.",
@@ -331,10 +332,10 @@ func TestLoopDirectExecutionCompletesFromStructuredSuccessWithoutPostExecLLM(t *
 	if outcome.Packet.TaskRuntime.State != "done" {
 		t.Fatalf("task state = %q, want done", outcome.Packet.TaskRuntime.State)
 	}
-	if !hasLoopExecutionFact(outcome.Packet.ActiveExecutionFacts, "latest_execution_status", "pwd") {
+	if !hasLoopExecutionFact(outcome.Packet.ActiveExecutionFacts, ctxpacket.ExecutionFactKindLatestExecutionStatus, "pwd") {
 		t.Fatalf("ActiveExecutionFacts missing latest_execution_status: %#v", outcome.Packet.ActiveExecutionFacts)
 	}
-	if !hasLoopExecutionFactKind(outcome.Packet.ActiveExecutionFacts, "log_ref") {
+	if !hasLoopExecutionFactKind(outcome.Packet.ActiveExecutionFacts, ctxpacket.ExecutionFactKindLogRef) {
 		t.Fatalf("ActiveExecutionFacts missing log_ref: %#v", outcome.Packet.ActiveExecutionFacts)
 	}
 	if calls != 1 {

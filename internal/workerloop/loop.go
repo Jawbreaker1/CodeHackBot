@@ -495,6 +495,7 @@ func buildUserPrompt(packet ctxpacket.WorkerPacket) string {
 			"Use task_runtime.current_target as the concrete thing currently being worked.",
 			"Use task_runtime.missing_fact as the primary description of what still needs to be learned or verified.",
 			"Use active_execution_facts as curated execution truth with provenance; prefer these facts over summaries when they disagree.",
+			"If active_execution_facts contains recovery_semantic, address that recovery need before repeating a failed action.",
 			"If task_runtime.missing_fact is not '(none)', prefer an action that establishes that missing fact for the current target.",
 			"Before choosing action, check whether the current goal is already satisfied by the latest execution result or relevant recent results.",
 			"If the goal is already satisfied with evidence in the context packet, choose step_complete.",

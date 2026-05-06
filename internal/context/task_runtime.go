@@ -166,6 +166,9 @@ func inferMissingArtifactIdentity(latest ExecutionResult, currentTarget string) 
 		if candidate == "" {
 			continue
 		}
+		if isSessionRuntimeArtifactPath(candidate) {
+			continue
+		}
 		if strings.TrimSpace(currentTarget) != "" && sameArtifact(candidate, currentTarget) {
 			continue
 		}
@@ -176,6 +179,9 @@ func inferMissingArtifactIdentity(latest ExecutionResult, currentTarget string) 
 	for _, candidate := range append(extractPathLikeCandidates(actionText), extractPathLikeCandidates(strings.Join(latest.LogRefs, " "))...) {
 		candidate = strings.TrimSpace(candidate)
 		if candidate == "" {
+			continue
+		}
+		if isSessionRuntimeArtifactPath(candidate) {
 			continue
 		}
 		if strings.TrimSpace(currentTarget) != "" && sameArtifact(candidate, currentTarget) {

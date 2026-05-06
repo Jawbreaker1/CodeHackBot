@@ -143,6 +143,7 @@ func buildStepEvaluationPrompt(packet ctxpacket.WorkerPacket, completionClaim st
 			"Otherwise use in_progress.",
 			"Judge from structured evidence already present in the packet; do not invent commands, outputs, or new facts.",
 			"Use active_execution_facts as curated execution truth with provenance; prefer these facts over summaries when they disagree.",
+			"If active_execution_facts contains recovery_semantic, treat the step as in_progress unless the recovery need has been resolved by evidence.",
 			"If a completion_claim is present, decide whether the current evidence supports it.",
 		},
 		"context_packet":   packet.RenderWithoutBehaviorFrame(),

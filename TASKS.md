@@ -102,6 +102,14 @@ Planned tasks:
   - derive only from structured runtime truth such as task target, latest execution status, signals, log refs, and artifact refs
   - render facts as a small context-packet section with provenance
   - do not infer new facts from raw command output or task-specific recipes
+- [x] Harden active execution fact schema without closing the fact taxonomy:
+  - require kind, subject, status, and source/provenance on every fact
+  - allow unknown fact kinds when provenance is structured and explicit
+  - do not drop or reject facts solely because their kind is not pre-registered
+- [x] Add generic recovery semantics:
+  - derive recovery semantics from structured result state, failure class, and existing signals
+  - surface recovery semantics as provenance-backed execution facts
+  - do not add task-specific command repair, output scraping, or scenario-specific guardrails
 - [ ] Only after validation is useful and inspectable, design any separate packet repair/rebuild step
 - [x] Add interactive shell inspection commands for live multi-turn context testing:
   - `/stats`

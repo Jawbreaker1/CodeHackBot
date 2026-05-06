@@ -51,7 +51,7 @@ func TestWorkerPacketRenderIncludesAllCoreSections(t *testing.T) {
 		},
 		ActiveExecutionFacts: []ExecutionFact{
 			{
-				Kind:         "artifact_ref",
+				Kind:         ExecutionFactKindArtifactRef,
 				Subject:      "artifacts/zipinfo.txt",
 				Status:       "available",
 				Source:       "latest_execution_result.artifact_refs",
@@ -135,7 +135,7 @@ func TestNewInitialWorkerPacketSetsSharedExecutionDefaults(t *testing.T) {
 	if !strings.Contains(strings.Join(packet.CapabilityInputs, "\n"), "Metasploit Framework") {
 		t.Fatalf("CapabilityInputs missing tooling context: %#v", packet.CapabilityInputs)
 	}
-	if !hasExecutionFact(packet.ActiveExecutionFacts, "current_target", "secret.zip") {
+	if !hasExecutionFact(packet.ActiveExecutionFacts, ExecutionFactKindCurrentTarget, "secret.zip") {
 		t.Fatalf("ActiveExecutionFacts missing current_target: %#v", packet.ActiveExecutionFacts)
 	}
 }
