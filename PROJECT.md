@@ -42,6 +42,7 @@ The `legacy/` tree is also non-authoritative: it is preserved as historical refe
 
 ## Test
 
+- `./scripts/ci.sh` runs the deterministic local/GitHub CI checks.
 - Rebuild-root tests now exist for the implemented core packages.
 - Real LLM validation remains required for major behavior slices.
 - Repeated live validations can be run with `scripts/repeat_worker_run.sh`.
