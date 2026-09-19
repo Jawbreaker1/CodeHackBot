@@ -50,6 +50,9 @@ The `legacy/` tree is also non-authoritative: it is preserved as historical refe
 ## Working Rules
 
 - Prefer deletion over patching on this branch.
+- Keep changes proportional to demonstrated problems and explicit product requirements. Use the smallest coherent implementation; avoid speculative abstractions, fallback chains, and scenario-specific edge-case handling.
+- Give each implementation slice a concrete done condition. Once it works and its required validation passes, stop expanding it to cover hypothetical cases. Essential execution, scope, and evidence guarantees remain part of the core requirements.
+- When a solution grows, first simplify it or narrow the slice. Record deferred concerns briefly instead of implementing them preemptively; revisit them when evidence or an agreed requirement justifies the work.
 - Do not implement new behavior that conflicts with `docs/architecture.md`.
 - Validate major implementation slices with real LLM runs.
 - Keep files modular and refactor early when ownership becomes unclear.
@@ -59,7 +62,11 @@ The `legacy/` tree is also non-authoritative: it is preserved as historical refe
 
 These are stable project truths and must be re-anchored before making non-trivial behavior changes.
 
-- The interactive CLI worker is the primary product surface.
+- The multi-agent orchestrator is the primary product direction and next implementation priority (user decision, 2026-09-19).
+- The existing worker loop is the shared execution engine; its standalone CLI remains a development, diagnosis, and single-task surface.
+- Orchestration owns the assessment, bounded delegation, shared evidence, validation, and final report. Worker reasoning must not be duplicated in the orchestrator.
+- Source-assisted investigation connects observed software to attributable source revisions and target-validated findings; source suspicions alone do not establish target exploitability.
+- Subscription-backed model access through a local REST bridge is a product requirement. Provider choice must preserve execution ownership, expose limits, and never silently switch to paid API billing.
 - Direct single-command execution paths are development/debugging support only and must not become the main behavioral truth of the system.
 - The runtime should guide and enforce hard boundaries, not replace LLM reasoning with hardcoded workflow logic.
 - Do not add scenario-specific guardrails, tool-specific steering, hidden workflow phases, or fallback logic that acts like a second planner.

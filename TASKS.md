@@ -9,6 +9,12 @@ Planning rules:
 - `DISCOVERIES.md` records lessons, risks, and future-phase notes; it is not a task list.
 - If `TASKS.md` and `ROADMAP.md` differ, `TASKS.md` is authoritative for execution.
 
+## Current Direction — 2026-09-19
+
+Phase 4 is the active implementation priority: orchestrator-led assessments and subscription access. Phase 5 is the next product slice: source-assisted assessment. The standalone worker remains the shared execution foundation.
+
+Phases 0-3 below preserve rebuild history and unfinished worker debt. Their unchecked items are not blanket prerequisites for orchestration; pull forward only the work required by Phase 4 contracts and acceptance. No new runtime capability is marked complete by this planning update.
+
 ## Phase 0 — Reset
 - [x] Aggressively archive historical docs into `docs/archive/`
 - [x] Reduce active docs to the minimal set
@@ -172,7 +178,7 @@ Planned tasks:
   - `satisfied`
   - `blocked`
 - [x] Document generic worker step-advance and step-blockage rules
-- [ ] Only after worker planning boundaries are stable, design orchestrator planning in detail
+- [ ] Carry worker planning boundary issues into the Phase 4 orchestrator contract design
 - [x] Implement generic worker step satisfaction/blockage evaluation
 - [x] Implement model-assisted generic step satisfaction evaluation:
   - evaluate active step from structured packet evidence
@@ -253,6 +259,72 @@ Planned tasks:
   - direct evaluation
   - step evaluation
   - keep execution timeout policy separate
+
+## Phase 4 — Orchestrator And Subscription Access (Active)
+
+Goal:
+- make the orchestrator the primary assessment experience while retaining the worker as the shared execution engine
+- make subscription-backed OpenAI access available through a local REST bridge
+
+Implementation order:
+
+1. Establish trustworthy evaluation capture and resolve the subscription backend boundary.
+2. Implement run/task/evidence contracts and the first complete orchestrated assessment.
+3. Add bounded concurrency, validation, reporting, and operator control to that same path.
+
+Tasks:
+- [ ] Repair repeated-run capture to use explicit per-run session directories and the interactive/headless product path
+- [ ] Define and record a Codex comparison protocol with matched model access, fixtures, tools, source access, credentials, and aggregate budgets
+- [ ] Prototype subscription access without target execution:
+  - compare documented Codex app-server embedding with an OpenCode-style OAuth inference adapter
+  - verify account authentication, available models, streaming, structured results, cancellation, and limit/error handling
+  - prove inference-only requests do not independently execute tools; an agent backend alone does not fulfill the LLM bridge requirement
+  - select the backend from evidence and record compatibility/maintenance constraints
+- [ ] Implement the local REST bridge around the selected adapter:
+  - versioned requests, streaming events, cancellation, capability/model discovery, auth status, and limit visibility
+  - local binding, caller authentication, isolated worker contexts, and protected credentials
+  - no implicit switch from subscription access to paid API billing
+  - retain local-model and explicitly selected API backends
+- [ ] Define small run/task/result contracts with scope, dependencies, budgets, worker role, artifact ownership, and validation state
+- [ ] Adapt the existing worker to those contracts; repair execution/completion/evidence gaps required by orchestration
+- [ ] Implement orchestrator goal intake, semantic planning, task dispatch, durable state, and event observation
+- [ ] Implement configurable bounded concurrency with separate task workspaces, shared read-only references, and exclusion for conflicting target mutations
+- [ ] Enforce explicit target boundaries and aggregate run budgets at execution boundaries
+- [ ] Implement a shared evidence ledger with observations, hypotheses, claims, and validated outcomes
+- [ ] Implement independent claim validation before promoting findings or access claims
+- [ ] Produce one OWASP-style assessment report with evidence, reproduction, impact, remediation, and coverage gaps, including interrupted/inconclusive runs
+- [ ] Make the orchestrator CLI show worker activity, dependencies, approvals, blockers, model/backend usage, and report status
+- [ ] Implement stop broadcast, child-process cleanup, and state-based resume without duplicate completed actions
+- [ ] Validate the new path against the Phase 4 gates in `docs/runbooks/acceptance-gates.md`
+
+Exit criteria:
+- the primary orchestrator path completes a bounded lab assessment with a reviewable report
+- independent tasks run concurrently and dependent/conflicting work is ordered correctly
+- important claims require supporting validation; stop/resume and evidence attribution remain coherent
+- subscription login and REST access work on the selected supported backend, with honest limits and no surprise API billing
+- repeated live evidence and a matched Codex baseline are recorded; no superiority claim is inferred from agent count
+
+## Phase 5 — Source-Assisted Assessment (Next)
+
+Goal:
+- connect deployed software identification to matching source, candidate weaknesses, and validated outcomes on the authorized target
+
+Tasks:
+- [ ] Record software identity, version/build/configuration evidence, and uncertainty
+- [ ] Discover authoritative public or operator-authorized source and acquire a pinned revision with origin and license metadata
+- [ ] Track source-to-deployment matching explicitly, including mismatched or unknown versions
+- [ ] Delegate bounded source-analysis questions through the same task/worker contracts
+- [ ] Emit hypotheses with code references, preconditions, target linkage, and missing validation evidence
+- [ ] Support isolated local reproduction and approved target validation; distinguish their conclusions
+- [ ] Handle unavailable source and false candidates without blocking unrelated investigation or inventing findings
+- [ ] Test untrusted repository instructions and deceptive target output as evidence-handling cases
+- [ ] Compare repeated runs against the frozen Codex baseline and record where orchestration/source correlation helps or hurts
+
+Exit criteria:
+- a clean vulnerable fixture produces a reproducible, source-linked, target-validated finding
+- fixed and mismatched fixtures do not produce unsupported validated findings
+- missing source degrades honestly to other assessment paths
+- a preregistered comparison shows a repeatable improvement in assessment outcomes or operator effort within matched budgets, without increased unsupported claims
 
 ## Working Rules
 - [ ] No patch-first behavior on this branch

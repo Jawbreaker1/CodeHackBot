@@ -8,7 +8,26 @@ Rules:
 - It is not a task list.
 - It does not override `TASKS.md` or `ROADMAP.md`.
 
-## Current Notes
+## Product Direction — 2026-09-19
+
+- The user explicitly changed the primary product from a standalone worker CLI to a multi-agent orchestrator. The worker remains its shared execution engine. This supersedes earlier worker-first sequencing without restoring the legacy implementation.
+- Source-assisted investigation is a planned differentiator: identify deployed software, acquire attributable matching source, investigate bounded questions, and validate candidate weaknesses against the authorized target. Source suspicions and local reproduction do not automatically establish target exploitability.
+- Subscription-backed OpenAI access through a local REST bridge is a requirement. Current [OpenAI authentication documentation](https://learn.chatgpt.com/docs/auth) separates subscription sign-in from API-key billing. [Codex app-server](https://learn.chatgpt.com/docs/app-server) is an embedding route; [OpenCode](https://opencode.ai/docs/providers#openai) also documents subscription login.
+- An app-server agent adapter and a raw inference provider have different execution ownership. The backend spike must settle this explicitly before coupling subscription access to the worker loop.
+- Parallel workers share provider limits and run budgets. They require isolated mutable workspaces, evidence provenance, conflict control, and reliable stop behavior; worker count alone does not establish value.
+- Evaluation needs a matched Codex baseline with its normal capabilities available. Score confirmed findings, unsupported claims, interventions, time, and aggregate usage against independent fixture truth.
+- Static review found that `scripts/repeat_worker_run.sh` still copies from `sessions/rebuild-dev` although the CLI now allocates individual session directories. Repair capture before treating new repeated-run summaries as acceptance evidence.
+- Existing ZIP/router gates remain. New orchestrator, subscription, source-correlation, and comparative gates are added to test the adopted product direction; they have not yet been run or passed. Fixed/mismatched fixtures test whether apparent gains are unsupported claims.
+- This update changes architecture and planning only. The orchestrator remains a placeholder and no subscription bridge or source-analysis runtime has been implemented yet.
+
+## Code Assessment — 2026-09-19
+
+- [The code assessment](docs/code-assessment-2026-09-19.md) recommends retaining this repository and Go while replacing the execution and evidence/state core in bounded, runnable slices. This is a recommendation, not an implemented change to the architecture.
+- The current race-enabled suite passes (72.0% aggregate statement coverage), but eight isolated diagnostic probes reproduce contract failures involving literal arguments, quoted commands, descendant cancellation, unrelated evidence, evaluator failure, stale failures, scope inference, and missing behavior validation.
+- Preserve the worker as the shared-engine concept; its current internal contracts need not be preserved. The orchestrator should be built on the corrected contracts rather than wrapped around the present loop unchanged.
+- Astra is the development/review model. The user clarified that the intended OpenAI pentest runtime is Daybreak on GPT-5.6 Sol, alongside local models. This records product intent, not a verified provider integration.
+
+## Worker Foundation Notes (Historical)
 
 - Keep the rebuild architecture small and explicit.
 - Favor generous, structured active context over aggressive compaction.

@@ -1,8 +1,10 @@
 # Architecture
 
-Status: v1 baseline  
-Decided at: 2026-03-14
-Last updated: 2026-03-14
+Status: v1 core with orchestrator-first product direction
+
+Baseline decided at: 2026-03-14
+
+Last updated: 2026-09-19
 
 ## 1. Purpose
 
@@ -15,6 +17,21 @@ The system must:
 - generate human-readable, reproducible reports
 
 The system must not depend on hardcoded pentest recipes to function.
+
+### 1.1 Product Direction — 2026-09-19
+
+The primary product is a multi-agent security-assessment orchestrator. The worker loop remains its shared execution engine; the standalone worker CLI supports development, diagnosis, and bounded single tasks. Worker polish is no longer a prerequisite for beginning orchestration.
+
+The next implementation must combine:
+
+- run-level planning, bounded parallel investigation, explicit validation, and one final report
+- source-assisted investigation linking observed software to matching source and then to target evidence
+- subscription-backed OpenAI access through a local REST bridge, with local-model and paid-API alternatives
+- evaluations demonstrating an advantage over Codex on matched assessment tasks
+
+These are adopted product requirements, not claims about implemented behavior. The orchestrator currently remains a placeholder. Earlier references to the initial rebuild describe the worker foundation; current sequencing is in `TASKS.md`.
+
+The value proposition is better assessment outcomes through coordinated investigation, source-to-target correlation, reproducible validation, and evidence continuity. Agent count alone is not a success metric.
 
 ## 2. Design Rules
 
@@ -54,6 +71,7 @@ Examples:
 - CVE candidate lookup
 - vulnerability validation helpers
 - product fingerprinting
+- source repository discovery, revision matching, and code investigation
 - report enrichment
 - tool discovery/install guidance
 
@@ -1303,6 +1321,8 @@ Forbidden:
 
 The orchestrator should remain simple and only coordinate.
 
+It is the primary operator surface. Its LLM owns run-level decisions; workers own local investigation and exact action selection. Independent branches may run concurrently, while dependent or conflicting work waits. A small task can still use one worker under the same orchestrator.
+
 ### 8.1 Orchestrator Flow
 
 1. Receive run goal.
@@ -1366,18 +1386,13 @@ These are not the same thing.
 
 ### 8.4 Worker Roles
 
-The architecture should allow worker roles, but roles are not part of the initial rebuild iteration.
-
-Likely future roles:
-- operator / explorer
-- validator
-- reporter
+Worker roles are part of the orchestrator implementation direction. Initial roles cover exploration, source investigation, validation, and reporting. Roles describe bounded responsibilities rather than separate agent architectures. The orchestrator instantiates them when the task benefits.
 
 Role rules:
 - roles should reuse the same core worker loop
 - roles should differ mainly through behavior prompt and behavior parameters
 - roles must not create separate execution architectures
-- roles should be introduced only when the minimal core loop is stable
+- roles share task, execution, cancellation, and evidence contracts
 
 ### 8.5 Orchestrator-To-Worker Contract
 
@@ -1394,7 +1409,7 @@ The initial `task_contract` should contain:
 - `budget`
 - `approval_state`
 - `context_attachments`
-- optional `role` field reserved for later use
+- optional `role` indicating the bounded investigation responsibility
 
 This is the only work-start input the worker should need from the orchestrator.
 
@@ -1435,6 +1450,16 @@ If the orchestrator wants to change direction, it should do so by task control:
 - create next-phase task
 
 It should not nudge the current worker with ad hoc instructions mid-task.
+
+### 8.8 Bounded Parallel Execution
+
+The scheduler owns dependencies, a configurable concurrency limit, and a shared run budget. Worker contexts contain their subgoal, relevant evidence, and parent-goal context without inheriting responsibility for the whole run.
+
+Each task has its own workspace and artifact namespace. Source snapshots may be shared read-only; mutable work and validation environments must be isolated. Tasks identify the target resources they may change so conflicting actions cannot run concurrently.
+
+All workers consume the same run-level model quota and target-load budget. Authentication failures and exhausted provider limits must surface to the operator without retry storms or automatic paid-provider fallback. Stop broadcasts to workers and terminates their child processes; resume restores durable state without duplicating completed actions.
+
+The orchestrator promotes claims only through evidence-backed validation. A fresh validator checks the proof and target applicability; agreement between models is not itself proof. A shared evidence ledger carries observations, hypotheses, source references, validation outcomes, and provenance, not an undifferentiated shared conversation. Candidate records remain explicitly untrusted and separate from the validated shared facts described in section 6.8.
 
 ## 9. Logging and Evidence
 
@@ -1573,7 +1598,7 @@ Interactive input behavior should support:
 
 ### 10.2 Interactive Worker Terminal UI
 
-The interactive worker terminal UI is a primary product surface.
+The interactive worker terminal UI is a supporting development and single-task surface. It exposes the same worker state that the primary orchestrator UI supervises.
 
 For the worker-facing interactive UI, the operator should always be able to see:
 - the live execution and conversation stream
@@ -1734,7 +1759,7 @@ Examples of bad worker-plan steps:
 
 ### 10.3 Interactive Orchestrator UI
 
-The interactive orchestrator UI is also a primary product surface.
+The interactive orchestrator UI is the primary product surface.
 
 It should show:
 - run goal
@@ -1837,7 +1862,7 @@ Initial architecture requirement:
 - capabilities must be removable
 - capabilities must not own the loop
 
-Validation behavior and specialized worker roles should be treated as later capabilities layered onto the stable core, not as complexity added before the core loop works.
+The orchestrator includes claim validation and bounded worker roles. Specialized analysis tools remain optional capabilities and must not introduce separate execution semantics.
 
 ### 11.3 Runbook Role
 
@@ -1877,6 +1902,42 @@ Additional architecture requirements:
 - lookup and validation should remain separate steps:
   - lookup proposes or strengthens candidates
   - validation/execution tests them against the live target
+
+### 11.5 Source-Assisted Investigation
+
+This capability connects live observations with source analysis. It proposes evidence and bounded tasks; it does not inject a mandatory command sequence or take over planning.
+
+The evidence flow is:
+
+1. Establish software identity from the authorized target, retaining uncertainty about version, build, plugins, and deployment configuration.
+2. Locate an attributable upstream or operator-provided repository. Record origin, license metadata, selected revision, and the evidence linking it to the deployment.
+3. Acquire a pinned source snapshot in the run workspace. Prefer a matching release or commit; treat analysis of an unmatched revision as a hypothesis about applicability.
+4. Investigate reachable code paths, trust boundaries, authorization, and relevant dependencies. Use parallel source workers only for bounded, distinct questions.
+5. Emit candidate findings with file/line/commit references, preconditions, target linkage, and the evidence still needed.
+6. Validate candidates in an isolated reproduction environment and, when appropriate and authorized, against the actual lab target. A local reproduction does not establish that the deployed target is affected.
+7. Promote only supported outcomes, including access claims, with minimal proof, reproduction steps, impact, and remediation. Preserve rejected and inconclusive hypotheses.
+
+If source is unavailable, mismatched, or unhelpful, the orchestrator can continue with other investigation paths. Source availability must not become a requirement for assessing a target.
+
+Retrieved code, repository instructions, and target responses are untrusted evidence. Cloning does not authorize build scripts or grant repository instructions control of the agent. Building or executing retrieved code uses an isolated worker environment with explicit permissions. Public source retrieval is a reference operation; it does not authorize testing the repository host or upstream infrastructure. Evidence stays locally recorded, and cloud-provider use must make context transmission explicit.
+
+### 11.6 Subscription Access And Local REST Bridge
+
+The product must offer subscription-backed OpenAI access without requiring a paid API key for that mode. Local inference and explicit API billing remain separate backend choices. Account eligibility, available models, usage limits, and backend restrictions must be discovered or surfaced honestly.
+
+Verified references, checked 2026-09-19:
+
+- [OpenAI authentication](https://learn.chatgpt.com/docs/auth) distinguishes ChatGPT subscription sign-in from API-key billing.
+- [Codex app-server](https://learn.chatgpt.com/docs/app-server) documents embedding Codex, managed sign-in, streamed events, approvals, and rate-limit status. Some integration surfaces are experimental.
+- [OpenCode providers](https://opencode.ai/docs/providers#openai) documents ChatGPT Plus/Pro login. Its [provider implementation](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/plugin/openai/codex.ts) uses OAuth and routes inference to the Codex Responses backend.
+
+Backend selection requires a focused integration spike. Compare a documented Codex app-server adapter with an OpenCode-style inference adapter. Verify the authentication path available to this project and supported request semantics before selecting a direct OAuth implementation; the existence of another client's implementation does not establish a stable public API contract for BirdHackBot.
+
+Keep model inference and agent execution as distinct interfaces. An app-server integration is an agent backend, not automatically a raw completion provider. To satisfy the inference bridge requirement, an adapter must return structured model decisions without independently executing tools. If app-server cannot support that boundary, it may be considered separately as an explicit delegated worker backend; it does not satisfy the requested LLM bridge merely by running Codex tasks. Any delegated backend must reconcile execution, approvals, cancellation, and evidence with BirdHackBot's contracts.
+
+The local REST bridge provides a versioned request interface, streaming events, cancellation, model/capability discovery, authentication status, and usage-limit visibility. Exact endpoint schemas follow the spike. Bind locally by default, authenticate callers, isolate per-worker conversations, and keep credentials outside prompts, logs, and target processes. Upstream provider transports stay behind adapters; any OpenAI-compatible endpoint must document and test its supported subset.
+
+Subscription limits apply across workers on the same account. Quota exhaustion pauses or stops affected work coherently; the bridge must not silently switch to API billing, purchase credits, or promise unlimited inference. Subscription mode and API mode are separate choices visible before execution.
 
 ## 12. Minimal Safety And Approval Model
 
@@ -2129,6 +2190,10 @@ During those runs, we should inspect:
 - memory retrieval
 - command logs
 - report quality
+
+Orchestrator acceptance additionally covers two genuinely concurrent bounded workers, dependency ordering, evidence merging, claim validation, stop/resume integrity, and a final assessment report. Source-assisted acceptance includes a vulnerable fixture, its fixed counterpart, a mismatched source revision, and unavailable source.
+
+Compare against Codex with its normal tools and delegation available, using matched model access, target snapshots, credentials, source access, and aggregate budgets. Record versions, prompts, interventions, confirmed findings, unsupported claims, time, and usage. Use independent fixture-grounded scoring and repeated trials; do not compare a favorable BirdHackBot run with a single weak baseline. Freeze the comparison protocol and success criterion before measuring. `docs/runbooks/acceptance-gates.md` owns the gates.
 
 ## 16. Open Review Questions
 

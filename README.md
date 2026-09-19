@@ -6,7 +6,9 @@ It is designed for hands-on operators who want an LLM-led workflow without losin
 
 ## What It Is
 
-BirdHackBot is currently focused on an interactive worker CLI.
+BirdHackBot is being rebuilt around a multi-agent orchestrator for authorized security assessments. The orchestrator will coordinate bounded investigations, connect live target observations with source-code analysis, validate findings, and produce one evidence-backed assessment report.
+
+The implemented foundation today is an interactive worker CLI. Orchestration, source-assisted investigation, and subscription-backed access are planned, not yet available.
 
 The worker can:
 
@@ -19,6 +21,13 @@ The worker can:
 - support direct tasks and small semantic plans
 
 The long-term direction is a practical lab assistant for reconnaissance, scanning, controlled exploitation, privilege-escalation work, evidence handling, and OWASP-style reporting inside approved environments.
+
+The next product milestones are:
+
+- orchestrator-led assessments with bounded parallel workers and operator control
+- identify deployed software, obtain matching public or authorized source, investigate candidate weaknesses, and validate their relevance to the actual lab target
+- a local REST bridge for subscription-backed OpenAI access, alongside local models and explicitly configured paid API access
+- repeatable comparisons against Codex using matched models, tools, targets, and budgets
 
 ## Safety First
 
@@ -97,7 +106,7 @@ The active implementation lives in:
 
 The old implementation is preserved under `legacy/` for historical reference only. It is not the current design truth.
 
-The worker loop is the active product surface. The orchestrator exists as an entrypoint, but the current focus is making the worker reliable, inspectable, and useful before rebuilding higher-level orchestration.
+The worker loop is the current executable foundation. The orchestrator entrypoint is still a placeholder, and implementing it is now the main priority. The existing worker will supply its execution engine; standalone worker use remains useful for development and diagnosis.
 
 ## Documentation
 
