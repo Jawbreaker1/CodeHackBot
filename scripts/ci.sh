@@ -15,7 +15,7 @@ run() {
 }
 
 check_gofmt() {
-  mapfile -t go_files < <(git ls-files '*.go' ':(exclude)legacy/**')
+  mapfile -t go_files < <(find cmd internal -type f -name '*.go' | sort)
   if ((${#go_files[@]} == 0)); then
     return
   fi
@@ -46,3 +46,8 @@ run go vet ./...
 run go test ./...
 run go build -buildvcs=false -o /tmp/birdhackbot-ci ./cmd/birdhackbot
 run go build -buildvcs=false -o /tmp/birdhackbot-orchestrator-ci ./cmd/birdhackbot-orchestrator
+
+run go build -buildvcs=false -o /tmp/birdhackbot-llm-bridge-ci ./cmd/birdhackbot-llm-bridge
+
+run python3 ./scripts/check_guided_app.py /tmp/birdhackbot-ci
+run python3 -m unittest discover -s testdata/source-lab -p 'test_*.py'

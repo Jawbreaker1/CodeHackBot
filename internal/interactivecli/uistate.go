@@ -88,8 +88,8 @@ func (s *UIState) AddProgressEvent(event workerloop.ProgressEvent, packet ctxpac
 	s.Packet = packet
 	body := strings.TrimSpace(event.Message)
 	switch event.Kind {
-	case workerloop.EventPlanStarted:
-		s.appendStream("System", firstNonEmpty(body, "Planning started."))
+	case workerloop.EventDecisionStarted:
+		s.appendStream("System", firstNonEmpty(body, "Choosing the next step."))
 	case workerloop.EventPlanFinished:
 		s.appendStream("System", firstNonEmpty(body, "Plan updated."))
 	case workerloop.EventExecutionStarted:

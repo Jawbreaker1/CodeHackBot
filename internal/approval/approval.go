@@ -21,6 +21,7 @@ const (
 type Request struct {
 	Command  string
 	UseShell bool
+	Cwd      string
 }
 
 // Approver decides whether an action may execute.
@@ -53,9 +54,10 @@ func (a *PromptApprover) Approve(ctx context.Context, req Request) (Decision, er
 	}
 
 	_, _ = fmt.Fprintf(a.Writer,
-		"Approve execution?\ncommand: %s\nmode: %s\nchoices: [t]his time, [a]lways allow (session), [n]o\n> ",
+		"Approve execution?\ncommand: %s\nmode: %s\ncwd: %s\nchoices: [t]his time, [a]lways allow (session), [n]o\n> ",
 		strings.TrimSpace(req.Command),
 		executionMode(req.UseShell),
+		req.Cwd,
 	)
 
 	lineCh := make(chan string, 1)

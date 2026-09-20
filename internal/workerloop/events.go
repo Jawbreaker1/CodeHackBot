@@ -9,12 +9,12 @@ import (
 type ProgressEventKind string
 
 const (
+	EventDecisionStarted      ProgressEventKind = "decision_started"
+	EventUserQuestion         ProgressEventKind = "user_question"
+	EventUserAnswered         ProgressEventKind = "user_answered"
 	EventTaskStarted          ProgressEventKind = "task_started"
-	EventPlanStarted          ProgressEventKind = "plan_started"
 	EventPlanFinished         ProgressEventKind = "plan_finished"
 	EventActionProposed       ProgressEventKind = "action_proposed"
-	EventActionReviewStarted  ProgressEventKind = "action_review_started"
-	EventActionReviewFinished ProgressEventKind = "action_review_finished"
 	EventExecutionStarted     ProgressEventKind = "execution_started"
 	EventExecutionFinished    ProgressEventKind = "execution_finished"
 	EventPostExecEvalStarted  ProgressEventKind = "post_exec_eval_started"
@@ -41,6 +41,10 @@ type ProgressEvent struct {
 type ProgressSink interface {
 	EmitProgress(event ProgressEvent, packet ctxpacket.WorkerPacket) error
 }
+
+type ProgressFunc func(ProgressEvent, ctxpacket.WorkerPacket) error
+
+func (f ProgressFunc) EmitProgress(e ProgressEvent, p ctxpacket.WorkerPacket) error { return f(e, p) }
 
 func newProgressEvent(kind ProgressEventKind, step int, message string) ProgressEvent {
 	return ProgressEvent{

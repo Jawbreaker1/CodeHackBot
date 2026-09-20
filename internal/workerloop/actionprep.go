@@ -3,36 +3,44 @@ package workerloop
 import (
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	ctxpacket "github.com/Jawbreaker1/CodeHackBot/internal/context"
 	"github.com/Jawbreaker1/CodeHackBot/internal/execx"
 )
 
-func prepareAction(resp Response) (execx.Action, *ctxpacket.ExecutionResult) {
+func prepareAction(resp Response, cwd string) (execx.Action, *ctxpacket.ExecutionResult) {
 	command := strings.TrimSpace(resp.Command)
 	if command == "" {
 		return execx.Action{}, validationFailure("(none)", "action command is required", "invalid_action", "invalid_action")
 	}
+	resolvedCwd, err := filepath.Abs(cwd)
+	if err != nil {
+		return execx.Action{}, validationFailure(command, "working directory could not be resolved", "invalid_action", "invalid_action")
+	}
+	cwd = resolvedCwd
 
 	if resp.UseShell {
+		if len(resp.Args) != 0 {
+			return execx.Action{}, validationFailure(command, "shell actions must put the entire script in command and omit args", "invalid_action", "invalid_action")
+		}
 		if _, err := exec.LookPath("/bin/sh"); err != nil {
 			return execx.Action{}, validationFailure(command, "shell runtime is unavailable", "not_executable", "not_executable")
 		}
-		return execx.Action{Command: command, Cwd: ".", UseShell: true}, nil
+		return execx.Action{Command: command, Cwd: cwd, UseShell: true}, nil
 	}
-
-	parts := strings.Fields(command)
-	if len(parts) == 0 {
-		return execx.Action{}, validationFailure(command, "action command is required", "invalid_action", "invalid_action")
+	lookupCommand := command
+	if !filepath.IsAbs(command) && strings.ContainsRune(command, '/') {
+		lookupCommand = filepath.Join(cwd, command)
 	}
-	if _, err := exec.LookPath(parts[0]); err != nil {
-		return execx.Action{}, validationFailure(command, fmt.Sprintf("command %q is not executable", parts[0]), "not_executable", "not_executable")
+	if _, err := exec.LookPath(lookupCommand); err != nil {
+		return execx.Action{}, validationFailure(command, fmt.Sprintf("command %q is not executable; use command for the executable and args for literal arguments, or explicitly select use_shell", command), "not_executable", "not_executable")
 	}
 	return execx.Action{
-		Command:  parts[0],
-		Args:     parts[1:],
-		Cwd:      ".",
+		Command:  command,
+		Args:     append([]string(nil), resp.Args...),
+		Cwd:      cwd,
 		UseShell: false,
 	}, nil
 }

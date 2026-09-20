@@ -171,13 +171,13 @@ func TestShellRunStartsNewTaskAfterCompletedTurn(t *testing.T) {
 	if got := runner.calls[1].CurrentStep.Objective; got != "next step" {
 		t.Fatalf("second call objective = %q, want %q", got, "next step")
 	}
-	if got := runner.calls[1].PlanState.ActiveStep; got != "next step" {
-		t.Fatalf("second call active step = %q, want %q", got, "next step")
+	if got := runner.calls[1].PlanState.ActiveStep; got != "" {
+		t.Fatalf("new task inherited an invented plan: %q", got)
 	}
 	if !strings.Contains(runner.calls[1].OlderConversationSummary, "User: first goal") {
 		t.Fatalf("second call older summary missing prior conversation: %q", runner.calls[1].OlderConversationSummary)
 	}
-	if len(runner.calls[1].RelevantRecentResults) == 0 || runner.calls[1].RelevantRecentResults[0].Action != "pwd" {
+	if len(runner.calls[1].RelevantRecentResults) != 0 {
 		t.Fatalf("second call relevant results = %#v", runner.calls[1].RelevantRecentResults)
 	}
 }
@@ -947,7 +947,7 @@ func TestShellRunFailsWhenStoppedStateSaveFails(t *testing.T) {
 	}
 }
 
-func TestShellReturnsContextCancellationAfterSavingStoppedState(t *testing.T) {
+func TestShellReturnsContextCancellationAfterSavingAbortedState(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, root+"/AGENTS.md", "rules")
 	mustWrite(t, root+"/go.mod", "module example.com/test\n")
@@ -982,8 +982,8 @@ func TestShellReturnsContextCancellationAfterSavingStoppedState(t *testing.T) {
 	if len(saves) != 2 {
 		t.Fatalf("save calls = %d, want 2", len(saves))
 	}
-	if saves[1].Status != "stopped" {
-		t.Fatalf("second save status = %q, want %q", saves[1].Status, "stopped")
+	if saves[1].Status != "aborted" {
+		t.Fatalf("second save status = %q, want %q", saves[1].Status, "aborted")
 	}
 	if saves[1].LastError != "aborted by signal" {
 		t.Fatalf("second save last_error = %q, want %q", saves[1].LastError, "aborted by signal")

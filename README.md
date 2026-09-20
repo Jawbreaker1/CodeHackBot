@@ -1,140 +1,82 @@
 # BirdHackBot / CodeHackBot
 
-BirdHackBot is an AI-assisted security testing assistant for authorized lab environments.
+BirdHackBot is being built as System Verification's security testing platform for authorized assessments. The intended primary product is a multi-agent orchestrator coordinating investigation, source analysis, target validation, and reproducible reporting.
 
-It is designed for hands-on operators who want an LLM-led workflow without losing control of scope, commands, evidence, or reproducibility. The agent reasons about the task, proposes exact actions, executes through a controlled local runtime, and keeps the session inspectable.
+## What works today
 
-## What It Is
+The active implementation uses one adaptive worker for standalone and delegated tasks: model-authored plans and revisions, per-action approvals, exact argv or explicit shell execution, whole-goal evaluation, local evidence, bounded context views, and session snapshots. The [worker audit](docs/worker-foundation-audit-2026-09-20.md) records the current rebuild and validation limits.
 
-BirdHackBot is being rebuilt around a multi-agent orchestrator for authorized security assessments. The orchestrator will coordinate bounded investigations, connect live target observations with source-code analysis, validate findings, and produce one evidence-backed assessment report.
+A local authenticated REST bridge provides subscription-backed OpenAI inference. Launching without flags now opens a guided lab assessment with a coordinator, up to two concurrent workers, serialized action approvals, saved evidence, and a draft report. Source-to-deployment correlation, assessment resume, and independent finding verification remain planned. The runtime does not enforce target allowlists or provide its own network sandbox; execution relies on the isolated lab environment and the operating rules in [AGENTS.md](AGENTS.md).
 
-The implemented foundation today is an interactive worker CLI. Orchestration, source-assisted investigation, and subscription-backed access are planned, not yet available.
+Current implementation order: **core cleanup → subscription API wrapper → orchestration → source-assisted assessment**. [TASKS.md](TASKS.md) records actual progress.
 
-The worker can:
+Required product capabilities include Kali tooling, adaptable playbooks, reusable custom tools, discovery-driven vulnerability research, and fully air-gapped assessments. Local-model access works today; full offline operation and a competitive discovery advantage remain unvalidated. See the [architecture](docs/architecture.md) and [acceptance gates](docs/runbooks/acceptance-gates.md).
 
-- talk through security-testing tasks
-- run exact shell commands after approval or session-level allow
-- keep multi-turn session context
-- capture command logs and evidence locally
-- expose inspectable context packets for debugging
-- track structured execution facts and recovery state
-- support direct tasks and small semantic plans
+Astra is the development/review model. The intended OpenAI pentest runtime is Daybreak on GPT-5.6 Sol, alongside local models. The subscription bridge has called `gpt-daybreak-blue-latest` successfully; the backend reports `gpt-5.6-sol`. Access remains account-dependent.
 
-The long-term direction is a practical lab assistant for reconnaissance, scanning, controlled exploitation, privilege-escalation work, evidence handling, and OWASP-style reporting inside approved environments.
+## Build and run
 
-The next product milestones are:
-
-- orchestrator-led assessments with bounded parallel workers and operator control
-- identify deployed software, obtain matching public or authorized source, investigate candidate weaknesses, and validate their relevance to the actual lab target
-- a local REST bridge for subscription-backed OpenAI access, alongside local models and explicitly configured paid API access
-- repeatable comparisons against Codex using matched models, tools, targets, and budgets
-
-## Safety First
-
-This project is for authorized security testing only.
-
-Primary intended scope:
-
-- Johan Engwall's closed lab systems
-- internal networks where authorization is explicit
-- local lab files and fixtures
-
-Not allowed by default:
-
-- third-party testing without written authorization
-- denial-of-service testing
-- persistence
-- real data exfiltration
-
-Operational safety rules live in `AGENTS.md`.
-
-## Why This Project Exists
-
-The project is a rebuild of an earlier implementation that became too complex and brittle.
-
-The current design favors:
-
-- a small, inspectable core loop
-- generous context instead of premature compaction
-- structured execution truth instead of hidden assumptions
-- generic recovery semantics instead of task-specific patches
-- local evidence that can be reviewed after the run
-
-The goal is not to hardcode pentest recipes. The goal is to give the LLM enough clean context and runtime feedback to make useful decisions while the system preserves boundaries and evidence.
-
-## Quick Start
-
-Build the worker:
-
-```bash
+```sh
 go build -buildvcs=false -o birdhackbot ./cmd/birdhackbot
+./birdhackbot
 ```
 
-Run it against a local OpenAI-compatible LLM endpoint:
+Run from the repository checkout for this lab preview. Guided setup offers a local model server or an existing Codex ChatGPT sign-in, then asks for a goal and explicit scope before starting. Provider preferences are remembered locally; scope and permissions are reviewed for each assessment. Subscription bridge startup and its temporary local credential are managed by the application. First-time Codex sign-in still uses the [subscription setup guide](docs/runbooks/subscription-bridge.md).
 
-```bash
-./birdhackbot \
-  --llm-base-url http://127.0.0.1:1234/v1 \
-  --llm-model qwen3.5-27b \
-  --allow-all
+Local setup also saves an explicit reasoning choice. The guided local profile allows 32,768 output tokens and up to ten minutes per request; Ctrl-C cancels an active request. The current lab configuration is Qwen 3.8 27B Q6_K with low reasoning, a server context of 50,176 tokens, and two parallel slots. Server load settings remain managed in LM Studio. The standalone development CLI does not yet expose these guided inference settings.
+
+Each proposed action requires approval. Ctrl-C stops all workers and saves an aborted result. Reports, coordinator decisions, worker state, and evidence live under the displayed `sessions/assessment-*` directory. Reports are model-authored drafts for operator review, not claims of independent vulnerability verification. `birdhackbot-orchestrator` opens the same guided surface.
+
+The standalone worker remains available for development:
+
+```sh
+./birdhackbot --llm-base-url http://127.0.0.1:1234/v1 --llm-model YOUR_LOCAL_MODEL_ID
 ```
 
-For development and live testing, the expected setup is an isolated lab VM with LM Studio or another local OpenAI-compatible model server.
+Use the exact model ID exposed by your local server. Execution requires per-action approval by default and uses the text interface. Inside the approved isolated VM, explicit `--allow-all` enables session-level approval and the terminal UI.
 
-## Interactive Commands
+For a bounded headless task:
 
-Inside a worker session, these commands are useful for inspection:
-
-```text
-/stats
-/packet
-/plan
-/lastlog
-/fulloutput
+```sh
+./birdhackbot --goal "Show the current directory"   --llm-base-url http://127.0.0.1:1234/v1 --llm-model YOUR_LOCAL_MODEL_ID   --session-dir sessions/example --max-steps 4 --inspect-context
 ```
 
-Use `--inspect-context` when diagnosing behavior. It writes context snapshots into the session directory.
+Use a fresh session directory per independent run. `--resume --session-dir PATH` loads a version 2 worker snapshot and preserves its consumed turn budget. Unknown pending execution is never replayed automatically. Older version 1 snapshots remain inspectable files but cannot be resumed with this worker; they lack reliable budget accounting. Whole-assessment resume is not yet implemented.
 
-## Current State
+For subscription access, follow the [bridge setup guide](docs/runbooks/subscription-bridge.md). It uses your Codex ChatGPT sign-in, keeps tool execution in BirdHackBot, and never falls back to API-key billing. Selected worker context is sent to OpenAI.
 
-The active implementation lives in:
+## Inspect a session
 
-- `cmd/`
-- `internal/`
-- `docs/`
-- `scripts/`
+Interactive commands include `/status`, `/plan`, `/stats`, `/packet`, `/lastlog`, and `/fulloutput`. Use `--inspect-context` to save model-facing snapshots.
 
-The old implementation is preserved under `legacy/` for historical reference only. It is not the current design truth.
+Each execution records its prepared invocation, working directory, times, exit status, and output references. Stdout/stderr stream to `.stdout` and `.stderr` files alongside the command log. Model previews are bounded; full output stays available locally. Ctrl-C/SIGTERM cancels active work and records an aborted state.
 
-The worker loop is the current executable foundation. The orchestrator entrypoint is still a placeholder, and implementing it is now the main priority. The existing worker will supply its execution engine; standalone worker use remains useful for development and diagnosis.
+Evidence and session data are ignored by Git and remain local. Testing scope and allowed operations are defined in [AGENTS.md](AGENTS.md); publicly designated test targets have their own [restrictions](docs/roe/public-test-targets.md).
+
+## Development
+
+```sh
+./scripts/ci.sh
+go test -race ./...
+```
+
+The repeat harness accepts an explicit local model endpoint and captures each run in its own session directory. Focused live checks and full product acceptance have different claims; see the [acceptance gates](docs/runbooks/acceptance-gates.md).
+
+Keep changes small and tied to demonstrated failures or agreed requirements. Define done and stop after required validation passes. Avoid speculative frameworks, hidden fallback planners, and scenario-specific runtime fixes.
 
 ## Documentation
 
-- `AGENTS.md`: authorization, scope, and safety directives
-- `PROJECT.md`: repository working rules
-- `docs/architecture.md`: rebuild architecture and design boundaries
-- `TASKS.md`: current executable plan
-- `ROADMAP.md`: future phase direction
-- `DISCOVERIES.md`: lessons and future-phase notes
-- `docs/runbooks/acceptance-gates.md`: live validation expectations
+| Document | Owns |
+| --- | --- |
+| [AGENTS.md](AGENTS.md) | Authorization and operating rules |
+| [PROJECT.md](PROJECT.md) | Repository conventions and implementation discipline |
+| [Architecture](docs/architecture.md) | Current contracts and clearly labeled planned boundaries |
+| [TASKS.md](TASKS.md) | Immediate sequence and actual implementation status |
+| [ROADMAP.md](ROADMAP.md) | Future product milestones |
+| [DISCOVERIES.md](DISCOVERIES.md) | Decisions, findings, and validation references |
+| [Subscription bridge](docs/runbooks/subscription-bridge.md) | Subscription setup, compatibility contract, and limits |
+| [Acceptance gates](docs/runbooks/acceptance-gates.md) | What validation establishes |
+| [Baseline assessment](docs/code-assessment-2026-09-19.md) | Historical evidence behind the cleanup |
+| [Competitive assessment](docs/competitive-assessment-2026-09-19.md) | Current competitor research, evidence limits, and recommended priorities |
 
-## Development Principles
-
-Before non-trivial behavior changes, the project expects a clear:
-
-- objective
-- architecture anchor
-- reason the change is not a patch
-- validation plan
-
-Avoid:
-
-- scenario-specific guardrails
-- brittle output parsing
-- hidden fallback planners
-- hardcoded demo workflows
-- treating `legacy/` as current architecture
-
-## License
-
-No license has been declared yet.
+Earlier plans are archived under `docs/archive/`; old code is under `legacy/`. Neither is current design authority. The pre-implementation checkpoint is `checkpoint/pre-core-rebuild-2026-09-19` (`95edae1`).

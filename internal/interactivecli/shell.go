@@ -39,6 +39,7 @@ type Shell struct {
 	RepoRoot string
 
 	BaseURL            string
+	AuthTokenFile      string
 	Model              string
 	MaxSteps           int
 	AllowAll           bool
@@ -62,11 +63,17 @@ type runResult struct {
 }
 
 type channelProgressSink struct {
-	ctx context.Context
-	ch  chan<- runnerProgress
+	ctx     context.Context
+	ch      chan<- runnerProgress
+	persist func(ctxpacket.WorkerPacket) error
 }
 
 func (s channelProgressSink) EmitProgress(event workerloop.ProgressEvent, packet ctxpacket.WorkerPacket) error {
+	if s.persist != nil {
+		if err := s.persist(packet); err != nil {
+			return err
+		}
+	}
 	select {
 	case <-s.ctx.Done():
 		return s.ctx.Err()
@@ -108,13 +115,13 @@ func (s Shell) runInteractive(ctx context.Context, allowTUI bool) error {
 		return err
 	}
 
-	if !allowTUI || !usesTerminalTUI(s.Reader, s.Writer) {
+	if !allowTUI || !s.AllowAll || !usesTerminalTUI(s.Reader, s.Writer) {
 		return s.runScripted(ctx, frame)
 	}
 
 	model := newBubbleModel(ctx, &s, frame)
+	defer model.cancel()
 	options := []tea.ProgramOption{
-		tea.WithContext(ctx),
 		tea.WithInput(s.Reader),
 		tea.WithOutput(s.Writer),
 		tea.WithoutSignalHandler(),
@@ -207,7 +214,7 @@ func (s Shell) startWorkerRunAsync(ctx context.Context, packet ctxpacket.WorkerP
 	resultCh := make(chan runResult, 1)
 	go func() {
 		if runner, ok := s.Runner.(progressConfigurableRunner); ok && progressCh != nil {
-			runner.SetProgressSink(channelProgressSink{ctx: ctx, ch: progressCh})
+			runner.SetProgressSink(channelProgressSink{ctx: ctx, ch: progressCh, persist: func(p ctxpacket.WorkerPacket) error { return s.persistPacketState(p, p.RunningSummary, nil) }})
 			defer func() {
 				runner.SetProgressSink(nil)
 				close(progressCh)
@@ -295,7 +302,9 @@ func (s Shell) applyTaskStart(ui *UIState, packet ctxpacket.WorkerPacket, mode s
 func (s Shell) applyProgress(ui *UIState, progress runnerProgress) error {
 	ui.AddProgressEvent(progress.Event, progress.Packet)
 	_ = s.artifacts().recordProgress(progress)
-	return s.persistPacketState(ui.Packet, "", nil)
+	// The worker-side sink persists before emitting. A queued UI event must not
+	// overwrite a newer snapshot or race the worker's persistence callback.
+	return nil
 }
 
 func (s Shell) finalizeRun(ctx context.Context, ui *UIState, outcome workerloop.Outcome, runErr error) error {
@@ -332,7 +341,7 @@ func (s Shell) chat(ctx context.Context, messages []llmclient.Message) (string, 
 	if s.Chat != nil {
 		return s.Chat(ctx, messages)
 	}
-	return llmclient.Client{BaseURL: s.BaseURL, Model: s.Model}.Chat(ctx, messages)
+	return llmclient.Client{BaseURL: s.BaseURL, Model: s.Model, AuthTokenFile: s.AuthTokenFile}.Chat(ctx, messages)
 }
 
 func (s Shell) structuredCompletion(ctx context.Context, messages []llmclient.Message) (llmclient.Completion, error) {
@@ -347,7 +356,7 @@ func (s Shell) structuredCompletion(ctx context.Context, messages []llmclient.Me
 		resp, err := s.Chat(ctx, messages)
 		return llmclient.Completion{Text: resp, Source: llmclient.ResponseSourceContent, Content: resp}, err
 	}
-	return llmclient.Client{BaseURL: s.BaseURL, Model: s.Model}.Complete(ctx, messages, llmclient.ChatOptions{Profile: llmclient.ProfileStructuredControl})
+	return llmclient.Client{BaseURL: s.BaseURL, Model: s.Model, AuthTokenFile: s.AuthTokenFile}.Complete(ctx, messages, llmclient.ChatOptions{Profile: llmclient.ProfileStructuredControl})
 }
 
 func (s Shell) classifyInput(ctx context.Context, frame behavior.Frame, packet ctxpacket.WorkerPacket, line string, started bool) (workermode.Decision, error) {
@@ -515,6 +524,9 @@ func (s Shell) prepareTaskPacket(ctx context.Context, frame behavior.Frame, pack
 }
 
 func persistedSessionStatus(packet ctxpacket.WorkerPacket, runErr error) string {
+	if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) || packet.TaskRuntime.State == "aborted" {
+		return "aborted"
+	}
 	if runErr != nil {
 		return "stopped"
 	}
@@ -924,35 +936,7 @@ func newTaskPacketFromPrevious(frame behavior.Frame, previous ctxpacket.WorkerPa
 		return ctxpacket.WorkerPacket{}, err
 	}
 	next.OlderConversationSummary = ctxpacket.CarryConversationSummary(previous.OlderConversationSummary, previous.RecentConversation)
-	next.RelevantRecentResults = carryRecentResults(previous)
 	return next, nil
-}
-
-func carryRecentResults(previous ctxpacket.WorkerPacket) []ctxpacket.ExecutionResult {
-	results := make([]ctxpacket.ExecutionResult, 0, 1+len(previous.RelevantRecentResults))
-	if hasExecutionEvidence(previous.LatestExecutionResult) {
-		results = append(results, previous.LatestExecutionResult)
-	}
-	for _, result := range previous.RelevantRecentResults {
-		if !hasExecutionEvidence(result) {
-			continue
-		}
-		results = append(results, result)
-		if len(results) >= 4 {
-			break
-		}
-	}
-	if len(results) == 0 {
-		return nil
-	}
-	return results
-}
-
-func hasExecutionEvidence(result ctxpacket.ExecutionResult) bool {
-	return strings.TrimSpace(result.Action) != "" ||
-		strings.TrimSpace(result.OutputSummary) != "" ||
-		len(result.LogRefs) > 0 ||
-		len(result.ArtifactRefs) > 0
 }
 
 func renderPlan(packet ctxpacket.WorkerPacket) string {

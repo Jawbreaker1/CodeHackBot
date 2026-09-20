@@ -10,6 +10,7 @@ Options:
   --goal TEXT           Worker goal to run.
   --base-url URL        LM Studio / OpenAI-compatible base URL.
   --model ID            Model id.
+  --token-file PATH     Local bridge client token file (optional).
   --runs N              Number of repeated runs. Default: 3
   --max-steps N         Worker max steps per run. Default: 6
   --timeout SEC         Per-run timeout in seconds. Default: 120
@@ -24,6 +25,7 @@ EOF
 goal=""
 base_url=""
 model=""
+token_file=""
 runs=3
 max_steps=6
 timeout_sec=120
@@ -38,6 +40,7 @@ while [[ $# -gt 0 ]]; do
     --goal) goal="${2:-}"; shift 2 ;;
     --base-url) base_url="${2:-}"; shift 2 ;;
     --model) model="${2:-}"; shift 2 ;;
+    --token-file) token_file="${2:-}"; shift 2 ;;
     --runs) runs="${2:-}"; shift 2 ;;
     --max-steps) max_steps="${2:-}"; shift 2 ;;
     --timeout) timeout_sec="${2:-}"; shift 2 ;;
@@ -65,6 +68,7 @@ if [[ -z "$output_dir" ]]; then
   output_dir="$repo_root/sessions/repeat/$(date -u +%Y%m%d-%H%M%S)"
 fi
 mkdir -p "$output_dir"
+output_dir="$(cd "$output_dir" && pwd)"
 
 summary_file="$output_dir/summary.tsv"
 printf "run\trc\tstatus\tsummary\n" > "$summary_file"
@@ -74,10 +78,10 @@ for i in $(seq 1 "$runs"); do
   run_dir="$output_dir/$run_id"
   mkdir -p "$run_dir"
 
-  stamp="$run_dir/.start-stamp"
-  : > "$stamp"
-
-  cmd=(timeout "$timeout_sec" "$binary" --goal "$goal" --llm-base-url "$base_url" --llm-model "$model" --max-steps "$max_steps")
+  cmd=(timeout "$timeout_sec" "$binary" --goal "$goal" --llm-base-url "$base_url" --llm-model "$model" --max-steps "$max_steps" --session-dir "$run_dir")
+  if [[ -n "$token_file" ]]; then
+    cmd+=(--llm-token-file "$token_file")
+  fi
   if [[ "$allow_all" -eq 1 ]]; then
     cmd+=(--allow-all)
   fi
@@ -93,14 +97,6 @@ for i in $(seq 1 "$runs"); do
     set -e
     echo "$rc" > "$run_dir/rc.txt"
   )
-
-  if [[ -f "$repo_root/sessions/rebuild-dev/session.json" ]]; then
-    cp "$repo_root/sessions/rebuild-dev/session.json" "$run_dir/session.json"
-  fi
-
-  mkdir -p "$run_dir/logs" "$run_dir/context"
-  find "$repo_root/sessions/rebuild-dev/logs" -type f -newer "$stamp" -exec cp {} "$run_dir/logs/" \; 2>/dev/null || true
-  find "$repo_root/sessions/rebuild-dev/context" -type f -newer "$stamp" -exec cp {} "$run_dir/context/" \; 2>/dev/null || true
 
   rc="$(cat "$run_dir/rc.txt")"
   status="unknown"

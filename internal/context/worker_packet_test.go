@@ -49,15 +49,6 @@ func TestWorkerPacketRenderIncludesAllCoreSections(t *testing.T) {
 			Assessment:    "success",
 			Signals:       []string{"archive_readable"},
 		},
-		ActiveExecutionFacts: []ExecutionFact{
-			{
-				Kind:         ExecutionFactKindArtifactRef,
-				Subject:      "artifacts/zipinfo.txt",
-				Status:       "available",
-				Source:       "latest_execution_result.artifact_refs",
-				EvidenceRefs: []string{"logs/cmd-1.log"},
-			},
-		},
 		RunningSummary: "Archive identified and metadata readable.",
 		RelevantRecentResults: []ExecutionResult{
 			{Action: "ls -la", ExitStatus: "0", OutputSummary: "secret.zip present"},
@@ -82,7 +73,6 @@ func TestWorkerPacketRenderIncludesAllCoreSections(t *testing.T) {
 		"[recent_conversation]",
 		"[older_conversation_summary]",
 		"[latest_execution_result]",
-		"[active_execution_facts]",
 		"[running_summary]",
 		"[relevant_recent_results]",
 		"[memory_bank_retrievals]",
@@ -95,9 +85,6 @@ func TestWorkerPacketRenderIncludesAllCoreSections(t *testing.T) {
 		"missing_fact: credential or password required for secret.zip",
 		"assessment: success",
 		"signals: archive_readable",
-		"kind: artifact_ref",
-		"subject: artifacts/zipinfo.txt",
-		"evidence_refs: logs/cmd-1.log",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("Render() missing %q in:\n%s", want, rendered)
@@ -120,7 +107,7 @@ func TestNewInitialWorkerPacketSetsSharedExecutionDefaults(t *testing.T) {
 	if packet.CurrentStep.Objective != foundation.Goal {
 		t.Fatalf("objective = %q", packet.CurrentStep.Objective)
 	}
-	if packet.PlanState.ActiveStep != foundation.Goal {
+	if packet.PlanState.ActiveStep != "" {
 		t.Fatalf("active_step = %q", packet.PlanState.ActiveStep)
 	}
 	if packet.OperatorState.WorkingDir != "/tmp/testrepo" {
@@ -135,18 +122,9 @@ func TestNewInitialWorkerPacketSetsSharedExecutionDefaults(t *testing.T) {
 	if !strings.Contains(strings.Join(packet.CapabilityInputs, "\n"), "Metasploit Framework") {
 		t.Fatalf("CapabilityInputs missing tooling context: %#v", packet.CapabilityInputs)
 	}
-	if !hasExecutionFact(packet.ActiveExecutionFacts, ExecutionFactKindCurrentTarget, "secret.zip") {
-		t.Fatalf("ActiveExecutionFacts missing current_target: %#v", packet.ActiveExecutionFacts)
+	if packet.TaskRuntime.CurrentTarget != "" || packet.TaskRuntime.MissingFact != "" {
+		t.Fatal("new task manufactured target or prerequisite facts")
 	}
-}
-
-func hasExecutionFact(facts []ExecutionFact, kind, subject string) bool {
-	for _, fact := range facts {
-		if fact.Kind == kind && fact.Subject == subject {
-			return true
-		}
-	}
-	return false
 }
 
 func TestRenderExecutionResultsPreservesRetainedEntriesForModelContext(t *testing.T) {
@@ -167,7 +145,7 @@ func TestRenderExecutionResultsPreservesRetainedEntriesForModelContext(t *testin
 	for _, want := range []string{
 		"result_1:",
 		"printf " + strings.Repeat("a", 200),
-		"output_evidence: stdout: first line",
+		"output_evidence: \"stdout: first line",
 		"stdout: second line",
 		"stdout: third line",
 		"log_refs: logs/cmd-1.log | logs/cmd-2.log",

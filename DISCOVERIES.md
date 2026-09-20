@@ -1,447 +1,103 @@
 # Discoveries
 
-This file is continuity, not scheduling.
+## Worker foundation rebuild — 2026-09-20
 
-Rules:
-- `DISCOVERIES.md` records realizations, risks, and lessons learned.
-- It may include notes for future phases.
-- It is not a task list.
-- It does not override `TASKS.md` or `ROADMAP.md`.
+The [worker audit](docs/worker-foundation-audit-2026-09-20.md) records the replacement of competing planner/reviewer/step-evaluator paths with one adaptive worker, removal of inferred target/prerequisite facts and failure ranking, bounded context views, persisted turn budgets and single-owner progress writes. Obsolete modules and tests were removed rather than retained as fallback behavior.
 
-## Product Direction — 2026-09-19
+Live checks exposed two additional defects that deterministic checks had missed: plan history was absent from evaluator context, and multiline output could resemble metadata and lose a line in model reports. Both were corrected. The same controlled fixture then passed three consecutive Daybreak runs with independent log, content/hash, state, budget and context inspection. Four preceding runs remain recorded as failures. Qwen's separate diagnostic completed its assignments but did not honor the single-worker scenario or report both content lines; it is not an acceptance pass. CI has nine terminal scenarios, including generic orchestration with dependent validation; full worker/pentest acceptance remains open.
 
-- The user explicitly changed the primary product from a standalone worker CLI to a multi-agent orchestrator. The worker remains its shared execution engine. This supersedes earlier worker-first sequencing without restoring the legacy implementation.
-- Source-assisted investigation is a planned differentiator: identify deployed software, acquire attributable matching source, investigate bounded questions, and validate candidate weaknesses against the authorized target. Source suspicions and local reproduction do not automatically establish target exploitability.
-- Subscription-backed OpenAI access through a local REST bridge is a requirement. Current [OpenAI authentication documentation](https://learn.chatgpt.com/docs/auth) separates subscription sign-in from API-key billing. [Codex app-server](https://learn.chatgpt.com/docs/app-server) is an embedding route; [OpenCode](https://opencode.ai/docs/providers#openai) also documents subscription login.
-- An app-server agent adapter and a raw inference provider have different execution ownership. The backend spike must settle this explicitly before coupling subscription access to the worker loop.
-- Parallel workers share provider limits and run budgets. They require isolated mutable workspaces, evidence provenance, conflict control, and reliable stop behavior; worker count alone does not establish value.
-- Evaluation needs a matched Codex baseline with its normal capabilities available. Score confirmed findings, unsupported claims, interventions, time, and aggregate usage against independent fixture truth.
-- Static review found that `scripts/repeat_worker_run.sh` still copies from `sessions/rebuild-dev` although the CLI now allocates individual session directories. Repair capture before treating new repeated-run summaries as acceptance evidence.
-- Existing ZIP/router gates remain. New orchestrator, subscription, source-correlation, and comparative gates are added to test the adopted product direction; they have not yet been run or passed. Fixed/mismatched fixtures test whether apparent gains are unsupported claims.
-- This update changes architecture and planning only. The orchestrator remains a placeholder and no subscription bridge or source-analysis runtime has been implemented yet.
+Continuity and evidence, not a task list. Updated 2026-09-19.
 
-## Code Assessment — 2026-09-19
+## Product decisions
 
-- [The code assessment](docs/code-assessment-2026-09-19.md) recommends retaining this repository and Go while replacing the execution and evidence/state core in bounded, runnable slices. This is a recommendation, not an implemented change to the architecture.
-- The current race-enabled suite passes (72.0% aggregate statement coverage), but eight isolated diagnostic probes reproduce contract failures involving literal arguments, quoted commands, descendant cancellation, unrelated evidence, evaluator failure, stale failures, scope inference, and missing behavior validation.
-- Preserve the worker as the shared-engine concept; its current internal contracts need not be preserved. The orchestrator should be built on the corrected contracts rather than wrapped around the present loop unchanged.
-- Astra is the development/review model. The user clarified that the intended OpenAI pentest runtime is Daybreak on GPT-5.6 Sol, alongside local models. This records product intent, not a verified provider integration.
+- Build System Verification's production security testing platform. The orchestrator is the intended primary product; workers share one engine.
+- Implementation order is core cleanup, subscription API wrapper, orchestration, then source-assisted assessment.
+- Astra is the development/review model. The intended OpenAI pentest runtime is Daybreak on GPT-5.6 Sol, alongside local models. The first subscription slice successfully requested `gpt-daybreak-blue-latest`; the backend reported resolved model `gpt-5.6-sol`. Access is account-dependent.
+- Keep solutions proportional to demonstrated problems. Define done, validate it, and defer hypothetical cases. A broad roadmap does not authorize building every subsystem in the first slice.
+- Priority clarified after initial coordinator experiments: validate the shared worker and generic orchestrator before expanding knowledge/source integration. The current delegated path uses the same adaptive worker loop as standalone work; repeated real-model capability acceptance and independent finding review remain open.
+- A subscription inference adapter must preserve BirdHackBot's execution ownership. An independently executing embedded agent has a different contract.
 
-## Worker Foundation Notes (Historical)
+## Baseline assessment
 
-- Keep the rebuild architecture small and explicit.
-- Favor generous, structured active context over aggressive compaction.
-- Do not compensate weak context with guardrails or command shaping.
-- Keep old implementation isolated under `legacy/`.
-- Prefer phase-based planning over large speculative sprint plans.
-- The unassisted worker loop is already plausible on local network reconnaissance.
-- The ZIP workflow is much more sensitive to execution/tooling details than the router workflow.
-- Context inspection exposed a real missing-core bug early: live `behavior_frame` was initially not wired into the packet.
-- Separating repo root, session storage, and execution cwd is necessary; tying behavior/config loading to execution cwd was wrong.
-- Clean fixtures matter. Workspace contamination can completely distort live validation results.
-- Stronger operator-style role text in the user goal changes behavior, but that framing belongs in the behavior frame, not in the task goal.
-- The next user-facing priority is a minimal interactive worker CLI shell; one-shot harness runs are no longer enough.
-- A minimal interactive worker CLI shell now exists and works with live LM Studio runs, which will make direct operator testing much easier.
-- Generic execution-result `assessment` and `signals` are useful. The next core weakness is not just choosing tools, but interpreting ambiguous tool outcomes correctly.
-- Generic completion guidance helped the router workflow finish cleanly once enough evidence existed; this was a core loop issue, not a planning issue.
-- The real-router run against `192.168.50.1` produced useful evidence, but the first action was too heavy for an interactive loop: `nmap -sV -sC -p- --open` took several minutes.
-- The right lesson from the real-router run is generic command-cost judgment, not tool-specific `nmap` rules.
-- Current router evidence on `192.168.50.1` includes:
-  - `53/tcp` `domain`
-  - `80/tcp` `httpd/3.0` with redirect to `/Main_Login.asp`
-  - `7788/tcp` `unknown`
-  - `18017/tcp` `Asus wanduck WAN monitor httpd`
-  - `42065/tcp` `MiniUPnP 2.2.0`
-- Single-run behavior is too noisy to trust for agent-quality conclusions. One run is useful as a smoke test; meaningful behavioral evaluation should use at least 2-3 runs per scenario.
-- The repeated clean ZIP runs showed both outcomes:
-  - one run drifted out of the fixture and searched `~`
-  - the next run stayed anchored to `./secret.zip` and behaved plausibly
-- That variance means future prompt/behavior changes should be judged on small repeated batches, not single examples.
-- A repeat-run harness now exists at `scripts/repeat_worker_run.sh`.
-- First 2-run localhost-router batch confirmed the value of repeated runs:
-  - run 1 completed cleanly
-  - run 2 stopped after failing to complete within the step budget
-- Generic shell-syntax handling in the executor was worth adding. Compound commands with `;`, `||`, pipes, and redirection should not be treated as argv actions.
-- After the shell-syntax fix, one ZIP spot-check no longer failed on execution mode; the remaining weakness was the next-step choice after confirming the archive is encrypted.
-- A minimal structured worker task context now exists:
-  - `state`
-  - `current_target`
-  - `missing_fact`
-- In the first spot-check after adding it:
-  - router final state reached `done`, target `127.0.0.1`, missing fact `(none)`
-  - ZIP final state reached `blocked`, target `secret.zip`, missing fact `next evidence needed about secret.zip`
-- Referencing `task_runtime` explicitly in the worker prompt was better than the earlier anchoring-only prompt tweak:
-  - router still completed
-  - ZIP stayed local and became more tool-directed without broadening into old session artifacts
+- The [competitive assessment](docs/competitive-assessment-2026-09-19.md) reviews current commercial and open-source approaches. Multi-agent, source-assisted, local/subscription capabilities already overlap our direction. Proposed differentiation must be measured in assessment usefulness, evidence quality, operator effort, and fix verification; no competitive superiority has been demonstrated.
 
-- Phase 1 is effectively complete: the thin worker loop, exact execution, approval model, context inspection, session resume, and minimal interactive shell are all real and validated.
-- The router/local-recon scenario is now good enough for the Phase 1 boundary: it still rereads evidence more than ideal, but it completes cleanly with coherent context and reproducible findings.
-- The ZIP scenario remains the best indicator of the raw closed-loop limit. It is still unstable across repeated runs even though the context is now much cleaner and more inspectable than before.
-- Recent generic result-truth fixes improved the active packet materially:
-  - `missing_path` is now surfaced reliably in bad shell/tool chains
-  - `incorrect_password` covers both direct incorrect-password text and `unable to get password` style output
-- The next active problem is no longer broad architecture confusion. It is the narrower tension between:
-  - stable named target identity in the active task
-  - noisy latest command output that can widen the loop into worse local directions
-- The right immediate next phase is not heavy memory-bank work. It is active-context quality: truth ordering, target stability, and better visibility into what is actually in the packet.
-- Later capability/skills phase: evaluate curated reuse of external security-skill repositories (for example `mukul975/Anthropic-Cybersecurity-Skills`) as inspiration/reference only, not as bulk-imported active runtime behavior.
-- Pre-execution observability was a real gap in the thin loop. Adding `pre-action` snapshots and pre-created execution logs closed it and made long-running or hanging first commands diagnosable before completion.
-- The interactive shell now has enough built-in inspection for Phase 2 live context work:
-  - `/stats` shows packet size and per-section sizes
-  - `/packet` dumps the current packet
-  - `/lastlog` shows the pending or latest execution log path
-- Interactive Phase 2 baseline before pruning/summarization:
-  - `4` user prompts are enough to produce meaningful context-growth signal
-  - ZIP baseline session: `sessions/phase2-baseline-20260321-153019/zip/output.txt`
-    - after first task prompt: total `7473` chars, about `1869` tokens by the current rough estimator (`chars/4`)
-    - after third task prompt: total `9127` chars, about `2282` tokens by the current rough estimator
-    - dominant growth came from `running_summary` (`613` -> `916`) and `relevant_recent_results` (`526` -> `1777`)
-  - Router baseline session: `sessions/phase2-baseline-20260321-153019/router/output.txt`
-    - after first task prompt: total `6992` chars, about `1748` tokens by the current rough estimator
-    - after later follow-up prompts: total `7427` chars, about `1857` tokens by the current rough estimator
-    - growth was smaller and cleaner, dominated by `recent_conversation`
-  - Current interactive baseline packets are still far below the available `262k` token window, so pruning should prioritize truth and stability over aggressive size reduction.
-- The interactive baseline exposed a real active-context truth issue:
-  - ZIP `missing_fact` had been attributing `missing_path` failures to the main target (`secret.zip`) instead of the actually missing artifact (for example a missing wordlist path)
-  - this must be corrected before pruning so later comparisons use truthful baseline state
-- Light Phase 2 pruning should start with `running_summary`, not evidence fields:
-  - narrowing `running_summary` to status + strongest evidence reduced redundant growth without changing the evidence model
-  - ZIP `running_summary` dropped from roughly `613 -> 916` chars in the pre-pruning baseline to roughly `268 -> 394` chars in the post-pruning comparison run
-  - total packet size changed only slightly, which is acceptable because the goal is redundancy cleanup rather than aggressive compression
-- After that light pruning slice, the next growth pressure is clearly `relevant_recent_results`, not `running_summary`.
-- A render-only light pruning pass on `relevant_recent_results` is safe and useful:
-  - keep the underlying retained evidence model unchanged
-  - compact only the packet rendering of prior results:
-    - shorter action/output text
-    - first log/artifact ref only
-  - ZIP comparison:
-    - first post-task packet dropped from about `1881` tokens to about `1866`
-    - later packet dropped from about `2196` tokens to about `2093`
-  - Router comparison:
-    - first post-task packet dropped from about `1766` tokens to about `1742`
-    - later packet dropped from about `2033` tokens to about `1974`
-  - This is the right kind of Phase 2 pruning: small, conservative, and aimed at redundancy rather than aggressive compression.
-- Conversation retention policy for Phase 2:
-  - keep up to `20` raw conversation turns
-  - also cap the raw conversation tail at about `20k` tokens using the same rough `chars/4` estimator
-  - roll older overflow into `older_conversation_summary`
-  - shell-level validation confirms rollover works and preserves older notes instead of dropping them silently
-- In the current live longer sessions, the packet is still well below the available `262k` context window, so the new conversation policy behaves conservatively:
-  - raw recent conversation remains generous
-  - summarization does not activate early just for tidiness
-  - `recent_conversation` is now the main long-session growth source to watch
-- Packet sanity work should start with validation, not repair:
-  - validation and repair/rebuild should be separate mechanisms
-  - validation alone is already valuable if it is logged with the session and used to troubleshoot packet quality
-  - repair/rebuild should come later and should only touch derived fields
-- Implemented lightweight packet validation:
-  - current structural checks cover:
-    - duplicate rendered sections
-    - missing behavior frame
-    - missing goal
-    - missing current objective
-    - empty running summary
-    - recent-conversation overflow beyond configured limits
-    - `task_runtime.state=done` while `missing_fact != (none)`
-    - session runtime artifact leakage into `current_target`
-    - inconsistent pending execution fields in `operator_state`
-    - partially populated `latest_execution_result`
-  - validation reports are now written alongside context snapshots as `step-XXX-<stage>-validation.txt`
-  - fatal packet issues now stop the loop before the LLM call
-  - live proof:
-    - `sessions/packet-validation-check-20260322/router2/context/step-001-pre-llm-validation.txt`
-    - `sessions/packet-validation-check-20260322/zip-expanded/context/step-001-pre-llm-validation.txt`
-- Broader live suite with validator in place:
-  - suite root:
-    - `sessions/live-suite-validation-20260322-215546`
-  - router/local:
-    - `2/2` completed
-  - ZIP:
-    - `0/2` completed
-  - every validation file across all four runs reported:
-    - `summary: ok`
-    - `highest_severity: info`
-  - conclusion:
-    - current packet structure is good enough for now
-    - the main remaining limitation is behavioral follow-through, not packet integrity
-    - this is the right point to move next attention toward planning
-- Missing-path attribution also needs to stay conservative:
-  - explicit missing artifacts like `/usr/share/wordlists/rockyou.txt` should be preserved when corroborated by the action/result
-  - malformed output-only paths from shell expansion noise should not be promoted into `missing_fact`
-- The real-router diagnostic showed the exact first command choice clearly:
-  - first useful captured heavy version: `nmap -sV -p- --open 192.168.50.1`
-  - later bounded-but-still-scaffolded version: `nmap -sV --top-ports 100 -oN /tmp/recon_192.168.50.1_scan.txt 192.168.50.1`
-  - later contradictory compromise after more prompt steering: `nmap -sV -p- --top-ports 100 192.168.50.1`
-- This is the current limit of plain prompt steering for first-action behavior:
-  - generic prompt nudges can move the model
-  - but pushing harder starts to distort command construction
-  - correctness is more important than trying to force "fast first" behavior before planning exists
-- Conclusion: fast-first recon strategy should move into the later planning layer rather than keep accumulating in the closed-loop prompt.
-- Minimal worker planner implementation findings:
-  - planner trigger is currently optional and heuristic:
-    - trivial requests like `what files are in this folder?` bypass planning and go straight into the closed loop
-    - multi-step ZIP and router goals can establish a worker plan before the first loop turn
-  - current worker plans are visible in packet state through:
-    - `plan_state.mode`
-    - `plan_state.worker_goal`
-    - `plan_state.summary`
-    - `plan_state.steps`
-    - `plan_state.active_step`
-    - `plan_state.replan_conditions`
-  - the loop now advances through planned steps when the model emits `step_complete` before final task completion
-  - packet validation remained clean during successful plan advancement:
-    - `sessions/plan-live-20260330/zip-3/context/step-004-step-advance-validation.txt`
-    - `sessions/plan-live-20260330/zip-3/context/step-008-step-complete-validation.txt`
-- Live worker-planner behavior so far:
-  - trivial direct request:
-    - planning correctly bypassed for `what files are in this folder?`
-    - session:
-      - `sessions/plan-live-20260330/trivial`
-  - ZIP runs:
-    - `zip-2`: planned, but blocked after 8 steps
-    - `zip-3`: planned and completed; plan advanced through intermediate steps before final completion
-    - successful run artifacts:
-      - `sessions/plan-live-20260330/zip-3/session.json`
-      - `sessions/plan-live-20260330/zip-3/context/step-004-step-advance.txt`
-  - router runs:
-    - `router-1`: planner call failed with upstream `500`
-    - `router-2`: plan established, but run blocked after 6 steps
-    - `router-3`: plan established, but run blocked after 6 steps
-  - conclusion:
-    - planner integration itself is real and not obviously corrupting the packet
-    - ZIP shows at least one successful planned path
-    - router planning still tends to overbuild commands and stall on the first plan step
-    - planner stability against upstream model/server errors is still weak and should stay under observation
-- Interactive-shell observability for planning:
-  - new `/plan` command prints the active worker plan for live testing
-  - this is shell-side inspection only; it does not change planning behavior
-- Planner-attempt observability is now part of the runtime:
-  - planned-task runs write `planner-attempt-001.txt` style artifacts into the session `context/` directory
-  - artifact contents include:
-    - accepted/rejected status
-    - final error
-    - parsed plan fields
-    - planner validation issues
-    - exact planner prompt
-    - raw planner response
-  - live proof:
-    - `sessions/plan-live-20260330/router-planner-log-3/context/planner-attempt-001.txt`
-  - conclusion:
-    - planner failures and weak plans are now inspectable session evidence instead of disappearing into generic worker-loop errors
-- Generic worker step-status evaluation is now implemented:
-  - planned steps are evaluated as:
-    - `in_progress`
-    - `satisfied`
-    - `blocked`
-  - advancement now requires supporting execution evidence rather than trusting every `step_complete` blindly
-  - blockage is based on:
-    - explicit replan-condition matches
-    - or generic blocking execution signals such as `missing_path`, `permission_denied`, `invalid_action`, `command_not_found`
-- Live effect of the step-status slice:
-  - router:
-    - `sessions/plan-live-20260330/router-step-1`
-    - the run advanced through planned steps and reached the documentation/report phase rather than staying pinned on the initial scan step
-  - ZIP:
-    - `sessions/plan-live-20260330/zip-step-1`
-    - the run stayed coherent but did not advance beyond the first semantic step
-    - it accumulated useful evidence, but the model did not emit a supported `step_complete`
-  - conclusion:
-    - the new generic evaluator improved advancement discipline without obvious packet drift
-    - router progression looked cleaner
-    - ZIP still shows that step completion depends heavily on the model actually recognizing when a semantic step is satisfied
-- Generic model-assisted step evaluation is now implemented as a separate, inspectable layer:
-  - step evaluation uses a small JSON contract:
-    - `status`
-    - `reason`
-    - `summary`
-  - step-evaluation attempts are now logged into session context as:
-    - `step-eval-attempt-001.txt`
-  - this keeps semantic step satisfaction model-driven while low-level failure normalization remains in code
-- Live effect of the model-assisted step evaluator:
-  - ZIP:
-    - `sessions/step-eval-live-20260330/zip-2/context/step-001-step-advance.txt`
-    - the run automatically advanced past the first semantic step without requiring the model to emit `step_complete`
-    - `step-eval-attempt-001.txt` correctly judged the file-verification step as satisfied from structured evidence
-    - the run still stopped later at the hint-search step, but it no longer stayed stuck on step 1
-  - ZIP run `zip-1` also showed semantic progression, but that run was confounded by an upstream model-server connection reset:
-    - `last_error: ... connection reset by peer`
-  - real router:
-    - `sessions/step-eval-live-20260330/router-real-1`
-    - the plan was still structurally fine, but the first action remained a heavy full-port scan:
-      - `nmap -sV -p- --open 192.168.50.1 > .../portscan-results.txt 2>&1`
-    - this run timed out before the new step evaluator had a meaningful chance to improve within-step behavior
-- Current conclusion after the new step-evaluation slice:
-  - ZIP progression improved materially in a generic way
-  - the remaining weakness is later-step follow-through, not step-1 recognition
-  - router remains limited mainly by heavy or overbuilt execution inside the first planned step, not by planner shape or packet integrity
-- Generic planned-step action review is now implemented as a separate, inspectable layer:
-  - action review uses a small JSON contract:
-    - `decision`
-    - `reason`
-  - review decisions are logged into the session context as:
-    - `action-review-attempt-001.txt`
-  - the worker can now:
-    - `execute`
-    - `revise`
-    - `block`
-    before running a proposed action during planned execution
-- Live effect of the action-review slice:
-  - ZIP:
-    - `sessions/action-review-live-20260330/zip-1/context/action-review-attempt-001.txt`
-    - `sessions/action-review-live-20260330/zip-1/context/action-review-attempt-002.txt`
-    - the reviewer accepted focused archive-inspection actions, which is reasonable
-  - real router:
-    - `sessions/action-review-live-20260330/router-real-1/context/action-review-attempt-001.txt`
-    - the reviewer still accepted a heavy full-port scan with output-file scaffolding
-    - conclusion:
-      - the new layer is working and inspectable
-      - but the current review prompt is still too permissive to catch this class of overbuilt router action
-- Current conclusion after the action-review slice:
-  - the mechanism itself is sound and generic
-  - it did not yet materially improve the real-router first-action choice
-  - the next improvement, if we continue here, should be better generic action-review criteria rather than task-specific command rules
-- Tightening the generic action-review prompt improved the router benchmark further without hardcoding:
-  - live session:
-    - `sessions/action-review-tighten-20260401/router-qwen27b-1`
-  - step 1 was approved and completed cleanly:
-    - `ping -c 3 192.168.50.1`
-  - step 2 action review approved:
-    - `nmap -sV -T4 --top-ports 1000 192.168.50.1`
-    - artifact:
-      - `sessions/action-review-tighten-20260401/router-qwen27b-1/context/action-review-attempt-002.txt`
-  - this is a meaningful improvement over earlier patterns because it avoided:
-    - full `-p-` scans
-    - invented output-file scaffolding
-    - `&& cat ...` chaining
-  - current conclusion:
-    - the tightened review is behaving sensibly
-    - the remaining router limitation is now long-running but reasonable step actions, not obviously malformed actions
-    - the next generic improvement should target planned-step progress and long-running action handling, not more command-shape steering
-- Worker-model A/B result on the local LM Studio server:
-  - after reducing the LM Studio context window for `qwen3.5-27b`, the earlier planner `400 Bad Request` failures disappeared
-  - this indicates the earlier incompatibility was environmental, not a worker-code issue
-  - current recommendation:
-    - prefer `qwen3.5-27b` as the default worker validation model
-    - keep `qwen/qwen3.5-35b-a3b` as a comparison model
-- A/B comparison summary so far:
-  - ZIP:
-    - both models can plan and advance past the initial metadata step
-    - both currently block on missing wordlist/path issues during password-recovery attempts
-    - `qwen3.5-27b` tends to keep the phases cleaner
-    - `qwen/qwen3.5-35b-a3b` more often mixes inspection and cracking behavior too early
-  - real router `192.168.50.1`:
-    - `qwen3.5-27b` currently chooses the cleaner scan shape:
-      - `nmap -sV --top-ports 1000 -oA ...`
-    - `qwen/qwen3.5-35b-a3b` tends to choose heavier or more overbuilt scan actions earlier
-    - both models still fail later on output-path / follow-through issues, but `qwen3.5-27b` is currently the cleaner worker
-- Interrupted execution is now normalized separately from ordinary command failure:
-  - runtime layer changes classify interrupted commands as:
-    - `failure_class: execution_interrupted`
-    - signals such as `execution_timeout`
-  - running summaries now keep interrupted work as in-progress rather than ordinary failure
-  - unit validation passed for:
-    - `internal/execx`
-    - `internal/context`
-    - `internal/workerloop`
-  - direct runtime proof:
-    - `sessions/interrupted-progress-20260402/debug-scan-interrupt`
-    - interrupted command:
-      - `nmap -sV -T4 --top-ports 1000 192.168.50.1`
-    - log artifact:
-      - `sessions/interrupted-progress-20260402/debug-scan-interrupt/logs/cmd-20260402-142459.640649474.log`
-- Latest live validation after the interrupted-execution change:
-  - router planning/action review remained sound:
-    - `sessions/interrupted-progress-20260402/router-qwen27b-live2`
-    - action review rejected an overbuilt first scan before execution:
-      - artifact: `sessions/interrupted-progress-20260402/router-qwen27b-live2/context/action-review-attempt-001.txt`
-  - ZIP planning/execution remained coherent:
-    - `sessions/interrupted-progress-20260402/zip-qwen27b-1`
-    - step 1 advanced
-    - step 2 blocked on a real missing prerequisite:
-      - `/usr/share/wordlists/rockyou.txt`
-    - blocked-step artifact:
-      - `sessions/interrupted-progress-20260402/zip-qwen27b-1/context/step-003-step-blocked.txt`
-- Current conclusion after these validations:
-  - the interrupted-execution runtime change is sound enough to keep
-  - router behavior is now more limited by planned-step progress and planner variance than by obviously malformed actions
-  - ZIP still blocks on genuine prerequisite gaps rather than packet or planner corruption
+- The pre-implementation checkpoint is `95edae1`, tagged `checkpoint/pre-core-rebuild-2026-09-19` and pushed to GitHub.
+- The [assessment](docs/code-assessment-2026-09-19.md) found eight contract failures despite passing race tests and 72.0% statement coverage. They concerned command interpretation, child cancellation, unsupported completion, stale evidence, scope inference, and missing behavior validation.
+- The recommendation was to keep Go, this repository, useful UI/inspection components, and one worker concept while correcting the core contracts. The legacy orchestrator remains reference material.
 
-- Current scope-step normalization still uses heuristic matching on planner-generated step labels. This is acceptable as a temporary bridge because it is not parsing raw execution output, but it should later be replaced by typed planner step metadata so runtime semantics do not depend on step-label text.
-- Worker interactive UI now has a usable first TUI slice:
-  - left stream pane
-  - right status pane
-  - bottom input bar
-  - operator commands:
-    - `/status`
-    - `/step`
-    - `/plan`
-    - `/lastlog`
-    - `/stats`
-    - `/packet`
-    - `/help`
-  - the first live TUI check against the worker model showed a session-status inconsistency (`task_runtime.state=done` while top-level `status=active`), which is now fixed in the interactive shell persistence path
-- Worker CLI now guarantees an end-of-run assistant summary in the chat stream:
-  - summarizes what was done
-  - reports the strongest result
-  - gives at least one concrete next way to progress
-  - this now applies to completed and blocked runs in the interactive shell
-- Worker CLI input-mode routing is now explicit:
-  - `conversation`
-  - `direct_execution`
-  - `planned_execution`
-  - the classifier is validated against a small contract (`mode`, `reason`) and fails safe to `conversation` on invalid or ambiguous output
-  - live validation showed:
-    - `Who are you?` stays in conversation mode without entering the worker loop
-    - `what files are in this folder?` routes to direct execution and completes with `ModeHint=direct_execution`
-    - ZIP extraction routes to planned execution and persists `ModeHint=planned_execution` with a real semantic plan
-- Direct execution needed its own completion path:
-  - a simple request like `what files are in this folder?` could execute a correct command (`ls`) and still block at the step limit
-  - the fix was not command hardcoding; it was a generic direct-execution evaluation pass after each action
-  - the worker loop now asks whether the direct request is already satisfied by the structured evidence and completes immediately when it is
-  - live validation after the fix showed `what files are in this folder?` finishing cleanly with top-level `status=completed` and a user-facing terminal summary
-- The custom renderer approach was the wrong foundation for a real TUI:
-  - the old implementation mixed cooked terminal input, full-frame string rendering, and ad hoc ANSI clearing
-  - that architecture could not reliably own the cursor, input line, width/height handling, or viewports
-- The worker CLI is now rebuilt on Bubble Tea + Bubbles + Lip Gloss:
-  - Bubble Tea owns the event loop and alternate-screen terminal lifecycle
-  - `bubbles/textinput` owns the input field instead of raw `ReadString`
-  - `bubbles/viewport` owns the chat and status panes instead of fixed-width string slicing
-  - Lip Gloss handles pane layout/styling
-  - the old custom renderer files were removed rather than patched further
-- The interactive CLI now has an explicit split between:
-  - a Bubble Tea TUI path for real terminals
-  - a scripted non-terminal path for tests and piped input
-- Live validation against the worker model showed the Bubble Tea UI rendering a real pane layout instead of the previous terminal dump:
-  - left chat pane
-  - right status pane
-  - bottom input area managed by Bubble Tea
-  - `Ctrl-C` now exits through the Bubble Tea input loop instead of leaving the old shell stuck
-- The next Worker CLI problem is not just presentation polish; it is run-lifecycle visibility and correctness:
-  - a new interactive request can correctly start a fresh active task while staying in the same session
-  - but the TUI still treats a worker run as a black box and only receives the final result
-  - that makes the right pane look frozen on the initial generic task scaffold during long runs
-  - and it hides post-execution waits while the worker performs additional LLM judgment
-- The correct architectural direction is:
-  - keep `WorkerPacket` as the durable source of truth for the current task
-  - add explicit worker progress events as a live runtime surface for the TUI and later orchestrator
-  - treat execution truth as primary and post-execution LLM judgment as secondary refinement
-  - this is a lifecycle design issue, not a timeout-only issue
-- That lifecycle refactor is now partially in place:
-  - the worker loop emits structured progress events for planning, execution, post-exec evaluation, and terminal states
-  - the Bubble Tea CLI and scripted CLI consume those events during the run instead of waiting only for the final `Runner.Run(...)` return
-  - in-flight `session.json` snapshots now persist packet updates during long-running work
-  - direct execution can now terminate from clear structured success evidence without requiring an extra post-execution LLM round
-- Live validation on April 6, 2026 showed the new lifecycle behavior working against the real worker model:
-  - direct execution (`what files are in this folder?`) completed with live `Command` / `System` progress entries and `session.json` ended in `completed`
-  - the two-turn ZIP flow started a fresh active task on the second request, executed `unzip`, and ended promptly in `blocked` with `MissingFact = credential or password required for secret.zip`
-  - remaining debt is narrower now:
-    - planned/direct blocked semantics still rely on post-execution judgment more than they should
-    - per-phase LLM budgets are still needed to keep evaluation waits bounded
-- The next post-exec refinement stayed on the right side of the architectural boundary:
-  - direct execution now blocks immediately from the existing typed `incorrect_password` signal instead of waiting on another LLM judgment round
-  - this uses the executor's structured `Signals` / `Assessment` / `FailureClass`, not new command-name heuristics or raw-output parsing in the worker loop
-- The interactive worker session is now observable without depending on Bubble Tea rendering:
-  - `Shell.RunHeadless(...)` exercises the same classification / task rollover / conversation / worker-run logic without a terminal UI
-  - live sessions now append `events.ndjson` with runtime transitions such as classification, task start, worker progress, and terminal outcomes
-  - live sessions now append `transcript.ndjson` with structured user/assistant conversation entries
-  - a real non-TTY run against the local model produced both artifacts and showed the full direct-execution lifecycle in machine-readable form
+## Kali, knowledge reuse, and offline inventory — 2026-09-19
+
+- Product requirement: combine Kali tooling, adaptable playbooks, reusable custom applications, and discovery-driven vulnerability research. Fully air-gapped assessments must use local inference for every role and local research/dependencies, with no cloud fallback. Better verified vulnerability discovery is the primary competitive objective; no such advantage has been demonstrated yet.
+- Read-only host inspection confirms Kali Rolling (`VERSION_ID=2025.4`) with installed packages `nmap 7.98+dfsg-1kali1`, `exploitdb 20260205-0kali1`, and `metasploit-framework 6.4.112-0kali1`. Local resources include `/usr/share/exploitdb/files_exploits.csv` and `/usr/share/metasploit-framework/db/modules_metadata_base.json`. These are useful exploit/module resources, not evidence of comprehensive CVE coverage or current upstream freshness.
+- The installed `/usr/share/nmap/scripts/vulners.nse` calls `https://vulners.com/api/v3/burp/software/` with software/version information. Its presence does not provide offline vulnerability research. No target scans or resource updates were run for this inventory.
+- Four playbooks survive under `docs/archive/playbooks/`; the active `docs/playbooks/` directory is empty. `legacy/internal/playbook/playbook.go` implements Markdown loading and keyword matching. These assets are not integrated into the rebuilt worker.
+- `legacy/internal/cli/tool_forge.go` creates session-local helpers with file hashes, purpose, invocation, and bounded repair; `tools_manifest.go` summarizes that session's tools. This is useful reference material, not a verified cross-assessment reuse catalog. The active core can execute commands but has no corresponding managed catalog.
+- Legacy `Network.AssumeOffline` asks for permission to browse/crawl and still permits model use with a configured endpoint. It does not enforce an air gap. The active runtime's lack of network enforcement is already documented.
+- Carry forward useful content and contracts in bounded slices. Do not restore legacy code wholesale or claim offline support from a setting. Architecture, tasks, and acceptance gates now include offline operation and independently scored discovery comparisons.
+
+## Core cleanup observations
+
+- Explicit argv and explicit shell scripts remove the need for command-splitting and shell-detection heuristics.
+- Approvals must describe the prepared invocation and cwd. Unknown approval decisions must not permit execution.
+- Process success alone does not establish task completion. Existing tests that accepted unrelated output or evaluator failure needed corrected assertions.
+- Earlier failures belong in history; they must not replace current execution truth merely because they have a higher severity score. New tasks start with fresh execution results.
+- Tool stdout/stderr can stream directly to local files. Bounded previews keep memory use predictable without discarding full evidence.
+- Atomic snapshot replacement addresses torn JSON reads/writes; it does not establish exactly-once external execution or a multi-worker journal.
+- TUI shutdown must wait for the worker to finish. Per-action approvals currently use text mode to avoid competing stdin readers.
+- The repeat-run harness used a stale fixed session location. It now passes an explicit per-run session directory; validation must inspect those actual artifacts.
+- Historical audit probes are stored as `.go.txt` fixtures so `go test ./...` does not discover incompatible scratch packages.
+- Runtime target-scope enforcement, robust multi-worker recovery, and a findings/report service remain product gaps. Removing misleading scope inference is not equivalent to implementing a sandbox.
+
+## Validation evidence
+
+- Focused regressions, deterministic CI, and the full race-enabled Go suite passed. A final relative-executable cwd correction also passed the affected package with the race detector.
+- Six repeated local-model checks used `lmstudio-community/qwen3.5-27b` on the configured LM Studio server: 3/3 explicit-shell runs and 3/3 direct-argv runs completed with the exact requested literal text `hello world; printf two`.
+- Evidence root: `sessions/core-live-20260919-7eLNPJ/`. The `runs/` and `direct-runs/` subdirectories each contain three independent sessions. Saved context, semantic evaluation records, final state, command logs, and full stdout/stderr artifacts were inspected. The task fixture remained empty.
+- These are focused execution/completion checks. They do not establish generic pentest effectiveness, scope enforcement, or comparative superiority.
+
+## Subscription integration evidence
+
+- OpenCode's direct OAuth/Responses provider and Cline's subscription support confirm the provider pattern. The first BirdHackBot adapter reuses Codex's file sign-in/refresh and sends inference directly; it never starts a Codex agent turn. Sources and setup: [subscription runbook](docs/runbooks/subscription-bridge.md).
+- No API-key fallback exists. The bridge has loopback-only bearer authentication, no upstream tools, propagated cancellation, one auth refresh/retry, and explicit access/limit failures.
+- The first transport probe failed because the terminal Responses event omitted already streamed completed items. A regression now covers that actual backend behavior; partial output still cannot become success.
+- After that correction, 3/3 live worker runs used `gpt-daybreak-blue-latest` and completed the harmless direct-argv printf task. Evidence root: `sessions/subscription-live-20260919/`. Each run executed one local command, produced the exact expected stdout, passed semantic evaluation, and persisted `completed`/`done` state.
+- Final model contexts, prepared invocations/cwd, stdout/stderr, evaluation records, and saved state were inspected. The fixture stayed empty. No bridge or subscription credential values were found in these session artifacts.
+- Deterministic CI (including all three entrypoint builds) and race checks for the bridge, local authentication, LLM client, interactive CLI, and worker command passed. Auth expiry/refresh failures and limits use deterministic fixtures; no intentional account exhaustion or live token expiry was required.
+- These are inference/worker integration checks. They do not establish pentest effectiveness, customer readiness, or an independent audit of provider-side Daybreak settings. The backend endpoint and file-store dependency are explicit compatibility limits.
+
+## Guided orchestration and current model setup — 2026-09-19
+
+- The primary no-flag application now guides provider selection, explicit scope, per-action approval, bounded two-worker delegation, operator questions, evidence review, and a draft assessment report. Subscription bridge lifetime and its temporary client credential are managed by the application for an existing sign-in. Whole-assessment resume, first-time sign-in, independent finding verification, and enforced scope isolation remain gaps.
+- The built application's deterministic PTY checks cover success, saved-provider reuse, denied execution, Ctrl-C during a child command, cancellation before execution, provider setup recovery, and worker questions. CI and affected-package race checks passed. Actual requests are checked for the selected local reasoning and output allowance.
+- User-selected local baseline: `qwen/qwen3.8-27b`, Q6_K, low reasoning, at most two concurrent requests. LM Studio's loaded-instance metadata reported context length 50,176 and parallelism two. Its model metadata default is xhigh, so the client sends explicit `reasoning_effort: low`. The guided local profile requests 32,768 output tokens with a ten-minute request timeout. The user noted that substantial output capacity may be necessary even at low reasoning. Server load settings were read, not changed.
+- Historical Qwen 3.5 runs remain labeled with that model; they do not establish Qwen 3.8 acceptance. Early guided debugging exposed array/string mismatch in the finding schema and a discarded proposed worker answer in semantic evaluation. The schema now uses string arrays for steps/remediation, and the evaluator receives the proposed answer alongside existing evidence. A bounded coordinator correction handles rejected proposals without executing them or accepting their claims.
+- The first Qwen 3.8 full planning request hit the old 90-second timeout before tool execution. A native low-reasoning diagnostic also timed out at 90 seconds. These are inference/time-budget observations, not evidence of a model refusal. The larger-budget application run subsequently produced a plan and entered worker execution. The CLI now distinguishes provider timeout from operator cancellation.
+- An initial guided Daybreak run completed discovery and dependent validation but rejected final citations to worker-created files not registered as execution evidence. The prompt now exposes the exact recorded evidence catalog and its one correction requests replacement of all invalid references. The runtime continues to reject unregistered citations. No target-specific logic or extra repair loops were introduced.
+- A subsequent Daybreak diagnostic exhausted the discovery worker’s six steps and was deliberately stopped, preserving its aborted report. Inspection found that model context kept displaying the original budget after turns were consumed. Each turn now exposes its actual remaining step count; the execution limit is unchanged, and the terminal question/answer regression checks the decrement.
+- The larger-budget Qwen 3.8 pilot finished all four workers (14 model calls, 100,478 provider-reported tokens), but the final report was rejected because its validation task had no dependency links; it also omitted the requested missing-reference GET. Actual logs confirm the seeded admin exposure, the fixed 403 response, and debug=false. This is not a passing local assessment. The run started before the explicit evidence catalog and step-countdown changes; Qwen needs further task/report-contract validation on the current build. No model refusal was observed in this synthetic pilot. Review: `sessions/guided-live-20260919-r5vjg4v3/qwen38-02-review.json`.
+- Fixture truth is fixed in `testdata/assessment-lab/README.md`: one synthetic access-control defect, a fixed counterpart, a non-applicable advisory, and an unavailable reference. Local terminal/debug evidence is under `sessions/guided-live-20260919-r5vjg4v3/`; corresponding Qwen assessment directories are recorded in its transcripts. Daybreak uses a clean synthetic workspace to keep cloud context limited to test instructions and fixture evidence. These runs do not establish real-CVE coverage, air-gapped operation, customer readiness, or superiority to competitors.
+
+## Guided Daybreak fixture results — 2026-09-19
+
+After the evidence-catalog and step-countdown corrections, three consecutive unchanged-build runs through `gpt-daybreak-blue-latest` completed from guided startup to report:
+
+| Assessment ID | Model calls | Reported tokens | Outcome |
+| --- | ---: | ---: | --- |
+| `assessment-20260919-162753-2813045723` | 15 | 92,685 | 4 workers done; expected finding and controls |
+| `assessment-20260919-163316-3234652723` | 21 | 113,150 | 4 workers done; expected finding and controls |
+| `assessment-20260919-164214-788991229` | 17 | 108,552 | 4 workers done; recovered from a shell syntax error |
+
+- Each report contains one evidence-backed draft finding for the seeded admin exposure, the protected counterpart, non-applicable debug advisory, and actual 404 research gap. Registered citations, dependency links, inherited scope, separate task directories, decreasing budgets, final contexts, and full command responses were inspected. No false second finding was reported for the fixed or debug controls.
+- The last run recovered from a model-generated shell command using unsupported substitution syntax. The error, repair, and successful output remain in the evidence; no runtime workaround was added.
+- The application managed its own subscription bridge and temporary credential. No bridge credential directories remained after exit, and no credential patterns were found in the inspected session artifacts. The fixture server was stopped. The checkout executable was rebuilt and matched the tested binary.
+- Evidence and all failed pilots: `sessions/guided-live-20260919-r5vjg4v3/`. Passing assessments live under `daybreak-lab/sessions/`; terminal transcripts are in `daybreak-lab/`. Inspection record: `completed-daybreak-reviews.json`.
+- CI, nine terminal scenarios, and affected-package race checks passed. This is a synthetic workflow result with existing subscription sign-in, not proof of real-CVE coverage, strict scope enforcement, unfamiliar-operator usability, Qwen acceptance, air-gapped operation, or competitive superiority. Local and cloud pilots used different instruction workspaces and manual approvals; they are not a matched model-performance comparison.
+
+## Source-assisted assessment and interrupted validation — 2026-09-19
+
+- Added `testdata/source-lab/`: a synthetic tenant authorization defect, a fixed API counterpart, authentication controls, an old non-applicable advisory, and a deployed Git revision differing from default HEAD. Fixture truth and source hashes were recorded before live inference. Deterministic fixture checks were added to CI, which passed with the nine guided terminal scenarios. No production runtime changes were needed for these source investigations.
+- Two guided Daybreak assessments completed and passed inspection: `assessment-20260919-165917-843355950` (19 calls, 156,188 reported tokens) and `assessment-20260919-173337-2947254808` (21 calls, 183,715 reported tokens). Each produced the single expected cross-tenant finding, dependent target validation, correct controls, attributable deployed source, and explicit research limits. Actual responses, reports, citations, saved contexts, and state were inspected. Evidence: `sessions/assessment-next-drlavi6_/daybreak-source/`; reviews: `sessions/assessment-next-drlavi6_/source-reviews.json`.
+- The third Daybreak run, `assessment-20260919-173912-279276461`, was deliberately canceled while awaiting action approval during conversation troubleshooting. The current Qwen retest, `sessions/assessment-20260919-165533-2506485338/`, was canceled too. Both persisted aborted reports; neither counts as a passing assessment or demonstrates a provider failure. Qwen supplied validation dependency links correctly in this retest, but final reporting and full fixture coverage remain unvalidated.
+- Both fixture servers and assessment processes were stopped. The cause of the conversation responsiveness problem has not been established; waiting application prompts alone do not prove that they caused it. These runs do not complete source-assisted acceptance, local-model acceptance, or comparative discovery evaluation.
+
+Earlier chronological notes are preserved in `docs/archive/pre-core-cleanup-2026-09-19/DISCOVERIES.md`.

@@ -1,339 +1,130 @@
-# Rebuild Plan
+# Tasks
 
-This task list derives from `docs/architecture.md`.
-The architecture document is the source of truth for the rebuild branch.
+Updated 2026-09-20. This file owns immediate implementation order and status.
 
-Planning rules:
-- `TASKS.md` is the executable plan for the current phase and, optionally, the next phase.
-- `ROADMAP.md` is directional only and must not contain detailed task lists.
-- `DISCOVERIES.md` records lessons, risks, and future-phase notes; it is not a task list.
-- If `TASKS.md` and `ROADMAP.md` differ, `TASKS.md` is authoritative for execution.
+## Agreed sequence
 
-## Current Direction — 2026-09-19
+1. Get the existing core into a dependable state.
+2. Build subscription-backed OpenAI inference through a local API wrapper.
+3. Make orchestration the primary product surface.
+4. Add source-assisted assessment and comparative evaluation.
 
-Phase 4 is the active implementation priority: orchestrator-led assessments and subscription access. Phase 5 is the next product slice: source-assisted assessment. The standalone worker remains the shared execution foundation.
+The product remains orchestrator-first. The first two steps establish its shared engine and model access. Keep each implementation small, runnable, and tied to its done condition. Priority clarification, 2026-09-19: complete and accept the agentic worker first, then complete and accept the orchestrator structure, before expanding knowledge/source capabilities. Completed cleanup and provider checks do not establish full worker acceptance.
 
-Phases 0-3 below preserve rebuild history and unfinished worker debt. Their unchecked items are not blanket prerequisites for orchestration; pull forward only the work required by Phase 4 contracts and acceptance. No new runtime capability is marked complete by this planning update.
+## Current priority: foundation acceptance and capability proof
 
-## Phase 0 — Reset
-- [x] Aggressively archive historical docs into `docs/archive/`
-- [x] Reduce active docs to the minimal set
-- [x] Move the pre-rebuild implementation into `legacy/` so old and new code cannot be confused
-- [x] Write and freeze the v1 baseline architecture document with user review before adoption
-- [x] Rewrite `README.md` to match the rebuild branch state
+Objective: prove one shared worker can carry a bounded multi-step task from goal to evidence-backed completion, adapt when observations invalidate its plan, and return an honest blocked/aborted result when appropriate.
 
-Exit criteria:
-- architecture frozen at `docs/architecture.md`
-- legacy/new separation is clear
-- active planning/documentation structure is clean
+- [x] Audit and replace competing worker control paths. One decision loop now owns model-authored plan changes, approved actions, questions, explicit blockers, and whole-goal completion. Removed keyword mode selection, startup-only planner, action reviewer, separate step judge, target/prerequisite inference, synthetic facts, failure ranking, and ambiguous response aliases.
+- [x] Bound model views without rewriting persisted evidence; retain repeated execution identities, plan history, multiline answers, protected instructions and explicit truncation. Persist consumed budgets, stop on recording failure, and reject uncertain action replay. Version 1 state cannot be resumed.
+- [x] Cover recovery and plan revision through the built terminal application; nine deterministic user-path cases now pass, including generic orchestration. Race testing identified and removed duplicate worker/UI progress writers.
+- [x] Pass three consecutive Daybreak controlled-recovery runs after independent artifact review. Corrected missing plan history and ambiguous multiline evidence rendering; retained four preceding runs as failures. This is focused fixture validation, not canonical worker acceptance.
+- [ ] Validate the full worker cycle with generic, meaningful multi-step assessment tasks covering discovery, evidence-producing actions, recovery, and a genuinely blocked case. Use synthetic or authorized customer-like fixtures selected for the capability under test; do not optimize around a named legacy target.
+- [ ] Use the confirmed provider settings consistently in standalone diagnosis and delegated work. Qwen's low reasoning and larger output allowance currently exist in guided setup but are not exposed by the standalone development CLI.
+- [ ] Inspect repeated real-model runs, persisted state, and actual evidence. Daybreak and Qwen results remain separately attributed; neither interrupted runs nor single-command checks establish acceptance.
+- [x] Implement the orchestrator contract around that same engine: bounded assignments, dependencies, result handoff, adaptation to failed/blocked work, shared budgets, cancellation, and evidence-backed synthesis. The guided application now exercises two independent tasks followed by dependent validation with separate workspaces and a shared model-call budget.
+- [ ] Validate the orchestrator with repeated real-model, generic multi-capability assessments and independently reviewed findings. Keep scope isolation, whole-assessment resume, and report verification as explicit product gates.
 
-## Phase 1 — Minimal Worker Loop
+Done means the worker and then the coordinator pass their explicit foundation gates in `docs/runbooks/acceptance-gates.md`. Preserve the useful existing coordinator; further knowledge, playbook, and source integration waits for these gates. Customer scope isolation, full assessment resume, and wider product acceptance remain separate explicit requirements.
 
-Status:
-- complete
+The dated [worker audit](docs/worker-foundation-audit-2026-09-20.md) records removed logic, replacement contracts and live-validation limits. The Qwen guided diagnostic split a requested single-worker task and omitted a line from its final content summary; it does not pass worker acceptance despite completing its assignments.
 
-Goal:
-- build the smallest interactive worker loop that follows `docs/architecture.md`
+## Completed: core cleanup
 
-Tasks:
-- [x] Create the new rebuild-root Go module and minimal package layout
-- [x] Implement the minimal behavior-frame loader, including `AGENTS.md`
-- [x] Implement minimal worker session foundation:
-  - goal
-  - reporting requirement
-- [x] Implement the minimal worker context packet v1
-- [x] Implement exact-action execution with:
-  - minimal shell wrapping only when needed
-  - full command logging
-  - execution-result capture
-- [x] Implement the minimal worker closed loop:
-  - ask LLM for next action
-  - validate approval/executability
-  - execute exact action
-  - feed result back
-- [x] Implement the minimal approval model:
-  - `this time`
-  - `always allow` (session-scoped)
-  - `no`
-  - `--allow-all`
-- [x] Implement context inspection for live diagnosis
-- [x] Implement state-based session resume
-- [x] Run live validation on:
-  - one `secret.zip` workflow
-  - one router workflow
-- [x] Improve generic execution-result assessment:
-  - add result `assessment`
-  - add generic result `signals`
-  - surface ambiguous/suspicious outcomes in active context
-- [x] Improve generic completion judgment:
-  - prefer `step_complete` when the goal is already satisfied by evidence
-  - avoid rereading the same evidence indefinitely
-- [x] Improve generic bounded-action judgment:
-  - prefer actions that fit an interactive loop
-  - avoid broad expensive commands when a smaller action can establish the next fact
-- [x] Add minimal structured worker task context:
-  - task state
-  - current target
-  - missing fact
-- [x] Implement the minimal interactive worker CLI shell:
-  - persistent prompt loop
-  - session continuity across turns
-  - reuse the same worker loop
-  - keep it simple; no full TUI yet
+Checkpoint: `checkpoint/pre-core-rebuild-2026-09-19` (`95edae1`). Implementation branch: `codex/core-foundation`.
 
-Exit criteria:
-- worker loop runs end-to-end with real LLM calls
-- no fallback command synthesis exists in the new path
-- exact commands and execution results are logged
-- active context packet is inspectable during runs
-- both live scenarios have been exercised with understandable behavior, even if not yet perfect
-- router-style reconnaissance can complete cleanly on a bounded local target
-- a minimal interactive worker CLI shell exists for direct user testing
+Objective: correct demonstrated execution/evidence failures without rebuilding every proposed subsystem.
 
-## Phase 2 — Active Context Quality
+- [x] Replace implicit shell detection and command splitting with literal argv or explicit shell scripts.
+- [x] Approve the prepared invocation and cwd; reject unknown approval decisions.
+- [x] Stop owned Unix process groups on cancellation and wait for TUI worker finalization.
+- [x] Stream tool output to local files, bound previews, and preserve execution metadata.
+- [x] Require semantic completion evaluation; remove evaluator-error success fallback.
+- [x] Remove severity-based replacement of current results and cross-task result carryover.
+- [x] Remove automatic scope-step advancement based on private IPs/local paths; expose missing runtime scope enforcement honestly.
+- [x] Validate required behavior fields independently of the goal.
+- [x] Replace session snapshots atomically and record aborted state.
+- [x] Repair repeat-run capture to use an explicit session directory per run.
+- [x] Complete deterministic CI, race checks, and repeated local-model validation; inspect saved context and evidence.
+- [x] Complete documentation/link/status review.
 
-Goal:
-- make active context truth, target stability, and inspectability reliable before adding deeper memory mechanisms
+Done: focused regressions and CI pass, live checks use current artifacts and support only the claims made, and remaining product gaps are explicit. This does not require a new distributed runtime, complete policy engine, or broad plugin system.
 
-Planned tasks:
-- [x] Implement running summary as an explicit active section
-- [x] Tighten truth ordering inside active context
-- [ ] Improve target stability against noisy latest evidence without adding scenario-specific guardrails
-- [x] Add visibility into included vs excluded context material and approximate size
-- [x] Add a lightweight packet validation pass:
-  - validate contradictions/redundancy after packet build
-  - log validation results with the session
-  - fail closed on fatally untrustworthy packets
-- [x] Add curated active execution facts:
-  - derive only from structured runtime truth such as task target, latest execution status, signals, log refs, and artifact refs
-  - render facts as a small context-packet section with provenance
-  - do not infer new facts from raw command output or task-specific recipes
-- [x] Harden active execution fact schema without closing the fact taxonomy:
-  - require kind, subject, status, and source/provenance on every fact
-  - allow unknown fact kinds when provenance is structured and explicit
-  - do not drop or reject facts solely because their kind is not pre-registered
-- [x] Add generic recovery semantics:
-  - derive recovery semantics from structured result state, failure class, and existing signals
-  - surface recovery semantics as provenance-backed execution facts
-  - do not add task-specific command repair, output scraping, or scenario-specific guardrails
-- [ ] Only after validation is useful and inspectable, design any separate packet repair/rebuild step
-- [x] Add interactive shell inspection commands for live multi-turn context testing:
-  - `/stats`
-  - `/packet`
-  - `/lastlog`
-- [x] Re-run repeated live validation on:
-  - `secret.zip`
-  - router/local recon
-- [x] Confirm current packet validation stays clean across a broader live suite
-- [ ] Phase boundary:
-  - treat Phase 2 as good enough for now
-  - move next work to minimal planning rather than more packet shaping
+## Completed: subscription API wrapper (first slice)
 
-## Phase 3 — Minimal Planning
+Objective: make one real subscription-backed structured model request usable by the existing worker while BirdHackBot retains tool execution.
 
-Goal:
-- define the smallest useful planning model without recreating the old complexity
+- [x] Verify available authentication, backend request semantics, actual models, and inference-only behavior.
+- [x] Implement the smallest local authenticated wrapper and worker adapter needed for that request.
+- [x] Handle cancellation, expired authentication, exhausted limits, and clear billing mode without paid-API fallback.
+- [x] Validate a harmless worker task end to end with the live subscription backend.
+- [x] Document setup, supported models/backend limits, and credential handling from verified behavior.
 
-Planned tasks:
-- [x] Document worker-vs-orchestrator planning boundaries explicitly
-- [x] Document interaction modes:
-  - worker:
-    - conversation
-    - direct execution
-    - planned execution
-  - orchestrator:
-    - conversation
-    - planned orchestration
-- [x] Document top-level goal vs worker subgoal model
-- [x] Define planning trigger rules so trivial requests do not create plans
-- [x] Write concrete use cases for:
-  - standalone trivial request
-  - standalone multi-step task
-  - orchestrated single-worker task
-  - orchestrated parallel task
-  - orchestrator conversational status / plan-change request
-- [x] Keep initial plans sequential:
-  - no explicit branch tree in the first planner
-  - local alternatives stay in the closed loop
-  - replan only on real blockage or material task change
-- [x] Define worker-plan acceptance criteria
-- [x] Define orchestrator-plan acceptance criteria
-- [x] Keep plan validation separate from packet validation
-- [x] Define planner output schemas/contracts for:
-  - worker planner output
-  - orchestrator planner output
-- [x] Tie planner validation expectations directly to the planner output schemas
-- [x] Implement the minimal worker planner:
-  - planner trigger remains optional
-  - trivial requests bypass planning
-  - planned tasks emit short sequential semantic steps
-  - `step_complete` can advance through plan steps before final completion
-- [x] Add minimal worker-plan inspection to the interactive shell:
-  - `/plan` prints the active plan state for live testing
-- [x] Log planner attempts with the session:
-  - accepted and failed planner outputs become inspectable artifacts
-  - planner prompt, raw response, parsed plan, and validation result are preserved
-- [x] Document generic worker step-execution semantics:
-  - `in_progress`
-  - `satisfied`
-  - `blocked`
-- [x] Document generic worker step-advance and step-blockage rules
-- [ ] Carry worker planning boundary issues into the Phase 4 orchestrator contract design
-- [x] Implement generic worker step satisfaction/blockage evaluation
-- [x] Implement model-assisted generic step satisfaction evaluation:
-  - evaluate active step from structured packet evidence
-  - log step-evaluation attempts with the session
-  - allow automatic step advancement when the active step is already satisfied
-- [x] Implement model-assisted planned-step action review:
-  - review proposed actions before execution during planned steps
-  - log action-review attempts with the session
-  - allow revise/block decisions without hardcoded command recipes
-- [x] Normalize interrupted execution separately from ordinary command failure:
-  - classify interrupted commands as `execution_interrupted` at the runtime layer
-  - keep interrupted work represented as in-progress rather than ordinary failure in worker summaries
-- [ ] Validate worker step advancement behavior with repeated live runs
-- [ ] Implement generic handling for long-running but reasonable planned-step actions:
-  - distinguish valid in-progress step work from overbuilt action selection
-  - improve planned-step progress interpretation before adding more command-shape guidance
-- [ ] Replace heuristic planner-step text matching with typed step metadata:
-  - planner output should eventually carry explicit step kind/category information
-  - runtime and validation logic should stop inferring semantics from step label text where possible
-- [x] Implement robust worker input-mode classification before worker-loop execution:
-  - classify each normal user turn as `conversation`, `direct_execution`, or `planned_execution`
-  - validate classifier output against a small contract
-  - fail safe to `conversation` on invalid or ambiguous classification
-- [x] Add direct-execution completion evaluation in the worker loop:
-  - after a successful simple action, evaluate whether the request is already satisfied
-  - complete immediately on supported evidence instead of waiting for another free-form worker turn
-  - keep this generic and evidence-driven; no task-specific rules or raw output parsing
-- [x] Define worker input-classifier contract and validator skeleton:
-  - structured output limited to `mode` and `reason`
-  - no commands, no plan steps, no essay output
-- [x] Replace the broken custom worker TUI renderer with a Bubble Tea foundation:
-  - use Bubble Tea + Bubbles + Lip Gloss for the interactive worker CLI
-  - retire the old snapshot/ANSI renderer path for real terminal usage
-  - keep a separate scripted non-terminal path for tests and piped input
-- [ ] Continue refining the worker interactive UI for manual testing:
-  - keep the panel-based layout:
-    - primary chat/execution pane
-    - persistent right-side status pane
-    - persistent bottom input bar
-  - keep the separation between:
-    - UI state
-    - UI events/messages
-    - renderer/view
-    - input/controller loop
-  - improve operator polish:
-    - active plan visibility
-    - active step visibility
-    - latest command and result visibility
-    - latest action review / step evaluation visibility
-    - smoother manual diagnostics during long-running work
-    - scope / approval / model / context usage
-  - keep the visible plan semantic and short
-  - validate the worker UI manually against `secret.zip` and router runs
-- [x] Refactor the worker CLI run lifecycle around explicit progress events:
-  - keep `WorkerPacket` as the authoritative current-task state
-  - add a small structured worker progress event model for live runtime transitions
-  - do not use events as a second source of truth
-  - support multiple tasks inside one interactive session:
-    - transcript/session persists
-    - active task packet resets per new task
-- [x] Remove black-box run behavior from the Worker CLI:
-  - do not wait until the entire `Runner.Run(...)` returns before updating the TUI
-  - surface in-flight progress during planning, execution, and post-execution evaluation
-  - persist meaningful in-flight session state during long-running runs
-- [x] Make the interactive worker logic observable and reusable without Bubble Tea rendering:
-  - add an explicit headless interactive entrypoint
-  - write append-only `events.ndjson` runtime artifacts during live sessions
-  - write append-only `transcript.ndjson` conversation artifacts during live sessions
-  - validate that a non-TTY run exercises the same classification / task rollover / worker execution logic
-- [ ] Make post-execution terminal semantics execution-truth-first:
-  - if execution already clearly implies `blocked`, surface it promptly
-  - if execution already clearly implies `completed`, surface it promptly
-  - use post-execution LLM judgment only when execution truth is genuinely ambiguous
-- [ ] Add per-phase time budgets to worker LLM phases:
-  - classification
-  - planner
-  - action review
-  - direct evaluation
-  - step evaluation
-  - keep execution timeout policy separate
+Done: deterministic CI and affected-package race checks passed; 3/3 real subscription worker checks completed through `gpt-daybreak-blue-latest`, with local execution/context/evidence inspected. Setup, comparison sources, and compatibility limits are in `docs/runbooks/subscription-bridge.md`.
 
-## Phase 4 — Orchestrator And Subscription Access (Active)
+Defer native OAuth UI, broader REST surface area, and client streaming until needed. Orchestrator scheduling belongs to the next slice, not to the inference bridge.
 
-Goal:
-- make the orchestrator the primary assessment experience while retaining the worker as the shared execution engine
-- make subscription-backed OpenAI access available through a local REST bridge
+## Implemented: first guided lab assessment
 
-Implementation order:
+Objective: guide one scoped lab assessment from software discovery through advisory research and bounded validation to an evidence-backed result, using the existing worker engine.
 
-1. Establish trustworthy evaluation capture and resolve the subscription backend boundary.
-2. Implement run/task/evidence contracts and the first complete orchestrated assessment.
-3. Add bounded concurrency, validation, reporting, and operator control to that same path.
+The [competitive assessment](docs/competitive-assessment-2026-09-19.md) supports this bounded slice. Include traceable findings and visible assessment gaps, then evaluate targeted retesting and authenticated multi-role testing as following increments. Competitor feature lists are not an instruction to implement every feature now.
 
-Tasks:
-- [ ] Repair repeated-run capture to use explicit per-run session directories and the interactive/headless product path
-- [ ] Define and record a Codex comparison protocol with matched model access, fixtures, tools, source access, credentials, and aggregate budgets
-- [ ] Prototype subscription access without target execution:
-  - compare documented Codex app-server embedding with an OpenCode-style OAuth inference adapter
-  - verify account authentication, available models, streaming, structured results, cancellation, and limit/error handling
-  - prove inference-only requests do not independently execute tools; an agent backend alone does not fulfill the LLM bridge requirement
-  - select the backend from evidence and record compatibility/maintenance constraints
-- [ ] Implement the local REST bridge around the selected adapter:
-  - versioned requests, streaming events, cancellation, capability/model discovery, auth status, and limit visibility
-  - local binding, caller authentication, isolated worker contexts, and protected credentials
-  - no implicit switch from subscription access to paid API billing
-  - retain local-model and explicitly selected API backends
-- [ ] Define small run/task/result contracts with scope, dependencies, budgets, worker role, artifact ownership, and validation state
-- [ ] Adapt the existing worker to those contracts; repair execution/completion/evidence gaps required by orchestration
-- [ ] Implement orchestrator goal intake, semantic planning, task dispatch, durable state, and event observation
-- [ ] Implement configurable bounded concurrency with separate task workspaces, shared read-only references, and exclusion for conflicting target mutations
-- [ ] Enforce explicit target boundaries and aggregate run budgets at execution boundaries
-- [ ] Implement a shared evidence ledger with observations, hypotheses, claims, and validated outcomes
-- [ ] Implement independent claim validation before promoting findings or access claims
-- [ ] Produce one OWASP-style assessment report with evidence, reproduction, impact, remediation, and coverage gaps, including interrupted/inconclusive runs
-- [ ] Make the orchestrator CLI show worker activity, dependencies, approvals, blockers, model/backend usage, and report status
-- [ ] Implement stop broadcast, child-process cleanup, and state-based resume without duplicate completed actions
-- [ ] Validate the new path against the Phase 4 gates in `docs/runbooks/acceptance-gates.md`
+- [x] Introduce a coordinator with a visible plan that can change as evidence arrives; every delegated task uses the shared adaptive worker loop.
+- [x] Delegate bounded tasks to two workers with inherited scope/permissions, separate workspaces, evidence references, shared call budgets, and explicit completion criteria. Workspace separation is not security isolation.
+- [x] Support model-directed local advisory investigation and follow-up requests through ordinary approved actions. A dedicated corpus/research service and connected research validation remain deferred.
+- [x] Route useful candidates to dependent validation and require recorded evidence for draft findings. Structural checks do not independently verify a finding.
+- [x] Expose this flow through guided startup, visible progress, worker questions, per-action approvals, and broadcast stop.
+- [x] Validate the complete flow on controlled fixtures through the built application: three corrected-build Daybreak runs passed, and the deterministic generic orchestration path now covers two independent tasks followed by dependent validation. Contexts, dependencies, actual output, reports, and cancellation were inspected. Local-model acceptance remains open below.
+- [x] Freeze the first synthetic fixture's expected findings, negative controls, and research gap before running it.
+- [ ] Validate Qwen 3.8 on the current task/report contract with low reasoning and the larger output budget; retain the failed pilot and require explicit validation dependencies and reference checks.
+- [ ] Record a capable general-agent baseline, verified unique findings, misses, false claims, operator effort, target effects, and model usage.
 
-Exit criteria:
-- the primary orchestrator path completes a bounded lab assessment with a reviewable report
-- independent tasks run concurrently and dependent/conflicting work is ordered correctly
-- important claims require supporting validation; stop/resume and evidence attribution remain coherent
-- subscription login and REST access work on the selected supported backend, with honest limits and no surprise API billing
-- repeated live evidence and a matched Codex baseline are recorded; no superiority claim is inferred from agent count
+Done for the first lab slice: three Daybreak assessments exercised discovery, local advisory lookup, delegation, dependent validation, and a reviewable result. Earlier failed diagnostics remain recorded. Qwen contract reliability, broader research integration, usability acceptance, and comparative scoring remain open; this is not customer or air-gap acceptance.
 
-## Phase 5 — Source-Assisted Assessment (Next)
+## In validation: source-assisted authenticated assessment
 
-Goal:
-- connect deployed software identification to matching source, candidate weaknesses, and validated outcomes on the authorized target
+Objective: establish whether the existing orchestrator can correlate a deployed source revision, investigate an authorization issue using supplied synthetic accounts, and produce a target-backed finding without a scenario-specific runtime path.
 
-Tasks:
-- [ ] Record software identity, version/build/configuration evidence, and uncertainty
-- [ ] Discover authoritative public or operator-authorized source and acquire a pinned revision with origin and license metadata
-- [ ] Track source-to-deployment matching explicitly, including mismatched or unknown versions
-- [ ] Delegate bounded source-analysis questions through the same task/worker contracts
-- [ ] Emit hypotheses with code references, preconditions, target linkage, and missing validation evidence
-- [ ] Support isolated local reproduction and approved target validation; distinguish their conclusions
-- [ ] Handle unavailable source and false candidates without blocking unrelated investigation or inventing findings
-- [ ] Test untrusted repository instructions and deceptive target output as evidence-handling cases
-- [ ] Compare repeated runs against the frozen Codex baseline and record where orchestration/source correlation helps or hurts
+- [x] Freeze a synthetic multi-tenant fixture with a vulnerable API, fixed counterpart, authentication controls, an old non-applicable advisory, and default source HEAD differing from deployment.
+- [x] Add deterministic fixture checks to CI.
+- [ ] Complete three unchanged-build guided Daybreak runs and inspect source provenance, dependent validation, actual responses, state, contexts, and report claims.
 
-Exit criteria:
-- a clean vulnerable fixture produces a reproducible, source-linked, target-validated finding
-- fixed and mismatched fixtures do not produce unsupported validated findings
-- missing source degrades honestly to other assessment paths
-- a preregistered comparison shows a repeatable improvement in assessment outcomes or operator effort within matched budgets, without increased unsupported claims
+Current evidence: two completed Daybreak runs passed inspection. The third run and the current Qwen retest were deliberately stopped during conversation troubleshooting, preserving aborted reports; neither establishes an application failure or a passing assessment. The remaining Daybreak repeat and local-model acceptance are still open.
 
-## Working Rules
-- [ ] No patch-first behavior on this branch
-- [ ] No new behavior that conflicts with the architecture document
-- [ ] Every major implementation slice must be followed by real LLM validation
-- [ ] Behavioral conclusions from live validation should use repeated runs, not single examples
-- [ ] Prefer deletion over adaptation when both solve the same problem
-- [ ] Add a recurring architecture drift review at phase boundaries:
-  - catch hardcoded task behavior
-  - catch brittle natural-language trigger matching
-  - catch raw stdout/stderr parsing in behavior logic
-  - catch machine state leaking into human-facing chat text
+Fixture: `testdata/source-lab/`. Done means the single expected defect is reproduced and controls/source mismatch are handled correctly. This does not complete unavailable-source, external repository acquisition, full source correlation, or competitive acceptance.
+
+## After worker and orchestrator acceptance: local assessment knowledge
+
+Objective: expose installed Kali capabilities and attributable local research/playbook resources to the coordinator and workers without replacing their reasoning with a fixed tool chain.
+
+Start with the existing Exploit-DB index and a reviewed active web/network playbook. Show resource paths, revision/freshness, and coverage limits; distinguish exploit references from comprehensive CVE coverage. Keep lookup on the same approved execution path and retain source references in evidence. Validate lookup/applicability through the guided application before bounded read-only capability fixtures. Do not add a new database service, external updater, or legacy planner.
+
+## Required capabilities: Kali, reusable knowledge, and air-gapped operation
+
+These are product requirements, not completed features or a request to build every subsystem at once. The architecture owns the contracts; the acceptance gates own proof.
+
+- [ ] Start from the installed Kali tools and local corpora recorded in `DISCOVERIES.md`; verify availability, versions, and knowledge freshness on the actual assessment environment.
+- [ ] Bring relevant playbook guidance into worker context and preserve its revision; avoid importing the legacy heuristic planner.
+- [ ] Support creating, validating, and reusing a small versioned local helper with recorded dependencies and evidence. Begin with one demonstrated use case, not a plugin marketplace.
+- [ ] Make the same orchestrator workflow usable with every model role local and research based on local snapshots. Add guided offline readiness and deliberate resource import; no cloud fallback.
+- [ ] Pass the air-gapped gate under enforced network isolation before claiming air-gapped support.
+- [ ] Compare discovery quality with a relevant specialist competitor, expand to held-out fixtures, and measure the contribution of playbooks, research, and reusable tools. Report connected and offline results separately.
+
+## Required in the primary product surface: guided operation
+
+User requirement, 2026-09-19: usability and application assistance must reduce setup mistakes and unsafe operation. The contract is in `docs/architecture.md`; the first guided lab flow implements part of it.
+
+- [x] Open a guided application with `birdhackbot` and no mandatory flags; support provider setup and reuse of preferences from the checkout.
+- [x] Manage bridge startup and temporary local credentials through the application for an existing sign-in.
+- [ ] Complete first-time provider sign-in and packaged operation outside the checkout.
+- [x] Guide goal/scope entry, review per-action permissions before starting, and show progress, stop, report location, and actionable errors.
+- [ ] Complete the usability acceptance check with an operator unfamiliar with the implementation.
+
+Implement this alongside the first orchestrator flow. Keep advanced CLI access and reuse existing runtime contracts; do not build a second execution path.
+
+## Deferred product work
+
+`ROADMAP.md` owns future direction. Full target-scope enforcement, assessment resume, independent finding verification, and scored comparisons remain required product work.
+
+Earlier phase checklists are archived in `docs/archive/pre-core-cleanup-2026-09-19/TASKS.md`. They are historical records, not additional current work orders.

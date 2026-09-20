@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
+
+	"github.com/Jawbreaker1/CodeHackBot/internal/localauth"
 )
 
 // Client is a minimal OpenAI-compatible chat client for the rebuild path.
@@ -16,6 +19,18 @@ type Client struct {
 	BaseURL    string
 	Model      string
 	HTTPClient *http.Client
+	// Empty preserves the provider default; local reasoning models can opt in.
+	ReasoningEffort string
+	MaxOutputTokens int
+	// MaxInputBytes bounds the combined message text before contacting a provider.
+	// It is an inspectable memory limit, not an exact provider token count.
+	MaxInputBytes int
+	// AuthTokenFile is a local bridge credential, never a provider/API token.
+	AuthTokenFile string
+	// Hooks let one assessment bound and account for all coordinator/worker calls.
+	// Implementations must be safe for concurrent callers.
+	BeforeRequest func(context.Context) error
+	OnCompletion  func(Completion, error)
 }
 
 // Message is a chat message.
@@ -26,9 +41,11 @@ type Message struct {
 }
 
 type chatRequest struct {
-	Model       string    `json:"model"`
-	Messages    []Message `json:"messages"`
-	Temperature float64   `json:"temperature"`
+	Model           string    `json:"model"`
+	Messages        []Message `json:"messages"`
+	Temperature     float64   `json:"temperature"`
+	ReasoningEffort string    `json:"reasoning_effort,omitempty"`
+	MaxTokens       int       `json:"max_tokens,omitempty"`
 }
 
 // Profile defines how provider-specific response fields may be selected.
@@ -97,7 +114,7 @@ func (c Client) ChatStructured(ctx context.Context, messages []Message) (string,
 }
 
 // Complete sends a minimal chat completion request and normalizes provider output.
-func (c Client) Complete(ctx context.Context, messages []Message, opts ChatOptions) (Completion, error) {
+func (c Client) Complete(ctx context.Context, messages []Message, opts ChatOptions) (completion Completion, completionErr error) {
 	if strings.TrimSpace(c.BaseURL) == "" {
 		return Completion{}, fmt.Errorf("base url is required")
 	}
@@ -107,6 +124,13 @@ func (c Client) Complete(ctx context.Context, messages []Message, opts ChatOptio
 	if len(messages) == 0 {
 		return Completion{}, fmt.Errorf("messages are required")
 	}
+	inputBytes := 0
+	for _, message := range messages {
+		inputBytes += len(message.Content)
+	}
+	if inputBytes > c.InputByteLimit() {
+		return Completion{}, fmt.Errorf("model input is %d bytes; limit is %d; reduce context before retrying", inputBytes, c.InputByteLimit())
+	}
 
 	httpClient := c.HTTPClient
 	if httpClient == nil {
@@ -114,9 +138,11 @@ func (c Client) Complete(ctx context.Context, messages []Message, opts ChatOptio
 	}
 
 	body, err := json.Marshal(chatRequest{
-		Model:       c.Model,
-		Messages:    messages,
-		Temperature: 0.2,
+		Model:           c.Model,
+		Messages:        messages,
+		Temperature:     0.2,
+		ReasoningEffort: c.ReasoningEffort,
+		MaxTokens:       c.MaxOutputTokens,
 	})
 	if err != nil {
 		return Completion{}, fmt.Errorf("marshal request: %w", err)
@@ -127,7 +153,29 @@ func (c Client) Complete(ctx context.Context, messages []Message, opts ChatOptio
 		return Completion{}, fmt.Errorf("new request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if c.AuthTokenFile != "" {
+		endpoint, err := url.Parse(c.BaseURL)
+		if err != nil || endpoint.Scheme != "http" || endpoint.User != nil || !localauth.LoopbackHost(endpoint.Hostname()) {
+			return Completion{}, fmt.Errorf("bridge authentication requires an http URL with a literal loopback IP")
+		}
+		token, err := localauth.Read(c.AuthTokenFile)
+		if err != nil {
+			return Completion{}, err
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		localClient := *httpClient
+		localClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		httpClient = &localClient
+	}
 
+	if c.BeforeRequest != nil {
+		if err := c.BeforeRequest(ctx); err != nil {
+			return Completion{}, err
+		}
+	}
+	if c.OnCompletion != nil {
+		defer func() { c.OnCompletion(completion, completionErr) }()
+	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return Completion{}, fmt.Errorf("chat request: %w", err)
@@ -139,6 +187,17 @@ func (c Client) Complete(ctx context.Context, messages []Message, opts ChatOptio
 		return Completion{}, fmt.Errorf("read response: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if c.AuthTokenFile != "" {
+			var failure struct {
+				Error struct {
+					Message string `json:"message"`
+					Type    string `json:"type"`
+				} `json:"error"`
+			}
+			if json.Unmarshal(respBody, &failure) == nil && failure.Error.Type == "subscription_bridge_error" {
+				return Completion{}, fmt.Errorf("subscription bridge %s: %s (Retry-After: %s)", resp.Status, failure.Error.Message, resp.Header.Get("Retry-After"))
+			}
+		}
 		return Completion{}, fmt.Errorf("chat request returned status %s", resp.Status)
 	}
 
@@ -150,6 +209,9 @@ func (c Client) Complete(ctx context.Context, messages []Message, opts ChatOptio
 		return Completion{}, fmt.Errorf("no choices returned")
 	}
 	choice := decoded.Choices[0]
+	if choice.FinishReason == "length" || choice.FinishReason == "content_filter" {
+		return Completion{FinishReason: choice.FinishReason, Usage: decoded.Usage}, fmt.Errorf("model response incomplete (finish_reason=%s); no decision accepted", choice.FinishReason)
+	}
 	content := strings.TrimSpace(choice.Message.Content)
 	reasoningContent := strings.TrimSpace(choice.Message.ReasoningContent)
 	text, source := selectResponseText(opts.Profile, content, reasoningContent)
@@ -162,6 +224,13 @@ func (c Client) Complete(ctx context.Context, messages []Message, opts ChatOptio
 		RawResponse:      strings.TrimSpace(string(respBody)),
 		Usage:            decoded.Usage,
 	}, nil
+}
+
+func (c Client) InputByteLimit() int {
+	if c.MaxInputBytes > 0 {
+		return c.MaxInputBytes
+	}
+	return 48 * 1024
 }
 
 func selectResponseText(profile Profile, content, reasoningContent string) (string, ResponseSource) {

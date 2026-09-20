@@ -9,11 +9,36 @@ import (
 	ctxpacket "github.com/Jawbreaker1/CodeHackBot/internal/context"
 	"github.com/Jawbreaker1/CodeHackBot/internal/llmclient"
 	"github.com/Jawbreaker1/CodeHackBot/internal/session"
+	"github.com/Jawbreaker1/CodeHackBot/internal/sessionstate"
 	"github.com/Jawbreaker1/CodeHackBot/internal/workerloop"
 	"github.com/Jawbreaker1/CodeHackBot/internal/workermode"
 	"github.com/Jawbreaker1/CodeHackBot/internal/workerplan"
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+func TestBubbleCancellationWaitsForWorkerBeforeQuit(t *testing.T) {
+	var saved sessionstate.State
+	shell := &Shell{StatePath: t.TempDir() + "/session.json", SaveState: func(_ string, state sessionstate.State) error { saved = state; return nil }}
+	m := newBubbleModel(context.Background(), shell, behavior.Frame{})
+	m.busy = true
+	m.resultCh = make(chan runResult)
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m = next.(bubbleModel)
+	if cmd != nil {
+		t.Fatal("quit before worker returned")
+	}
+	packet := ctxpacket.WorkerPacket{SessionFoundation: session.Foundation{Goal: "fixture"}, TaskRuntime: ctxpacket.TaskRuntime{State: "aborted"}}
+	next, cmd = m.Update(runFinishedMsg{outcome: workerloop.Outcome{Packet: packet}, err: context.Canceled})
+	if cmd == nil {
+		t.Fatal("expected quit after worker finalized")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatal("expected quit command")
+	}
+	if saved.Status != "aborted" {
+		t.Fatalf("status=%q", saved.Status)
+	}
+}
 
 func runBubbleCmd[T any](t *testing.T, cmd tea.Cmd) T {
 	t.Helper()
@@ -126,6 +151,8 @@ func TestBubbleModelDirectExecutionMarksRunningBeforeRun(t *testing.T) {
 	classified := runBubbleCmd[classifiedMsg](t, cmd)
 	next, cmd = model.Update(classified)
 	model = next.(bubbleModel)
+	next, cmd = model.Update(runBubbleCmd[preparedTaskMsg](t, cmd))
+	model = next.(bubbleModel)
 	if !model.ui.Started {
 		t.Fatal("ui.Started = false, want true")
 	}
@@ -199,6 +226,8 @@ func TestBubbleModelConsumesWorkerProgressEvents(t *testing.T) {
 	model := next.(bubbleModel)
 	classified := runBubbleCmd[classifiedMsg](t, cmd)
 	next, cmd = model.Update(classified)
+	model = next.(bubbleModel)
+	next, cmd = model.Update(runBubbleCmd[preparedTaskMsg](t, cmd))
 	model = next.(bubbleModel)
 
 	msgs := runBubbleBatch(cmd)

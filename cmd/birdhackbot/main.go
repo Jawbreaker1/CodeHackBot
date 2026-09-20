@@ -18,6 +18,7 @@ import (
 	ctxpacket "github.com/Jawbreaker1/CodeHackBot/internal/context"
 	"github.com/Jawbreaker1/CodeHackBot/internal/contextinspect"
 	"github.com/Jawbreaker1/CodeHackBot/internal/execx"
+	"github.com/Jawbreaker1/CodeHackBot/internal/guided"
 	"github.com/Jawbreaker1/CodeHackBot/internal/interactivecli"
 	"github.com/Jawbreaker1/CodeHackBot/internal/llmclient"
 	"github.com/Jawbreaker1/CodeHackBot/internal/reporoot"
@@ -44,8 +45,9 @@ func main() {
 	contextPacket := flag.Bool("context-packet", false, "print minimal worker context packet")
 	inspectContext := flag.Bool("inspect-context", false, "write turn-by-turn context snapshots to the active session directory")
 	debugRunCommand := flag.String("debug-run-command", "", "development/debugging only: execute an exact command outside the worker loop")
-	debugRunShell := flag.Bool("debug-run-shell", false, "execute debug-run-command through /bin/sh -lc")
+	debugRunShell := flag.Bool("debug-run-shell", false, "execute debug-run-command through /bin/sh -c")
 	llmBaseURL := flag.String("llm-base-url", "", "OpenAI-compatible base URL without trailing /chat/completions")
+	llmTokenFile := flag.String("llm-token-file", "", "private token file for a local subscription bridge")
 	llmModel := flag.String("llm-model", "", "LLM model id")
 	maxSteps := flag.Int("max-steps", 3, "maximum bounded worker-loop steps")
 	allowAll := flag.Bool("allow-all", false, "allow execution without per-step approval")
@@ -78,6 +80,20 @@ func main() {
 		fmt.Fprintf(os.Stderr, "birdhackbot rebuild: resolve repo root: %v\n", err)
 		os.Exit(2)
 	}
+	if len(os.Args) == 1 {
+		runCtx, stop := signalAwareContext()
+		defer stop()
+		app := guided.App{RepoRoot: repoRoot, Reader: os.Stdin, Writer: os.Stdout}
+		if err := app.Run(runCtx); err != nil {
+			if isAborted(runCtx, err) {
+				fmt.Fprintln(os.Stderr, "BirdHackBot stopped; active workers were canceled.")
+				os.Exit(130)
+			}
+			fmt.Fprintln(os.Stderr, "BirdHackBot:", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	if *resume {
 		runCtx, stop := signalAwareContext()
@@ -87,7 +103,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "birdhackbot rebuild: invalid session dir: %v\n", err)
 			os.Exit(2)
 		}
-		if err := runResumedSession(runCtx, paths, *inspectContext); err != nil {
+		if err := runResumedSession(runCtx, paths, *inspectContext, *llmTokenFile); err != nil {
 			if isAborted(runCtx, err) {
 				fmt.Fprintln(os.Stderr, "birdhackbot rebuild: aborted by signal")
 				os.Exit(130)
@@ -124,8 +140,9 @@ func main() {
 		}
 		loop := workerloop.Loop{
 			LLM: llmclient.Client{
-				BaseURL: *llmBaseURL,
-				Model:   *llmModel,
+				AuthTokenFile: *llmTokenFile,
+				BaseURL:       *llmBaseURL,
+				Model:         *llmModel,
 			},
 			Executor: execx.Executor{
 				LogDir: paths.LogsDir,
@@ -134,15 +151,16 @@ func main() {
 			Inspector: newInspector(paths.ContextDir, *inspectContext),
 		}
 		shell := interactivecli.Shell{
-			Reader:    os.Stdin,
-			Writer:    os.Stdout,
-			Runner:    &loop,
-			RepoRoot:  repoRoot,
-			BaseURL:   *llmBaseURL,
-			Model:     *llmModel,
-			MaxSteps:  *maxSteps,
-			AllowAll:  *allowAll,
-			StatePath: paths.StatePath,
+			AuthTokenFile: *llmTokenFile,
+			Reader:        os.Stdin,
+			Writer:        os.Stdout,
+			Runner:        &loop,
+			RepoRoot:      repoRoot,
+			BaseURL:       *llmBaseURL,
+			Model:         *llmModel,
+			MaxSteps:      *maxSteps,
+			AllowAll:      *allowAll,
+			StatePath:     paths.StatePath,
 		}
 		runCtx, stop := signalAwareContext()
 		defer stop()
@@ -213,20 +231,22 @@ func main() {
 
 			loop := workerloop.Loop{
 				LLM: llmclient.Client{
-					BaseURL: *llmBaseURL,
-					Model:   *llmModel,
+					AuthTokenFile: *llmTokenFile,
+					BaseURL:       *llmBaseURL,
+					Model:         *llmModel,
 				},
 				Executor: execx.Executor{
 					LogDir: paths.LogsDir,
 				},
 				Approver:  newApprover(*allowAll),
 				Inspector: newInspector(paths.ContextDir, *inspectContext),
+				Progress:  workerStateProgress(statePath, *llmBaseURL, *llmModel, *maxSteps, *allowAll),
 			}
 			outcome, err := loop.Run(runCtx, packet, *maxSteps)
 			if err != nil {
 				lastError := terminalError(runCtx, err)
 				_ = sessionstate.Save(statePath, sessionstate.State{
-					Status:    "stopped",
+					Status:    stoppedStatus(outcome.Packet),
 					BaseURL:   *llmBaseURL,
 					Model:     *llmModel,
 					MaxSteps:  *maxSteps,
@@ -265,6 +285,13 @@ func main() {
 	}
 
 	fmt.Fprintln(os.Stderr, "birdhackbot rebuild: provide --goal, or use --resume, --debug-run-command, or interactive LLM shell flags")
+}
+
+func stoppedStatus(packet ctxpacket.WorkerPacket) string {
+	if packet.TaskRuntime.State == "aborted" {
+		return "aborted"
+	}
+	return "stopped"
 }
 
 func approvalState(allowAll bool) string {
@@ -384,7 +411,7 @@ func ensureSessionPaths(paths SessionPaths) error {
 	return nil
 }
 
-func runResumedSession(ctx context.Context, paths SessionPaths, inspectContext bool) error {
+func runResumedSession(ctx context.Context, paths SessionPaths, inspectContext bool, tokenFile string) error {
 	statePath := paths.StatePath
 	state, err := sessionstate.Load(statePath)
 	if err != nil {
@@ -402,20 +429,22 @@ func runResumedSession(ctx context.Context, paths SessionPaths, inspectContext b
 
 	loop := workerloop.Loop{
 		LLM: llmclient.Client{
-			BaseURL: state.BaseURL,
-			Model:   state.Model,
+			AuthTokenFile: tokenFile,
+			BaseURL:       state.BaseURL,
+			Model:         state.Model,
 		},
 		Executor: execx.Executor{
 			LogDir: paths.LogsDir,
 		},
 		Approver:  newApprover(state.AllowAll),
 		Inspector: newInspector(paths.ContextDir, inspectContext),
+		Progress:  workerStateProgress(statePath, state.BaseURL, state.Model, state.MaxSteps, state.AllowAll),
 	}
 	outcome, err := loop.Run(ctx, state.Packet, state.MaxSteps)
 	if err != nil {
 		lastError := terminalError(ctx, err)
 		_ = sessionstate.Save(statePath, sessionstate.State{
-			Status:    "stopped",
+			Status:    stoppedStatus(outcome.Packet),
 			BaseURL:   state.BaseURL,
 			Model:     state.Model,
 			MaxSteps:  state.MaxSteps,
@@ -450,6 +479,12 @@ func resolveRepoRoot() (string, error) {
 	return reporoot.Find(cwd)
 }
 
+func workerStateProgress(path, baseURL, model string, maxSteps int, allowAll bool) workerloop.ProgressSink {
+	return workerloop.ProgressFunc(func(_ workerloop.ProgressEvent, p ctxpacket.WorkerPacket) error {
+		return sessionstate.Save(path, sessionstate.State{Status: p.TaskRuntime.State, BaseURL: baseURL, Model: model, MaxSteps: maxSteps, AllowAll: allowAll, Packet: p, Summary: p.RunningSummary})
+	})
+}
+
 func signalAwareContext() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 }
@@ -458,7 +493,7 @@ func isAborted(ctx context.Context, err error) bool {
 	if err == nil {
 		return false
 	}
-	return ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+	return ctx.Err() != nil || errors.Is(err, context.Canceled)
 }
 
 func terminalError(ctx context.Context, err error) string {

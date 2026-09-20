@@ -9,11 +9,8 @@ import (
 
 	ctxpacket "github.com/Jawbreaker1/CodeHackBot/internal/context"
 	"github.com/Jawbreaker1/CodeHackBot/internal/contextstats"
-	"github.com/Jawbreaker1/CodeHackBot/internal/workeraction"
-	"github.com/Jawbreaker1/CodeHackBot/internal/workerdirect"
+	"github.com/Jawbreaker1/CodeHackBot/internal/workergoal"
 	"github.com/Jawbreaker1/CodeHackBot/internal/workermode"
-	"github.com/Jawbreaker1/CodeHackBot/internal/workerplan"
-	"github.com/Jawbreaker1/CodeHackBot/internal/workerstep"
 	"github.com/Jawbreaker1/CodeHackBot/internal/workertask"
 )
 
@@ -52,44 +49,16 @@ func (r Recorder) Capture(step int, stage string, packet ctxpacket.WorkerPacket)
 	return nil
 }
 
-func (r Recorder) CapturePlannerAttempt(attempt workerplan.AttemptRecord) error {
+func (r Recorder) CaptureGoalEvaluationAttempt(attempt workergoal.AttemptRecord) error {
 	if r.Dir == "" {
 		return fmt.Errorf("dir is required")
 	}
 	if err := os.MkdirAll(r.Dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir inspect dir: %w", err)
 	}
-	path := filepath.Join(r.Dir, fmt.Sprintf("planner-attempt-%03d.txt", nextPlannerAttemptIndex(r.Dir)))
-	if err := os.WriteFile(path, []byte(renderPlannerAttempt(path, attempt)), 0o644); err != nil {
-		return fmt.Errorf("write planner attempt: %w", err)
-	}
-	return nil
-}
-
-func (r Recorder) CaptureActionReviewAttempt(attempt workeraction.AttemptRecord) error {
-	if r.Dir == "" {
-		return fmt.Errorf("dir is required")
-	}
-	if err := os.MkdirAll(r.Dir, 0o755); err != nil {
-		return fmt.Errorf("mkdir inspect dir: %w", err)
-	}
-	path := filepath.Join(r.Dir, fmt.Sprintf("action-review-attempt-%03d.txt", nextActionReviewAttemptIndex(r.Dir)))
-	if err := os.WriteFile(path, []byte(renderActionReviewAttempt(path, attempt)), 0o644); err != nil {
-		return fmt.Errorf("write action review attempt: %w", err)
-	}
-	return nil
-}
-
-func (r Recorder) CaptureDirectEvaluationAttempt(attempt workerdirect.AttemptRecord) error {
-	if r.Dir == "" {
-		return fmt.Errorf("dir is required")
-	}
-	if err := os.MkdirAll(r.Dir, 0o755); err != nil {
-		return fmt.Errorf("mkdir inspect dir: %w", err)
-	}
-	path := filepath.Join(r.Dir, fmt.Sprintf("direct-eval-attempt-%03d.txt", nextDirectEvalAttemptIndex(r.Dir)))
-	if err := os.WriteFile(path, []byte(renderDirectEvaluationAttempt(path, attempt)), 0o644); err != nil {
-		return fmt.Errorf("write direct evaluation attempt: %w", err)
+	path := filepath.Join(r.Dir, fmt.Sprintf("goal-eval-attempt-%03d.txt", nextGoalEvalAttemptIndex(r.Dir)))
+	if err := os.WriteFile(path, []byte(renderGoalEvaluationAttempt(path, attempt)), 0o644); err != nil {
+		return fmt.Errorf("write goal evaluation attempt: %w", err)
 	}
 	return nil
 }
@@ -118,20 +87,6 @@ func (r Recorder) CaptureTaskBoundaryAttempt(attempt workertask.AttemptRecord) e
 	path := filepath.Join(r.Dir, fmt.Sprintf("task-boundary-attempt-%03d.txt", nextTaskBoundaryAttemptIndex(r.Dir)))
 	if err := os.WriteFile(path, []byte(renderTaskBoundaryAttempt(path, attempt)), 0o644); err != nil {
 		return fmt.Errorf("write task boundary attempt: %w", err)
-	}
-	return nil
-}
-
-func (r Recorder) CaptureStepEvaluationAttempt(attempt workerstep.AttemptRecord) error {
-	if r.Dir == "" {
-		return fmt.Errorf("dir is required")
-	}
-	if err := os.MkdirAll(r.Dir, 0o755); err != nil {
-		return fmt.Errorf("mkdir inspect dir: %w", err)
-	}
-	path := filepath.Join(r.Dir, fmt.Sprintf("step-eval-attempt-%03d.txt", nextStepEvalAttemptIndex(r.Dir)))
-	if err := os.WriteFile(path, []byte(renderStepEvaluationAttempt(path, attempt)), 0o644); err != nil {
-		return fmt.Errorf("write step evaluation attempt: %w", err)
 	}
 	return nil
 }
@@ -202,9 +157,9 @@ func renderClassificationAttempt(path string, attempt workermode.AttemptRecord) 
 	return strings.Join(lines, "\n") + "\n"
 }
 
-func renderDirectEvaluationAttempt(path string, attempt workerdirect.AttemptRecord) string {
+func renderGoalEvaluationAttempt(path string, attempt workergoal.AttemptRecord) string {
 	lines := []string{
-		"[direct_evaluation_attempt]",
+		"[goal_evaluation_attempt]",
 		"path: " + path,
 		fmt.Sprintf("accepted: %t", attempt.Accepted),
 		"final_error: " + blankOrNone(attempt.FinalError),
@@ -276,139 +231,8 @@ func renderValidation(path string, report ctxpacket.ValidationReport) string {
 	return strings.Join(lines, "\n") + "\n"
 }
 
-func renderPlannerAttempt(path string, attempt workerplan.AttemptRecord) string {
-	lines := []string{
-		"[planner_attempt]",
-		"path: " + path,
-		fmt.Sprintf("accepted: %t", attempt.Accepted),
-		"final_error: " + blankOrNone(attempt.FinalError),
-		"response_source: " + blankOrNone(attempt.ResponseSource),
-		"",
-		"[plan]",
-		"mode: " + blankOrNone(string(attempt.Parsed.Mode)),
-		"worker_goal: " + blankOrNone(attempt.Parsed.WorkerGoal),
-		"plan_summary: " + blankOrNone(attempt.Parsed.PlanSummary),
-		"plan_steps: " + renderItems(attempt.Parsed.PlanSteps),
-		"active_step: " + blankOrNone(attempt.Parsed.ActiveStep),
-		"replan_conditions: " + renderItems(attempt.Parsed.ReplanConditions),
-		"",
-		"[validation]",
-		fmt.Sprintf("issue_count: %d", len(attempt.Validation.Issues)),
-	}
-	if len(attempt.Validation.Issues) == 0 {
-		lines = append(lines, "(none)")
-	} else {
-		for i, issue := range attempt.Validation.Issues {
-			lines = append(lines, fmt.Sprintf("%d. message=%s", i+1, issue.Message))
-		}
-	}
-	lines = append(lines,
-		"",
-		"[prompt]",
-		blankOrNone(attempt.Prompt),
-		"",
-		"[raw_response]",
-		blankOrNone(attempt.RawResponse),
-	)
-	return strings.Join(lines, "\n") + "\n"
-}
-
-func renderActionReviewAttempt(path string, attempt workeraction.AttemptRecord) string {
-	lines := []string{
-		"[action_review_attempt]",
-		"path: " + path,
-		fmt.Sprintf("accepted: %t", attempt.Accepted),
-		"final_error: " + blankOrNone(attempt.FinalError),
-		"response_source: " + blankOrNone(attempt.ResponseSource),
-		"",
-		"[review]",
-		"decision: " + blankOrNone(string(attempt.Parsed.Decision)),
-		"reason: " + blankOrNone(attempt.Parsed.Reason),
-		"",
-		"[validation]",
-		fmt.Sprintf("issue_count: %d", len(attempt.Validation.Issues)),
-	}
-	if len(attempt.Validation.Issues) == 0 {
-		lines = append(lines, "(none)")
-	} else {
-		for i, issue := range attempt.Validation.Issues {
-			lines = append(lines, fmt.Sprintf("%d. message=%s", i+1, issue.Message))
-		}
-	}
-	lines = append(lines,
-		"",
-		"[prompt]",
-		blankOrNone(attempt.Prompt),
-		"",
-		"[raw_response]",
-		blankOrNone(attempt.RawResponse),
-	)
-	return strings.Join(lines, "\n") + "\n"
-}
-
-func renderStepEvaluationAttempt(path string, attempt workerstep.AttemptRecord) string {
-	lines := []string{
-		"[step_evaluation_attempt]",
-		"path: " + path,
-		fmt.Sprintf("accepted: %t", attempt.Accepted),
-		"final_error: " + blankOrNone(attempt.FinalError),
-		"response_source: " + blankOrNone(attempt.ResponseSource),
-		"",
-		"[evaluation]",
-		"status: " + blankOrNone(string(attempt.Parsed.Status)),
-		"reason: " + blankOrNone(attempt.Parsed.Reason),
-		"summary: " + blankOrNone(attempt.Parsed.Summary),
-		"",
-		"[validation]",
-		fmt.Sprintf("issue_count: %d", len(attempt.Validation.Issues)),
-	}
-	if len(attempt.Validation.Issues) == 0 {
-		lines = append(lines, "(none)")
-	} else {
-		for i, issue := range attempt.Validation.Issues {
-			lines = append(lines, fmt.Sprintf("%d. message=%s", i+1, issue.Message))
-		}
-	}
-	lines = append(lines,
-		"",
-		"[prompt]",
-		blankOrNone(attempt.Prompt),
-		"",
-		"[raw_response]",
-		blankOrNone(attempt.RawResponse),
-	)
-	return strings.Join(lines, "\n") + "\n"
-}
-
-func nextPlannerAttemptIndex(dir string) int {
-	matches, err := filepath.Glob(filepath.Join(dir, "planner-attempt-*.txt"))
-	if err != nil || len(matches) == 0 {
-		return 1
-	}
-	sort.Strings(matches)
-	return len(matches) + 1
-}
-
-func nextActionReviewAttemptIndex(dir string) int {
-	matches, err := filepath.Glob(filepath.Join(dir, "action-review-attempt-*.txt"))
-	if err != nil || len(matches) == 0 {
-		return 1
-	}
-	sort.Strings(matches)
-	return len(matches) + 1
-}
-
-func nextStepEvalAttemptIndex(dir string) int {
-	matches, err := filepath.Glob(filepath.Join(dir, "step-eval-attempt-*.txt"))
-	if err != nil || len(matches) == 0 {
-		return 1
-	}
-	sort.Strings(matches)
-	return len(matches) + 1
-}
-
-func nextDirectEvalAttemptIndex(dir string) int {
-	matches, err := filepath.Glob(filepath.Join(dir, "direct-eval-attempt-*.txt"))
+func nextGoalEvalAttemptIndex(dir string) int {
+	matches, err := filepath.Glob(filepath.Join(dir, "goal-eval-attempt-*.txt"))
 	if err != nil || len(matches) == 0 {
 		return 1
 	}

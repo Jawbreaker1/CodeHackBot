@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -85,6 +86,16 @@ func TestIsAbortedFalseForNormalError(t *testing.T) {
 	}
 	if got := terminalError(ctx, errors.New("boom")); got != "boom" {
 		t.Fatalf("terminalError() = %q", got)
+	}
+}
+
+func TestProviderTimeoutIsNotAnOperatorStop(t *testing.T) {
+	err := fmt.Errorf("model request: %w", context.DeadlineExceeded)
+	if isAborted(context.Background(), err) {
+		t.Fatal("a provider timeout must not be labeled as a signal abort")
+	}
+	if got := terminalError(context.Background(), err); got != err.Error() {
+		t.Fatalf("lost provider timeout: %s", got)
 	}
 }
 

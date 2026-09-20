@@ -2,95 +2,32 @@ package workerloop
 
 import "testing"
 
-func TestParseResponseAction(t *testing.T) {
-	r, err := ParseResponse(`{"type":"action","command":"ls -la","use_shell":true}`)
-	if err != nil {
-		t.Fatalf("ParseResponse() error = %v", err)
+func TestDecisionContract(t *testing.T) {
+	for _, text := range []string{
+		`{"type":"action","command":"printf","args":["%s","literal; text"]}`,
+		`{"type":"action","command":"printf '%s' text","use_shell":true}`,
+		`{"type":"step_complete","summary":"supported answer"}`,
+		`{"type":"ask_user","question":"Which file?"}`,
+		`{"type":"blocked","summary":"Need missing input"}`,
+		`{"type":"update_plan","plan":{"summary":"changed observation","steps":["inspect","verify"],"active_step":"verify"}}`,
+	} {
+		if _, err := ParseResponse(text); err != nil {
+			t.Errorf("%s: %v", text, err)
+		}
 	}
-	if r.Type != "action" || r.Command != "ls -la" || !r.UseShell {
-		t.Fatalf("unexpected response: %#v", r)
-	}
-}
-
-func TestParseResponseComplete(t *testing.T) {
-	r, err := ParseResponse(`{"type":"step_complete","summary":"done"}`)
-	if err != nil {
-		t.Fatalf("ParseResponse() error = %v", err)
-	}
-	if r.Type != "step_complete" || r.Summary != "done" {
-		t.Fatalf("unexpected response: %#v", r)
-	}
-}
-
-func TestParseResponseRejectsInvalid(t *testing.T) {
-	if _, err := ParseResponse(`{"type":"action"}`); err == nil {
-		t.Fatal("expected error")
-	}
-}
-
-func TestParseResponseStripsThinkAndSupportsShellNeeded(t *testing.T) {
-	r, err := ParseResponse("<think>reasoning</think>\n\n{\"type\":\"action\",\"command\":\"ls -la\",\"shell_needed\":true}")
-	if err != nil {
-		t.Fatalf("ParseResponse() error = %v", err)
-	}
-	if !r.UseShell || r.Command != "ls -la" {
-		t.Fatalf("unexpected response: %#v", r)
-	}
-}
-
-func TestParseResponseUsesLastValidJSONContract(t *testing.T) {
-	input := "<think>\nExample:\n{\"example\":true}\n</think>\n\n```json\n{\"type\":\"action\",\"command\":\"ls -la\",\"shell_needed\":true}\n```"
-
-	r, err := ParseResponse(input)
-	if err != nil {
-		t.Fatalf("ParseResponse() error = %v", err)
-	}
-	if r.Type != "action" || r.Command != "ls -la" || !r.UseShell {
-		t.Fatalf("unexpected response: %#v", r)
-	}
-}
-
-func TestParseResponseSupportsNestedActionEnvelope(t *testing.T) {
-	r, err := ParseResponse(`{"action":{"command":"ls -la","shell_needed":true}}`)
-	if err != nil {
-		t.Fatalf("ParseResponse() error = %v", err)
-	}
-	if r.Type != "action" || r.Command != "ls -la" || !r.UseShell {
-		t.Fatalf("unexpected response: %#v", r)
-	}
-}
-
-func TestParseResponseSupportsBooleanStepCompleteEnvelope(t *testing.T) {
-	r, err := ParseResponse(`{"action":null,"step_complete":true,"reason":"done"}`)
-	if err != nil {
-		t.Fatalf("ParseResponse() error = %v", err)
-	}
-	if r.Type != "step_complete" || r.Summary != "done" {
-		t.Fatalf("unexpected response: %#v", r)
-	}
-}
-
-func TestParseResponseSupportsStringStepCompleteEnvelope(t *testing.T) {
-	r, err := ParseResponse(`{"action":"step_complete","reasoning":"done"}`)
-	if err != nil {
-		t.Fatalf("ParseResponse() error = %v", err)
-	}
-	if r.Type != "step_complete" || r.Summary != "done" {
-		t.Fatalf("unexpected response: %#v", r)
-	}
-}
-
-func TestParseResponseRepairsLiteralNewlineInsideJSONString(t *testing.T) {
-	input := "<think>reasoning</think>\n\n```json\n{\n  \"type\": \"action\",\n  \"command\": \"printf 'a'\nb\",\n  \"use_shell\": true\n}\n```"
-
-	r, err := ParseResponse(input)
-	if err != nil {
-		t.Fatalf("ParseResponse() error = %v", err)
-	}
-	if r.Type != "action" || !r.UseShell {
-		t.Fatalf("unexpected response: %#v", r)
-	}
-	if r.Command != "printf 'a'\nb" {
-		t.Fatalf("command = %q", r.Command)
+	for _, text := range []string{
+		`{"action":{"command":"pwd"}}`,
+		`{"type":"step_complete","summary":"done","command":"touch x"}`,
+		`{"type":"action","command":"echo x","use_shell":true,"args":["y"]}`,
+		`{"type":"update_plan"}`,
+		`{"type":"update_plan","plan":{"summary":"x","steps":["a","a"],"active_step":"a"}}`,
+		`{"type":"update_plan","plan":{"summary":"x","steps":["a"],"active_step":"b"}}`,
+		`{"type":"action","command":"pwd","scope":"new scope"}`,
+		`{"type":"action","command":"pwd"} {"type":"step_complete","summary":"done"}`,
+		`{"type":"step_complete"}`,
+	} {
+		if _, err := ParseResponse(text); err == nil {
+			t.Errorf("accepted ambiguous or invalid decision: %s", text)
+		}
 	}
 }

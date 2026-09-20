@@ -2,7 +2,9 @@ package context
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/behavior"
 	"github.com/Jawbreaker1/CodeHackBot/internal/session"
@@ -28,9 +30,22 @@ type PlanState struct {
 	ReplanConditions []string
 }
 
+// PlanRevision records a planning transition, not proof about a target. The
+// preceding execution reference makes its ordering inspectable after recovery.
+type PlanRevision struct {
+	Turn              int
+	AfterExecutionLog string
+	Plan              PlanState
+}
+
 // ExecutionResult is the minimal latest execution truth for the rebuild path.
 type ExecutionResult struct {
 	Action         string
+	ActualExec     string
+	ExecutionMode  string
+	Cwd            string
+	StartedAt      time.Time
+	FinishedAt     time.Time
 	ExitStatus     string
 	OutputSummary  string
 	OutputEvidence string
@@ -39,15 +54,6 @@ type ExecutionResult struct {
 	Assessment     string
 	Signals        []string
 	FailureClass   string
-}
-
-// ExecutionFact is a curated active fact derived from structured runtime truth.
-type ExecutionFact struct {
-	Kind         string
-	Subject      string
-	Status       string
-	Source       string
-	EvidenceRefs []string
 }
 
 // OperatorState is the visible operator/runtime state in the context packet.
@@ -71,15 +77,24 @@ type WorkerPacket struct {
 	CurrentStep              Step
 	TaskRuntime              TaskRuntime
 	PlanState                PlanState
+	PlanHistory              []PlanRevision
 	RecentConversation       []string
 	OlderConversationSummary string
 	LatestExecutionResult    ExecutionResult
-	ActiveExecutionFacts     []ExecutionFact
 	RunningSummary           string
 	RelevantRecentResults    []ExecutionResult
 	MemoryBankRetrievals     []string
 	CapabilityInputs         []string
 	OperatorState            OperatorState
+	Budget                   TurnBudget
+	ContextNotes             []string
+}
+
+// TurnBudget survives pause/resume. Each model decision, including a question
+// or plan change, consumes one turn. Evaluation never grants another turn.
+type TurnBudget struct {
+	Limit int
+	Used  int
 }
 
 func DefaultExecutionCapabilityInputs() []string {
@@ -95,7 +110,7 @@ func NewInitialWorkerPacket(frame behavior.Frame, foundation session.Foundation,
 	if maxSteps <= 0 {
 		maxSteps = 1
 	}
-	taskRuntime := InitialTaskRuntimeInDir(foundation.Goal, cwd)
+	taskRuntime := TaskRuntime{State: "running"}
 	return WorkerPacket{
 		BehaviorFrame:     frame,
 		SessionFoundation: foundation,
@@ -106,17 +121,13 @@ func NewInitialWorkerPacket(frame behavior.Frame, foundation session.Foundation,
 			ExpectedEvidence: []string{"command logs", "artifacts if produced"},
 			RemainingBudget:  fmt.Sprintf("%d steps", maxSteps),
 		},
-		TaskRuntime: taskRuntime,
-		PlanState: PlanState{
-			Steps:      []string{"understand goal", "work the named target/task", "verify and finish"},
-			ActiveStep: foundation.Goal,
-		},
-		RecentConversation:   []string{"User: " + foundation.Goal},
-		ActiveExecutionFacts: UpdateExecutionFacts(nil, taskRuntime, ExecutionResult{}),
-		RunningSummary:       "Worker loop starting from the stated user goal.",
-		CapabilityInputs:     DefaultExecutionCapabilityInputs(),
+		TaskRuntime:        taskRuntime,
+		Budget:             TurnBudget{Limit: maxSteps},
+		RecentConversation: []string{"User: " + foundation.Goal},
+		RunningSummary:     "Worker loop starting from the stated user goal.",
+		CapabilityInputs:   DefaultExecutionCapabilityInputs(),
 		OperatorState: OperatorState{
-			ScopeState:    "from_session_foundation",
+			ScopeState:    "not_enforced_by_runtime",
 			ApprovalState: approvalState,
 			Model:         model,
 			ContextUsage:  "(unset)",
@@ -163,15 +174,16 @@ func (p WorkerPacket) RenderSections() []RenderedSection {
 		{Name: "current_step", Content: renderStep(p.CurrentStep)},
 		{Name: "task_runtime", Content: renderTaskRuntime(p.TaskRuntime)},
 		{Name: "plan_state", Content: renderPlanState(p.PlanState)},
+		{Name: "plan_history", Content: renderPlanHistory(p.PlanHistory)},
 		{Name: "recent_conversation", Content: renderConversation(p.RecentConversation)},
 		{Name: "older_conversation_summary", Content: blankOrValue(p.OlderConversationSummary)},
 		{Name: "latest_execution_result", Content: renderExecutionResult(p.LatestExecutionResult)},
-		{Name: "active_execution_facts", Content: renderExecutionFacts(p.ActiveExecutionFacts)},
 		{Name: "running_summary", Content: blankOrValue(p.RunningSummary)},
 		{Name: "relevant_recent_results", Content: renderExecutionResults(p.RelevantRecentResults)},
 		{Name: "memory_bank_retrievals", Content: renderList(p.MemoryBankRetrievals)},
 		{Name: "capability_inputs", Content: renderList(p.CapabilityInputs)},
 		{Name: "operator_state", Content: renderOperatorState(p.OperatorState)},
+		{Name: "context_notes", Content: renderList(p.ContextNotes)},
 	}
 }
 
@@ -217,12 +229,26 @@ func renderTaskRuntime(t TaskRuntime) string {
 	}, "\n")
 }
 
+func renderPlanHistory(history []PlanRevision) string {
+	parts := make([]string, 0, len(history))
+	for _, revision := range history {
+		parts = append(parts, fmt.Sprintf("turn: %d\nafter_execution_log: %s\n%s", revision.Turn, blankOrValue(revision.AfterExecutionLog), renderPlanState(revision.Plan)))
+	}
+	return strings.Join(parts, "\n\n")
+}
+
 func renderExecutionResult(r ExecutionResult) string {
 	return strings.Join([]string{
 		"action: " + blankOrValue(r.Action),
+		"actual_exec: " + blankOrValue(r.ActualExec),
+		"execution_mode: " + blankOrValue(r.ExecutionMode),
+		"cwd: " + blankOrValue(r.Cwd),
+		"started_at: " + r.StartedAt.Format(time.RFC3339Nano),
+		"finished_at: " + r.FinishedAt.Format(time.RFC3339Nano),
 		"exit_status: " + blankOrValue(r.ExitStatus),
-		"output_summary: " + blankOrValue(r.OutputSummary),
-		"output_evidence: " + blankOrValue(r.OutputEvidence),
+		// Quoted strings keep output lines from impersonating packet metadata.
+		"output_summary: " + strconv.Quote(blankOrValue(r.OutputSummary)),
+		"output_evidence: " + strconv.Quote(blankOrValue(r.OutputEvidence)),
 		"log_refs: " + joinOrNone(r.LogRefs),
 		"artifact_refs: " + joinOrNone(r.ArtifactRefs),
 		"assessment: " + blankOrValue(r.Assessment),
@@ -243,35 +269,7 @@ func renderExecutionResults(results []ExecutionResult) string {
 }
 
 func renderRetainedExecutionResult(r ExecutionResult) string {
-	return strings.Join([]string{
-		"action: " + blankOrValue(r.Action),
-		"exit_status: " + blankOrValue(r.ExitStatus),
-		"output_summary: " + blankOrValue(r.OutputSummary),
-		"output_evidence: " + blankOrValue(firstNonBlank(r.OutputEvidence, r.OutputSummary)),
-		"log_refs: " + joinOrNone(r.LogRefs),
-		"artifact_refs: " + joinOrNone(r.ArtifactRefs),
-		"assessment: " + blankOrValue(r.Assessment),
-		"signals: " + joinOrNone(r.Signals),
-		"failure_class: " + blankOrValue(r.FailureClass),
-	}, "\n")
-}
-
-func renderExecutionFacts(facts []ExecutionFact) string {
-	if len(facts) == 0 {
-		return "(none)"
-	}
-	parts := make([]string, 0, len(facts))
-	for i, fact := range facts {
-		lines := []string{
-			"kind: " + blankOrValue(fact.Kind),
-			"subject: " + blankOrValue(fact.Subject),
-			"status: " + blankOrValue(fact.Status),
-			"source: " + blankOrValue(fact.Source),
-			"evidence_refs: " + joinOrNone(fact.EvidenceRefs),
-		}
-		parts = append(parts, fmt.Sprintf("fact_%d:\n%s", i+1, indent(strings.Join(lines, "\n"), "  ")))
-	}
-	return strings.Join(parts, "\n")
+	return renderExecutionResult(r)
 }
 
 func renderOperatorState(s OperatorState) string {
@@ -314,39 +312,12 @@ func joinOrNone(items []string) string {
 	return strings.Join(items, " | ")
 }
 
-func firstOrNone(items []string) string {
-	if len(items) == 0 {
-		return "(none)"
-	}
-	return blankOrValue(items[0])
-}
-
-func firstNonBlank(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
-}
-
 func blankOrValue(v string) string {
 	v = strings.TrimSpace(v)
 	if v == "" {
 		return "(none)"
 	}
 	return v
-}
-
-func compactText(v string, max int) string {
-	v = strings.TrimSpace(strings.ReplaceAll(v, "\n", " | "))
-	if v == "" || max <= 0 || len(v) <= max {
-		return v
-	}
-	if max <= 3 {
-		return v[:max]
-	}
-	return strings.TrimSpace(v[:max-3]) + "..."
 }
 
 func indent(s, prefix string) string {

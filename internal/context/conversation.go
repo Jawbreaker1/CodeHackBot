@@ -22,7 +22,7 @@ func AppendConversation(recent []string, olderSummary, entry string) ([]string, 
 	next := append(append([]string{}, recent...), entry)
 	overflow := make([]string, 0)
 	for len(next) > recentConversationTurnLimit || approxConversationTokens(next) > recentConversationTokenLimit {
-		if len(next) == 0 {
+		if len(next) <= 1 {
 			break
 		}
 		overflow = append(overflow, next[0])
@@ -89,5 +89,5 @@ func compactConversationEntry(entry string, max int) string {
 }
 
 func normalizeConversationEntry(entry string) string {
-	return strings.Join(strings.Fields(strings.TrimSpace(entry)), " ")
+	return strings.TrimSpace(entry)
 }

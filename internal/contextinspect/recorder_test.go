@@ -1,6 +1,7 @@
 package contextinspect
 
 import (
+	"github.com/Jawbreaker1/CodeHackBot/internal/workerplan"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,11 +10,8 @@ import (
 	"github.com/Jawbreaker1/CodeHackBot/internal/behavior"
 	ctxpacket "github.com/Jawbreaker1/CodeHackBot/internal/context"
 	"github.com/Jawbreaker1/CodeHackBot/internal/session"
-	"github.com/Jawbreaker1/CodeHackBot/internal/workeraction"
-	"github.com/Jawbreaker1/CodeHackBot/internal/workerdirect"
+	"github.com/Jawbreaker1/CodeHackBot/internal/workergoal"
 	"github.com/Jawbreaker1/CodeHackBot/internal/workermode"
-	"github.com/Jawbreaker1/CodeHackBot/internal/workerplan"
-	"github.com/Jawbreaker1/CodeHackBot/internal/workerstep"
 	"github.com/Jawbreaker1/CodeHackBot/internal/workertask"
 )
 
@@ -78,150 +76,36 @@ func TestRecorderCapture(t *testing.T) {
 	}
 }
 
-func TestRecorderCapturePlannerAttempt(t *testing.T) {
+func TestRecorderCaptureGoalEvaluationAttempt(t *testing.T) {
 	dir := t.TempDir()
 	recorder := Recorder{Dir: dir}
-	attempt := workerplan.AttemptRecord{
-		Prompt:      "planner prompt",
-		RawResponse: `{"mode":"planned_execution"}`,
-		Parsed: workerplan.Plan{
-			Mode:        workerplan.ModePlannedExecution,
-			WorkerGoal:  "inspect zip",
-			PlanSummary: "Inspect then recover.",
-			PlanSteps:   []string{"Inspect archive", "Attempt recovery"},
-			ActiveStep:  "Inspect archive",
-		},
-		Accepted:   true,
-		FinalError: "",
-	}
-	if err := recorder.CapturePlannerAttempt(attempt); err != nil {
-		t.Fatalf("CapturePlannerAttempt() error = %v", err)
-	}
-	path := filepath.Join(dir, "planner-attempt-001.txt")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
-	}
-	text := string(data)
-	for _, want := range []string{
-		"[planner_attempt]",
-		"accepted: true",
-		"[plan]",
-		"mode: planned_execution",
-		"plan_steps: Inspect archive | Attempt recovery",
-		"[validation]",
-		"[prompt]",
-		"planner prompt",
-		"[raw_response]",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("planner attempt missing %q in:\n%s", want, text)
-		}
-	}
-}
-
-func TestRecorderCaptureActionReviewAttempt(t *testing.T) {
-	dir := t.TempDir()
-	recorder := Recorder{Dir: dir}
-	attempt := workeraction.AttemptRecord{
-		Prompt:      "action review prompt",
-		RawResponse: `{"decision":"revise","reason":"too broad for active step"}`,
-		Parsed: workeraction.Review{
-			Decision: workeraction.DecisionRevise,
-			Reason:   "too broad for active step",
-		},
-		Accepted: true,
-	}
-	if err := recorder.CaptureActionReviewAttempt(attempt); err != nil {
-		t.Fatalf("CaptureActionReviewAttempt() error = %v", err)
-	}
-	path := filepath.Join(dir, "action-review-attempt-001.txt")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
-	}
-	text := string(data)
-	for _, want := range []string{
-		"[action_review_attempt]",
-		"accepted: true",
-		"[review]",
-		"decision: revise",
-		"reason: too broad for active step",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("action review attempt missing %q in:\n%s", want, text)
-		}
-	}
-}
-
-func TestRecorderCaptureStepEvaluationAttempt(t *testing.T) {
-	dir := t.TempDir()
-	recorder := Recorder{Dir: dir}
-	attempt := workerstep.AttemptRecord{
-		Prompt:      "step evaluation prompt",
-		RawResponse: `{"status":"satisfied","reason":"metadata collected","summary":"step satisfied"}`,
-		Parsed: workerstep.Evaluation{
-			Status:  workerstep.StatusSatisfied,
-			Reason:  "metadata collected",
-			Summary: "step satisfied",
-		},
-		Accepted: true,
-	}
-	if err := recorder.CaptureStepEvaluationAttempt(attempt); err != nil {
-		t.Fatalf("CaptureStepEvaluationAttempt() error = %v", err)
-	}
-	path := filepath.Join(dir, "step-eval-attempt-001.txt")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
-	}
-	text := string(data)
-	for _, want := range []string{
-		"[step_evaluation_attempt]",
-		"accepted: true",
-		"[evaluation]",
-		"status: satisfied",
-		"reason: metadata collected",
-		"[prompt]",
-		"step evaluation prompt",
-		"[raw_response]",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("step evaluation attempt missing %q in:\n%s", want, text)
-		}
-	}
-}
-
-func TestRecorderCaptureDirectEvaluationAttempt(t *testing.T) {
-	dir := t.TempDir()
-	recorder := Recorder{Dir: dir}
-	attempt := workerdirect.AttemptRecord{
+	attempt := workergoal.AttemptRecord{
 		Prompt:      "direct prompt",
 		RawResponse: `{"status":"satisfied","reason":"file listing is complete","summary":"listed files"}`,
-		Parsed: workerdirect.Evaluation{
-			Status:  workerdirect.StatusSatisfied,
+		Parsed: workergoal.Evaluation{
+			Status:  workergoal.StatusSatisfied,
 			Reason:  "file listing is complete",
 			Summary: "listed files",
 		},
 		Accepted: true,
 	}
-	if err := recorder.CaptureDirectEvaluationAttempt(attempt); err != nil {
-		t.Fatalf("CaptureDirectEvaluationAttempt() error = %v", err)
+	if err := recorder.CaptureGoalEvaluationAttempt(attempt); err != nil {
+		t.Fatalf("CaptureGoalEvaluationAttempt() error = %v", err)
 	}
-	path := filepath.Join(dir, "direct-eval-attempt-001.txt")
+	path := filepath.Join(dir, "goal-eval-attempt-001.txt")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("ReadFile(direct evaluation attempt) error = %v", err)
+		t.Fatalf("ReadFile(goal evaluation attempt) error = %v", err)
 	}
 	text := string(data)
 	for _, want := range []string{
-		"[direct_evaluation_attempt]",
+		"[goal_evaluation_attempt]",
 		"accepted: true",
 		"status: satisfied",
 		"reason: file listing is complete",
 	} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("direct evaluation attempt missing %q in:\n%s", want, text)
+			t.Fatalf("goal evaluation attempt missing %q in:\n%s", want, text)
 		}
 	}
 }

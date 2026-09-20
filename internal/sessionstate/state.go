@@ -9,9 +9,10 @@ import (
 	ctxpacket "github.com/Jawbreaker1/CodeHackBot/internal/context"
 )
 
-const Version = 1
+const Version = 2
 
-// State is the persisted worker session state for v1 resume.
+// State includes the worker's consumed turn budget. Version 1 snapshots lack
+// that contract and must not be resumed with a silently replenished budget.
 type State struct {
 	Version   int                    `json:"version"`
 	Status    string                 `json:"status"`
@@ -36,8 +37,23 @@ func Save(path string, state State) error {
 	if err != nil {
 		return fmt.Errorf("marshal state: %w", err)
 	}
-	if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
+	file, err := os.CreateTemp(filepath.Dir(path), ".session-*")
+	if err != nil {
+		return fmt.Errorf("create temporary state: %w", err)
+	}
+	defer os.Remove(file.Name())
+	defer file.Close()
+	if _, err := file.Write(append(data, '\n')); err != nil {
 		return fmt.Errorf("write state: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("sync state: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close state: %w", err)
+	}
+	if err := os.Rename(file.Name(), path); err != nil {
+		return fmt.Errorf("replace state: %w", err)
 	}
 	return nil
 }

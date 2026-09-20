@@ -1,6 +1,7 @@
 # Binaries / build output
 /birdhackbot
 /birdhackbot-orchestrator
+/birdhackbot-llm-bridge
 /.cache/
 /bin/
 /dist/

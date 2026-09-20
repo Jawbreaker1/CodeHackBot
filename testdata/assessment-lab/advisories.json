@@ -1,0 +1,22 @@
+{
+  "dataset": "Synthetic assessment fixture; these are not real CVEs",
+  "snapshot_date": "2026-09-19",
+  "records": [
+    {
+      "id": "LAB-ADMIN-001",
+      "product": "BirdLab",
+      "affected_versions": ["1.4"],
+      "description": "An administrative configuration route may lack authentication. Confirm actual unauthenticated access; a version match alone is insufficient.",
+      "source": "local fixture advisory LAB-ADMIN-001"
+    },
+    {
+      "id": "LAB-DEBUG-002",
+      "product": "BirdLab",
+      "affected_versions": ["1.1"],
+      "prerequisite": "debug mode enabled",
+      "description": "Older debug-enabled deployments may disclose diagnostics. This record does not claim that later versions are affected.",
+      "source": "local fixture advisory LAB-DEBUG-002"
+    }
+  ],
+  "unavailable_reference": "/missing-advisory"
+}

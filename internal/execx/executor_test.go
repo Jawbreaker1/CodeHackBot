@@ -59,7 +59,7 @@ func TestExecutorRunShell(t *testing.T) {
 	if result.ExecutionMode != "shell" {
 		t.Fatalf("ExecutionMode = %q", result.ExecutionMode)
 	}
-	if !strings.Contains(result.ActualExec, `/bin/sh -lc "printf shell-test > shell.txt"`) {
+	if !strings.Contains(result.ActualExec, `/bin/sh -c 'printf shell-test > shell.txt'`) {
 		t.Fatalf("ActualExec = %q", result.ActualExec)
 	}
 	content, err := os.ReadFile(filepath.Join(logDir, "shell.txt"))
@@ -118,7 +118,7 @@ func TestExecutorPlanAndInitialLog(t *testing.T) {
 	text := string(data)
 	for _, want := range []string{
 		"action: printf hello > out.txt",
-		"actual_invocation: /bin/sh -lc",
+		"actual_invocation: /bin/sh -c",
 		"status: running",
 	} {
 		if !strings.Contains(text, want) {
@@ -127,29 +127,48 @@ func TestExecutorPlanAndInitialLog(t *testing.T) {
 	}
 }
 
-func TestExecutorAutoDetectsShellSyntax(t *testing.T) {
-	logDir := t.TempDir()
-	exec := Executor{LogDir: logDir}
+func TestExecutorPreservesLiteralArguments(t *testing.T) {
+	for _, argument := range []string{"hello world", "one; printf two", "$(printf injected)", "*.txt", "", "a'b\"c"} {
+		t.Run(argument, func(t *testing.T) {
+			result, err := (Executor{LogDir: t.TempDir()}).Run(context.Background(), Action{
+				Command: "printf", Args: []string{"%s", argument},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			expected := argument
+			if expected == "" {
+				expected = "(none)"
+			}
+			if result.ExecutionMode != "argv" || result.StdoutSummary != expected {
+				t.Fatalf("mode=%q output=%q, want literal %q", result.ExecutionMode, result.StdoutSummary, expected)
+			}
+		})
+	}
+}
 
-	result, err := exec.Run(context.Background(), Action{
-		Command: "printf auto-shell > auto.txt; cat auto.txt",
-		Cwd:     logDir,
-	})
+func TestExecutorPlanSnapshotsArguments(t *testing.T) {
+	action := Action{Command: "printf", Args: []string{"%s", "original"}, Env: map[string]string{"TEST_VALUE": "original"}}
+	executor := Executor{LogDir: t.TempDir()}
+	plan, err := executor.Plan(action)
 	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+		t.Fatal(err)
 	}
-	if result.ExecutionMode != "shell" {
-		t.Fatalf("ExecutionMode = %q", result.ExecutionMode)
-	}
-	if !strings.Contains(result.StdoutSummary, "auto-shell") {
-		t.Fatalf("StdoutSummary = %q", result.StdoutSummary)
-	}
-	content, err := os.ReadFile(filepath.Join(logDir, "auto.txt"))
+	action.Args[1] = "changed"
+	action.Env["TEST_VALUE"] = "changed"
+	result, err := executor.RunPlanned(context.Background(), plan)
 	if err != nil {
-		t.Fatalf("read auto.txt: %v", err)
+		t.Fatal(err)
 	}
-	if string(content) != "auto-shell" {
-		t.Fatalf("auto.txt = %q", string(content))
+	if result.StdoutSummary != "original" || result.EnvDelta["TEST_VALUE"] != "original" {
+		t.Fatalf("plan changed after preparation: %+v", result)
+	}
+}
+
+func TestExecutorRejectsAmbiguousShellAction(t *testing.T) {
+	_, err := (Executor{LogDir: t.TempDir()}).Plan(Action{Command: "printf hello", Args: []string{"world"}, UseShell: true})
+	if err == nil {
+		t.Fatal("shell script plus argv must be rejected")
 	}
 }
 

@@ -37,7 +37,7 @@ func ValidatePacket(packet WorkerPacket) ValidationReport {
 		seen[section.Name] = struct{}{}
 	}
 
-	if strings.TrimSpace(packet.BehaviorFrame.PromptText()) == "" {
+	if strings.TrimSpace(packet.BehaviorFrame.SystemPrompt) == "" || strings.TrimSpace(packet.BehaviorFrame.AgentsText) == "" {
 		report.add(ValidationFatal, "missing_behavior_frame", "behavior_frame is empty")
 	}
 	if strings.TrimSpace(packet.SessionFoundation.Goal) == "" {
@@ -49,11 +49,8 @@ func ValidatePacket(packet WorkerPacket) ValidationReport {
 	if strings.TrimSpace(packet.RunningSummary) == "" {
 		report.add(ValidationWarn, "missing_running_summary", "running_summary is empty")
 	}
-	if packet.TaskRuntime.State == "done" && strings.TrimSpace(packet.TaskRuntime.MissingFact) != "(none)" {
-		report.add(ValidationError, "done_with_missing_fact", "task_runtime.state is done but missing_fact is not '(none)'")
-	}
-	if target := strings.TrimSpace(packet.TaskRuntime.CurrentTarget); target != "" && isSessionRuntimeArtifactPath(target) {
-		report.add(ValidationError, "runtime_artifact_as_target", "task_runtime.current_target points at a session runtime artifact")
+	if packet.Budget.Limit < 0 || packet.Budget.Used < 0 || (packet.Budget.Limit > 0 && packet.Budget.Used > packet.Budget.Limit) {
+		report.add(ValidationFatal, "invalid_budget", "worker turn budget is invalid")
 	}
 	if len(packet.RecentConversation) > recentConversationTurnLimit {
 		report.add(ValidationError, "recent_conversation_turn_overflow", fmt.Sprintf("recent_conversation has %d turns; limit is %d", len(packet.RecentConversation), recentConversationTurnLimit))
@@ -75,10 +72,6 @@ func ValidatePacket(packet WorkerPacket) ValidationReport {
 	if hasPartialLatestExecution(packet.LatestExecutionResult) {
 		report.add(ValidationError, "partial_latest_execution_result", "latest_execution_result is partially populated")
 	}
-	if len(packet.ActiveExecutionFacts) > executionFactLimit {
-		report.add(ValidationError, "active_execution_facts_overflow", fmt.Sprintf("active_execution_facts has %d facts; limit is %d", len(packet.ActiveExecutionFacts), executionFactLimit))
-	}
-	validateExecutionFacts(&report, packet.ActiveExecutionFacts)
 
 	return report
 }
@@ -95,6 +88,10 @@ func (r ValidationReport) HighestSeverity() ValidationSeverity {
 
 func (r ValidationReport) IsFatal() bool {
 	return r.HighestSeverity() == ValidationFatal
+}
+
+func (r ValidationReport) Valid() bool {
+	return severityRank(r.HighestSeverity()) < severityRank(ValidationError)
 }
 
 func (r ValidationReport) Summary() string {
@@ -145,22 +142,4 @@ func hasPartialLatestExecution(result ExecutionResult) bool {
 		return exit != "" || assessment != "" || output != "" || hasRefs || strings.TrimSpace(result.FailureClass) != "" || len(result.Signals) > 0
 	}
 	return exit == ""
-}
-
-func validateExecutionFacts(report *ValidationReport, facts []ExecutionFact) {
-	for i, fact := range facts {
-		location := fmt.Sprintf("active_execution_facts[%d]", i)
-		if strings.TrimSpace(fact.Kind) == "" {
-			report.add(ValidationError, "execution_fact_missing_kind", location+" missing kind")
-		}
-		if strings.TrimSpace(fact.Subject) == "" {
-			report.add(ValidationError, "execution_fact_missing_subject", location+" missing subject")
-		}
-		if strings.TrimSpace(fact.Status) == "" {
-			report.add(ValidationError, "execution_fact_missing_status", location+" missing status")
-		}
-		if strings.TrimSpace(fact.Source) == "" {
-			report.add(ValidationError, "execution_fact_missing_source", location+" missing source")
-		}
-	}
 }

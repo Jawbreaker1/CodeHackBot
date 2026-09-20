@@ -2,11 +2,51 @@ package llmclient
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+func TestRequestLimitAndIncompleteControlOutput(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"action\",\"command\":\"pwd\"}"},"finish_reason":"length"}]}`))
+	}))
+	defer server.Close()
+	client := Client{BaseURL: server.URL, Model: "fixture", MaxInputBytes: 32}
+	if _, err := client.ChatStructured(context.Background(), []Message{{Role: "user", Content: strings.Repeat("x", 33)}}); err == nil || calls != 0 {
+		t.Fatal("oversized request sent")
+	}
+	if _, err := client.ChatStructured(context.Background(), []Message{{Role: "user", Content: "small"}}); err == nil || calls != 1 {
+		t.Fatal("truncated decision accepted")
+	}
+}
+
+func TestReasoningEffortIsExplicitAndOptional(t *testing.T) {
+	for _, effort := range []string{"", "low"} {
+		t.Run("effort="+effort, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]json.RawMessage
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				field, present := body["reasoning_effort"]
+				if effort == "" && present || effort != "" && string(field) != `"low"` {
+					t.Errorf("reasoning_effort = %s, configured %q", field, effort)
+				}
+				_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"OK"}}]}`))
+			}))
+			defer server.Close()
+			client := Client{BaseURL: server.URL, Model: "test", ReasoningEffort: effort}
+			if _, err := client.Chat(context.Background(), []Message{{Role: "user", Content: "hello"}}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
 
 func TestClientChat(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

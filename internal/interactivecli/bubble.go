@@ -29,6 +29,12 @@ type conversationMsg struct {
 	err   error
 }
 
+type preparedTaskMsg struct {
+	packet ctxpacket.WorkerPacket
+	mode   string
+	err    error
+}
+
 type runFinishedMsg struct {
 	outcome workerloop.Outcome
 	err     error
@@ -96,11 +102,28 @@ func newBubbleModel(parent context.Context, shell *Shell, frame behavior.Frame) 
 }
 
 func (m bubbleModel) Init() tea.Cmd {
-	return tea.Batch(textinput.Blink, m.spinner.Tick)
+	return tea.Batch(textinput.Blink, m.spinner.Tick, func() tea.Msg {
+		<-m.ctx.Done()
+		return contextCanceledMsg{}
+	})
+}
+
+type contextCanceledMsg struct{}
+
+func (m bubbleModel) stop() (tea.Model, tea.Cmd) {
+	m.cancel()
+	m.exitErr = context.Canceled
+	m.busyLabel = "stopping"
+	if m.resultCh == nil {
+		return m, tea.Quit
+	}
+	return m, nil
 }
 
 func (m bubbleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case contextCanceledMsg:
+		return m.stop()
 	case spinner.TickMsg:
 		if !m.busy {
 			return m, nil
@@ -125,14 +148,19 @@ func (m bubbleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		started := m.ui.Started && strings.TrimSpace(m.ui.Packet.SessionFoundation.Goal) != ""
-		packet, _, err := m.shell.prepareTaskPacket(m.ctx, m.frame, m.ui.Packet, started, msg.line)
-		if err != nil {
+		return m, func() tea.Msg {
+			packet, _, err := m.shell.prepareTaskPacket(m.ctx, m.frame, m.ui.Packet, started, msg.line)
+			return preparedTaskMsg{packet: packet, mode: string(msg.decision.Mode), err: err}
+		}
+
+	case preparedTaskMsg:
+		if msg.err != nil {
 			m.busy = false
-			m.ui.AddShellCommand("worker", "", err)
+			m.ui.AddShellCommand("worker", "", msg.err)
 			m.syncLayout()
 			return m, nil
 		}
-		if err := m.shell.applyTaskStart(&m.ui, packet, string(msg.decision.Mode)); err != nil {
+		if err := m.shell.applyTaskStart(&m.ui, msg.packet, msg.mode); err != nil {
 			m.busy = false
 			m.ui.AddShellCommand("save", "", err)
 			m.syncLayout()
@@ -182,9 +210,7 @@ func (m bubbleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c":
-			m.cancel()
-			m.exitErr = context.Canceled
-			return m, tea.Quit
+			return m.stop()
 		case "enter":
 			if m.busy {
 				return m, nil
@@ -318,6 +344,9 @@ func (m bubbleModel) finishRun(msg runFinishedMsg) (tea.Model, tea.Cmd) {
 	}
 	m.pendingLine = ""
 	m.syncLayout()
+	if m.ctx.Err() != nil {
+		return m, tea.Quit
+	}
 	return m, nil
 }
 

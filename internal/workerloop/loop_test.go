@@ -3,11 +3,12 @@ package workerloop
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -20,901 +21,254 @@ import (
 	"github.com/Jawbreaker1/CodeHackBot/internal/session"
 )
 
-func TestLoopStepComplete(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []map[string]any{
-				{"message": map[string]any{"role": "assistant", "content": `{"type":"step_complete","summary":"done"}`}},
-			},
-		})
-	}))
-	defer server.Close()
+func testFoundation() session.Foundation {
+	return session.Foundation{Goal: "Establish the fixture", ReportingRequirement: "Evidence and limitations"}
+}
 
-	loop := Loop{
-		LLM:      llmclient.Client{BaseURL: server.URL, Model: "test-model", HTTPClient: server.Client()},
-		Executor: execx.Executor{LogDir: t.TempDir()},
-		Approver: approval.StaticApprover{Decision: approval.DecisionApproveSession},
+func fixtureWorker(t *testing.T, turns int, replies ...string) (Loop, ctxpacket.WorkerPacket, *int) {
+	t.Helper()
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := calls
+		calls++
+		if n >= len(replies) {
+			t.Errorf("unexpected model request %d", n+1)
+			http.Error(w, "unexpected call", 500)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"content": replies[n]}, "finish_reason": "stop"}}})
+	}))
+	t.Cleanup(server.Close)
+	frame := behavior.Frame{SystemPrompt: "Assess only the stated goal.", AgentsText: "Local synthetic fixtures only; every action requires approval.", Parameters: map[string]string{"scope": "local fixture only"}}
+	packet := ctxpacket.NewInitialWorkerPacket(frame, testFoundation(), t.TempDir(), "fixture", "per_action", turns)
+	loop := Loop{LLM: llmclient.Client{BaseURL: server.URL, Model: "fixture"}, Executor: execx.Executor{LogDir: t.TempDir()}, Approver: approval.StaticApprover{Decision: approval.DecisionApproveOnce}, Inspector: contextinspect.Recorder{Dir: t.TempDir()}}
+	return loop, packet, &calls
+}
+
+const completeEval = `{"status":"satisfied","reason":"whole goal supported by the log","summary":"Fixture established"}`
+const continueEval = `{"status":"in_progress","reason":"more observations needed","summary":""}`
+const printAction = `{"type":"action","command":"printf","args":["%s","fixture"]}`
+
+func TestWorkerRecoversAndRevisesPlanWithoutChangingGoal(t *testing.T) {
+	first := `{"type":"action","command":"cat","args":["missing.txt"],"plan":{"summary":"Read the supplied path","steps":["read supplied file"],"active_step":"read supplied file"}}`
+	second := `{"type":"action","command":"cat","args":["actual.txt"],"plan":{"summary":"The first path was absent; use the provided alternative","steps":["read alternative file","report evidence"],"active_step":"read alternative file"}}`
+	loop, p, calls := fixtureWorker(t, 2, first, `{"status":"blocked","reason":"first path absent; alternative may exist","summary":""}`, second, completeEval)
+	p.SessionFoundation.Goal = "Read the fixture from missing.txt or actual.txt and report its contents"
+	p.CurrentStep.DoneCondition = "The fixture content is observed and reported"
+	if err := os.WriteFile(filepath.Join(p.OperatorState.WorkingDir, "actual.txt"), []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
 	}
-	packet := ctxpacket.WorkerPacket{
-		BehaviorFrame:     behavior.Frame{SystemPrompt: "prompt", AgentsText: "agents", RuntimeMode: "worker"},
-		SessionFoundation: session.Foundation{Goal: "test", ReportingRequirement: "owasp"},
+	sink := &recordingProgressSink{}
+	loop.Progress = sink
+	out, err := loop.Run(context.Background(), p, 2)
+	if err != nil || out.Packet.TaskRuntime.State != "done" || *calls != 4 {
+		t.Fatalf("out=%+v err=%v calls=%d", out, err, *calls)
 	}
-	outcome, err := loop.Run(context.Background(), packet, 1)
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+	if out.Packet.Budget.Used != 2 || out.Packet.CurrentStep.RemainingBudget != "0 steps" {
+		t.Fatalf("budget=%+v", out.Packet.Budget)
 	}
-	if outcome.Summary != "done" {
-		t.Fatalf("summary = %q", outcome.Summary)
+	if out.Packet.PlanState.ActiveStep != "read alternative file" || out.Packet.PlanState.WorkerGoal != p.SessionFoundation.Goal || out.Packet.CurrentStep.DoneCondition != p.CurrentStep.DoneCondition {
+		t.Fatal("plan changed task contract or failed to revise")
 	}
-	if !strings.Contains(outcome.Packet.RunningSummary, "Status: done.") {
-		t.Fatalf("running summary = %q", outcome.Packet.RunningSummary)
+	if len(out.Packet.RelevantRecentResults) != 1 || out.Packet.RelevantRecentResults[0].ExitStatus == "0" || out.Packet.LatestExecutionResult.ExitStatus != "0" {
+		t.Fatal("recovery history lost")
 	}
-	if outcome.Packet.RunningSummary == "done" {
-		t.Fatalf("running summary should not be raw model completion text")
+	if p.PlanState.Mode != "" || p.Budget.Used != 0 {
+		t.Fatal("caller state mutated")
+	}
+	if len(out.Packet.PlanHistory) != 2 || out.Packet.PlanHistory[0].AfterExecutionLog != "" || out.Packet.PlanHistory[1].AfterExecutionLog != out.Packet.RelevantRecentResults[0].LogRefs[0] {
+		t.Fatal("plan revision chronology was not preserved")
+	}
+	if sink.packets[0].Budget.Used != 0 || sink.packets[0].TaskRuntime.State != "running" {
+		t.Fatal("earlier progress snapshot mutated")
 	}
 }
 
-func TestBuildUserPromptIncludesCompletionGuidance(t *testing.T) {
-	packet := ctxpacket.WorkerPacket{
-		BehaviorFrame: behavior.Frame{SystemPrompt: "prompt", AgentsText: "agents", RuntimeMode: "worker"},
-		SessionFoundation: session.Foundation{
-			Goal:                 "inspect localhost",
-			ReportingRequirement: "owasp",
-		},
-		LatestExecutionResult: ctxpacket.ExecutionResult{
-			Action:        "nmap -sV -p- --open 127.0.0.1",
-			ExitStatus:    "0",
-			OutputSummary: "stdout: 22/tcp open ssh OpenSSH 10.2p1 Debian 3",
-			Assessment:    "success",
-		},
+func TestRepeatedInvocationsRemainDistinctChronologicalEvidence(t *testing.T) {
+	var replies []string
+	for i := 0; i < 5; i++ {
+		replies = append(replies, printAction, continueEval)
 	}
+	replies = append(replies, printAction, completeEval)
+	loop, p, _ := fixtureWorker(t, 6, replies...)
+	out, err := loop.Run(context.Background(), p, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := append([]ctxpacket.ExecutionResult{out.Packet.LatestExecutionResult}, out.Packet.RelevantRecentResults...)
+	if len(results) != 6 {
+		t.Fatalf("lost repeated observations: %d", len(results))
+	}
+	seen := map[string]bool{}
+	for i, r := range results {
+		if len(r.LogRefs) != 1 || seen[r.LogRefs[0]] {
+			t.Fatalf("duplicate execution identity: %+v", r)
+		}
+		seen[r.LogRefs[0]] = true
+		if i > 0 && r.StartedAt.After(results[i-1].StartedAt) {
+			t.Fatal("history not newest first")
+		}
+	}
+}
 
-	prompt := buildUserPrompt(packet)
-	for _, want := range []string{
-		"Use task_runtime.current_target as the concrete thing currently being worked.",
-		"Use task_runtime.missing_fact as the primary description of what still needs to be learned or verified.",
-		"Use active_execution_facts as curated execution truth with provenance; prefer these facts over summaries when they disagree.",
-		"If active_execution_facts contains recovery_semantic, address that recovery need before repeating a failed action.",
-		"If task_runtime.missing_fact is not '(none)', prefer an action that establishes that missing fact for the current target.",
-		"Before choosing action, check whether the current goal is already satisfied by the latest execution result or relevant recent results.",
-		"If the goal is already satisfied with evidence in the context packet, choose step_complete.",
-		"If operator_state.mode_hint is direct_execution, prefer the simplest sufficient action and complete the task as soon as one supported result satisfies it.",
-		"Do not spend another turn re-reading or slicing the same log, command output, or artifact when the needed evidence is already present in the context packet.",
-		"If the latest result clearly failed, first reconsider whether the failed command structure itself was necessary before repeating or elaborating it.",
-		"After a clear failure, prefer a simpler next action that removes the failure cause or gathers the missing fact directly.",
-		"Do not preserve self-invented scaffolding such as custom output files or new directories unless they are actually needed for the goal.",
-	} {
+func TestCompletionRequiresEvidenceAndWholeGoalEvaluation(t *testing.T) {
+	t.Run("claim alone", func(t *testing.T) {
+		loop, p, calls := fixtureWorker(t, 1, `{"type":"step_complete","summary":"done"}`)
+		out, err := loop.Run(context.Background(), p, 1)
+		if err == nil || out.Packet.TaskRuntime.State != "blocked" || *calls != 1 {
+			t.Fatalf("err=%v calls=%d state=%s", err, *calls, out.Packet.TaskRuntime.State)
+		}
+	})
+	t.Run("omitted requirement", func(t *testing.T) {
+		loop, p, calls := fixtureWorker(t, 2, printAction, continueEval, `{"type":"step_complete","summary":"first part done","plan":{"summary":"Only part one","steps":["part one"],"active_step":"part one"}}`, continueEval)
+		p.SessionFoundation.Goal = "Establish both first and second conditions"
+		out, err := loop.Run(context.Background(), p, 2)
+		if err == nil || out.Packet.TaskRuntime.State == "done" || *calls != 4 {
+			t.Fatalf("false completion err=%v calls=%d", err, *calls)
+		}
+	})
+	t.Run("nonzero negative evidence", func(t *testing.T) {
+		loop, p, _ := fixtureWorker(t, 1, `{"type":"action","command":"sh","args":["-c","printf 'expected absent'; exit 1"]}`, completeEval)
+		out, err := loop.Run(context.Background(), p, 1)
+		if err != nil || out.Packet.LatestExecutionResult.ExitStatus != "1" {
+			t.Fatalf("valid negative evidence rejected: %v", err)
+		}
+	})
+	t.Run("evaluator unavailable", func(t *testing.T) {
+		loop, p, _ := fixtureWorker(t, 3, printAction, "not a verdict")
+		out, err := loop.Run(context.Background(), p, 3)
+		if err == nil || out.Packet.TaskRuntime.State != "failed" || !strings.Contains(err.Error(), "evaluation unavailable") {
+			t.Fatalf("err=%v state=%s", err, out.Packet.TaskRuntime.State)
+		}
+	})
+}
+
+func TestMalformedDecisionAndUnavailableToolCanBeCorrected(t *testing.T) {
+	for _, bad := range []string{`{"action":{"command":"touch","args":["should-not-exist"]}}`, `{"type":"action","command":"missing-fixture-command-xyz"}`} {
+		t.Run(bad, func(t *testing.T) {
+			loop, p, calls := fixtureWorker(t, 2, bad, printAction, completeEval)
+			out, err := loop.Run(context.Background(), p, 2)
+			if err != nil || *calls != 3 || len(out.Packet.RelevantRecentResults) != 0 {
+				t.Fatalf("err=%v calls=%d evidence=%+v", err, *calls, out.Packet.RelevantRecentResults)
+			}
+		})
+	}
+}
+
+type failProgress struct{ kind ProgressEventKind }
+
+func (f failProgress) EmitProgress(e ProgressEvent, p ctxpacket.WorkerPacket) error {
+	if e.Kind == f.kind {
+		return errors.New("fixture disk failure")
+	}
+	return nil
+}
+
+func TestPersistenceFailureStopsBeforeExternalEffect(t *testing.T) {
+	loop, p, _ := fixtureWorker(t, 2, `{"type":"action","command":"touch","args":["should-not-exist"]}`)
+	loop.Progress = failProgress{EventExecutionStarted}
+	out, err := loop.Run(context.Background(), p, 2)
+	if err == nil || out.Packet.TaskRuntime.State != "failed" {
+		t.Fatalf("err=%v state=%s", err, out.Packet.TaskRuntime.State)
+	}
+	if _, err := os.Stat(filepath.Join(p.OperatorState.WorkingDir, "should-not-exist")); !os.IsNotExist(err) {
+		t.Fatal("action ran despite failed persistence")
+	}
+	if out.Packet.OperatorState.PendingExec == "" {
+		t.Fatal("pending execution was lost")
+	}
+}
+
+func TestApprovalDenialAndCancellationStopWorker(t *testing.T) {
+	loop, p, calls := fixtureWorker(t, 2, printAction)
+	loop.Approver = approval.StaticApprover{Decision: approval.DecisionDeny}
+	out, err := loop.Run(context.Background(), p, 2)
+	if err == nil || out.Packet.LatestExecutionResult.Action != "" || *calls != 1 {
+		t.Fatalf("denied execution err=%v calls=%d", err, *calls)
+	}
+	loop, p, calls = fixtureWorker(t, 2)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	out, err = loop.Run(ctx, p, 2)
+	if !errors.Is(err, context.Canceled) || out.Packet.TaskRuntime.State != "aborted" || *calls != 0 {
+		t.Fatalf("canceled err=%v state=%s", err, out.Packet.TaskRuntime.State)
+	}
+}
+
+func TestQuestionAnswerAndResumeUseOriginalBudget(t *testing.T) {
+	loop, p, calls := fixtureWorker(t, 2, `{"type":"ask_user","question":"Which text?"}`, printAction, completeEval)
+	const answer = "first line\n  indented line\nlast line"
+	loop.AskUser = func(context.Context, string) (string, error) { return answer, nil }
+	out, err := loop.Run(context.Background(), p, 2)
+	if err != nil || *calls != 3 || !strings.Contains(strings.Join(out.Packet.RecentConversation, "\n"), answer) {
+		t.Fatalf("answer lost: err=%v", err)
+	}
+	// An interrupted task resumes its remaining turn instead of granting maxSteps again.
+	loop, p, calls = fixtureWorker(t, 2, printAction, continueEval)
+	p.Budget.Used = 1
+	out, err = loop.Run(context.Background(), p, 100)
+	if err == nil || out.Packet.Budget.Limit != 2 || out.Packet.Budget.Used != 2 || *calls != 2 {
+		t.Fatalf("resume reset budget: %+v err=%v calls=%d", out.Packet.Budget, err, *calls)
+	}
+	_, err = loop.Run(context.Background(), out.Packet, 100)
+	if err == nil || *calls != 2 {
+		t.Fatal("exhausted task contacted model again")
+	}
+}
+
+func TestPendingExecutionIsNeverReplayed(t *testing.T) {
+	loop, p, calls := fixtureWorker(t, 3)
+	p.OperatorState.PendingExec = "touch unknown"
+	out, err := loop.Run(context.Background(), p, 3)
+	if err == nil || !strings.Contains(err.Error(), "unknown") || *calls != 0 || out.Packet.OperatorState.PendingExec == "" {
+		t.Fatalf("err=%v calls=%d", err, *calls)
+	}
+}
+
+func TestInvalidAndOversizedContextStopsBeforeModel(t *testing.T) {
+	for _, kind := range []string{"policy", "budget", "size"} {
+		t.Run(kind, func(t *testing.T) {
+			loop, p, calls := fixtureWorker(t, 2)
+			switch kind {
+			case "policy":
+				p.BehaviorFrame.AgentsText = ""
+			case "budget":
+				p.Budget.Used = -1
+			case "size":
+				p.SessionFoundation.Goal = strings.Repeat("goal ", 20000)
+			}
+			out, err := loop.Run(context.Background(), p, 2)
+			if err == nil || *calls != 0 || out.Packet.TaskRuntime.State != "failed" {
+				t.Fatalf("err=%v calls=%d", err, *calls)
+			}
+		})
+	}
+}
+
+func TestProgressSnapshotsAndEvaluatorPromptPreserveTaskContract(t *testing.T) {
+	loop, p, _ := fixtureWorker(t, 1, printAction, completeEval)
+	sink := &recordingProgressSink{}
+	loop.Progress = sink
+	out, err := loop.Run(context.Background(), p, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kinds []string
+	for _, e := range sink.events {
+		kinds = append(kinds, string(e.Kind))
+		if e.Kind == EventExecutionStarted && e.Action != out.Packet.LatestExecutionResult.ActualExec {
+			t.Fatal("execution progress displayed a stale invocation")
+		}
+	}
+	for _, want := range []ProgressEventKind{EventTaskStarted, EventDecisionStarted, EventActionProposed, EventExecutionStarted, EventExecutionFinished, EventPostExecEvalStarted, EventPostExecEvalFinished, EventTaskCompleted} {
+		if !strings.Contains(strings.Join(kinds, ","), string(want)) {
+			t.Fatalf("missing %s in %v", want, kinds)
+		}
+	}
+	prompt := buildGoalEvaluationPrompt(out.Packet, "claimed answer")
+	for _, want := range []string{p.SessionFoundation.Goal, p.CurrentStep.DoneCondition, "claimed answer", "scope"} {
 		if !strings.Contains(prompt, want) {
-			t.Fatalf("prompt missing %q", want)
+			t.Fatal(fmt.Sprintf("evaluation lost %s", want))
 		}
 	}
-	if strings.Contains(prompt, "[behavior_frame]") {
-		t.Fatalf("prompt unexpectedly contains behavior_frame packet section: %q", prompt)
-	}
-	if !strings.Contains(prompt, "\"context_packet\":") {
-		t.Fatalf("prompt missing context_packet payload: %q", prompt)
-	}
-}
-
-func TestLoopWritesInspectionSnapshots(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []map[string]any{
-				{"message": map[string]any{"role": "assistant", "content": `{"type":"step_complete","summary":"done"}`}},
-			},
-		})
-	}))
-	defer server.Close()
-
-	inspectDir := t.TempDir()
-	loop := Loop{
-		LLM:       llmclient.Client{BaseURL: server.URL, Model: "test-model", HTTPClient: server.Client()},
-		Executor:  execx.Executor{LogDir: t.TempDir()},
-		Approver:  approval.StaticApprover{Decision: approval.DecisionApproveSession},
-		Inspector: contextinspect.Recorder{Dir: inspectDir},
-	}
-	packet := ctxpacket.WorkerPacket{
-		BehaviorFrame:     behavior.Frame{SystemPrompt: "prompt", AgentsText: "agents", RuntimeMode: "worker"},
-		SessionFoundation: session.Foundation{Goal: "test", ReportingRequirement: "owasp"},
-	}
-	if _, err := loop.Run(context.Background(), packet, 1); err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	for _, path := range []string{
-		filepath.Join(inspectDir, "step-001-pre-llm.txt"),
-		filepath.Join(inspectDir, "step-001-pre-llm-validation.txt"),
-		filepath.Join(inspectDir, "step-001-step-complete.txt"),
-	} {
-		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("expected snapshot %s: %v", path, err)
-		}
-	}
-}
-
-func TestLoopApprovalDenied(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []map[string]any{
-				{"message": map[string]any{"role": "assistant", "content": `{"type":"action","command":"pwd","use_shell":false}`}},
-			},
-		})
-	}))
-	defer server.Close()
-
-	loop := Loop{
-		LLM:      llmclient.Client{BaseURL: server.URL, Model: "test-model", HTTPClient: server.Client()},
-		Executor: execx.Executor{LogDir: t.TempDir()},
-		Approver: approval.StaticApprover{Decision: approval.DecisionDeny},
-	}
-	packet := ctxpacket.WorkerPacket{
-		BehaviorFrame:      behavior.Frame{SystemPrompt: "prompt", AgentsText: "agents", RuntimeMode: "worker"},
-		SessionFoundation:  session.Foundation{Goal: "test", ReportingRequirement: "owasp"},
-		RunningSummary:     "start",
-		RecentConversation: []string{"user: test"},
-	}
-	_, err := loop.Run(context.Background(), packet, 1)
-	if err == nil || !strings.Contains(err.Error(), "execution denied by user") {
-		t.Fatalf("Run() error = %v, want denial", err)
-	}
-}
-
-func TestLoopStopsOnFatalPacketValidation(t *testing.T) {
-	loop := Loop{
-		LLM:      llmclient.Client{BaseURL: "http://example.invalid", Model: "test-model"},
-		Executor: execx.Executor{LogDir: t.TempDir()},
-		Approver: approval.StaticApprover{Decision: approval.DecisionApproveSession},
-	}
-	packet := ctxpacket.WorkerPacket{}
-	outcome, err := loop.Run(context.Background(), packet, 1)
-	if err == nil || !strings.Contains(err.Error(), "packet validation failed") {
-		t.Fatalf("Run() error = %v, want packet validation failure", err)
-	}
-	if got := strings.TrimSpace(outcome.Packet.SessionFoundation.Goal); got != "" {
-		t.Fatalf("unexpected packet mutation, goal=%q", got)
-	}
-}
-
-func TestShouldUseWorkerPlanner(t *testing.T) {
-	cases := []struct {
-		goal string
-		want bool
-	}{
-		{goal: "ls", want: false},
-		{goal: "what files are in this folder?", want: false},
-		{goal: "Extract contents of secret.zip and identify the password needed to decrypt it.", want: true},
-		{goal: "Perform local reconnaissance of 127.0.0.1 and identify open ports and services.", want: true},
-	}
-	for _, tc := range cases {
-		packet := ctxpacket.WorkerPacket{
-			SessionFoundation: session.Foundation{Goal: tc.goal},
-		}
-		if got := shouldUseWorkerPlanner(packet); got != tc.want {
-			t.Fatalf("shouldUseWorkerPlanner(%q) = %v, want %v", tc.goal, got, tc.want)
-		}
-	}
-}
-
-func TestLoopAppliesWorkerPlanAndAdvancesStep(t *testing.T) {
-	var calls int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		content := `{"type":"step_complete","summary":"done"}`
-		switch calls {
-		case 1:
-			content = `{"mode":"planned_execution","worker_goal":"extract secret.zip and identify password","plan_summary":"Inspect then recover then verify.","plan_steps":["identify archive input","attempt bounded recovery","verify extraction"],"active_step":"identify archive input","replan_conditions":["current step is genuinely blocked"]}`
-		case 2:
-			content = `{"type":"action","command":"pwd","use_shell":false}`
-		case 3:
-			content = `{"type":"step_complete","summary":"identified archive"}`
-		case 4:
-			content = `{"type":"action","command":"pwd","use_shell":false}`
-		case 5:
-			content = `{"type":"step_complete","summary":"recovered archive"}`
-		case 6:
-			content = `{"type":"step_complete","summary":"done"}`
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []map[string]any{
-				{"message": map[string]any{"role": "assistant", "content": content}},
-			},
-		})
-	}))
-	defer server.Close()
-
-	loop := Loop{
-		LLM:      llmclient.Client{BaseURL: server.URL, Model: "test-model", HTTPClient: server.Client()},
-		Executor: execx.Executor{LogDir: t.TempDir()},
-		Approver: approval.StaticApprover{Decision: approval.DecisionApproveSession},
-	}
-	packet := ctxpacket.WorkerPacket{
-		BehaviorFrame:     behavior.Frame{SystemPrompt: "prompt", AgentsText: "agents", RuntimeMode: "worker"},
-		SessionFoundation: session.Foundation{Goal: "Extract contents of secret.zip and identify the password needed to decrypt it.", ReportingRequirement: "owasp"},
-		CurrentStep:       ctxpacket.Step{RemainingBudget: "6 steps"},
-	}
-	outcome, err := loop.Run(context.Background(), packet, 6)
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	if outcome.Packet.PlanState.Mode != "planned_execution" {
-		t.Fatalf("plan mode = %q", outcome.Packet.PlanState.Mode)
-	}
-	if outcome.Packet.PlanState.ActiveStep != "verify extraction" {
-		t.Fatalf("active step = %q", outcome.Packet.PlanState.ActiveStep)
-	}
-	if outcome.Packet.TaskRuntime.State != "done" {
-		t.Fatalf("task state = %q", outcome.Packet.TaskRuntime.State)
-	}
-	if outcome.Summary != "done" {
-		t.Fatalf("summary = %q", outcome.Summary)
-	}
-}
-
-func TestLoopEmitsProgressEventsForDirectExecution(t *testing.T) {
-	var calls int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []map[string]any{
-				{"message": map[string]any{"role": "assistant", "content": `{"type":"action","command":"pwd","use_shell":false}`}},
-			},
-		})
-	}))
-	defer server.Close()
-
-	progress := &recordingProgressSink{}
-	loop := Loop{
-		LLM:      llmclient.Client{BaseURL: server.URL, Model: "test-model", HTTPClient: server.Client()},
-		Executor: execx.Executor{LogDir: t.TempDir()},
-		Approver: approval.StaticApprover{Decision: approval.DecisionApproveSession},
-		Progress: progress,
-	}
-	packet := ctxpacket.WorkerPacket{
-		BehaviorFrame:      behavior.Frame{SystemPrompt: "prompt", AgentsText: "agents", RuntimeMode: "worker"},
-		SessionFoundation:  session.Foundation{Goal: "what is the current working directory?", ReportingRequirement: "owasp"},
-		OperatorState:      ctxpacket.OperatorState{ModeHint: "direct_execution"},
-		RecentConversation: []string{"User: what is the current working directory?"},
-	}
-	outcome, err := loop.Run(context.Background(), packet, 1)
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	if outcome.Packet.TaskRuntime.State != "done" {
-		t.Fatalf("task state = %q, want done", outcome.Packet.TaskRuntime.State)
-	}
-	gotKinds := make([]ProgressEventKind, 0, len(progress.events))
-	for _, event := range progress.events {
-		gotKinds = append(gotKinds, event.Kind)
-	}
-	want := []ProgressEventKind{
-		EventTaskStarted,
-		EventActionProposed,
-		EventExecutionStarted,
-		EventExecutionFinished,
-		EventPostExecEvalStarted,
-		EventPostExecEvalFinished,
-		EventTaskCompleted,
-	}
-	if !slices.Equal(gotKinds, want) {
-		t.Fatalf("event kinds = %#v, want %#v", gotKinds, want)
-	}
-	if calls != 1 {
-		t.Fatalf("llm calls = %d, want 1", calls)
-	}
-}
-
-func TestLoopDirectExecutionCompletesFromStructuredSuccessWithoutPostExecLLM(t *testing.T) {
-	var calls int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []map[string]any{
-				{"message": map[string]any{"role": "assistant", "content": `{"type":"action","command":"pwd","use_shell":false}`}},
-			},
-		})
-	}))
-	defer server.Close()
-
-	loop := Loop{
-		LLM:      llmclient.Client{BaseURL: server.URL, Model: "test-model", HTTPClient: server.Client()},
-		Executor: execx.Executor{LogDir: t.TempDir()},
-		Approver: approval.StaticApprover{Decision: approval.DecisionApproveSession},
-	}
-	packet := ctxpacket.WorkerPacket{
-		BehaviorFrame:      behavior.Frame{SystemPrompt: "prompt", AgentsText: "agents", RuntimeMode: "worker"},
-		SessionFoundation:  session.Foundation{Goal: "what is the current working directory?", ReportingRequirement: "owasp"},
-		OperatorState:      ctxpacket.OperatorState{ModeHint: "direct_execution"},
-		RecentConversation: []string{"User: what is the current working directory?"},
-	}
-	outcome, err := loop.Run(context.Background(), packet, 1)
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	if outcome.Packet.TaskRuntime.State != "done" {
-		t.Fatalf("task state = %q, want done", outcome.Packet.TaskRuntime.State)
-	}
-	if !hasLoopExecutionFact(outcome.Packet.ActiveExecutionFacts, ctxpacket.ExecutionFactKindLatestExecutionStatus, "pwd") {
-		t.Fatalf("ActiveExecutionFacts missing latest_execution_status: %#v", outcome.Packet.ActiveExecutionFacts)
-	}
-	if !hasLoopExecutionFactKind(outcome.Packet.ActiveExecutionFacts, ctxpacket.ExecutionFactKindLogRef) {
-		t.Fatalf("ActiveExecutionFacts missing log_ref: %#v", outcome.Packet.ActiveExecutionFacts)
-	}
-	if calls != 1 {
-		t.Fatalf("llm calls = %d, want 1", calls)
-	}
-}
-
-func TestLoopEmitsProgressEventsForPlannedExecution(t *testing.T) {
-	var calls int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		content := `{"status":"satisfied","reason":"step satisfied","summary":"identified archive"}`
-		switch calls {
-		case 1:
-			content = `{"mode":"planned_execution","worker_goal":"inspect secret.zip","plan_summary":"Inspect archive.","plan_steps":["inspect archive"],"active_step":"inspect archive","replan_conditions":["archive missing"]}`
-		case 2:
-			content = `{"type":"step_complete","summary":"identified archive"}`
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []map[string]any{
-				{"message": map[string]any{"role": "assistant", "content": content}},
-			},
-		})
-	}))
-	defer server.Close()
-
-	progress := &recordingProgressSink{}
-	loop := Loop{
-		LLM:      llmclient.Client{BaseURL: server.URL, Model: "test-model", HTTPClient: server.Client()},
-		Executor: execx.Executor{LogDir: t.TempDir()},
-		Approver: approval.StaticApprover{Decision: approval.DecisionApproveSession},
-		Progress: progress,
-	}
-	packet := ctxpacket.WorkerPacket{
-		BehaviorFrame:      behavior.Frame{SystemPrompt: "prompt", AgentsText: "agents", RuntimeMode: "worker"},
-		SessionFoundation:  session.Foundation{Goal: "Extract contents of secret.zip and identify the password needed to decrypt it.", ReportingRequirement: "owasp"},
-		RecentConversation: []string{"User: Extract contents of secret.zip and identify the password needed to decrypt it."},
-		OperatorState:      ctxpacket.OperatorState{ModeHint: "planned_execution"},
-	}
-	outcome, err := loop.Run(context.Background(), packet, 1)
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	if outcome.Packet.TaskRuntime.State != "done" {
-		t.Fatalf("task state = %q, want done", outcome.Packet.TaskRuntime.State)
-	}
-	gotKinds := make([]ProgressEventKind, 0, len(progress.events))
-	for _, event := range progress.events {
-		gotKinds = append(gotKinds, event.Kind)
-	}
-	want := []ProgressEventKind{
-		EventTaskStarted,
-		EventPlanStarted,
-		EventPlanFinished,
-		EventTaskCompleted,
-	}
-	if !slices.Equal(gotKinds, want) {
-		t.Fatalf("event kinds = %#v, want %#v", gotKinds, want)
-	}
-}
-
-func TestLoopWritesPlannerAttemptSnapshot(t *testing.T) {
-	var calls int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		content := `{"type":"step_complete","summary":"done"}`
-		if calls == 1 {
-			content = `{"mode":"planned_execution","worker_goal":"inspect zip","plan_summary":"Inspect then recover.","plan_steps":["Inspect archive","Attempt recovery"],"active_step":"Inspect archive","replan_conditions":["blocked"]}`
-		} else if calls == 2 {
-			content = `{"type":"action","command":"pwd","use_shell":false}`
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []map[string]any{
-				{"message": map[string]any{"role": "assistant", "content": content}},
-			},
-		})
-	}))
-	defer server.Close()
-
-	inspectDir := t.TempDir()
-	loop := Loop{
-		LLM:       llmclient.Client{BaseURL: server.URL, Model: "test-model", HTTPClient: server.Client()},
-		Executor:  execx.Executor{LogDir: t.TempDir()},
-		Approver:  approval.StaticApprover{Decision: approval.DecisionApproveSession},
-		Inspector: contextinspect.Recorder{Dir: inspectDir},
-	}
-	packet := ctxpacket.WorkerPacket{
-		BehaviorFrame:     behavior.Frame{SystemPrompt: "prompt", AgentsText: "agents", RuntimeMode: "worker"},
-		SessionFoundation: session.Foundation{Goal: "Extract contents of secret.zip and identify the password needed to decrypt it.", ReportingRequirement: "owasp"},
-		CurrentStep:       ctxpacket.Step{RemainingBudget: "4 steps"},
-	}
-	if _, err := loop.Run(context.Background(), packet, 4); err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	path := filepath.Join(inspectDir, "planner-attempt-001.txt")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile(planner attempt) error = %v", err)
-	}
-	text := string(data)
-	for _, want := range []string{
-		"[planner_attempt]",
-		"accepted: true",
-		"mode: planned_execution",
-		"plan_steps: Inspect archive | Attempt recovery",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("planner attempt missing %q in:\n%s", want, text)
-		}
-	}
-}
-
-func TestLoopAutoAdvancesPlannedStepFromStepEvaluation(t *testing.T) {
-	var calls int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		content := `{"type":"step_complete","summary":"done"}`
-		switch calls {
-		case 1:
-			content = `{"mode":"planned_execution","worker_goal":"inspect zip","plan_summary":"Inspect then recover.","plan_steps":["Inspect archive","Attempt recovery"],"active_step":"Inspect archive","replan_conditions":["blocked"]}`
-		case 2:
-			content = `{"type":"action","command":"pwd","use_shell":false}`
-		case 3:
-			content = `{"decision":"execute","reason":"action fits the active step"}`
-		case 4:
-			content = `{"status":"satisfied","reason":"archive inspection evidence is sufficient","summary":"archive inspected"}`
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []map[string]any{
-				{"message": map[string]any{"role": "assistant", "content": content}},
-			},
-		})
-	}))
-	defer server.Close()
-
-	loop := Loop{
-		LLM:      llmclient.Client{BaseURL: server.URL, Model: "test-model", HTTPClient: server.Client()},
-		Executor: execx.Executor{LogDir: t.TempDir()},
-		Approver: approval.StaticApprover{Decision: approval.DecisionApproveSession},
-	}
-	packet := ctxpacket.WorkerPacket{
-		BehaviorFrame:     behavior.Frame{SystemPrompt: "prompt", AgentsText: "agents", RuntimeMode: "worker"},
-		SessionFoundation: session.Foundation{Goal: "Extract contents of secret.zip and identify the password needed to decrypt it.", ReportingRequirement: "owasp"},
-		CurrentStep:       ctxpacket.Step{RemainingBudget: "1 step"},
-	}
-	outcome, err := loop.Run(context.Background(), packet, 1)
-	if err == nil || !strings.Contains(err.Error(), "step did not complete within 1 steps") {
-		t.Fatalf("Run() error = %v, want step limit", err)
-	}
-	if outcome.Packet.PlanState.ActiveStep != "Attempt recovery" {
-		t.Fatalf("active step = %q", outcome.Packet.PlanState.ActiveStep)
-	}
-	if outcome.Packet.CurrentStep.Objective != "Attempt recovery" {
-		t.Fatalf("current objective = %q", outcome.Packet.CurrentStep.Objective)
-	}
-	if !strings.Contains(outcome.Packet.RunningSummary, "Next step: Attempt recovery") {
-		t.Fatalf("running summary = %q", outcome.Packet.RunningSummary)
-	}
-}
-
-func TestLoopDirectExecutionCompletesFromStructuredSuccess(t *testing.T) {
-	var calls int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []map[string]any{
-				{"message": map[string]any{"role": "assistant", "content": `{"type":"action","command":"pwd","use_shell":false}`}},
-			},
-		})
-	}))
-	defer server.Close()
-
-	loop := Loop{
-		LLM:      llmclient.Client{BaseURL: server.URL, Model: "test-model", HTTPClient: server.Client()},
-		Executor: execx.Executor{LogDir: t.TempDir()},
-		Approver: approval.StaticApprover{Decision: approval.DecisionApproveSession},
-	}
-	packet := ctxpacket.WorkerPacket{
-		BehaviorFrame:     behavior.Frame{SystemPrompt: "prompt", AgentsText: "agents", RuntimeMode: "worker"},
-		SessionFoundation: session.Foundation{Goal: "what files are in this folder?", ReportingRequirement: "concise"},
-		OperatorState:     ctxpacket.OperatorState{ModeHint: "direct_execution"},
-		CurrentStep:       ctxpacket.Step{RemainingBudget: "1 step"},
-	}
-	outcome, err := loop.Run(context.Background(), packet, 1)
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	if outcome.Packet.TaskRuntime.State != "done" {
-		t.Fatalf("task state = %q", outcome.Packet.TaskRuntime.State)
-	}
-	if outcome.Summary != "" {
-		t.Fatalf("summary = %q, want empty direct outcome summary", outcome.Summary)
-	}
-	if calls != 1 {
-		t.Fatalf("llm calls = %d, want 1", calls)
-	}
-	if !strings.Contains(outcome.Packet.RunningSummary, "Status: done.") {
-		t.Fatalf("running summary = %q", outcome.Packet.RunningSummary)
-	}
-}
-
-func TestLoopDirectExecutionBlocksFromStructuredIncorrectPasswordWithoutPostExecLLM(t *testing.T) {
-	var calls int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []map[string]any{
-				{"message": map[string]any{"role": "assistant", "content": `{"type":"action","command":"printf 'unable to get password\n'; exit 5","use_shell":true}`}},
-			},
-		})
-	}))
-	defer server.Close()
-
-	loop := Loop{
-		LLM:      llmclient.Client{BaseURL: server.URL, Model: "test-model", HTTPClient: server.Client()},
-		Executor: execx.Executor{LogDir: t.TempDir()},
-		Approver: approval.StaticApprover{Decision: approval.DecisionApproveSession},
-	}
-	packet := ctxpacket.WorkerPacket{
-		BehaviorFrame:     behavior.Frame{SystemPrompt: "prompt", AgentsText: "agents", RuntimeMode: "worker"},
-		SessionFoundation: session.Foundation{Goal: "extract secret.zip and tell me what is inside", ReportingRequirement: "concise"},
-		OperatorState:     ctxpacket.OperatorState{ModeHint: "direct_execution"},
-		CurrentStep:       ctxpacket.Step{RemainingBudget: "1 step"},
-	}
-	outcome, err := loop.Run(context.Background(), packet, 1)
-	if err == nil || !strings.Contains(err.Error(), "direct request blocked") {
-		t.Fatalf("Run() error = %v, want direct request blocked", err)
-	}
-	if outcome.Packet.TaskRuntime.State != "blocked" {
-		t.Fatalf("task state = %q, want blocked", outcome.Packet.TaskRuntime.State)
-	}
-	if calls != 1 {
-		t.Fatalf("llm calls = %d, want 1", calls)
-	}
-}
-
-func TestLoopWritesActionReviewAttemptAndRequestsRevision(t *testing.T) {
-	var calls int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		content := `{"type":"step_complete","summary":"done"}`
-		switch calls {
-		case 1:
-			content = `{"mode":"planned_execution","worker_goal":"inspect host","plan_summary":"scan then report","plan_steps":["Scan target","Report"],"active_step":"Scan target","replan_conditions":["blocked"]}`
-		case 2:
-			content = `{"type":"action","command":"nmap -sV -p- --open 192.168.50.1 > /tmp/out.txt 2>&1 && cat /tmp/out.txt","use_shell":true}`
-		case 3:
-			content = `{"decision":"revise","reason":"proposed action is unnecessarily elaborate for the active step"}`
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []map[string]any{
-				{"message": map[string]any{"role": "assistant", "content": content}},
-			},
-		})
-	}))
-	defer server.Close()
-
-	inspectDir := t.TempDir()
-	loop := Loop{
-		LLM:       llmclient.Client{BaseURL: server.URL, Model: "test-model", HTTPClient: server.Client()},
-		Executor:  execx.Executor{LogDir: t.TempDir()},
-		Approver:  approval.StaticApprover{Decision: approval.DecisionApproveSession},
-		Inspector: contextinspect.Recorder{Dir: inspectDir},
-	}
-	packet := ctxpacket.WorkerPacket{
-		BehaviorFrame:     behavior.Frame{SystemPrompt: "prompt", AgentsText: "agents", RuntimeMode: "worker"},
-		SessionFoundation: session.Foundation{Goal: "Perform local reconnaissance of 192.168.50.1 and identify open ports and services.", ReportingRequirement: "owasp"},
-		CurrentStep:       ctxpacket.Step{RemainingBudget: "1 step"},
-	}
-	outcome, err := loop.Run(context.Background(), packet, 1)
-	if err == nil || !strings.Contains(err.Error(), "step did not complete within 1 steps") {
-		t.Fatalf("Run() error = %v, want step limit", err)
-	}
-	if got := outcome.Packet.LatestExecutionResult.FailureClass; got != "pre_execution_review" {
-		t.Fatalf("failure class = %q", got)
-	}
-	if got := outcome.Packet.LatestExecutionResult.Action; !strings.Contains(got, "nmap -sV -p-") {
-		t.Fatalf("latest action = %q", got)
-	}
-	path := filepath.Join(inspectDir, "action-review-attempt-001.txt")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile(action review) error = %v", err)
-	}
-	text := string(data)
-	for _, want := range []string{
-		"[action_review_attempt]",
-		"decision: revise",
-		"reason: proposed action is unnecessarily elaborate for the active step",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("action review attempt missing %q in:\n%s", want, text)
-		}
-	}
-}
-
-func TestLoopBlocksPlannedStepOnBlockingFailure(t *testing.T) {
-	var calls int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		content := `{"type":"step_complete","summary":"done"}`
-		if calls == 1 {
-			content = `{"mode":"planned_execution","worker_goal":"recover archive","plan_summary":"Recover archive.","plan_steps":["Attempt recovery","Verify extraction"],"active_step":"Attempt recovery","replan_conditions":["wordlist missing"]}`
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []map[string]any{
-				{"message": map[string]any{"role": "assistant", "content": content}},
-			},
-		})
-	}))
-	defer server.Close()
-
-	loop := Loop{
-		LLM:      llmclient.Client{BaseURL: server.URL, Model: "test-model", HTTPClient: server.Client()},
-		Executor: execx.Executor{LogDir: t.TempDir()},
-		Approver: approval.StaticApprover{Decision: approval.DecisionApproveSession},
-	}
-	packet := ctxpacket.WorkerPacket{
-		BehaviorFrame:     behavior.Frame{SystemPrompt: "prompt", AgentsText: "agents", RuntimeMode: "worker"},
-		SessionFoundation: session.Foundation{Goal: "Extract contents of secret.zip and identify the password needed to decrypt it.", ReportingRequirement: "owasp"},
-		CurrentStep:       ctxpacket.Step{RemainingBudget: "4 steps"},
-		LatestExecutionResult: ctxpacket.ExecutionResult{
-			Action:        "fcrackzip -D -p /usr/share/wordlists/rockyou.txt secret.zip",
-			ExitStatus:    "1",
-			Assessment:    "failed",
-			OutputSummary: "stderr: wordlist missing",
-			Signals:       []string{"missing_path", "nonzero_exit"},
-			FailureClass:  "command_failed",
-		},
-	}
-	outcome, err := loop.Run(context.Background(), packet, 4)
-	if err == nil || !strings.Contains(err.Error(), "planned step blocked") {
-		t.Fatalf("Run() error = %v, want planned step blocked", err)
-	}
-	if outcome.Packet.TaskRuntime.State != "blocked" {
-		t.Fatalf("task state = %q, want blocked", outcome.Packet.TaskRuntime.State)
-	}
-	if outcome.Packet.PlanState.BlockedStep != "Attempt recovery" {
-		t.Fatalf("blocked step = %q", outcome.Packet.PlanState.BlockedStep)
-	}
-}
-
-func TestUpdateRelevantRecentResults(t *testing.T) {
-	current := []ctxpacket.ExecutionResult{
-		{Action: "second", ExitStatus: "0"},
-		{Action: "third", ExitStatus: "1"},
-		{Action: "fourth", ExitStatus: "0"},
-	}
-	got := updateRelevantRecentResults(current, ctxpacket.ExecutionResult{Action: "first", ExitStatus: "0"}, "")
-	if len(got) != 3 {
-		t.Fatalf("len(got) = %d", len(got))
-	}
-	if got[0].Action != "third" || got[1].Action != "first" || got[2].Action != "second" {
-		t.Fatalf("unexpected ordering: %#v", got)
-	}
-}
-
-func TestUpdateRelevantRecentResultsPrefersTargetRelevantEvidence(t *testing.T) {
-	current := []ctxpacket.ExecutionResult{
-		{
-			Action:        `find . -name "*.txt"`,
-			ExitStatus:    "0",
-			OutputSummary: "(none)",
-			Assessment:    "ambiguous",
-			Signals:       []string{"empty_output"},
-		},
-		{
-			Action:        "unzip -t secret.zip",
-			ExitStatus:    "0",
-			OutputSummary: "unable to get password",
-			Assessment:    "suspicious",
-			Signals:       []string{"incorrect_password"},
-		},
-	}
-	got := updateRelevantRecentResults(current, ctxpacket.ExecutionResult{
-		Action:        "env | grep -i pass",
-		ExitStatus:    "0",
-		OutputSummary: "(none)",
-		Assessment:    "success",
-	}, "secret.zip")
-	if len(got) < 2 {
-		t.Fatalf("len(got) = %d", len(got))
-	}
-	if got[0].Action != "unzip -t secret.zip" {
-		t.Fatalf("got[0].Action = %q", got[0].Action)
-	}
-}
-
-func TestBuildRunningSummary(t *testing.T) {
-	summary := buildRunningSummary(
-		"inspect archive",
-		ctxpacket.ExecutionResult{
-			Action:        "file ./secret.zip",
-			ExitStatus:    "0",
-			Assessment:    "suspicious",
-			Signals:       []string{"error_text", "incorrect_password"},
-			OutputSummary: "stdout: ./secret.zip: ASCII text",
-		},
-		[]ctxpacket.ExecutionResult{
-			{Action: "ls -la ./secret.zip", ExitStatus: "0"},
-		},
-	)
-	for _, want := range []string{
-		"Status: needs interpretation.",
-		`Evidence: "file ./secret.zip" exited with 0.`,
-		"Assessment: suspicious.",
-		"Signals: error_text, incorrect_password.",
-		"Key output: stdout: ./secret.zip: ASCII text.",
-	} {
-		if !strings.Contains(summary, want) {
-			t.Fatalf("summary missing %q in %q", want, summary)
-		}
-	}
-	for _, unwanted := range []string{
-		"Objective:",
-		"Recent prior results retained:",
-		"Current status:",
-	} {
-		if strings.Contains(summary, unwanted) {
-			t.Fatalf("summary unexpectedly contains %q in %q", unwanted, summary)
-		}
-	}
-}
-
-func TestBuildRunningSummaryPrefersStrongerRetainedEvidence(t *testing.T) {
-	summary := buildRunningSummary(
-		"extract archive",
-		ctxpacket.ExecutionResult{
-			Action:        "find /home/johan -name \"secret.zip\"",
-			ExitStatus:    "0",
-			OutputSummary: "stdout: /home/johan/.../secret.zip",
-			Assessment:    "success",
-		},
-		[]ctxpacket.ExecutionResult{
-			{
-				Action:        "unzip -t secret.zip",
-				ExitStatus:    "0",
-				OutputSummary: "stdout: unable to get password",
-				Assessment:    "suspicious",
-				Signals:       []string{"incorrect_password"},
-			},
-		},
-	)
-	for _, want := range []string{
-		"Status: needs interpretation.",
-		`Evidence: "unzip -t secret.zip" exited with 0.`,
-		"Assessment: suspicious.",
-		"Signals: incorrect_password.",
-		"Key output: stdout: unable to get password.",
-		"Latest result was weaker than retained evidence.",
-	} {
-		if !strings.Contains(summary, want) {
-			t.Fatalf("summary missing %q in %q", want, summary)
-		}
-	}
-}
-
-func TestBuildRunningSummaryCompactsOnlyVeryLongFields(t *testing.T) {
-	longAction := "printf " + strings.Repeat("a", 700)
-	longOutput := "stdout: " + strings.Repeat("b", 2200)
-	summary := buildRunningSummary(
-		"inspect archive",
-		ctxpacket.ExecutionResult{
-			Action:        longAction,
-			ExitStatus:    "0",
-			Assessment:    "success",
-			OutputSummary: longOutput,
-		},
-		nil,
-	)
-	if len(summary) >= len(longAction)+len(longOutput) {
-		t.Fatalf("summary was not compacted: len(summary)=%d", len(summary))
-	}
-	if !strings.Contains(summary, "...") {
-		t.Fatalf("summary missing compacted marker: %q", summary)
-	}
-}
-
-func TestBuildRunningSummaryKeepsModeratelyLongFields(t *testing.T) {
-	longAction := "printf " + strings.Repeat("a", 260)
-	longOutput := "stdout: " + strings.Repeat("b", 700)
-	summary := buildRunningSummary(
-		"inspect archive",
-		ctxpacket.ExecutionResult{
-			Action:        longAction,
-			ExitStatus:    "0",
-			Assessment:    "success",
-			OutputSummary: longOutput,
-		},
-		nil,
-	)
-	if !strings.Contains(summary, longAction) {
-		t.Fatalf("summary should preserve action without compaction: %q", summary)
-	}
-	if !strings.Contains(summary, longOutput) {
-		t.Fatalf("summary should preserve evidence without compaction: %q", summary)
-	}
-}
-
-func TestBuildRunningSummaryInterruptedExecution(t *testing.T) {
-	summary := buildRunningSummary(
-		"scan router",
-		ctxpacket.ExecutionResult{
-			Action:        "nmap -sV --top-ports 1000 192.168.50.1",
-			ExitStatus:    "-1",
-			Assessment:    "ambiguous",
-			OutputSummary: "(none)",
-			Signals:       []string{"execution_timeout"},
-			FailureClass:  "execution_interrupted",
-		},
-		nil,
-	)
-	for _, want := range []string{
-		"Status: in progress.",
-		`Evidence: "nmap -sV --top-ports 1000 192.168.50.1" exited with -1.`,
-		"Execution was interrupted before the active work completed.",
-		"Assessment: ambiguous.",
-		"Signals: execution_timeout.",
-	} {
-		if !strings.Contains(summary, want) {
-			t.Fatalf("summary missing %q in %q", want, summary)
-		}
-	}
-	if strings.Contains(summary, "encountered a failure") {
-		t.Fatalf("summary incorrectly treated interrupted work as failure: %q", summary)
-	}
-}
-
-func TestBuildCompletionSummary(t *testing.T) {
-	summary := buildCompletionSummary(
-		"Perform local reconnaissance of 127.0.0.1",
-		ctxpacket.ExecutionResult{
-			Action:        "nmap -sV 127.0.0.1",
-			ExitStatus:    "0",
-			Assessment:    "success",
-			OutputSummary: "stdout: 22/tcp open ssh OpenSSH 10.2p1 Debian 3",
-		},
-		nil,
-	)
-	for _, want := range []string{
-		"Status: done.",
-		"Goal: Perform local reconnaissance of 127.0.0.1.",
-		`Completion evidence: "nmap -sV 127.0.0.1" exited with 0.`,
-		"Assessment: success.",
-		"Key output: stdout: 22/tcp open ssh OpenSSH 10.2p1 Debian 3.",
-	} {
-		if !strings.Contains(summary, want) {
-			t.Fatalf("completion summary missing %q in %q", want, summary)
-		}
-	}
-}
-
-func TestPrepareActionSplitsDirectCommandAndChecksExecutability(t *testing.T) {
-	action, validationFailure := prepareAction(Response{Type: "action", Command: "printf hello", UseShell: false})
-	if validationFailure != nil {
-		t.Fatalf("prepareAction() validation failure = %#v", validationFailure)
-	}
-	if action.Command != "printf" {
-		t.Fatalf("action.Command = %q", action.Command)
-	}
-	if len(action.Args) != 1 || action.Args[0] != "hello" {
-		t.Fatalf("action.Args = %#v", action.Args)
-	}
-}
-
-func hasLoopExecutionFact(facts []ctxpacket.ExecutionFact, kind, subject string) bool {
-	for _, fact := range facts {
-		if fact.Kind == kind && fact.Subject == subject {
-			return true
-		}
-	}
-	return false
-}
-
-func hasLoopExecutionFactKind(facts []ctxpacket.ExecutionFact, kind string) bool {
-	for _, fact := range facts {
-		if fact.Kind == kind {
-			return true
-		}
-	}
-	return false
 }

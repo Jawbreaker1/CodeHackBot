@@ -40,6 +40,14 @@ func TestValidatePacketFatalForMissingGoalAndBehavior(t *testing.T) {
 	}
 }
 
+func TestValidatePacketRejectsMissingBehaviorWithValidGoal(t *testing.T) {
+	packet := WorkerPacket{SessionFoundation: session.Foundation{Goal: "inspect fixture"}, CurrentStep: Step{Objective: "inspect fixture"}, RunningSummary: "starting"}
+	report := ValidatePacket(packet)
+	if !report.IsFatal() {
+		t.Fatalf("missing behavior accepted: %+v", report)
+	}
+}
+
 func TestValidatePacketWarnsOnMissingSummary(t *testing.T) {
 	packet := WorkerPacket{
 		BehaviorFrame:     behavior.Frame{SystemPrompt: "prompt", AgentsText: "rules", RuntimeMode: "worker"},
@@ -68,30 +76,13 @@ func TestValidatePacketErrorsOnRecentConversationOverflow(t *testing.T) {
 	}
 }
 
-func TestValidatePacketErrorsOnDoneWithMissingFact(t *testing.T) {
-	packet := WorkerPacket{
-		BehaviorFrame:     behavior.Frame{SystemPrompt: "prompt", AgentsText: "rules", RuntimeMode: "worker"},
-		SessionFoundation: session.Foundation{Goal: "inspect target", ReportingRequirement: "owasp"},
-		CurrentStep:       Step{Objective: "inspect target"},
-		RunningSummary:    "done",
-		TaskRuntime: TaskRuntime{
-			State:         "done",
-			CurrentTarget: "secret.zip",
-			MissingFact:   "next evidence needed about secret.zip",
-		},
-	}
-	report := ValidatePacket(packet)
-	if got := report.HighestSeverity(); got != ValidationError {
-		t.Fatalf("HighestSeverity() = %q, want %q", got, ValidationError)
-	}
-}
-
-func TestValidatePacketErrorsOnRuntimeArtifactTarget(t *testing.T) {
+func TestValidatePacketRejectsInvalidBudget(t *testing.T) {
 	packet := WorkerPacket{
 		BehaviorFrame:     behavior.Frame{SystemPrompt: "prompt", AgentsText: "rules", RuntimeMode: "worker"},
 		SessionFoundation: session.Foundation{Goal: "inspect target", ReportingRequirement: "owasp"},
 		CurrentStep:       Step{Objective: "inspect target"},
 		RunningSummary:    "running",
+		Budget:            TurnBudget{Limit: 1, Used: 2},
 		TaskRuntime: TaskRuntime{
 			State:         "running",
 			CurrentTarget: "/tmp/session-1/logs/cmd-20260322.log",
@@ -99,8 +90,8 @@ func TestValidatePacketErrorsOnRuntimeArtifactTarget(t *testing.T) {
 		},
 	}
 	report := ValidatePacket(packet)
-	if got := report.HighestSeverity(); got != ValidationError {
-		t.Fatalf("HighestSeverity() = %q, want %q", got, ValidationError)
+	if got := report.HighestSeverity(); got != ValidationFatal {
+		t.Fatalf("HighestSeverity() = %q, want %q", got, ValidationFatal)
 	}
 }
 
@@ -133,76 +124,6 @@ func TestValidatePacketErrorsOnPartialLatestExecutionResult(t *testing.T) {
 	report := ValidatePacket(packet)
 	if got := report.HighestSeverity(); got != ValidationError {
 		t.Fatalf("HighestSeverity() = %q, want %q", got, ValidationError)
-	}
-}
-
-func TestValidatePacketErrorsOnActiveExecutionFactsOverflow(t *testing.T) {
-	packet := WorkerPacket{
-		BehaviorFrame:     behavior.Frame{SystemPrompt: "prompt", AgentsText: "rules", RuntimeMode: "worker"},
-		SessionFoundation: session.Foundation{Goal: "inspect target", ReportingRequirement: "owasp"},
-		CurrentStep:       Step{Objective: "inspect target"},
-		RunningSummary:    "running",
-	}
-	for i := 0; i < executionFactLimit+1; i++ {
-		packet.ActiveExecutionFacts = append(packet.ActiveExecutionFacts, ExecutionFact{
-			Kind:    ExecutionFactKindArtifactRef,
-			Subject: "artifact",
-			Status:  "available",
-		})
-	}
-
-	report := ValidatePacket(packet)
-	if got := report.HighestSeverity(); got != ValidationError {
-		t.Fatalf("HighestSeverity() = %q, want %q", got, ValidationError)
-	}
-}
-
-func TestValidatePacketAllowsUnknownExecutionFactKindWithProvenance(t *testing.T) {
-	packet := WorkerPacket{
-		BehaviorFrame:     behavior.Frame{SystemPrompt: "prompt", AgentsText: "rules", RuntimeMode: "worker"},
-		SessionFoundation: session.Foundation{Goal: "inspect target", ReportingRequirement: "owasp"},
-		CurrentStep:       Step{Objective: "inspect target"},
-		RunningSummary:    "running",
-		ActiveExecutionFacts: []ExecutionFact{
-			{
-				Kind:         "service_banner",
-				Subject:      "127.0.0.1:22 OpenSSH",
-				Status:       "observed",
-				Source:       "capability.port_inventory",
-				EvidenceRefs: []string{"logs/cmd-1.log"},
-			},
-		},
-	}
-
-	report := ValidatePacket(packet)
-	if got := report.HighestSeverity(); got != ValidationInfo {
-		t.Fatalf("HighestSeverity() = %q, want %q: %#v", got, ValidationInfo, report.Issues)
-	}
-}
-
-func TestValidatePacketErrorsOnMalformedExecutionFact(t *testing.T) {
-	packet := WorkerPacket{
-		BehaviorFrame:     behavior.Frame{SystemPrompt: "prompt", AgentsText: "rules", RuntimeMode: "worker"},
-		SessionFoundation: session.Foundation{Goal: "inspect target", ReportingRequirement: "owasp"},
-		CurrentStep:       Step{Objective: "inspect target"},
-		RunningSummary:    "running",
-		ActiveExecutionFacts: []ExecutionFact{
-			{
-				Kind:    "service_banner",
-				Subject: "127.0.0.1:22 OpenSSH",
-			},
-		},
-	}
-
-	report := ValidatePacket(packet)
-	if got := report.HighestSeverity(); got != ValidationError {
-		t.Fatalf("HighestSeverity() = %q, want %q", got, ValidationError)
-	}
-	if !hasValidationIssue(report, "execution_fact_missing_status") {
-		t.Fatalf("missing execution_fact_missing_status issue: %#v", report.Issues)
-	}
-	if !hasValidationIssue(report, "execution_fact_missing_source") {
-		t.Fatalf("missing execution_fact_missing_source issue: %#v", report.Issues)
 	}
 }
 
