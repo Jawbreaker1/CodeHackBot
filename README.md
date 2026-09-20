@@ -35,7 +35,7 @@ The standalone worker remains available for development:
 ./birdhackbot --llm-base-url http://127.0.0.1:1234/v1 --llm-model YOUR_LOCAL_MODEL_ID
 ```
 
-Use the exact model ID exposed by your local server. Execution requires per-action approval by default and uses the text interface. Inside the approved isolated VM, explicit `--allow-all` enables session-level approval and the terminal UI.
+Use the exact model ID exposed by your local server. Execution requires per-action approval by default. The no-flag guided application owns the terminal UI; advanced flags remain the diagnosis and automation surface.
 
 For a bounded headless task:
 

@@ -22,6 +22,7 @@ type App struct {
 	RepoRoot string
 	Reader   io.Reader
 	Writer   io.Writer
+	events   func(consoleEvent)
 }
 
 type assessmentConversation struct {
@@ -182,7 +183,7 @@ func (a App) Run(ctx context.Context) error {
 func (a App) runPlain(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	c := NewConsole(ctx, a.Reader, a.Writer)
+	c := newConsole(ctx, a.Reader, a.Writer, a.events)
 	c.Print("BirdHackBot — interactive assessment console\n\n")
 	c.Print("The orchestrator is ready. Talk naturally about what you want to do. The selected model will answer questions, ask for missing assessment details, and propose work for your review. Scope and action approval remain explicit before any worker runs. During an assessment, type a message to talk to the coordinator; /workers, /status, /help, and /stop are available. Ctrl-C stops setup or broadcasts stop to every active worker.\n\n")
 
@@ -241,6 +242,7 @@ func (a App) runPlain(ctx context.Context) error {
 			return err
 		}
 		c.Print("\nAssessment directory: %s\n", root)
+		c.assessmentStarted()
 		return a.runAssessmentWithFrame(ctx, c, prefs, client, root, assessment.State{Goal: goal, Scope: scope}, frame)
 	}
 }
@@ -293,6 +295,7 @@ func (a App) runAssessment(ctx context.Context, c *Console, prefs preferences, c
 		return err
 	}
 	c.Print("\nResuming assessment %s with saved evidence using %s / %s. Previously executed commands will not be replayed automatically.\n", saved.ID, prefs.Provider, prefs.Model)
+	c.assessmentStarted()
 	return a.runAssessmentWithFrame(ctx, c, prefs, client, root, saved, frame)
 }
 

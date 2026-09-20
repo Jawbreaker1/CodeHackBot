@@ -21,3 +21,12 @@ func TestSavePreferencesAppliesSubscriptionInputBudget(t *testing.T) {
 		t.Fatalf("subscription input bytes = %d, want %d", got.MaxInputBytes, SubscriptionInputByteLimit)
 	}
 }
+
+func TestSavedSubscriptionPreferencesRejectInputAsModel(t *testing.T) {
+	if validSavedPreferences(preferences{Provider: "subscription", Model: "Hello who are you?"}) {
+		t.Fatal("input text must not be accepted as a subscription model id")
+	}
+	if !validSavedPreferences(preferences{Provider: "subscription", Model: "gpt-daybreak-blue-latest"}) {
+		t.Fatal("valid subscription model was rejected")
+	}
+}

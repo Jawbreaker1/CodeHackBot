@@ -111,7 +111,7 @@ The current implementation covers bounded projections, protected anchors, conver
 
 Session state is one local JSON snapshot per worker session, written through a temporary file and atomic replacement. Version 2 persists the original turn limit and consumed turns. Resume never replenishes that budget. Version 1 snapshots remain inspectable JSON but cannot be resumed because they lack reliable budget accounting. A pending invocation with an unknown outcome is never replayed automatically; inspect its evidence before starting a new task. This is not a multi-worker event store and does not provide exactly-once recovery of external tool effects.
 
-Canceled runs persist an aborted outcome. The TUI waits for an active worker to return and finalize before quitting. Task preparation runs outside the UI update handler. Per-action approval uses the text interface; the TUI currently requires explicit session-level approval to avoid competing stdin readers.
+Canceled runs persist an aborted outcome. The TUI keeps ownership of terminal input, routes typed prompt events to the guided console, and waits for the application to finalize before quitting. Task preparation runs outside the UI update handler. Per-action approvals and worker questions use the same prompt event path as setup; the UI never creates a second stdin reader.
 
 The worker stops when execution evidence, configured context inspection, or progress persistence fails. Progress is persisted synchronously before an action starts, with a single worker-side writer; queued UI events cannot overwrite newer snapshots. Optional UI transcripts still have best-effort paths; production evidence journaling is separate future work.
 

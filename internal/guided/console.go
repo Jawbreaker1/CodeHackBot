@@ -18,6 +18,19 @@ type line struct {
 	err  error
 }
 
+type consoleEventKind uint8
+
+const (
+	consoleOutput consoleEventKind = iota
+	consolePrompt
+	consoleAssessmentStarted
+)
+
+type consoleEvent struct {
+	kind consoleEventKind
+	text string
+}
+
 // One reader owns stdin for the application lifetime. The mutex serializes
 // prompts and progress from concurrent workers without losing buffered input.
 type Console struct {
@@ -27,11 +40,18 @@ type Console struct {
 	requests  chan promptRequest
 	commands  chan line
 	dashboard assessmentDashboard
+	ctx       context.Context
+	events    func(consoleEvent)
+	eventMu   sync.Mutex
 }
 
 type promptRequest struct{ response chan line }
 
 func NewConsole(ctx context.Context, reader io.Reader, writer io.Writer) *Console {
+	return newConsole(ctx, reader, writer, nil)
+}
+
+func newConsole(ctx context.Context, reader io.Reader, writer io.Writer, events func(consoleEvent)) *Console {
 	lines := make(chan line)
 	go func() {
 		defer close(lines)
@@ -80,7 +100,7 @@ func NewConsole(ctx context.Context, reader io.Reader, writer io.Writer) *Consol
 			}
 		}
 	}()
-	return &Console{writer: writer, requests: requests, commands: commands, dashboard: newAssessmentDashboard()}
+	return &Console{writer: writer, requests: requests, commands: commands, dashboard: newAssessmentDashboard(), ctx: ctx, events: events}
 }
 
 func (c *Console) Ask(ctx context.Context, prompt string) (string, error) {
@@ -92,9 +112,7 @@ func (c *Console) Ask(ctx context.Context, prompt string) (string, error) {
 		return "", ctx.Err()
 	case c.requests <- promptRequest{response: response}:
 	}
-	c.mu.Lock()
-	fmt.Fprint(c.writer, prompt+"\n> ")
-	c.mu.Unlock()
+	c.emit(consolePrompt, prompt)
 	select {
 	case <-ctx.Done():
 		return "", ctx.Err()
@@ -112,25 +130,51 @@ func (c *Console) Ask(ctx context.Context, prompt string) (string, error) {
 func (c *Console) Commands() <-chan line { return c.commands }
 
 func (c *Console) Print(format string, args ...any) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	fmt.Fprintf(c.writer, format, args...)
+	c.emit(consoleOutput, fmt.Sprintf(format, args...))
 }
 
 func (c *Console) Progress(e assessment.Event) {
+	var lines []string
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	for _, line := range c.dashboard.apply(e) {
-		fmt.Fprintln(c.writer, line)
+		lines = append(lines, line)
+	}
+	c.mu.Unlock()
+	if len(lines) > 0 {
+		c.emit(consoleOutput, strings.Join(lines, "\n")+"\n")
 	}
 }
 
 func (c *Console) approvalRequested(taskID, command string) {
+	var lines []string
+	c.mu.Lock()
+	for _, line := range c.dashboard.apply(assessment.Event{TaskID: taskID, Kind: "approval_required", Message: command, Action: command}) {
+		lines = append(lines, line)
+	}
+	c.mu.Unlock()
+	if len(lines) > 0 {
+		c.emit(consoleOutput, strings.Join(lines, "\n")+"\n")
+	}
+}
+
+func (c *Console) emit(kind consoleEventKind, text string) {
+	c.eventMu.Lock()
+	defer c.eventMu.Unlock()
+	if c.events != nil {
+		c.events(consoleEvent{kind: kind, text: text})
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for _, line := range c.dashboard.apply(assessment.Event{TaskID: taskID, Kind: "approval_required", Message: command, Action: command}) {
-		fmt.Fprintln(c.writer, line)
+	if kind == consolePrompt {
+		_, _ = fmt.Fprint(c.writer, text+"\n> ")
+		return
 	}
+	_, _ = fmt.Fprint(c.writer, text)
+}
+
+func (c *Console) assessmentStarted() {
+	c.emit(consoleAssessmentStarted, "")
 }
 
 func (c *Console) DashboardSnapshot() []string {

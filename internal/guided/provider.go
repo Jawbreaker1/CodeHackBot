@@ -35,7 +35,7 @@ const SubscriptionInputByteLimit = 128 * 1024
 
 func configureProvider(ctx context.Context, c *Console, path string) (preferences, error) {
 	var p preferences
-	if data, err := os.ReadFile(path); err == nil && json.Unmarshal(data, &p) == nil && p.Model != "" && (p.Provider == "local" || p.Provider == "subscription") {
+	if data, err := os.ReadFile(path); err == nil && json.Unmarshal(data, &p) == nil && validSavedPreferences(p) {
 		answer, err := c.Ask(ctx, fmt.Sprintf("Use saved provider %s / %s (reasoning: %s)? [Y/n, s=settings]", p.Provider, p.Model, reasoningLabel(p)))
 		if err != nil {
 			return p, err
@@ -113,6 +113,19 @@ func configureProvider(ctx context.Context, c *Console, path string) (preference
 		p.MaxInputBytes = SubscriptionInputByteLimit
 	}
 	return savePreferences(ctx, c, path, p)
+}
+
+func validSavedPreferences(p preferences) bool {
+	if p.Model == "" || (p.Provider != "local" && p.Provider != "subscription") {
+		return false
+	}
+	// Subscription model IDs come from a fixed provider namespace. Rejecting
+	// whitespace here prevents an earlier setup answer from being persisted as
+	// the model after an input-routing failure. Local model IDs remain opaque.
+	if p.Provider == "subscription" && strings.ContainsAny(p.Model, " \t\r\n") {
+		return false
+	}
+	return true
 }
 
 func reasoningLabel(p preferences) string {

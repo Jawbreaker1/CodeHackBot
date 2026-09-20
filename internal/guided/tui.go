@@ -2,6 +2,7 @@ package guided
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -24,20 +25,11 @@ func wantsGuidedTUI(reader io.Reader, writer io.Writer) bool {
 	return inOK && outOK && term.IsTerminal(in.Fd()) && term.IsTerminal(out.Fd())
 }
 
-type tuiOutput struct{ text string }
-type tuiDone struct{ err error }
-
-type tuiOutputWriter struct{ output chan<- tuiOutput }
-
-func (w tuiOutputWriter) Write(p []byte) (int, error) {
-	text := string(p)
-	select {
-	case w.output <- tuiOutput{text: text}:
-		return len(p), nil
-	default:
-		return len(p), nil
-	}
+type tuiOutput struct {
+	kind consoleEventKind
+	text string
 }
+type tuiDone struct{ err error }
 
 type guidedTUI struct {
 	ctx           context.Context
@@ -51,6 +43,10 @@ type guidedTUI struct {
 	lines         []string
 	width, height int
 	busy          bool
+	waiting       bool
+	active        bool
+	inputPrompt   string
+	stopping      bool
 	err           error
 }
 
@@ -63,7 +59,13 @@ func (a App) runTUI(parent context.Context) error {
 	go func() {
 		instance := a
 		instance.Reader = &pipeReader{Reader: reader}
-		instance.Writer = tuiOutputWriter{output: output}
+		instance.Writer = io.Discard
+		instance.events = func(event consoleEvent) {
+			select {
+			case output <- tuiOutput{kind: event.kind, text: event.text}:
+			case <-ctx.Done():
+			}
+		}
 		done <- instance.runPlain(ctx)
 		close(output)
 	}()
@@ -92,7 +94,7 @@ func newGuidedTUI(ctx context.Context, cancel context.CancelFunc, output <-chan 
 	input.CharLimit = 0
 	spin := spinner.New()
 	spin.Spinner = spinner.Dot
-	return guidedTUI{ctx: ctx, cancel: cancel, input: input, inputPipe: inputPipe, spinner: spin, conversation: viewport.New(100, 24), output: output, done: done, width: 120, height: 32}
+	return guidedTUI{ctx: ctx, cancel: cancel, input: input, inputPipe: inputPipe, spinner: spin, conversation: viewport.New(100, 24), output: output, done: done, width: 120, height: 32, busy: true}
 }
 
 func (m guidedTUI) Init() tea.Cmd {
@@ -112,18 +114,47 @@ func (m guidedTUI) waitOutput() tea.Cmd {
 func (m guidedTUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch value := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width, m.height = value.Width, value.Height
-	case tuiOutput:
-		m.lines = append(m.lines, strings.TrimRight(value.text, "\n"))
-		if len(m.lines) > 300 {
-			m.lines = m.lines[len(m.lines)-300:]
+		if value.Width > 0 {
+			m.width = value.Width
 		}
-		m.busy = false
+		if value.Height > 0 {
+			m.height = value.Height
+		}
+		m.syncLayout()
+	case tuiOutput:
+		switch value.kind {
+		case consolePrompt:
+			m.waiting = true
+			m.busy = false
+			m.inputPrompt = strings.TrimSpace(value.text)
+			m.input.Prompt = ""
+			m.input.Placeholder = m.inputPrompt
+		case consoleAssessmentStarted:
+			m.active = true
+			m.waiting = false
+			m.busy = false
+			m.inputPrompt = "Talk to the orchestrator"
+			m.input.Prompt = ""
+			m.input.Placeholder = m.inputPrompt
+		case consoleOutput:
+			if text := strings.TrimRight(value.text, "\n"); text != "" {
+				m.lines = append(m.lines, text)
+			}
+			if len(m.lines) > 300 {
+				m.lines = m.lines[len(m.lines)-300:]
+			}
+		}
+		if m.active {
+			m.busy = false
+		}
 		m.syncLayout()
 		return m, m.waitOutput()
 	case tuiDone:
 		m.busy = false
 		m.err = value.err
+		if m.stopping && (errors.Is(value.err, context.Canceled) || errors.Is(value.err, context.DeadlineExceeded)) {
+			m.err = nil
+		}
 		if value.err != nil {
 			m.lines = append(m.lines, "Application: "+value.err.Error())
 			m.syncLayout()
@@ -139,19 +170,30 @@ func (m guidedTUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch value.String() {
 		case "ctrl+c":
+			if m.stopping {
+				return m, nil
+			}
+			m.stopping = true
+			m.busy = true
+			m.waiting = false
+			m.inputPrompt = "Stopping workers..."
+			m.input.Prompt = ""
+			m.input.Placeholder = m.inputPrompt
 			m.cancel()
-			_ = m.inputPipe.Close()
-			return m, tea.Quit
+			return m, nil
 		case "enter":
 			line := strings.TrimSpace(m.input.Value())
-			if m.busy {
+			if line == "" || m.busy || (!m.waiting && !m.active) {
 				return m, nil
 			}
 			m.input.SetValue("")
-			m.busy = true
+			m.waiting = false
+			m.busy = !m.active
+			m.lines = append(m.lines, "You: "+line)
 			// The guided console owns the conversation semantics. The TUI only
 			// transports the exact line to that runtime.
-			m.input.Prompt = "birdhackbot> "
+			m.input.Prompt = ""
+			m.input.Placeholder = "Talk to the orchestrator"
 			return m, sendTUILine(m.ctx, m.inputPipe, line)
 		}
 	}
@@ -167,9 +209,9 @@ func (m guidedTUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func sendTUILine(ctx context.Context, input io.Writer, text string) tea.Cmd {
 	return func() tea.Msg {
 		if _, err := io.WriteString(input, text+"\n"); err != nil {
-			return tuiOutput{text: "Input error: " + err.Error()}
+			return tuiOutput{kind: consoleOutput, text: "Input error: " + err.Error()}
 		}
-		return tuiOutput{text: "You: " + text}
+		return nil
 	}
 }
 
@@ -182,10 +224,15 @@ func (m *guidedTUI) syncLayout() {
 	if height < 20 {
 		height = 20
 	}
+	m.width, m.height = width, height
 	left := width * 2 / 3
 	m.conversation.Width = left - 4
 	m.conversation.Height = height - 8
-	m.conversation.SetContent(strings.Join(m.lines, "\n"))
+	content := strings.Join(m.lines, "\n")
+	if m.conversation.Width > 0 {
+		content = lipgloss.NewStyle().Width(m.conversation.Width).Render(content)
+	}
+	m.conversation.SetContent(content)
 	m.conversation.GotoBottom()
 	m.input.Width = width - 8
 }
@@ -204,13 +251,13 @@ func (m guidedTUI) View() string {
 		"",
 		"/workers  /status  /help  /stop",
 	}, "\n")
-	right := pane.Width(maxTUI(24, m.width-m.conversation.Width-8)).Height(m.conversation.Height + 2).Render(title.Render(" Assessment status ") + "\n" + rightBody)
+	right := pane.Width(maxTUI(24, m.width-m.conversation.Width-9)).Height(m.conversation.Height + 2).Render(title.Render(" Assessment status ") + "\n" + rightBody)
 	inputTitle := " Input "
 	if m.busy {
 		inputTitle = " Input " + m.spinner.View() + " thinking "
 	}
 	bottom := pane.Width(maxTUI(30, m.width-2)).Render(title.Render(inputTitle) + "\n" + m.input.View() + "\nEnter sends · Ctrl-C stops all workers")
-	return lipgloss.JoinVertical(lipgloss.Left, lipgloss.JoinHorizontal(lipgloss.Top, left, right), bottom)
+	return lipgloss.JoinVertical(lipgloss.Left, lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right), bottom)
 }
 
 func maxTUI(a, b int) int {

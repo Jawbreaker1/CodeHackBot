@@ -87,13 +87,17 @@ class Model(BaseHTTPRequestHandler):
 
 
 class Terminal:
-    def __init__(self, binary, cwd):
+    def __init__(self, binary, cwd, plain=True):
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
             os.chdir(cwd)
             environment = os.environ.copy()
-            environment["BIRDHACKBOT_PLAIN"] = "1"
+            if plain:
+                environment["BIRDHACKBOT_PLAIN"] = "1"
+            else:
+                environment.pop("BIRDHACKBOT_PLAIN", None)
             os.execve(binary, [binary], environment)
+        self.plain = plain
         self.transcript = ""
         self.pending = ""
         self.reaped = False
@@ -120,7 +124,10 @@ class Terminal:
         return before
 
     def send(self, value):
-        os.write(self.fd, (value + "\n").encode())
+        os.write(self.fd, (value + ("\n" if self.plain else "\r")).encode())
+
+    def interrupt(self):
+        os.write(self.fd, b"\x03")
 
     def finish(self, expected):
         deadline = time.monotonic() + 10
@@ -231,6 +238,29 @@ def run_case(binary, root, endpoint, mode):
         terminal.close()
 
 
+def run_tui_smoke(binary, root, endpoint):
+    terminal = Terminal(binary, root, plain=False)
+    try:
+        terminal.expect("Choose model access:")
+        terminal.send("1")
+        terminal.expect("Local model server address")
+        terminal.send(endpoint)
+        terminal.expect("Choose a model number")
+        terminal.send("1")
+        terminal.expect("Reasoning effort:")
+        terminal.send("low")
+        terminal.expect("birdhackbot>")
+        terminal.send("Who are you?")
+        terminal.expect("Coordinator: I am the assessment orchestrator.")
+        terminal.interrupt()
+        terminal.finish(0)
+        assert "Coordinator: I am the assessment orchestrator." in terminal.transcript
+        assert "\n> " not in terminal.transcript, "raw console prompts leaked into the TUI stream"
+    finally:
+        (root / "terminal-tui.txt").write_text(terminal.transcript)
+        terminal.close()
+
+
 def main():
     binary = str(Path(sys.argv[1]).resolve())
     server = ThreadingHTTPServer(("127.0.0.1", 0), Model)
@@ -247,6 +277,12 @@ def main():
                 (root / "go.mod").write_text("module terminal-fixture\n")
                 run_case(binary, root, endpoint, mode)
                 print(f"guided terminal: {mode} passed", flush=True)
+            tui_root = base / "tui"
+            tui_root.mkdir(exist_ok=True)
+            (tui_root / "AGENTS.md").write_text("Authorized synthetic fixture commands only.\n")
+            (tui_root / "go.mod").write_text("module terminal-fixture\n")
+            run_tui_smoke(binary, tui_root, endpoint)
+            print("guided TUI: smoke passed", flush=True)
     finally:
         server.shutdown()
         server.server_close()
