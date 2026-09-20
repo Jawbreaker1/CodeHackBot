@@ -144,7 +144,7 @@ def run_case(binary, root, endpoint, mode):
             terminal.send("1")
             terminal.expect("Reasoning effort:")
             terminal.send("low")
-        terminal.expect("What should this assessment establish?")
+        terminal.expect("birdhackbot> What would you like the orchestrator to investigate?")
         goal = {"stop": "cancellation fixture", "question": "question fixture", "recovery": "recovery fixture", "orchestration": "orchestrate generic capability checks"}.get(mode, "Print terminal fixture")
         terminal.send(goal)
         terminal.expect("What is explicitly in scope?")

@@ -172,7 +172,7 @@ func (a App) Run(ctx context.Context) error {
 	defer cancel()
 	c := NewConsole(ctx, a.Reader, a.Writer)
 	c.Print("BirdHackBot — interactive assessment console\n\n")
-	c.Print("Enter a plain-language goal to start. During an assessment, type a message to talk to the coordinator; /workers, /status, /help, and /stop are available. Ctrl-C stops setup or broadcasts stop to every active worker.\n\n")
+	c.Print("The orchestrator is ready. Start with a plain-language message describing what you want to investigate. Scope and action approval remain explicit before any worker runs. During an assessment, type a message to talk to the coordinator; /workers, /status, /help, and /stop are available. Ctrl-C stops setup or broadcasts stop to every active worker.\n\n")
 
 	preferencesPath := filepath.Join(a.RepoRoot, ".birdhackbot", "preferences.json")
 	prefs, err := configureProvider(ctx, c, preferencesPath)
@@ -237,7 +237,7 @@ func (a App) Run(ctx context.Context) error {
 
 func (a App) readGoalOrCommand(ctx context.Context, c *Console, path string, prefs *preferences, client *llmclient.Client, cleanup *func()) (string, *savedAssessment, error) {
 	for {
-		value, err := c.Ask(ctx, "What should this assessment establish? (type /settings to change model or /resume to reopen a saved session)")
+		value, err := c.Ask(ctx, "birdhackbot> What would you like the orchestrator to investigate? (type /settings to change model or /resume to reopen a saved session)")
 		if err != nil {
 			return "", nil, err
 		}
