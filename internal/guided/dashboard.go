@@ -34,6 +34,9 @@ func newAssessmentDashboard() assessmentDashboard {
 
 func (d *assessmentDashboard) apply(e assessment.Event) []string {
 	if e.TaskID == "" {
+		if e.Kind == "operator_message" {
+			return []string{"Coordinator received operator message: " + dashboardText(e.Message, 180)}
+		}
 		if e.Kind == "planning" {
 			return []string{"\nCoordinator: " + dashboardText(e.Message, 180)}
 		}

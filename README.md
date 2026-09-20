@@ -6,7 +6,7 @@ BirdHackBot is being built as System Verification's security testing platform fo
 
 The active implementation uses one adaptive worker for standalone and delegated tasks: model-authored plans and revisions, per-action approvals, exact argv or explicit shell execution, whole-goal evaluation, local evidence, bounded context views, and session snapshots. The [worker audit](docs/worker-foundation-audit-2026-09-20.md) records the current rebuild and validation limits.
 
-A local authenticated REST bridge provides subscription-backed OpenAI inference. Launching without flags now opens a guided lab assessment with a coordinator, up to two concurrent workers, serialized action approvals, saved evidence, and a draft report. Source-to-deployment correlation, assessment resume, and independent finding verification remain planned. The runtime does not enforce target allowlists or provide its own network sandbox; execution relies on the isolated lab environment and the operating rules in [AGENTS.md](AGENTS.md).
+A local authenticated REST bridge provides subscription-backed OpenAI inference. Launching without flags now opens an interactive guided assessment with a coordinator, up to two concurrent workers, serialized action approvals, saved evidence, resumable assessment state, and a draft report. Source-to-deployment correlation and independent finding verification remain planned. The runtime does not enforce target allowlists or provide its own network sandbox; execution relies on the isolated lab environment and the operating rules in [AGENTS.md](AGENTS.md).
 
 Current implementation order: **core cleanup → subscription API wrapper → orchestration → source-assisted assessment**. [TASKS.md](TASKS.md) records actual progress.
 
@@ -22,6 +22,8 @@ go build -buildvcs=false -o birdhackbot ./cmd/birdhackbot
 ```
 
 Run from the repository checkout for this lab preview. Guided setup offers a local model server or an existing Codex ChatGPT sign-in, then asks for a goal and explicit scope before starting. Provider preferences are remembered locally; scope and permissions are reviewed for each assessment. Subscription bridge startup and its temporary local credential are managed by the application. First-time Codex sign-in still uses the [subscription setup guide](docs/runbooks/subscription-bridge.md).
+
+The saved-provider prompt accepts `s` to open model settings. At the goal prompt, `/settings` switches the provider/model before starting and `/resume` lists unfinished assessment sessions. A running assessment accepts plain-language coordinator messages plus `/workers`, `/status`, `/help`, and `/stop`; messages are retained for the next planning turn and are not execution approvals. Resuming uses recorded results and budgets and never replays an action whose external outcome is unknown.
 
 Local setup also saves an explicit reasoning choice. The guided local profile allows 32,768 output tokens and up to ten minutes per request; Ctrl-C cancels an active request. The current lab configuration is Qwen 3.8 27B Q6_K with low reasoning, a server context of 50,176 tokens, and two parallel slots. Server load settings remain managed in LM Studio. The standalone development CLI does not yet expose these guided inference settings.
 
@@ -41,7 +43,7 @@ For a bounded headless task:
 ./birdhackbot --goal "Show the current directory"   --llm-base-url http://127.0.0.1:1234/v1 --llm-model YOUR_LOCAL_MODEL_ID   --session-dir sessions/example --max-steps 4 --inspect-context
 ```
 
-Use a fresh session directory per independent run. `--resume --session-dir PATH` loads a version 2 worker snapshot and preserves its consumed turn budget. Unknown pending execution is never replayed automatically. Older version 1 snapshots remain inspectable files but cannot be resumed with this worker; they lack reliable budget accounting. Whole-assessment resume is not yet implemented.
+Use a fresh session directory per independent run. `--resume --session-dir PATH` loads a version 2 worker snapshot and preserves its consumed turn budget. Unknown pending execution is never replayed automatically. Older version 1 snapshots remain inspectable files but cannot be resumed with this worker; they lack reliable budget accounting. The guided assessment path uses `/resume` for coordinator sessions and preserves its shared model-call budget and operator conversation excerpts.
 
 For subscription access, follow the [bridge setup guide](docs/runbooks/subscription-bridge.md). It uses your Codex ChatGPT sign-in, keeps tool execution in BirdHackBot, and never falls back to API-key billing. Selected worker context is sent to OpenAI.
 

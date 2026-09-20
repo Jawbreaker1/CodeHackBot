@@ -78,22 +78,23 @@ type Decision struct {
 }
 
 type State struct {
-	Version         int        `json:"version"`
-	ID              string     `json:"id"`
-	Goal            string     `json:"goal"`
-	Scope           string     `json:"scope"`
-	Model           string     `json:"model"`
-	ReasoningEffort string     `json:"reasoning_effort,omitempty"`
-	MaxOutputTokens int        `json:"max_output_tokens,omitempty"`
-	MaxInputBytes   int        `json:"max_input_bytes,omitempty"`
-	Status          string     `json:"status"`
-	StartedAt       time.Time  `json:"started_at"`
-	FinishedAt      time.Time  `json:"finished_at,omitempty"`
-	Limits          Limits     `json:"limits"`
-	Plans           []Decision `json:"plans"`
-	Results         []Result   `json:"results"`
-	Usage           Usage      `json:"usage"`
-	Error           string     `json:"error,omitempty"`
+	Version          int        `json:"version"`
+	ID               string     `json:"id"`
+	Goal             string     `json:"goal"`
+	Scope            string     `json:"scope"`
+	Model            string     `json:"model"`
+	ReasoningEffort  string     `json:"reasoning_effort,omitempty"`
+	MaxOutputTokens  int        `json:"max_output_tokens,omitempty"`
+	MaxInputBytes    int        `json:"max_input_bytes,omitempty"`
+	Status           string     `json:"status"`
+	StartedAt        time.Time  `json:"started_at"`
+	FinishedAt       time.Time  `json:"finished_at,omitempty"`
+	Limits           Limits     `json:"limits"`
+	Plans            []Decision `json:"plans"`
+	Results          []Result   `json:"results"`
+	OperatorMessages []string   `json:"operator_messages,omitempty"`
+	Usage            Usage      `json:"usage"`
+	Error            string     `json:"error,omitempty"`
 }
 
 func saveJSON(path string, value any) error {

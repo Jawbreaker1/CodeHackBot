@@ -219,6 +219,31 @@ func TestCoordinatorRejectsUnfinishedDependenciesAndInventedEvidence(t *testing.
 	}
 }
 
+func TestLoadStateReadsOnlyCompleteAssessmentSnapshots(t *testing.T) {
+	root := t.TempDir()
+	state := State{Version: 1, ID: "assessment-fixture", Goal: "observe a fixture", Scope: "fixture only", Status: "incomplete"}
+	data, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "assessment.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadState(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != state.ID || got.Scope != state.Scope {
+		t.Fatalf("loaded state = %+v", got)
+	}
+	if err := os.WriteFile(filepath.Join(root, "assessment.json"), []byte(`{"version":1,"id":"assessment-fixture"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadState(root); err == nil {
+		t.Fatal("accepted incomplete assessment snapshot")
+	}
+}
+
 func TestFindingListsFromLiveResponseRemainStructured(t *testing.T) {
 	d, err := parseDecision(`{"summary":"Evidence gathered","tasks":[],"complete":true,"findings":[{"title":"Missing authentication","status":"candidate","impact":"Synthetic data readable","steps":["Request the administrative route without credentials","Inspect response"],"evidence":["recorded.log"],"remediation":["Require authentication","Retest the route"]}],"gaps":[]}`)
 	if err != nil {

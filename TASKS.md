@@ -119,6 +119,7 @@ User requirement, 2026-09-19: usability and application assistance must reduce s
 - [x] Manage bridge startup and temporary local credentials through the application for an existing sign-in.
 - [ ] Complete first-time provider sign-in and packaged operation outside the checkout.
 - [x] Guide goal/scope entry, review per-action permissions before starting, and show progress, stop, report location, and actionable errors.
+- [x] Add an in-application model settings flow, guided `/resume` selection, and coordinator conversation while delegated workers are active. Resume preserves saved results and model-call budgets and does not replay unknown actions.
 - [ ] Complete the usability acceptance check with an operator unfamiliar with the implementation.
 
 ## Required UI surfaces: terminal and web
@@ -127,6 +128,8 @@ The CLI and browser are presentation layers over the same orchestrator and evide
 
 - [x] Show coordinator planning, queued workers, dependencies, phases, budgets, evidence counts, approval waits, and terminal worker status in the guided terminal output.
 - [x] Keep provider input budgets explicit: local Qwen 3.8 retains the conservative 48 KiB default, while the guided Daybreak profile uses a larger 128 KiB client ceiling and persists the value in assessment state.
+- [x] Keep the terminal as a live coordinator surface: free-form operator messages, `/workers`, `/status`, `/help`, `/stop`, approval/question routing, and bounded conversation excerpts share the assessment runtime.
+- [x] Reopen unfinished coordinator sessions from durable assessment state while retaining completed evidence, operator notes, and consumed model-call budgets. Exactly-once recovery of unknown external effects remains out of scope.
 - [ ] Give finalized assessments with blocked exploratory workers a distinct runtime status so the terminal label and coordinator summary cannot disagree.
 - [ ] Extract the guided assessment lifecycle from `guided.App` into an application service with explicit commands, read models, approval requests, and progress events.
 - [ ] Keep Bubble Tea as the terminal adapter; test the CLI through the service boundary and evaluate the upstream v1-to-v2 migration separately.
@@ -138,6 +141,6 @@ Implement this alongside the first orchestrator flow. Keep advanced CLI access a
 
 ## Deferred product work
 
-`ROADMAP.md` owns future direction. Full target-scope enforcement, assessment resume, independent finding verification, and scored comparisons remain required product work.
+`ROADMAP.md` owns future direction. Full target-scope enforcement, exactly-once external-effect recovery, independent finding verification, and scored comparisons remain required product work.
 
 Earlier phase checklists are archived in `docs/archive/pre-core-cleanup-2026-09-19/TASKS.md`. They are historical records, not additional current work orders.

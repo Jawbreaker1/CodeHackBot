@@ -22,10 +22,14 @@ type line struct {
 // prompts and progress from concurrent workers without losing buffered input.
 type Console struct {
 	mu        sync.Mutex
+	askMu     sync.Mutex
 	writer    io.Writer
-	lines     <-chan line
+	requests  chan promptRequest
+	commands  chan line
 	dashboard assessmentDashboard
 }
+
+type promptRequest struct{ response chan line }
 
 func NewConsole(ctx context.Context, reader io.Reader, writer io.Writer) *Console {
 	lines := make(chan line)
@@ -47,26 +51,65 @@ func NewConsole(ctx context.Context, reader io.Reader, writer io.Writer) *Consol
 			}
 		}
 	}()
-	return &Console{writer: writer, lines: lines, dashboard: newAssessmentDashboard()}
+	requests := make(chan promptRequest)
+	commands := make(chan line, 32)
+	go func() {
+		defer close(commands)
+		var active *promptRequest
+		for {
+			select {
+			case request := <-requests:
+				active = &request
+			case input, ok := <-lines:
+				if !ok {
+					if active != nil {
+						active.response <- line{err: io.EOF}
+					}
+					return
+				}
+				if active != nil {
+					active.response <- input
+					active = nil
+					continue
+				}
+				select {
+				case commands <- input:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return &Console{writer: writer, requests: requests, commands: commands, dashboard: newAssessmentDashboard()}
 }
 
 func (c *Console) Ask(ctx context.Context, prompt string) (string, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	fmt.Fprint(c.writer, prompt+"\n> ")
+	c.askMu.Lock()
+	defer c.askMu.Unlock()
+	response := make(chan line, 1)
 	select {
 	case <-ctx.Done():
 		return "", ctx.Err()
-	case input, ok := <-c.lines:
-		if !ok {
-			return "", io.EOF
-		}
+	case c.requests <- promptRequest{response: response}:
+	}
+	c.mu.Lock()
+	fmt.Fprint(c.writer, prompt+"\n> ")
+	c.mu.Unlock()
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case input := <-response:
 		if input.err != nil {
 			return "", input.err
 		}
 		return strings.TrimSpace(input.text), nil
 	}
 }
+
+// Commands returns operator input received while no approval or worker
+// question owns the next line. It lets the guided application remain a live
+// conversation while delegated workers execute.
+func (c *Console) Commands() <-chan line { return c.commands }
 
 func (c *Console) Print(format string, args ...any) {
 	c.mu.Lock()
@@ -88,6 +131,12 @@ func (c *Console) approvalRequested(taskID, command string) {
 	for _, line := range c.dashboard.apply(assessment.Event{TaskID: taskID, Kind: "approval_required", Message: command, Action: command}) {
 		fmt.Fprintln(c.writer, line)
 	}
+}
+
+func (c *Console) DashboardSnapshot() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.dashboard.snapshot()
 }
 
 type taskApprover struct {

@@ -36,12 +36,15 @@ const SubscriptionInputByteLimit = 128 * 1024
 func configureProvider(ctx context.Context, c *Console, path string) (preferences, error) {
 	var p preferences
 	if data, err := os.ReadFile(path); err == nil && json.Unmarshal(data, &p) == nil && p.Model != "" && (p.Provider == "local" || p.Provider == "subscription") {
-		answer, err := c.Ask(ctx, fmt.Sprintf("Use saved provider %s / %s (reasoning: %s)? [Y/n]", p.Provider, p.Model, reasoningLabel(p)))
+		answer, err := c.Ask(ctx, fmt.Sprintf("Use saved provider %s / %s (reasoning: %s)? [Y/n, s=settings]", p.Provider, p.Model, reasoningLabel(p)))
 		if err != nil {
 			return p, err
 		}
 		if answer == "" || strings.EqualFold(answer, "y") || strings.EqualFold(answer, "yes") {
 			return savePreferences(ctx, c, path, p)
+		}
+		if strings.EqualFold(answer, "s") || strings.EqualFold(answer, "settings") {
+			c.Print("Opening model settings. The selected profile is used for this and future assessments.\n")
 		}
 	}
 	for {
@@ -62,6 +65,7 @@ func configureProvider(ctx context.Context, c *Console, path string) (preference
 	}
 	p.ReasoningEffort = ""
 	p.MaxOutputTokens = 0
+	p.MaxInputBytes = 0
 	if p.Provider == "local" {
 		for {
 			endpoint, err := c.Ask(ctx, "Local model server address [http://127.0.0.1:1234/v1]")

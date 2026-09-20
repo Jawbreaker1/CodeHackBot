@@ -1,6 +1,7 @@
 package guided
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -36,5 +37,18 @@ func TestDashboardTextCompactsMultilineMessages(t *testing.T) {
 	}
 	if got := dashboardText("123456789", 6); got != "123..." {
 		t.Fatalf("dashboard truncation = %q", got)
+	}
+}
+
+func TestAssessmentConversationRetainsBoundedOperatorHistory(t *testing.T) {
+	c := &assessmentConversation{}
+	for i := 0; i < 20; i++ {
+		c.Add("user", fmt.Sprintf("message-%02d", i))
+	}
+	if got := len(c.Messages()); got != 12 {
+		t.Fatalf("conversation length = %d, want 12", got)
+	}
+	if got := c.Messages()[0].Content; got != "message-08" {
+		t.Fatalf("oldest retained message = %q", got)
 	}
 }

@@ -21,6 +21,13 @@ func writeReport(root string, s State) error {
 	if s.Error != "" {
 		fmt.Fprintf(&b, "Run limitation: %s\n\n", s.Error)
 	}
+	if len(s.OperatorMessages) > 0 {
+		b.WriteString("## Operator conversation\n\n")
+		for _, message := range s.OperatorMessages {
+			fmt.Fprintf(&b, "- %s\n", message)
+		}
+		b.WriteString("\n")
+	}
 	if len(s.Plans) > 0 {
 		d := s.Plans[len(s.Plans)-1]
 		fmt.Fprintf(&b, "## Summary\n\n%s\n\n", d.Summary)

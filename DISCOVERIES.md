@@ -109,3 +109,11 @@ After the evidence-catalog and step-countdown corrections, three consecutive unc
 - Both fixture servers and assessment processes were stopped. The cause of the conversation responsiveness problem has not been established; waiting application prompts alone do not prove that they caused it. These runs do not complete source-assisted acceptance, local-model acceptance, or comparative discovery evaluation.
 
 Earlier chronological notes are preserved in `docs/archive/pre-core-cleanup-2026-09-19/DISCOVERIES.md`.
+
+## Interactive CLI settings, resume, and coordinator conversation — 2026-09-20
+
+- The guided terminal now exposes a small model-settings path without flags: `s` at the saved-provider prompt or `/settings` before an assessment. Provider changes restart the local bridge/client before the next run; an active assessment reports settings as locked so its workers keep one consistent model profile.
+- `/resume` lists durable `assessment.json` snapshots, shows status/time/goal, and reopens only unfinished assessments. The coordinator continues from saved results and its consumed model-call budget. It does not replay a pending external action, and finalized sessions remain report-only.
+- While workers execute, the same input reader routes approvals and worker questions to their active prompt and routes other lines to the assessment shell. `/workers`, `/status`, `/help`, and `/stop` are handled locally. Plain-language messages receive a concise coordinator reply and are supplied to the next planning boundary as bounded, untrusted conversation context; they cannot approve actions or change scope.
+- The built terminal harness passed all nine existing user-path scenarios after prompt registration was made race-safe. Focused tests cover console routing, bounded conversation history, and assessment snapshot validation. Full Go tests and the elevated PTY run passed after these changes.
+- This is a bounded guided-session increment. It does not establish exactly-once recovery of external effects, remote/web lifecycle APIs, unfamiliar-operator usability, or independent vulnerability-finding quality.
