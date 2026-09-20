@@ -105,6 +105,11 @@ type savedAssessment struct {
 	State assessment.State
 }
 
+type assessmentDraft struct {
+	Goal  string
+	Scope string
+}
+
 func findSavedAssessments(base string) []savedAssessment {
 	paths, _ := filepath.Glob(filepath.Join(base, "assessment-*", "assessment.json"))
 	out := make([]savedAssessment, 0, len(paths))
@@ -168,11 +173,18 @@ func compactSessionText(value string, max int) string {
 }
 
 func (a App) Run(ctx context.Context) error {
+	if wantsGuidedTUI(a.Reader, a.Writer) {
+		return a.runTUI(ctx)
+	}
+	return a.runPlain(ctx)
+}
+
+func (a App) runPlain(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	c := NewConsole(ctx, a.Reader, a.Writer)
 	c.Print("BirdHackBot — interactive assessment console\n\n")
-	c.Print("The orchestrator is ready. Start with a plain-language message describing what you want to investigate. Scope and action approval remain explicit before any worker runs. During an assessment, type a message to talk to the coordinator; /workers, /status, /help, and /stop are available. Ctrl-C stops setup or broadcasts stop to every active worker.\n\n")
+	c.Print("The orchestrator is ready. Talk naturally about what you want to do. The selected model will answer questions, ask for missing assessment details, and propose work for your review. Scope and action approval remain explicit before any worker runs. During an assessment, type a message to talk to the coordinator; /workers, /status, /help, and /stop are available. Ctrl-C stops setup or broadcasts stop to every active worker.\n\n")
 
 	preferencesPath := filepath.Join(a.RepoRoot, ".birdhackbot", "preferences.json")
 	prefs, err := configureProvider(ctx, c, preferencesPath)
@@ -185,21 +197,19 @@ func (a App) Run(ctx context.Context) error {
 	}
 	defer func() { cleanup() }()
 
+	intake := &intakeConversation{}
 	for {
-		goal, resume, err := a.readGoalOrCommand(ctx, c, preferencesPath, &prefs, &client, &cleanup)
+		draft, resume, err := a.readGoalOrCommand(ctx, c, preferencesPath, &prefs, &client, &cleanup, intake)
 		if err != nil {
 			return err
 		}
 		if resume != nil {
 			return a.runAssessment(ctx, c, prefs, client, resume.Root, resume.State)
 		}
-		if goal == "" {
+		if draft == nil {
 			continue
 		}
-		scope, err := required(ctx, c, "What is explicitly in scope? Include exact targets or absolute file paths, allowed actions, and exclusions.")
-		if err != nil {
-			return err
-		}
+		goal, scope := draft.Goal, draft.Scope
 		limits := assessment.DefaultLimits()
 		c.Print("\nAssessment review\nGoal: %s\nDeclared scope: %s\nProvider: %s / %s\nPermissions: approve each action\nLimits: up to %d workers, %d tasks, %d model calls\n", goal, scope, prefs.Provider, prefs.Model, limits.Workers, limits.Tasks, limits.ModelCalls)
 		c.Print("Requested reasoning: %s\n", reasoningLabel(prefs))
@@ -235,33 +245,43 @@ func (a App) Run(ctx context.Context) error {
 	}
 }
 
-func (a App) readGoalOrCommand(ctx context.Context, c *Console, path string, prefs *preferences, client *llmclient.Client, cleanup *func()) (string, *savedAssessment, error) {
+func (a App) readGoalOrCommand(ctx context.Context, c *Console, path string, prefs *preferences, client *llmclient.Client, cleanup *func(), intake *intakeConversation) (*assessmentDraft, *savedAssessment, error) {
 	for {
-		value, err := c.Ask(ctx, "birdhackbot> What would you like the orchestrator to investigate? (type /settings to change model or /resume to reopen a saved session)")
+		value, err := c.Ask(ctx, "birdhackbot> ")
 		if err != nil {
-			return "", nil, err
+			return nil, nil, err
 		}
-		switch strings.ToLower(strings.TrimSpace(value)) {
+		trimmed := strings.TrimSpace(value)
+		switch strings.ToLower(trimmed) {
 		case "/settings", "settings":
 			(*cleanup)()
 			next, err := configureProvider(ctx, c, path)
 			if err != nil {
-				return "", nil, err
+				return nil, nil, err
 			}
 			nextClient, nextCleanup, err := startProvider(ctx, next)
 			if err != nil {
-				return "", nil, fmt.Errorf("model access unavailable: %w", err)
+				return nil, nil, fmt.Errorf("model access unavailable: %w", err)
 			}
 			*prefs, *client, *cleanup = next, nextClient, nextCleanup
 			c.Print("Model settings applied: %s / %s (reasoning: %s).\n", prefs.Provider, prefs.Model, reasoningLabel(*prefs))
 		case "/resume", "resume":
 			chosen, err := chooseSavedAssessment(ctx, c, filepath.Join(a.RepoRoot, "sessions"))
-			return "", chosen, err
+			return nil, chosen, err
 		case "/help", "help":
-			c.Print("Setup commands: /settings changes provider/model; /resume reopens an unfinished assessment; /help repeats this message.\n")
+			c.Print("Talk naturally with the orchestrator. It answers questions and asks for missing assessment details. /settings changes provider/model; /resume reopens an unfinished assessment; /help repeats this message.\n")
 		default:
-			if strings.TrimSpace(value) != "" {
-				return strings.TrimSpace(value), nil, nil
+			if trimmed == "" {
+				continue
+			}
+			turn, err := intake.turn(ctx, *client, trimmed)
+			if err != nil {
+				c.Print("Coordinator intake unavailable: %v\n", err)
+				continue
+			}
+			c.Print("Coordinator: %s\n", turn.Reply)
+			if turn.Proposal != nil {
+				return turn.Proposal, nil, nil
 			}
 		}
 	}

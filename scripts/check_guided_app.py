@@ -37,7 +37,21 @@ class Model(BaseHTTPRequestHandler):
         request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         assert request.get("reasoning_effort") == "low", request.keys()
         assert request.get("max_tokens") == 32768, request.keys()
-        prompt = request["messages"][1]["content"]
+        messages = request["messages"]
+        if "conversational assessment orchestrator" in messages[0]["content"]:
+            latest = messages[-1]["content"]
+            if latest == "Who are you?":
+                result = {"reply": "I am the assessment orchestrator. I can explain the harness and help define an authorized assessment before any worker runs.", "proposal": None}
+            else:
+                goal = "Print terminal fixture"
+                for candidate in ("cancellation fixture", "question fixture", "recovery fixture", "orchestrate generic capability checks"):
+                    if candidate in latest:
+                        goal = candidate
+                        break
+                result = {"reply": "I have a proposed objective and exact scope ready for review.", "proposal": {"goal": goal, "scope": "Local synthetic commands only; no target network access"}}
+            self.send_json({"choices": [{"message": {"content": json.dumps(result)}}], "usage": {"total_tokens": 10}})
+            return
+        prompt = messages[1]["content"]
         payload = json.loads(prompt)
         if "Operator answer: fixture answer" in prompt:
             remaining = 5 if payload.get("role") == "worker" else 4
@@ -77,7 +91,9 @@ class Terminal:
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
             os.chdir(cwd)
-            os.execv(binary, [binary])
+            environment = os.environ.copy()
+            environment["BIRDHACKBOT_PLAIN"] = "1"
+            os.execve(binary, [binary], environment)
         self.transcript = ""
         self.pending = ""
         self.reaped = False
@@ -144,11 +160,13 @@ def run_case(binary, root, endpoint, mode):
             terminal.send("1")
             terminal.expect("Reasoning effort:")
             terminal.send("low")
-        terminal.expect("birdhackbot> What would you like the orchestrator to investigate?")
+        terminal.expect("birdhackbot> ")
+        terminal.send("Who are you?")
+        terminal.expect("Coordinator: I am the assessment orchestrator.")
+        terminal.expect("birdhackbot> ")
         goal = {"stop": "cancellation fixture", "question": "question fixture", "recovery": "recovery fixture", "orchestration": "orchestrate generic capability checks"}.get(mode, "Print terminal fixture")
         terminal.send(goal)
-        terminal.expect("What is explicitly in scope?")
-        terminal.send("Local synthetic commands only; no target network access")
+        terminal.expect("Assessment review")
         terminal.expect("Type start")
         terminal.send("" if mode == "cancel" else "start")
         if mode == "cancel":
