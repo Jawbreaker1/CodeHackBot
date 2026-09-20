@@ -25,7 +25,13 @@ type preferences struct {
 	Model           string `json:"model"`
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	MaxOutputTokens int    `json:"max_output_tokens,omitempty"`
+	MaxInputBytes   int    `json:"max_input_bytes,omitempty"`
 }
+
+// SubscriptionInputByteLimit gives Daybreak a larger evidence budget than the
+// conservative local-model default while still failing visibly before a
+// provider request becomes unbounded.
+const SubscriptionInputByteLimit = 128 * 1024
 
 func configureProvider(ctx context.Context, c *Console, path string) (preferences, error) {
 	var p preferences
@@ -100,6 +106,7 @@ func configureProvider(ctx context.Context, c *Console, path string) (preference
 			model = "gpt-daybreak-blue-latest"
 		}
 		p.Model, p.BaseURL = model, ""
+		p.MaxInputBytes = SubscriptionInputByteLimit
 	}
 	return savePreferences(ctx, c, path, p)
 }
@@ -114,6 +121,13 @@ func reasoningLabel(p preferences) string {
 func savePreferences(ctx context.Context, c *Console, path string, p preferences) (preferences, error) {
 	if p.Provider == "local" && p.MaxOutputTokens == 0 {
 		p.MaxOutputTokens = 32768
+	}
+	if p.MaxInputBytes == 0 {
+		if p.Provider == "subscription" {
+			p.MaxInputBytes = SubscriptionInputByteLimit
+		} else {
+			p.MaxInputBytes = llmclient.DefaultInputByteLimit
+		}
 	}
 	if p.Provider == "local" && p.ReasoningEffort == "" {
 		for {
@@ -184,6 +198,7 @@ func listModels(ctx context.Context, endpoint string) ([]string, error) {
 
 func startProvider(ctx context.Context, p preferences) (llmclient.Client, func(), error) {
 	client := llmclient.Client{BaseURL: p.BaseURL, Model: p.Model}
+	client.MaxInputBytes = p.MaxInputBytes
 	if p.Provider == "local" {
 		client.MaxOutputTokens = p.MaxOutputTokens
 		client.HTTPClient = &http.Client{Timeout: 10 * time.Minute}

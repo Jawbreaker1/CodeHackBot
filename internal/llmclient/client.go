@@ -33,6 +33,10 @@ type Client struct {
 	OnCompletion  func(Completion, error)
 }
 
+// DefaultInputByteLimit is the conservative fallback used when a provider
+// profile does not declare a larger request budget.
+const DefaultInputByteLimit = 48 * 1024
+
 // Message is a chat message.
 type Message struct {
 	Role             string `json:"role"`
@@ -230,7 +234,7 @@ func (c Client) InputByteLimit() int {
 	if c.MaxInputBytes > 0 {
 		return c.MaxInputBytes
 	}
-	return 48 * 1024
+	return DefaultInputByteLimit
 }
 
 func selectResponseText(profile Profile, content, reasoningContent string) (string, ResponseSource) {

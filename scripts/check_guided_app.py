@@ -205,8 +205,9 @@ def run_case(binary, root, endpoint, mode):
             assert "Generic orchestrator fixture assessment" in (runs[-1].parent / "report.md").read_text()
         assert (runs[-1].parent / "report.md").exists()
         prefs = json.loads((root / ".birdhackbot/preferences.json").read_text())
-        assert set(prefs) == {"provider", "base_url", "model", "reasoning_effort", "max_output_tokens"}, prefs
+        assert set(prefs) == {"provider", "base_url", "model", "reasoning_effort", "max_output_tokens", "max_input_bytes"}, prefs
         assert prefs["reasoning_effort"] == "low", prefs
+        assert prefs["max_input_bytes"] == 48 * 1024, prefs
     finally:
         (root / f"terminal-{mode}.txt").write_text(terminal.transcript)
         terminal.close()

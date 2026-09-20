@@ -49,7 +49,7 @@ func (a App) Run(ctx context.Context) error {
 		c.Print("Local response budget: %d output tokens, up to 10 minutes per request. Ctrl-C remains available.\n", prefs.MaxOutputTokens)
 	}
 	if prefs.Provider == "subscription" {
-		c.Print("Selected task context and evidence will be sent to OpenAI.\n")
+		c.Print("Selected task context and evidence will be sent to OpenAI (input ceiling: %d bytes).\n", prefs.MaxInputBytes)
 	}
 	c.Print("This lab preview does not enforce a network allowlist or filesystem sandbox. Use only your authorized isolated lab. Reports are drafts for review.\n")
 	answer, err := c.Ask(ctx, "Type start to confirm this is an authorized isolated lab and begin, or press Enter to cancel")

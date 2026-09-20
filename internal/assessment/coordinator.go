@@ -43,6 +43,7 @@ func (c Coordinator) Run(ctx context.Context, root, goal, scope string) (state S
 	state = State{Version: 1, ID: filepath.Base(root), Goal: goal, Scope: scope, Model: c.LLM.Model, Status: "running", StartedAt: time.Now().UTC(), Limits: limits}
 	state.ReasoningEffort = c.LLM.ReasoningEffort
 	state.MaxOutputTokens = c.LLM.MaxOutputTokens
+	state.MaxInputBytes = c.LLM.InputByteLimit()
 	budget := &meter{limit: limits.ModelCalls}
 	c.LLM.BeforeRequest, c.LLM.OnCompletion = budget.reserve, budget.record
 	defer func() {
