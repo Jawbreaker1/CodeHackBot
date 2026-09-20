@@ -32,8 +32,8 @@ func TestServerCreatesDraftAndServesUI(t *testing.T) {
 		t.Fatalf("GET / status = %d", response.StatusCode)
 	}
 	body, err := io.ReadAll(response.Body)
-	if err != nil || !strings.Contains(string(body), "BirdHackBot assessment console") {
-		t.Fatal("embedded web UI is missing")
+	if err != nil || !strings.Contains(string(body), "Start with a security question") || !strings.Contains(string(body), "Customers") {
+		t.Fatal("embedded operator console UI is missing")
 	}
 
 	created := postJSON[assessmentView](t, httpServer.URL+"/api/v1/assessments", createRequest{Customer: "fixture-lab", Goal: "inspect the fixture", Scope: "only local synthetic commands; approve each action"})
@@ -42,6 +42,41 @@ func TestServerCreatesDraftAndServesUI(t *testing.T) {
 	}
 	if got := postStatus(t, httpServer.URL+"/api/v1/assessments/"+created.ID+"/start", nil); got != http.StatusConflict {
 		t.Fatalf("start without model status = %d", got)
+	}
+}
+
+func TestServerUsesModelLedIntakeAndCoordinatorChat(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("Authorized synthetic web fixture only.\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	model := httptest.NewServer(http.HandlerFunc(webModelFixture))
+	defer model.Close()
+	server := NewServer(Config{RepoRoot: root, SessionsRoot: filepath.Join(root, "sessions"), LLM: llmclient.Client{BaseURL: model.URL + "/v1", Model: "web-fixture"}})
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+
+	view := getJSON[intakeView](t, httpServer.URL+"/api/v1/intake")
+	if view.Status != "conversation" || !view.ModelConfigured {
+		t.Fatalf("intake view = %#v", view)
+	}
+	view = postJSON[intakeView](t, httpServer.URL+"/api/v1/intake/"+view.ID+"/messages", intakeMessageRequest{Text: "I want to record the web fixture, only using the authorized synthetic command."})
+	if view.Status != "ready" || view.Proposal == nil || len(view.Messages) != 2 {
+		t.Fatalf("intake response = %#v", view)
+	}
+	started := postJSON[assessmentView](t, httpServer.URL+"/api/v1/intake/"+view.ID+"/start", intakeStartRequest{Customer: "intake-fixture"})
+	if started.Customer != "intake-fixture" {
+		t.Fatalf("started assessment = %#v", started)
+	}
+	chat := postJSON[assessmentView](t, httpServer.URL+"/api/v1/assessments/"+started.ID+"/messages", messageRequest{Text: "What is the worker doing right now?"})
+	if len(chat.Messages) < 4 || chat.Messages[len(chat.Messages)-1].Role != "assistant" || !strings.Contains(chat.Messages[len(chat.Messages)-1].Text, "waiting") {
+		t.Fatalf("coordinator chat = %#v", chat.Messages)
+	}
+	_ = postStatus(t, httpServer.URL+"/api/v1/assessments/"+started.ID+"/stop", nil)
+	select {
+	case <-server.getRun(started.ID).done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stopped intake assessment did not finalize")
 	}
 }
 
@@ -59,6 +94,10 @@ func TestServerAggregatesSessionsByCustomer(t *testing.T) {
 	}
 	if customer.Sessions[0].ID != first.ID || customer.Sessions[1].ID != second.ID {
 		t.Fatalf("customer sessions = %#v", customer.Sessions)
+	}
+	index := getJSON[map[string][]customerIndexView](t, httpServer.URL+"/api/v1/customers")
+	if len(index["customers"]) != 2 || len(index["customers"][0].Sessions) == 0 || len(index["customers"][1].Sessions) == 0 {
+		t.Fatalf("customer index = %#v", index)
 	}
 	status, report := requestJSON(t, http.MethodGet, httpServer.URL+"/api/v1/customers/shared-customer/report", nil)
 	if status != http.StatusOK || !strings.Contains(report, first.ID) || !strings.Contains(report, second.ID) {
@@ -123,7 +162,11 @@ func webModelFixture(w http.ResponseWriter, r *http.Request) {
 		latest = request.Messages[len(request.Messages)-1].Content
 	}
 	response := `{"type":"action","command":"printf","args":["%s","web fixture"],"summary":"recorded web fixture"}`
-	if strings.Contains(latest, "Evaluate whether the original worker goal") {
+	if len(request.Messages) > 0 && strings.Contains(request.Messages[0].Content, "conversational assessment orchestrator") {
+		response = `{"reply":"I can coordinate that authorized synthetic check. I have enough detail to propose one bounded observation.","proposal":{"goal":"record the web fixture","scope":"Authorized synthetic fixture only; run one printf command and approve each action."}}`
+	} else if len(request.Messages) > 0 && strings.Contains(request.Messages[0].Content, "conversational interface") {
+		response = `The worker is waiting for your approval before it runs the proposed action.`
+	} else if strings.Contains(latest, "Evaluate whether the original worker goal") {
 		response = `{"status":"satisfied","reason":"the fixture output is recorded","summary":"web fixture recorded"}`
 	} else {
 		var payload struct {

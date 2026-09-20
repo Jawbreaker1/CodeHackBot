@@ -51,6 +51,9 @@ class Model(BaseHTTPRequestHandler):
                 result = {"reply": "I have a proposed objective and exact scope ready for review.", "proposal": {"goal": goal, "scope": "Local synthetic commands only; no target network access"}}
             self.send_json({"choices": [{"message": {"content": json.dumps(result)}}], "usage": {"total_tokens": 10}})
             return
+        if "conversational interface" in messages[0]["content"]:
+            self.send_json({"choices": [{"message": {"content": "The worker is waiting for your approval before it runs the proposed action."}}], "usage": {"total_tokens": 10}})
+            return
         prompt = messages[1]["content"]
         payload = json.loads(prompt)
         if "Operator answer: fixture answer" in prompt:

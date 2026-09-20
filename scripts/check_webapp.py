@@ -34,14 +34,15 @@ def call(base, path, method="GET", value=None):
 
 
 def run_session(base, customer, goal):
-    status, view = call(base, "/api/v1/assessments", "POST", {
-        "customer": customer,
-        "goal": goal,
-        "scope": "Local synthetic commands only; approve each action",
-    })
-    assert status == 201 and view["status"] == "draft", view
+    status, intake = call(base, "/api/v1/intake")
+    assert status == 200 and intake["status"] == "conversation", intake
+    _, intake = call(base, f"/api/v1/intake/{intake['id']}/messages", "POST", {"text": goal})
+    assert intake["status"] == "ready" and intake["proposal"], intake
+    status, view = call(base, f"/api/v1/intake/{intake['id']}/start", "POST", {"customer": customer})
+    assert status == 201 and view["customer"] == customer, view
     assessment_id = view["id"]
-    _, view = call(base, f"/api/v1/assessments/{assessment_id}/start", "POST", {})
+    _, chat = call(base, f"/api/v1/assessments/{assessment_id}/messages", "POST", {"text": "What is the worker doing right now?"})
+    assert chat["messages"][-1]["role"] == "assistant" and "waiting" in chat["messages"][-1]["text"], chat
     deadline = time.monotonic() + 10
     approved = False
     while time.monotonic() < deadline:

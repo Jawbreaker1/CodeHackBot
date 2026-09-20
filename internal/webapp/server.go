@@ -21,6 +21,7 @@ import (
 	"github.com/Jawbreaker1/CodeHackBot/internal/approval"
 	"github.com/Jawbreaker1/CodeHackBot/internal/assessment"
 	"github.com/Jawbreaker1/CodeHackBot/internal/behavior"
+	"github.com/Jawbreaker1/CodeHackBot/internal/intake"
 	"github.com/Jawbreaker1/CodeHackBot/internal/llmclient"
 )
 
@@ -33,10 +34,45 @@ type Config struct {
 }
 
 type Server struct {
-	config Config
-	mu     sync.RWMutex
-	runs   map[string]*run
-	seq    atomic.Uint64
+	config  Config
+	mu      sync.RWMutex
+	runs    map[string]*run
+	intakes map[string]*intakeRun
+	seq     atomic.Uint64
+}
+
+type intakeRun struct {
+	mu           sync.RWMutex
+	id           string
+	conversation intake.Conversation
+	messages     []intakeMessage
+	proposal     *intake.Draft
+	assessmentID string
+	busy         bool
+}
+
+type intakeMessage struct {
+	Role string    `json:"role"`
+	Text string    `json:"text"`
+	At   time.Time `json:"at"`
+}
+
+type intakeView struct {
+	ID              string          `json:"id"`
+	Model           string          `json:"model"`
+	ModelConfigured bool            `json:"model_configured"`
+	Status          string          `json:"status"`
+	Messages        []intakeMessage `json:"messages"`
+	Proposal        *intake.Draft   `json:"proposal,omitempty"`
+	AssessmentID    string          `json:"assessment_id,omitempty"`
+}
+
+type intakeMessageRequest struct {
+	Text string `json:"text"`
+}
+
+type intakeStartRequest struct {
+	Customer string `json:"customer"`
 }
 
 type run struct {
@@ -51,10 +87,11 @@ type run struct {
 	started  bool
 	cancel   context.CancelFunc
 	done     chan struct{}
+	chatBusy bool
 
 	sequence  uint64
 	events    []eventRecord
-	messages  []string
+	messages  []intakeMessage
 	approvals map[string]*pendingApproval
 	questions map[string]*pendingQuestion
 }
@@ -109,6 +146,7 @@ type assessmentView struct {
 	Events           []eventRecord       `json:"events"`
 	PendingApprovals []approvalView      `json:"pending_approvals"`
 	PendingQuestions []questionView      `json:"pending_questions"`
+	Messages         []intakeMessage     `json:"messages"`
 	ReportURL        string              `json:"report_url,omitempty"`
 }
 
@@ -146,7 +184,7 @@ func NewServer(config Config) *Server {
 	if config.Limits == (assessment.Limits{}) {
 		config.Limits = assessment.DefaultLimits()
 	}
-	return &Server{config: config, runs: make(map[string]*run)}
+	return &Server{config: config, runs: make(map[string]*run), intakes: make(map[string]*intakeRun)}
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -163,8 +201,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.health(w, r)
 		return
 	}
+	if r.URL.Path == "/api/v1/intake" || strings.HasPrefix(r.URL.Path, "/api/v1/intake/") {
+		s.intakeRoute(w, r)
+		return
+	}
 	if r.URL.Path == "/api/v1/assessments" {
 		s.assessments(w, r)
+		return
+	}
+	if r.URL.Path == "/api/v1/customers" {
+		s.customers(w, r)
 		return
 	}
 	if strings.HasPrefix(r.URL.Path, "/api/v1/assessments/") {
@@ -188,6 +234,169 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		"model_configured": strings.TrimSpace(s.config.LLM.BaseURL) != "" && strings.TrimSpace(s.config.LLM.Model) != "",
 		"loopback_warning": "This preview has no authentication; bind it to loopback and use only an authorized lab.",
 	})
+}
+
+func (s *Server) intakeRoute(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/api/v1/intake" {
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w, http.MethodGet)
+			return
+		}
+		current := s.newIntake()
+		writeJSON(w, http.StatusOK, current.view(s.config.LLM))
+		return
+	}
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/intake/"), "/"), "/")
+	if len(parts) != 2 || parts[0] == "" {
+		http.NotFound(w, r)
+		return
+	}
+	current := s.getIntake(parts[0])
+	if current == nil {
+		writeError(w, http.StatusNotFound, "intake session not found")
+		return
+	}
+	switch parts[1] {
+	case "messages":
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w, http.MethodPost)
+			return
+		}
+		var input intakeMessageRequest
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+		if err := s.intakeMessage(r.Context(), current, input.Text); err != nil {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, current.view(s.config.LLM))
+	case "start":
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w, http.MethodPost)
+			return
+		}
+		var input intakeStartRequest
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+		currentView, err := s.startIntake(current, input.Customer)
+		if err != nil {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, currentView)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func (s *Server) newIntake() *intakeRun {
+	current := &intakeRun{id: fmt.Sprintf("intake-%06d", s.seq.Add(1))}
+	s.mu.Lock()
+	s.intakes[current.id] = current
+	s.mu.Unlock()
+	return current
+}
+
+func (s *Server) getIntake(id string) *intakeRun {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.intakes[id]
+}
+
+func (s *Server) intakeMessage(ctx context.Context, current *intakeRun, text string) error {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return fmt.Errorf("message is required")
+	}
+	current.mu.Lock()
+	if current.assessmentID != "" {
+		current.mu.Unlock()
+		return fmt.Errorf("this conversation already started an assessment")
+	}
+	if current.busy {
+		current.mu.Unlock()
+		return fmt.Errorf("the coordinator is still answering the previous message")
+	}
+	current.busy = true
+	current.messages = append(current.messages, intakeMessage{Role: "user", Text: text, At: time.Now().UTC()})
+	current.mu.Unlock()
+	defer func() {
+		current.mu.Lock()
+		current.busy = false
+		current.mu.Unlock()
+	}()
+	turn, err := current.conversation.Turn(ctx, s.config.LLM, text)
+	if err != nil {
+		return err
+	}
+	current.mu.Lock()
+	current.messages = append(current.messages, intakeMessage{Role: "assistant", Text: turn.Reply, At: time.Now().UTC()})
+	if turn.Proposal != nil {
+		proposal := *turn.Proposal
+		current.proposal = &proposal
+	}
+	current.mu.Unlock()
+	return nil
+}
+
+func (s *Server) startIntake(current *intakeRun, customer string) (assessmentView, error) {
+	customer = strings.TrimSpace(customer)
+	if !validCustomerID(customer) {
+		return assessmentView{}, fmt.Errorf("customer must contain only letters, numbers, hyphens, or underscores")
+	}
+	current.mu.RLock()
+	proposal := current.proposal
+	assessmentID := current.assessmentID
+	current.mu.RUnlock()
+	if assessmentID != "" {
+		return assessmentView{}, fmt.Errorf("this conversation already started an assessment")
+	}
+	if proposal == nil {
+		return assessmentView{}, fmt.Errorf("the coordinator has not proposed an assessment yet")
+	}
+	if strings.TrimSpace(s.config.LLM.BaseURL) == "" || strings.TrimSpace(s.config.LLM.Model) == "" {
+		return assessmentView{}, fmt.Errorf("model endpoint and model are required; configure the web server first")
+	}
+	created, err := s.newRun(customer, proposal.Goal, proposal.Scope)
+	if err != nil {
+		return assessmentView{}, err
+	}
+	if err := s.start(created); err != nil {
+		return assessmentView{}, err
+	}
+	current.mu.Lock()
+	current.assessmentID = created.id
+	intakeMessages := append([]intakeMessage(nil), current.messages...)
+	current.mu.Unlock()
+	created.mu.Lock()
+	created.messages = intakeMessages
+	created.mu.Unlock()
+	return created.view(""), nil
+}
+
+func (r *intakeRun) view(client llmclient.Client) intakeView {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	status := "conversation"
+	if r.busy {
+		status = "thinking"
+	} else if r.proposal != nil {
+		status = "ready"
+	}
+	if r.assessmentID != "" {
+		status = "started"
+	}
+	return intakeView{ID: r.id, Model: client.Model, ModelConfigured: strings.TrimSpace(client.BaseURL) != "" && strings.TrimSpace(client.Model) != "", Status: status, Messages: append([]intakeMessage(nil), r.messages...), Proposal: cloneDraft(r.proposal), AssessmentID: r.assessmentID}
+}
+
+func cloneDraft(draft *intake.Draft) *intake.Draft {
+	if draft == nil {
+		return nil
+	}
+	copy := *draft
+	return &copy
 }
 
 func (s *Server) assessments(w http.ResponseWriter, r *http.Request) {
@@ -229,6 +438,34 @@ func (s *Server) assessments(w http.ResponseWriter, r *http.Request) {
 	default:
 		methodNotAllowed(w, http.MethodGet, http.MethodPost)
 	}
+}
+
+type customerIndexView struct {
+	ID       string           `json:"id"`
+	Status   string           `json:"status"`
+	Sessions []assessmentView `json:"sessions"`
+}
+
+func (s *Server) customers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	s.mu.RLock()
+	ids := make(map[string]struct{})
+	for _, current := range s.runs {
+		current.mu.RLock()
+		ids[current.customer] = struct{}{}
+		current.mu.RUnlock()
+	}
+	s.mu.RUnlock()
+	views := make([]customerIndexView, 0, len(ids))
+	for id := range ids {
+		view := s.customerView(id)
+		views = append(views, customerIndexView{ID: view.ID, Status: view.Status, Sessions: view.Sessions})
+	}
+	sort.Slice(views, func(i, j int) bool { return views[i].ID < views[j].ID })
+	writeJSON(w, http.StatusOK, map[string]any{"customers": views})
 }
 
 func (s *Server) newRun(customer, goal, scope string) (*run, error) {
@@ -300,7 +537,7 @@ func (s *Server) assessmentRoute(w http.ResponseWriter, r *http.Request) {
 		if !decodeJSON(w, r, &input) {
 			return
 		}
-		if err := current.message(input.Text); err != nil {
+		if err := s.message(r.Context(), current, input.Text); err != nil {
 			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
@@ -509,7 +746,11 @@ func (r *run) snapshot(state assessment.State) {
 func (r *run) conversation() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return append([]string(nil), r.messages...)
+	values := make([]string, 0, len(r.messages))
+	for _, message := range r.messages {
+		values = append(values, message.Role+": "+message.Text)
+	}
+	return values
 }
 
 func (r *run) emit(event assessment.Event) {
@@ -537,25 +778,80 @@ func (r *run) stop() error {
 	return nil
 }
 
-func (r *run) message(text string) error {
+func (s *Server) message(ctx context.Context, r *run, text string) error {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return fmt.Errorf("message is required")
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if !r.started {
+	if !r.started || (r.status != "running" && r.status != "starting") {
+		r.mu.Unlock()
 		return fmt.Errorf("start the assessment before sending messages")
 	}
 	for id, question := range r.questions {
 		delete(r.questions, id)
+		r.messages = append(r.messages, intakeMessage{Role: "user", Text: text, At: time.Now().UTC()})
 		question.answer <- text
-		r.messages = append(r.messages, "user: "+text)
+		r.events = append(r.events, eventRecord{Sequence: r.nextSequenceLocked(), At: time.Now().UTC(), Event: assessment.Event{Kind: "operator_message", Message: text}})
+		r.mu.Unlock()
 		return nil
 	}
-	r.messages = append(r.messages, "user: "+text)
+	if r.chatBusy {
+		r.mu.Unlock()
+		return fmt.Errorf("the coordinator is still answering the previous message")
+	}
+	r.chatBusy = true
+	r.messages = append(r.messages, intakeMessage{Role: "user", Text: text, At: time.Now().UTC()})
 	r.events = append(r.events, eventRecord{Sequence: r.nextSequenceLocked(), At: time.Now().UTC(), Event: assessment.Event{Kind: "operator_message", Message: text}})
+	state := r.state
+	pending := make([]string, 0, len(r.approvals)+len(r.questions))
+	for _, approval := range r.approvals {
+		pending = append(pending, "approval required for "+approval.request.Command+" in "+approval.request.Cwd)
+	}
+	for _, question := range r.questions {
+		pending = append(pending, "question for "+question.taskID+": "+question.text)
+	}
+	sort.Strings(pending)
+	r.mu.Unlock()
+
+	prompt := []llmclient.Message{
+		{Role: "system", Content: "You are the assessment coordinator's conversational interface. Answer the operator directly and concisely while workers may be running. Explain progress, blockers, and next steps from the supplied state. Preserve scope and approval boundaries. Do not claim that a finding is confirmed from chat alone. Do not execute tools or change the plan from this chat response. Task working directories shown in pending actions are internal evidence workspaces managed by the runtime; they are not target scope. Judge command arguments against the declared scope."},
+		{Role: "user", Content: "Current assessment state (untrusted evidence): " + compactRunState(state, pending) + "\nOperator message: " + text},
+	}
+	reply, err := s.config.LLM.Chat(ctx, prompt)
+	r.mu.Lock()
+	r.chatBusy = false
+	if err != nil {
+		r.events = append(r.events, eventRecord{Sequence: r.nextSequenceLocked(), At: time.Now().UTC(), Event: assessment.Event{Kind: "coordinator_error", Message: err.Error()}})
+		r.mu.Unlock()
+		return fmt.Errorf("coordinator response: %w", err)
+	}
+	r.messages = append(r.messages, intakeMessage{Role: "assistant", Text: strings.TrimSpace(reply), At: time.Now().UTC()})
+	r.state.Usage.Calls++
+	r.events = append(r.events, eventRecord{Sequence: r.nextSequenceLocked(), At: time.Now().UTC(), Event: assessment.Event{Kind: "coordinator_message", Message: strings.TrimSpace(reply)}})
+	r.mu.Unlock()
 	return nil
+}
+
+func compactRunState(state assessment.State, pending []string) string {
+	results := make([]string, 0, len(state.Results))
+	for _, result := range state.Results {
+		summary := strings.Join(strings.Fields(result.Summary), " ")
+		if len(summary) > 240 {
+			summary = summary[:237] + "..."
+		}
+		results = append(results, result.Task.ID+"="+result.Status+": "+summary)
+	}
+	data, _ := json.Marshal(struct {
+		Status     string   `json:"status"`
+		Goal       string   `json:"goal"`
+		Scope      string   `json:"scope"`
+		Plans      int      `json:"plans"`
+		Results    []string `json:"results"`
+		Pending    []string `json:"pending_operator_actions"`
+		ModelCalls int      `json:"model_calls"`
+	}{Status: state.Status, Goal: state.Goal, Scope: state.Scope, Plans: len(state.Plans), Results: results, Pending: pending, ModelCalls: state.Usage.Calls})
+	return string(data)
 }
 
 func (r *run) ask(ctx context.Context, taskID, text string) (string, error) {
@@ -631,7 +927,7 @@ func (r *run) approve(id, decision string) error {
 func (r *run) view(after string) assessmentView {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	view := assessmentView{Customer: r.customer, ID: r.id, Goal: r.goal, Scope: r.scope, Status: r.status, Model: r.state.Model, Error: r.state.Error, StartedAt: r.state.StartedAt, FinishedAt: r.state.FinishedAt, Usage: r.state.Usage, Plans: len(r.state.Plans), Results: append([]assessment.Result(nil), r.state.Results...), ReportURL: "/api/v1/assessments/" + r.id + "/report"}
+	view := assessmentView{Customer: r.customer, ID: r.id, Goal: r.goal, Scope: r.scope, Status: r.status, Model: r.state.Model, Error: r.state.Error, StartedAt: r.state.StartedAt, FinishedAt: r.state.FinishedAt, Usage: r.state.Usage, Plans: len(r.state.Plans), Results: append([]assessment.Result(nil), r.state.Results...), Messages: append([]intakeMessage(nil), r.messages...), ReportURL: "/api/v1/assessments/" + r.id + "/report"}
 	if n, err := strconv.ParseUint(strings.TrimSpace(after), 10, 64); err == nil {
 		for _, event := range r.events {
 			if event.Sequence > n {

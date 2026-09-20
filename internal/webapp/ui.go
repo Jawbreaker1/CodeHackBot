@@ -5,181 +5,122 @@ const indexHTML = `<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>BirdHackBot assessment console</title>
+  <title>BirdHackBot · operator console</title>
   <style>
-    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: #0b1020; color: #e8edf7; }
+    :root {
+      color-scheme: dark;
+      --canvas: #0b0d10;
+      --sidebar: #101318;
+      --surface: #15191f;
+      --surface-2: #191e25;
+      --field: #0d1014;
+      --line: #282e37;
+      --line-strong: #3a424d;
+      --text: #e5e8ec;
+      --muted: #8c949f;
+      --faint: #626b77;
+      --blue: #8bb8ff;
+      --blue-strong: #4d8fe8;
+      --green: #72d6a3;
+      --amber: #e6b86f;
+      --red: #f18c8c;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
     * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 20% 0%, #1a2b4d, #0b1020 45%); }
-    header { padding: 28px clamp(20px, 6vw, 90px) 20px; border-bottom: 1px solid #2a3855; }
-    h1 { margin: 0 0 8px; font-size: clamp(1.5rem, 3vw, 2.25rem); letter-spacing: -0.03em; }
-    header p { max-width: 760px; margin: 0; color: #aebbd0; }
-    main { display: grid; grid-template-columns: minmax(300px, 0.8fr) minmax(420px, 1.5fr); gap: 18px; max-width: 1500px; margin: 24px auto; padding: 0 20px 40px; }
-    section { background: rgba(17, 27, 48, .9); border: 1px solid #2a3855; border-radius: 14px; padding: 18px; box-shadow: 0 16px 40px rgba(0,0,0,.18); }
-    h2 { font-size: 1rem; margin: 0 0 14px; color: #94c5ff; }
-    label { display: block; margin: 14px 0 6px; color: #aebbd0; font-size: .88rem; }
-    textarea, input { width: 100%; border: 1px solid #3b4d6d; border-radius: 8px; background: #0d1629; color: #f2f6fc; padding: 10px; font: inherit; }
-    textarea { min-height: 100px; resize: vertical; }
-    button { border: 0; border-radius: 8px; background: #4d9cff; color: #061020; font-weight: 700; padding: 10px 14px; cursor: pointer; }
-    button.secondary { background: #263752; color: #e8edf7; }
-    button.danger { background: #d86666; color: #1c0808; }
-    button:disabled { opacity: .5; cursor: wait; }
-    .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
-    .notice { border-left: 3px solid #e0ad5c; padding: 9px 11px; margin-bottom: 15px; color: #e8d8b9; background: #2a2418; font-size: .86rem; }
-    .meta { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; font-size: .88rem; color: #b9c7db; }
-    .meta strong { color: #eef4ff; }
-    #events { height: 360px; overflow: auto; background: #09101d; border: 1px solid #25344e; border-radius: 8px; padding: 12px; font: .82rem ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
-    .event { padding: 7px 0; border-bottom: 1px solid #1b2940; }
-    .event:last-child { border-bottom: 0; }
-    .event time { color: #7890ae; margin-right: 8px; }
-    .pending { margin-top: 14px; display: grid; gap: 10px; }
-    .pending-card { border: 1px solid #765d2f; border-radius: 8px; padding: 11px; background: #211d16; }
-    .pending-card code { display: block; white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0; color: #f6ddb1; }
-    .session-list, .finding-list { display: grid; gap: 8px; margin-top: 12px; }
-    .session-card, .finding-card { border: 1px solid #2f4262; border-radius: 8px; padding: 10px; background: #101d32; }
-    .session-card strong, .finding-card strong { color: #eef4ff; }
-    .session-card p, .finding-card p { margin: 6px 0 0; color: #b9c7db; font-size: .86rem; }
-    .session-card a { color: #8fc4ff; }
-    .muted { color: #8395af; font-size: .84rem; }
-    .hidden { display: none !important; }
-    .status { color: #93e0b0; }
-    .status.bad { color: #ff9b9b; }
-    @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+    html, body { height: 100%; }
+    body { margin: 0; background: var(--canvas); color: var(--text); font-size: 13px; }
+    button, textarea, input { font: inherit; }
+    button { cursor: pointer; }
+    button:disabled { cursor: wait; opacity: .45; }
+    .app-shell { height: 100vh; min-height: 620px; display: grid; grid-template-columns: 236px minmax(0, 1fr) 304px; overflow: hidden; }
+    .sidebar, .inspector { background: var(--sidebar); min-width: 0; }
+    .sidebar { border-right: 1px solid var(--line); display: flex; flex-direction: column; }
+    .inspector { border-left: 1px solid var(--line); overflow: auto; }
+    .brand-row { height: 58px; padding: 0 16px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 10px; }
+    .brand-mark { width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid var(--line-strong); color: var(--blue); font-size: 10px; font-weight: 800; letter-spacing: -.08em; }
+    .brand-name { font-weight: 760; letter-spacing: -.02em; }
+    .brand-subtitle { display: block; color: var(--faint); font-size: 10px; font-weight: 500; margin-top: 1px; letter-spacing: .02em; }
+    .new-assessment { margin: 14px 12px 16px; height: 34px; padding: 0 12px; border: 1px solid #3a659c; background: #17243a; color: #cfe1ff; text-align: left; }
+    .new-assessment:hover { background: #1e304d; border-color: var(--blue-strong); }
+    .side-label { padding: 0 14px 8px; color: var(--faint); font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    #sidebarSessions { flex: 1; overflow: auto; padding: 0 8px 12px; }
+    .customer-group { margin-bottom: 12px; }
+    .customer-heading { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 7px; border: 0; background: transparent; color: var(--muted); text-align: left; font-size: 11px; font-weight: 700; }
+    .customer-heading:hover { color: var(--text); }
+    .customer-heading .customer-count { color: var(--faint); font-size: 10px; font-weight: 500; }
+    .session-link { width: 100%; display: block; padding: 8px 8px 8px 18px; border: 0; border-left: 2px solid transparent; background: transparent; color: var(--muted); text-align: left; }
+    .session-link:hover { color: var(--text); background: #171c23; }
+    .session-link.active { border-left-color: var(--blue); color: var(--text); background: #1a222d; }
+    .session-link-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+    .session-link-meta { display: flex; justify-content: space-between; gap: 8px; margin-top: 3px; color: var(--faint); font-size: 10px; }
+    .session-link-meta .running { color: var(--amber); }.session-link-meta .completed { color: var(--green); }.session-link-meta .aborted, .session-link-meta .incomplete { color: var(--red); }
+    .sidebar-empty { padding: 10px 8px; color: var(--faint); font-size: 11px; line-height: 1.45; }
+    .sidebar-footer { border-top: 1px solid var(--line); padding: 12px 14px; color: var(--faint); font-size: 10px; line-height: 1.45; }
+    .sidebar-footer strong { display: block; color: var(--muted); font-size: 11px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .main-column { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--canvas); }
+    .main-header { height: 58px; border-bottom: 1px solid var(--line); padding: 0 22px; display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+    .main-heading { min-width: 0; }.main-heading h1 { margin: 0; font-size: 14px; font-weight: 650; letter-spacing: -.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.main-heading p { margin: 3px 0 0; color: var(--faint); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .header-meta { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 11px; white-space: nowrap; }.state-pill { padding: 3px 7px; border: 1px solid var(--line-strong); color: var(--muted); text-transform: lowercase; }.state-pill.ready, .state-pill.completed { color: var(--green); border-color: #315f4a; }.state-pill.running, .state-pill.starting, .state-pill.thinking { color: var(--amber); border-color: #665330; }.state-pill.aborted, .state-pill.incomplete { color: var(--red); border-color: #683b42; }
+    #chat { flex: 1; min-height: 0; overflow: auto; padding: 26px clamp(20px, 6vw, 86px) 34px; }
+    .transcript-empty { max-width: 640px; margin: 18vh auto 0; text-align: center; color: var(--muted); }.transcript-empty strong { display: block; color: var(--text); font-size: 18px; font-weight: 620; letter-spacing: -.03em; margin-bottom: 8px; }.transcript-empty p { margin: 0; line-height: 1.55; }
+    .transcript-entry { display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 18px; max-width: 940px; margin: 0 auto; padding: 15px 0; border-top: 1px solid #1c2128; }.transcript-entry:first-child { border-top: 0; }.transcript-role { padding-top: 2px; color: var(--faint); font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }.transcript-entry.user .transcript-role { color: var(--blue); }.transcript-entry.assistant .transcript-role { color: var(--green); }.transcript-entry.system { display: block; margin-top: 5px; padding: 10px 12px; border: 1px solid var(--line); color: var(--muted); font-size: 11px; }.transcript-entry.system .transcript-role { display: inline; margin-right: 7px; }.transcript-text { min-width: 0; white-space: pre-wrap; line-height: 1.58; overflow-wrap: anywhere; }
+    .composer { border-top: 1px solid var(--line); padding: 14px clamp(20px, 6vw, 86px) 18px; }.composer-inner { max-width: 940px; margin: 0 auto; }.composer-row { display: flex; align-items: flex-end; gap: 9px; }.composer textarea { flex: 1; min-height: 48px; max-height: 150px; resize: vertical; padding: 12px 13px; border: 1px solid var(--line-strong); border-radius: 3px; outline: none; background: var(--field); color: var(--text); line-height: 1.45; }.composer textarea:focus, .inspector input:focus { border-color: var(--blue-strong); box-shadow: 0 0 0 2px #3e70ad33; }.send-button { height: 48px; padding: 0 16px; border: 1px solid #6396db; border-radius: 3px; background: #214472; color: #e5f0ff; font-weight: 650; }.send-button:hover { background: #2a568d; }.composer-hint { margin-top: 7px; color: var(--faint); font-size: 10px; }
+    .inspector-section { padding: 17px 15px; border-bottom: 1px solid var(--line); }.inspector-section h2 { margin: 0 0 13px; color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }.inspector-section p { margin: 7px 0; color: var(--muted); font-size: 11px; line-height: 1.48; }.kv { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 9px; padding: 5px 0; border-bottom: 1px solid #1d2229; font-size: 11px; }.kv:last-child { border-bottom: 0; }.kv span { color: var(--faint); }.kv strong { min-width: 0; color: var(--text); text-align: right; font-weight: 560; overflow-wrap: anywhere; }.value-status { color: var(--green)!important; }.value-waiting { color: var(--amber)!important; }.value-bad { color: var(--red)!important; }
+    .proposal-review { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }.proposal-review label { display: block; margin: 11px 0 5px; color: var(--faint); font-size: 10px; }.proposal-value { margin: 0; white-space: pre-wrap; line-height: 1.45; font-size: 11px; }.inspector input { width: 100%; height: 32px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 3px; outline: none; background: var(--field); color: var(--text); }.primary-button { width: 100%; margin-top: 12px; height: 33px; border: 1px solid #6396db; border-radius: 3px; background: #214472; color: #e5f0ff; font-size: 11px; font-weight: 650; }.primary-button:hover { background: #2a568d; }.danger-button { margin-top: 12px; height: 29px; padding: 0 9px; border: 1px solid #6b3b42; border-radius: 3px; background: transparent; color: var(--red); font-size: 10px; }.danger-button:hover { background: #271619; }.link-button { display: inline-block; margin-top: 10px; color: var(--blue); font-size: 11px; text-decoration: none; }.link-button:hover { text-decoration: underline; }
+    .approval-item { margin-top: 10px; padding: 10px; border-left: 2px solid var(--amber); background: #1a1814; }.approval-title { color: var(--amber); font-size: 10px; font-weight: 750; }.approval-command { display: block; margin: 7px 0; color: #e7c98f; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }.approval-actions { display: flex; gap: 6px; }.approval-actions button { height: 27px; padding: 0 8px; border: 1px solid #608ec9; border-radius: 3px; background: #214472; color: #e5f0ff; font-size: 10px; }.approval-actions .deny { border-color: #6b3b42; background: transparent; color: var(--red); }.question-input { margin-top: 8px; }.activity-list, .result-list { display: flex; flex-direction: column; gap: 8px; max-height: 250px; overflow: auto; }.activity-item { padding-left: 9px; border-left: 1px solid #3a4654; color: var(--muted); font-size: 10px; line-height: 1.4; }.activity-item strong { color: var(--text); font-weight: 580; }.result-item { padding-bottom: 8px; border-bottom: 1px solid #1d2229; }.result-item:last-child { border-bottom: 0; }.result-item strong { display: block; color: var(--text); font-size: 11px; font-weight: 620; }.result-item span { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.4; }.empty { color: var(--faint); font-size: 10px; line-height: 1.45; }.hidden { display: none!important; }
+    @media (max-width: 1050px) { .app-shell { grid-template-columns: 210px minmax(0, 1fr); }.inspector { display: none; } }
+    @media (max-width: 680px) { .app-shell { display: block; height: auto; min-height: 100vh; overflow: visible; }.sidebar { min-height: 210px; max-height: 280px; border-right: 0; border-bottom: 1px solid var(--line); }.sidebar-footer { display: none; }.main-column { min-height: 660px; }.main-header { padding: 0 14px; }.header-meta { display: none; }.transcript-entry { grid-template-columns: 64px minmax(0, 1fr); gap: 10px; }.composer { padding: 12px 14px 15px; } }
   </style>
 </head>
 <body>
-<header>
-  <h1>BirdHackBot assessment console</h1>
-  <p>Browser control surface for the shared orchestrator. Define exact scope, review every action, and keep the evidence-backed run visible.</p>
-</header>
-<main>
-  <section>
-    <div class="notice">Lab preview: this server has no authentication. Bind it to loopback and use only an authorized environment. Browser controls never call tools directly.</div>
-    <h2>Start an assessment</h2>
-    <form id="create">
-      <label for="customer">Customer workspace</label>
-      <input id="customer" required pattern="[A-Za-z0-9_-]+" maxlength="80" placeholder="customer-id">
-      <label for="goal">Objective</label>
-      <textarea id="goal" required placeholder="What should the assessment establish?"></textarea>
-      <label for="scope">Exact scope and permissions</label>
-      <textarea id="scope" required placeholder="Targets, allowed actions, exclusions, and evidence limits"></textarea>
-      <div class="actions"><button type="submit">Create review</button></div>
-    </form>
-    <div id="review" class="hidden">
-      <h2>Review</h2>
-      <div id="reviewText" class="meta"></div>
-      <div class="actions"><button id="start">Start assessment</button><button id="reset" class="secondary">Discard draft</button></div>
-    </div>
-    <div id="runMeta" class="hidden">
-      <h2>Assessment status</h2>
-      <div class="meta">
-        <strong>Status</strong><span id="status" class="status">draft</span>
-        <strong>Model</strong><span id="model">—</span>
-        <strong>Plans</strong><span id="plans">0</span>
-        <strong>Model calls</strong><span id="calls">0</span>
-      </div>
-      <div class="actions"><button id="stop" class="danger">Stop assessment</button><a id="report" class="button secondary" href="#" target="_blank">Open report</a></div>
-    </div>
-    <div id="customerSummary" class="hidden">
-      <h2>Customer workspace</h2>
-      <div id="customerSummaryMeta" class="meta"></div>
-      <a id="customerReport" class="button secondary" href="#" target="_blank">Open unified customer report</a>
-      <h2 style="margin-top:18px">Sessions</h2>
-      <div id="customerSessions" class="session-list"></div>
-      <h2 style="margin-top:18px">Findings across sessions</h2>
-      <div id="customerFindings" class="finding-list"></div>
-    </div>
-    <div id="pending" class="pending"></div>
-    <div id="messageBox" class="hidden">
-      <label for="message">Talk to the coordinator</label>
-      <textarea id="message" placeholder="Ask about progress or suggest the next investigation step"></textarea>
-      <div class="actions"><button id="sendMessage">Send message</button></div>
-    </div>
-  </section>
-  <section>
-    <h2>Conversation and activity</h2>
-    <div id="events" aria-live="polite">Create a scoped assessment to begin.</div>
-  </section>
-</main>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Assessment sessions">
+      <div class="brand-row"><div class="brand-mark">BH</div><div class="brand-name">BirdHackBot<span class="brand-subtitle">security operator console</span></div></div>
+      <button id="newAssessment" class="new-assessment" type="button">＋ New assessment</button>
+      <div class="side-label">Customers</div>
+      <div id="sidebarSessions"><div class="sidebar-empty">No assessment sessions yet. Start a conversation with the coordinator.</div></div>
+      <div class="sidebar-footer"><strong id="sidebarModel">Connecting…</strong><span id="sidebarConnection">Checking model connection</span></div>
+    </aside>
+
+    <main class="main-column">
+      <header class="main-header"><div class="main-heading"><h1 id="sessionTitle">New assessment</h1><p id="sessionSubtitle">Talk to the coordinator to shape an authorized security assessment.</p></div><div class="header-meta"><span id="headerCustomer">No customer</span><span id="headerState" class="state-pill">conversation</span></div></header>
+      <section id="chat" aria-live="polite"></section>
+      <form id="composer" class="composer"><div class="composer-inner"><div class="composer-row"><textarea id="chatInput" aria-label="Message the coordinator" rows="2" placeholder="Message the coordinator…" required></textarea><button id="send" class="send-button" type="submit">Send</button></div><div id="composerHint" class="composer-hint">The coordinator owns the discussion. Nothing executes until you review and start an assessment.</div></div></form>
+    </main>
+
+    <aside class="inspector" aria-label="Assessment inspector">
+      <section class="inspector-section"><h2>Assessment</h2><div class="kv"><span>Status</span><strong id="assessmentStatus">Conversation</strong></div><div class="kv"><span>Model</span><strong id="model">Connecting…</strong></div><div class="kv"><span>Customer</span><strong id="assessmentCustomer">—</strong></div><div class="kv"><span>Calls</span><strong id="assessmentCalls">0</strong></div><p id="assessmentGoal">Describe what you want to understand. The coordinator will ask for the detail it needs.</p><div id="proposalReview" class="proposal-review hidden"><h2>Ready to start</h2><label>Objective</label><p id="proposalGoal" class="proposal-value"></p><label>Scope and permissions</label><p id="proposalScope" class="proposal-value"></p><label for="customer">Customer workspace</label><input id="customer" aria-label="Customer workspace" pattern="[A-Za-z0-9_-]+" maxlength="80" placeholder="customer-id" required><button id="start" class="primary-button" type="button">Start assessment</button></div><button id="stop" class="danger-button hidden" type="button">Stop assessment</button><a id="report" class="link-button hidden" target="_blank">Open session report ↗</a></section>
+      <section id="approvalSection" class="inspector-section hidden"><h2>Needs your attention</h2><div id="approvalBox"></div></section>
+      <section class="inspector-section"><h2>Activity</h2><div id="activity" class="activity-list"><div class="empty">Activity will appear when an assessment is running.</div></div></section>
+      <section class="inspector-section"><h2>Results</h2><div id="results" class="result-list"><div class="empty">No findings or worker results yet.</div></div><div id="customerReportWrap" class="hidden"><a id="customerReport" class="link-button" target="_blank">Open customer report ↗</a></div></section>
+    </aside>
+  </div>
 <script>
 (() => {
-  let id = null, after = 0, customer = null;
-  const $ = (name) => document.getElementById(name);
-  const json = (url, options = {}) => fetch(url, {headers: {'Content-Type': 'application/json'}, ...options}).then(async response => {
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(body.error || response.statusText);
-    return body;
-  });
-  const showError = (error) => { $('events').textContent = 'Error: ' + error.message; };
-  const addEvent = (record) => {
-    const event = record.event || {};
-    const line = document.createElement('div'); line.className = 'event';
-    const time = document.createElement('time'); time.textContent = new Date(record.at).toLocaleTimeString();
-    const text = document.createElement('span'); text.textContent = (event.task_id ? '[' + event.task_id + '] ' : '') + event.kind + (event.message ? ': ' + event.message : '') + (event.action ? ' — ' + event.action : '');
-    line.append(time, text); $('events').append(line); $('events').scrollTop = $('events').scrollHeight;
-  };
-  const renderPending = (view) => {
-    const box = $('pending'); box.replaceChildren();
-    (view.pending_approvals || []).forEach(item => {
-      const card = document.createElement('div'); card.className = 'pending-card';
-      const title = document.createElement('strong'); title.textContent = 'Approval required · ' + item.task_id; card.append(title);
-      const code = document.createElement('code'); code.textContent = item.command + '\n' + item.cwd; card.append(code);
-      const actions = document.createElement('div'); actions.className = 'actions';
-      [['approved_once','Approve once',''],['denied','Deny','danger']].forEach(([decision,label,kind]) => { const button=document.createElement('button'); button.textContent=label; if(kind) button.className=kind; button.onclick=()=>json('/api/v1/assessments/'+id+'/approvals/'+encodeURIComponent(item.id), {method:'POST', body:JSON.stringify({decision})}).then(refresh).catch(showError); actions.append(button); });
-      card.append(actions); box.append(card);
-    });
-    (view.pending_questions || []).forEach(item => {
-      const card = document.createElement('div'); card.className = 'pending-card';
-      const title = document.createElement('strong'); title.textContent = 'Question · ' + item.task_id; card.append(title);
-      const prompt = document.createElement('p'); prompt.textContent = item.text; card.append(prompt);
-      const input = document.createElement('input'); input.placeholder = 'Answer'; const button = document.createElement('button'); button.textContent='Answer'; button.onclick=()=>json('/api/v1/assessments/'+id+'/questions/'+encodeURIComponent(item.id), {method:'POST', body:JSON.stringify({text:input.value})}).then(refresh).catch(showError); const actions=document.createElement('div'); actions.className='actions'; actions.append(input,button); card.append(actions); box.append(card);
-    });
-  };
-  const renderCustomer = (view) => {
-    if (!view || !view.id) return;
-    $('customerSummary').classList.remove('hidden');
-    $('customerReport').href = '/api/v1/customers/' + encodeURIComponent(view.id) + '/report';
-    const meta = $('customerSummaryMeta'); meta.replaceChildren();
-    [['Customer', view.id], ['Status', view.status], ['Sessions', String((view.sessions || []).length)], ['Findings', String((view.findings || []).length)]].forEach(([label, value]) => {
-      const strong = document.createElement('strong'); strong.textContent = label;
-      const text = document.createElement('span'); text.textContent = value; meta.append(strong, text);
-    });
-    const sessions = $('customerSessions'); sessions.replaceChildren();
-    (view.sessions || []).forEach(session => {
-      const card = document.createElement('div'); card.className = 'session-card';
-      const title = document.createElement('strong'); title.textContent = session.status + ' · ' + session.id; card.append(title);
-      const detail = document.createElement('p'); detail.textContent = session.goal + ' · ' + (session.model || 'not started'); card.append(detail);
-      const link = document.createElement('a'); link.href = session.report_url; link.target = '_blank'; link.textContent = 'Open session report'; card.append(link);
-      sessions.append(card);
-    });
-    if (!view.sessions || view.sessions.length === 0) {
-      const empty = document.createElement('div'); empty.className = 'muted'; empty.textContent = 'No assessment sessions yet.'; sessions.append(empty);
-    }
-    const findings = $('customerFindings'); findings.replaceChildren();
-    (view.findings || []).forEach(item => {
-      const card = document.createElement('div'); card.className = 'finding-card';
-      const title = document.createElement('strong'); title.textContent = item.finding.title + ' · ' + item.finding.status; card.append(title);
-      const detail = document.createElement('p'); detail.textContent = 'Session ' + item.session_id + ': ' + item.finding.impact; card.append(detail);
-      findings.append(card);
-    });
-    if (!view.findings || view.findings.length === 0) {
-      const empty = document.createElement('div'); empty.className = 'muted'; empty.textContent = 'No model-authored findings have been recorded.'; findings.append(empty);
-    }
-  };
-  const refreshCustomer = () => customer ? json('/api/v1/customers/'+encodeURIComponent(customer)).then(renderCustomer).catch(() => {}) : Promise.resolve();
-  const render = (view) => {
-    if (view.customer) customer = view.customer;
-    $('runMeta').classList.remove('hidden'); $('messageBox').classList.toggle('hidden', !['running','starting'].includes(view.status)); $('status').textContent=view.status; $('model').textContent=view.model || 'not started'; $('plans').textContent=view.plans; $('calls').textContent=view.usage.calls; $('report').href=view.report_url; $('stop').disabled=!['running','starting'].includes(view.status); renderPending(view);
-    if (after === 0 && (!view.events || view.events.length === 0)) $('events').textContent = 'Assessment draft created. Review the scope and start when ready.';
-    (view.events || []).forEach(record => { if(record.sequence > after) { after=record.sequence; addEvent(record); } });
-    refreshCustomer();
-  };
-  const refresh = () => id ? json('/api/v1/assessments/'+encodeURIComponent(id)+'?after='+after).then(render).catch(showError) : Promise.resolve();
-  $('create').onsubmit = (event) => { event.preventDefault(); json('/api/v1/assessments', {method:'POST', body:JSON.stringify({customer:$('customer').value, goal:$('goal').value, scope:$('scope').value})}).then(view => { id=view.id; customer=view.customer; $('create').classList.add('hidden'); $('review').classList.remove('hidden'); const review=$('reviewText'); review.replaceChildren(); [['Customer', view.customer], ['Objective', view.goal], ['Scope', view.scope]].forEach(([label, value]) => { const strong=document.createElement('strong'); strong.textContent=label; const text=document.createElement('span'); text.textContent=value; review.append(strong,text); }); render(view); }).catch(showError); };
-  $('start').onclick = () => json('/api/v1/assessments/'+id+'/start', {method:'POST'}).then(view => { $('review').classList.add('hidden'); render(view); }).catch(showError);
-  $('reset').onclick = () => location.reload();
-  $('stop').onclick = () => json('/api/v1/assessments/'+id+'/stop', {method:'POST'}).then(render).catch(showError);
-  $('sendMessage').onclick = () => { const text=$('message').value.trim(); if(!text) return; json('/api/v1/assessments/'+id+'/messages', {method:'POST', body:JSON.stringify({text})}).then(view => { $('message').value=''; render(view); }).catch(showError); };
-  setInterval(refresh, 1000);
+  let intakeId = null, assessmentId = null, customer = null, after = 0, sending = false;
+  const $ = (id) => document.getElementById(id);
+  const api = (url, options = {}) => fetch(url, {headers:{'Content-Type':'application/json'}, ...options}).then(async r => { const body=await r.json().catch(()=>({})); if(!r.ok) throw new Error(body.error || r.statusText); return body; });
+  const fail = (error) => { appendMessage('system', 'Coordinator unavailable: ' + error.message); sending=false; updateComposer(); };
+  const stateClass = (value) => String(value || '').toLowerCase().replace(/[^a-z]+/g, '-');
+  const setHeader = (title, subtitle, customerName, status) => { $('sessionTitle').textContent=title || 'Assessment'; $('sessionSubtitle').textContent=subtitle || ''; $('headerCustomer').textContent=customerName || 'No customer'; $('headerState').textContent=status || 'conversation'; $('headerState').className='state-pill '+stateClass(status); };
+  const appendMessage = (role, text) => { const item=document.createElement('article'); item.className='transcript-entry '+role; const label=document.createElement('div'); label.className='transcript-role'; label.textContent=role==='user'?'You':role==='assistant'?'Coordinator':'System'; const body=document.createElement('div'); body.className='transcript-text'; body.textContent=text; item.append(label,body); $('chat').append(item); };
+  const renderMessages = (messages) => { $('chat').replaceChildren(); if(!messages || messages.length===0) { const empty=document.createElement('div'); empty.className='transcript-empty'; const title=document.createElement('strong'); title.textContent='Start with a security question'; const text=document.createElement('p'); text.textContent='Describe what you want to investigate in plain language. The coordinator will clarify the target, boundaries, and permitted actions before proposing work.'; empty.append(title,text); $('chat').append(empty); } else (messages||[]).forEach(m=>appendMessage(m.role,m.text)); $('chat').scrollTop=$('chat').scrollHeight; };
+  const updateComposer = () => { $('send').disabled=sending; $('chatInput').disabled=sending || (!intakeId && !assessmentId); $('chatInput').placeholder=assessmentId?'Ask about progress, blockers, or the next discovery…':'Message the coordinator…'; $('composerHint').textContent=assessmentId?'The coordinator can explain live worker state while approvals remain under your control.':'The coordinator owns the discussion. Nothing executes until you review and start an assessment.'; };
+  const renderEvents = (events) => { if(after===0) $('activity').replaceChildren(); (events||[]).forEach(record=>{ if(record.sequence<=after)return; after=record.sequence; const item=document.createElement('div'); item.className='activity-item'; const title=document.createElement('strong'); title.textContent=(record.event&&record.event.task_id?'['+record.event.task_id+'] ':'')+(record.event&&record.event.kind || 'event'); const message=record.event&&(record.event.message||record.event.action); item.append(title,document.createTextNode(message?': '+message:'')); $('activity').append(item); }); if(!$('activity').children.length) { const empty=document.createElement('div'); empty.className='empty'; empty.textContent='Activity will appear when an assessment is running.'; $('activity').append(empty); } $('activity').scrollTop=$('activity').scrollHeight; };
+  const renderResults = (view) => { const box=$('results'); box.replaceChildren(); const results=view.results||[]; if(!results.length) { const empty=document.createElement('div'); empty.className='empty'; empty.textContent='No findings or worker results yet.'; box.append(empty); return; } results.forEach(result=>{ const item=document.createElement('div'); item.className='result-item'; const title=document.createElement('strong'); title.textContent=(result.task&&result.task.id?result.task.id:'Worker result')+' · '+(result.status||'reported'); const detail=document.createElement('span'); detail.textContent=result.summary||'No summary supplied.'; item.append(title,detail); box.append(item); }); };
+  const renderApprovals = (view) => { const section=$('approvalSection'); const box=$('approvalBox'); box.replaceChildren(); let count=0; (view.pending_approvals||[]).forEach(item=>{ count++; const card=document.createElement('div'); card.className='approval-item'; const title=document.createElement('div'); title.className='approval-title'; title.textContent='Approval · '+item.task_id; const code=document.createElement('code'); code.className='approval-command'; code.textContent=item.command+'\\n'+item.cwd; const actions=document.createElement('div'); actions.className='approval-actions'; [['approved_once','Approve once',''],['denied','Deny','deny']].forEach(([decision,label,kind])=>{const b=document.createElement('button');b.type='button';b.textContent=label;if(kind)b.className=kind;b.onclick=()=>api('/api/v1/assessments/'+assessmentId+'/approvals/'+encodeURIComponent(item.id),{method:'POST',body:JSON.stringify({decision})}).then(renderAssessment).catch(fail);actions.append(b);}); card.append(title,code,actions);box.append(card); }); (view.pending_questions||[]).forEach(item=>{ count++; const card=document.createElement('div'); card.className='approval-item'; const title=document.createElement('div'); title.className='approval-title'; title.textContent='Question · '+item.task_id; const prompt=document.createElement('div'); prompt.className='proposal-value'; prompt.textContent=item.text; const input=document.createElement('input'); input.className='question-input'; input.placeholder='Answer'; const b=document.createElement('button'); b.type='button'; b.className='primary-button'; b.textContent='Answer'; b.onclick=()=>api('/api/v1/assessments/'+assessmentId+'/questions/'+encodeURIComponent(item.id),{method:'POST',body:JSON.stringify({text:input.value})}).then(renderAssessment).catch(fail); card.append(title,prompt,input,b);box.append(card); }); section.classList.toggle('hidden',count===0); };
+  const renderIntake = (view) => { intakeId=view.id; assessmentId=null; customer=null; $('start').disabled=false; $('model').textContent=view.model_configured?view.model:'Model not configured'; $('sidebarModel').textContent=view.model_configured?view.model:'Model not configured'; $('sidebarConnection').textContent=view.model_configured?'Model connection ready':'Configure a model endpoint'; $('assessmentStatus').textContent=view.status; $('assessmentStatus').className=view.status==='ready'?'value-status':view.status==='thinking'?'value-waiting':''; $('assessmentCustomer').textContent='—'; $('assessmentCalls').textContent='0'; $('assessmentGoal').textContent='Describe what you want to understand. The coordinator will ask for the detail it needs.'; $('proposalReview').classList.toggle('hidden',!view.proposal); if(view.proposal){$('proposalGoal').textContent=view.proposal.goal;$('proposalScope').textContent=view.proposal.scope;} $('stop').classList.add('hidden'); $('report').classList.add('hidden'); $('approvalSection').classList.add('hidden'); $('customerReportWrap').classList.add('hidden'); renderEvents([]); renderResults({}); renderMessages(view.messages); setHeader('New assessment','Talk to the coordinator to shape an authorized security assessment.','No customer',view.status); updateComposer(); refreshSidebar(); };
+  const renderAssessment = (view) => { assessmentId=view.id; intakeId=null; customer=view.customer; $('model').textContent=view.model||$('sidebarModel').textContent; $('assessmentStatus').textContent=view.status; $('assessmentStatus').className=view.status==='completed'?'value-status':(view.status==='running'||view.status==='starting')?'value-waiting':(view.status==='aborted'||view.status==='incomplete')?'value-bad':''; $('assessmentCustomer').textContent=view.customer; $('assessmentCalls').textContent=(view.usage&&view.usage.calls)||0; $('assessmentGoal').textContent=view.goal; $('stop').classList.toggle('hidden',!['running','starting'].includes(view.status)); $('stop').disabled=!['running','starting'].includes(view.status); if(view.report_url){$('report').href=view.report_url;$('report').classList.remove('hidden');} else $('report').classList.add('hidden'); $('proposalReview').classList.add('hidden'); renderMessages(view.messages); renderEvents(view.events); renderApprovals(view); renderResults(view); setHeader(view.id,view.goal,view.customer,view.status); updateComposer(); api('/api/v1/customers/'+encodeURIComponent(customer)).then(renderCustomer).catch(()=>{}); refreshSidebar(); };
+  const renderCustomer = (view) => { if(!view||!view.id)return; $('customerReportWrap').classList.remove('hidden'); $('customerReport').href=view.report_url; if(view.findings&&view.findings.length && !assessmentId) { const box=$('results'); box.replaceChildren(); view.findings.forEach(item=>{const row=document.createElement('div');row.className='result-item';const title=document.createElement('strong');title.textContent=item.finding.title+' · '+item.finding.status;const detail=document.createElement('span');detail.textContent=item.finding.impact;row.append(title,detail);box.append(row);}); } };
+  const refreshSidebar = () => api('/api/v1/customers').then(data=>{ const root=$('sidebarSessions'); root.replaceChildren(); const groups=data.customers||[]; if(!groups.length){const empty=document.createElement('div');empty.className='sidebar-empty';empty.textContent='No assessment sessions yet. Start a conversation with the coordinator.';root.append(empty);return;} groups.forEach(group=>{const section=document.createElement('section');section.className='customer-group';const heading=document.createElement('button');heading.type='button';heading.className='customer-heading';const name=document.createElement('span');name.textContent=group.id;const count=document.createElement('span');count.className='customer-count';count.textContent=(group.sessions||[]).length+' session'+((group.sessions||[]).length===1?'':'s');heading.append(name,count);section.append(heading);(group.sessions||[]).forEach(session=>{const link=document.createElement('button');link.type='button';link.className='session-link'+(session.id===assessmentId?' active':'');const title=document.createElement('span');title.className='session-link-title';title.textContent=session.goal||session.id;const meta=document.createElement('span');meta.className='session-link-meta';const state=document.createElement('span');state.className=stateClass(session.status);state.textContent=session.status;const id=document.createElement('span');id.textContent=session.id.slice(-6);meta.append(state,id);link.append(title,meta);link.onclick=()=>selectAssessment(session.id);section.append(link);});root.append(section);}); }).catch(()=>{});
+  const selectAssessment = (id) => { assessmentId=null; intakeId=null; after=0; api('/api/v1/assessments/'+encodeURIComponent(id)).then(view=>{after=0;renderAssessment(view);}).catch(fail); };
+  const refresh = () => { if(!assessmentId)return; api('/api/v1/assessments/'+encodeURIComponent(assessmentId)+'?after='+after).then(renderAssessment).catch(()=>{}); };
+  const beginIntake = () => { assessmentId=null; intakeId=null; after=0; api('/api/v1/intake').then(renderIntake).catch(fail); };
+  $('composer').onsubmit=(event)=>{event.preventDefault();const text=$('chatInput').value.trim();if(!text||sending)return;sending=true;updateComposer();const url=assessmentId?'/api/v1/assessments/'+encodeURIComponent(assessmentId)+'/messages':'/api/v1/intake/'+encodeURIComponent(intakeId)+'/messages';api(url,{method:'POST',body:JSON.stringify({text})}).then(view=>{ $('chatInput').value=''; sending=false; if(assessmentId)renderAssessment(view); else renderIntake(view); }).catch(fail);};
+  $('start').onclick=()=>{const value=$('customer').value.trim();if(!value)return;$('start').disabled=true;api('/api/v1/intake/'+encodeURIComponent(intakeId)+'/start',{method:'POST',body:JSON.stringify({customer:value})}).then(view=>{customer=value;renderAssessment(view);}).catch(error=>{fail(error);$('start').disabled=false;});};
+  $('stop').onclick=()=>api('/api/v1/assessments/'+encodeURIComponent(assessmentId)+'/stop',{method:'POST'}).then(renderAssessment).catch(fail);
+  $('newAssessment').onclick=beginIntake;
+  refreshSidebar(); beginIntake(); setInterval(refresh,1000); setInterval(refreshSidebar,3000);
 })();
 </script>
 </body>
