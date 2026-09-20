@@ -46,8 +46,10 @@ run go vet ./...
 run go test ./...
 run go build -buildvcs=false -o /tmp/birdhackbot-ci ./cmd/birdhackbot
 run go build -buildvcs=false -o /tmp/birdhackbot-orchestrator-ci ./cmd/birdhackbot-orchestrator
+run go build -buildvcs=false -o /tmp/birdhackbot-web-ci ./cmd/birdhackbot-web
 
 run go build -buildvcs=false -o /tmp/birdhackbot-llm-bridge-ci ./cmd/birdhackbot-llm-bridge
 
 run python3 ./scripts/check_guided_app.py /tmp/birdhackbot-ci
+run python3 ./scripts/check_webapp.py /tmp/birdhackbot-web-ci
 run python3 -m unittest discover -s testdata/source-lab -p 'test_*.py'

@@ -19,6 +19,7 @@ Current active docs are intentionally minimal:
 - `docs/roe/public-test-targets.md`
 - `docs/runbooks/acceptance-gates.md`
 - `docs/runbooks/subscription-bridge.md`
+- `docs/runbooks/web-application.md`
 - `docs/architecture.md`
 
 `TASKS.md` owns status, `docs/architecture.md` owns contracts, and `ROADMAP.md` owns future direction. Update the relevant active docs with behavior changes; archive superseded designs instead of retaining conflicting instructions. Assessments are dated evidence, not implementation status.
@@ -41,6 +42,7 @@ The `legacy/` tree is also non-authoritative: it is preserved as historical refe
 
 - `go build -buildvcs=false ./cmd/birdhackbot`
 - `go build -buildvcs=false ./cmd/birdhackbot-orchestrator`
+- `go build -buildvcs=false ./cmd/birdhackbot-web`
 - `go build -buildvcs=false ./cmd/birdhackbot-llm-bridge`
 - The legacy snapshot remains buildable from `legacy/` if needed for reference.
 
@@ -48,6 +50,7 @@ The `legacy/` tree is also non-authoritative: it is preserved as historical refe
 
 - `./scripts/ci.sh` runs the deterministic local/GitHub CI checks.
 - CI includes `scripts/check_guided_app.py`: the built application runs in a real terminal against a deterministic local model fixture. Python 3 and a Unix PTY are required.
+- CI includes `scripts/check_webapp.py`: the built browser binary is started on loopback and exercised through HTTP against the same deterministic model fixture, including two sessions aggregated under one customer report.
 - Rebuild-root tests now exist for the implemented core packages.
 - Real LLM validation remains required for major behavior slices.
 - Repeated live validations can be run with `scripts/repeat_worker_run.sh`.

@@ -8,6 +8,8 @@ The active implementation uses one adaptive worker for standalone and delegated 
 
 A local authenticated REST bridge provides subscription-backed OpenAI inference. Launching without flags now opens an interactive guided assessment with a coordinator, up to two concurrent workers, serialized action approvals, saved evidence, resumable assessment state, and a draft report. Source-to-deployment correlation and independent finding verification remain planned. The runtime does not enforce target allowlists or provide its own network sandbox; execution relies on the isolated lab environment and the operating rules in [AGENTS.md](AGENTS.md).
 
+The initial browser surface is available through `birdhackbot-web`. It uses the same coordinator and worker runtime as the terminal UI, keeps scope and approvals explicit, and groups multiple assessment sessions under a customer workspace. The customer view aggregates session status, model-authored draft findings, and links to each session report plus a unified Markdown report. This preview is loopback-oriented and has no authentication yet.
+
 Current implementation order: **core cleanup → subscription API wrapper → orchestration → source-assisted assessment**. [TASKS.md](TASKS.md) records actual progress.
 
 Required product capabilities include Kali tooling, adaptable playbooks, reusable custom tools, discovery-driven vulnerability research, and fully air-gapped assessments. Local-model access works today; full offline operation and a competitive discovery advantage remain unvalidated. See the [architecture](docs/architecture.md) and [acceptance gates](docs/runbooks/acceptance-gates.md).
@@ -36,6 +38,15 @@ The standalone worker remains available for development:
 ```
 
 Use the exact model ID exposed by your local server. Execution requires per-action approval by default. The no-flag guided application owns the terminal UI; advanced flags remain the diagnosis and automation surface.
+
+To start the browser UI, configure an OpenAI-compatible local or bridge endpoint and open the printed URL:
+
+```sh
+go build -buildvcs=false -o birdhackbot-web ./cmd/birdhackbot-web
+./birdhackbot-web --llm-base-url http://127.0.0.1:1234/v1 --llm-model YOUR_LOCAL_MODEL_ID
+```
+
+The web server defaults to `127.0.0.1:8080`. Keep it on loopback until authentication, origin protection, and deployment controls are added. The browser is a presentation and lifecycle adapter; it never executes a tool or calls the model directly.
 
 For a bounded headless task:
 
@@ -77,6 +88,7 @@ Keep changes small and tied to demonstrated failures or agreed requirements. Def
 | [ROADMAP.md](ROADMAP.md) | Future product milestones |
 | [DISCOVERIES.md](DISCOVERIES.md) | Decisions, findings, and validation references |
 | [Subscription bridge](docs/runbooks/subscription-bridge.md) | Subscription setup, compatibility contract, and limits |
+| [Web application](docs/runbooks/web-application.md) | Local browser startup, customer/session workflow, and deterministic check |
 | [Acceptance gates](docs/runbooks/acceptance-gates.md) | What validation establishes |
 | [Baseline assessment](docs/code-assessment-2026-09-19.md) | Historical evidence behind the cleanup |
 | [Competitive assessment](docs/competitive-assessment-2026-09-19.md) | Current competitor research, evidence limits, and recommended priorities |

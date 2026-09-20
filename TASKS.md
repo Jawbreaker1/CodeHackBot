@@ -133,8 +133,9 @@ The CLI and browser are presentation layers over the same orchestrator and evide
 - [ ] Give finalized assessments with blocked exploratory workers a distinct runtime status so the terminal label and coordinator summary cannot disagree.
 - [ ] Extract the guided assessment lifecycle from `guided.App` into an application service with explicit commands, read models, approval requests, and progress events.
 - [ ] Keep Bubble Tea as the terminal adapter; test the CLI through the service boundary and evaluate the upstream v1-to-v2 migration separately.
-- [ ] Add an authenticated Go HTTP API with assessment create/read/start/stop, approval decisions, live events, and report/evidence access. Keep loopback binding as the default until remote deployment controls exist.
-- [ ] Build the first browser workflow against that API: scope review, provider/permission visibility, approval, progress, stop, and report review. Verify it with the same deterministic assessment fixture used by the CLI.
+- [x] Add the initial Go HTTP API with assessment create/read/start/stop, approval decisions, live events, and report access. Keep loopback binding as the default until authentication and remote deployment controls exist.
+- [x] Build the first browser workflow against that API: customer/session scope review, provider visibility, approval, progress, stop, and report review. Verify it with the same deterministic assessment fixture used by the CLI, including two sessions aggregated into one customer report.
+- [ ] Add authentication, origin/CSRF protection, durable session discovery/resume, and streaming events before remote web deployment.
 - [ ] Treat the local subscription bridge as an internal model-provider service, never as a browser-facing execution endpoint.
 
 Implement this alongside the first orchestrator flow. Keep advanced CLI access and reuse existing runtime contracts; do not build a second execution path.
