@@ -27,6 +27,15 @@ Usability is part of safe operation and a core acceptance requirement. The appli
 
 The first guided lab surface now starts with `birdhackbot` without flags and is shared by `birdhackbot-orchestrator`. It discovers local model choices, remembers provider preferences, manages the subscription bridge for an existing sign-in, reviews the goal/scope before starting, and serializes action approvals across workers. Flags still select the standalone development worker. First-time subscription sign-in, packaged operation outside the checkout, reopening assessments, and unfamiliar-operator acceptance remain gaps; the complete product requirement is not yet met. `docs/runbooks/acceptance-gates.md` defines the usability check.
 
+## User interface surfaces
+
+The product has two UI adapters over the same assessment runtime:
+
+- **Terminal client.** Keep the existing [Bubble Tea](https://github.com/charmbracelet/bubbletea) implementation for the interactive CLI, with its scripted/headless path for automation and air-gapped operation. Bubble Tea owns terminal input, rendering, and local interaction only; it must not own assessment state, worker execution, approvals, or evidence semantics. The current dependency is the v1 module and remains pinned until the UI boundary is stable. Upstream now documents a v2 module and an upgrade path, so migration is a separate compatibility task rather than an incidental dependency change.
+- **Web application.** Add a browser client over a versioned Go HTTP API. The server owns assessment lifecycle, persistence, approvals, event streaming, artifact/report access, and authentication. The browser must never call the LLM provider or execute tools directly. The first web slice should expose assessment creation, explicit scope review, start/stop, approval decisions, live progress, and report/evidence links.
+
+Both surfaces call one application service above `internal/assessment`; neither should call `internal/workerloop` directly. The local subscription bridge remains an inference-provider adapter and is not the user-facing assessment API. Bind the web server to loopback by default until authentication, authorization, CSRF/origin handling, and deployment policy are implemented. Do not add an embedded desktop wrapper until the browser product is useful; a Wails-style wrapper can be considered later if native packaging is required.
+
 ## Ownership
 
 | Component | Owns | Does not own |
@@ -36,7 +45,8 @@ The first guided lab surface now starts with `birdhackbot` without flags and is 
 | Executor | Explicit invocation, cwd, output capture, exit status, cancellation | Repairing commands or guessing shell syntax |
 | Approval surface | Operator decision on the prepared invocation and cwd | Rewriting the approved command |
 | Context | A reviewable view of current task and prior observations | Turning stale failures into current execution truth |
-| UI | Input and visible progress | Independent worker execution semantics |
+| UI adapters | Input and visible progress for terminal or browser users | Independent worker execution semantics |
+| Application service | Assessment commands, subscriptions, approvals, and read models shared by both UIs | Rendering or direct tool execution |
 | Assessment coordinator | Run goal, delegation, budgets, shared evidence, validation, final report | A duplicate worker reasoning engine |
 
 Keep each change tied to a demonstrated failure or explicit requirement. Prefer small runnable slices; stop once the stated validation passes. Do not build speculative abstraction layers or tool-specific policy machinery.

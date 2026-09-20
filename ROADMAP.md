@@ -24,6 +24,8 @@ Use Kali's actual installed capabilities, relevant playbooks, and existing local
 
 The [competitive assessment](docs/competitive-assessment-2026-09-19.md) recommends visible coverage gaps in that first result, followed by small increments for targeted retesting and authenticated multi-role application testing. Demonstrate these on controlled fixtures before expanding into broad enterprise integrations.
 
+The primary product will expose this workflow through both a terminal client and a browser application. The terminal remains valuable for Kali, SSH, automation, and air-gapped operation; the browser becomes the main guided surface for assessment setup, approvals, live coordination, and report review. Both must use the same application service and persisted assessment state.
+
 ## 4. Source-assisted assessment
 
 Identify deployed software, acquire attributable matching source, investigate bounded questions, and validate candidate weaknesses. Distinguish local reproduction from proof that the deployed target is affected. Handle unavailable or mismatched source honestly.
