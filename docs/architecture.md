@@ -89,7 +89,7 @@ A command exit status describes the process. It does not prove the user goal. Ev
 
 Current-result summaries describe the latest execution. Earlier results remain observations available to the model; they do not replace the current result because a severity ranking considers them stronger. A new task starts with fresh execution results. Conversation history can be retained as history.
 
-Output-derived assessments/signals remain labeled hints for model interpretation; they no longer select recovery actions or force task blockage. The regex target/prerequisite inference and synthetic authoritative-facts layer have been removed. Full evidence can be read from the recorded artifacts when previews are insufficient. A future findings pipeline must distinguish observations, hypotheses, local reproductions, and target-validated findings.
+Execution assessments/signals are limited to process facts: actual exit status, cancellation/timeout, and whether both output streams are empty. Raw stdout/stderr remain evidence for model interpretation and findings; the executor does not classify their wording with phrase or regex matching. The regex target/prerequisite inference and synthetic authoritative-facts layer have been removed. Full evidence can be read from the recorded artifacts when previews are insufficient. A future findings pipeline must distinguish observations, hypotheses, local reproductions, and target-validated findings.
 
 ## Context ownership and bounds
 

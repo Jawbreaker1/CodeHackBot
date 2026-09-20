@@ -218,7 +218,7 @@ func TestExecutorRunInterruptedClassification(t *testing.T) {
 	}
 }
 
-func TestExecutorRunSuspiciousZeroExit(t *testing.T) {
+func TestExecutorRunDoesNotInterpretSuccessfulOutput(t *testing.T) {
 	logDir := t.TempDir()
 	exec := Executor{LogDir: logDir}
 
@@ -229,11 +229,11 @@ func TestExecutorRunSuspiciousZeroExit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if result.Assessment != "suspicious" {
+	if result.Assessment != "success" {
 		t.Fatalf("Assessment = %q", result.Assessment)
 	}
-	if !strings.Contains(strings.Join(result.Signals, ","), "incorrect_password") {
-		t.Fatalf("Signals = %#v", result.Signals)
+	if len(result.Signals) != 0 {
+		t.Fatalf("Signals = %#v; output text must remain uninterpreted", result.Signals)
 	}
 }
 
@@ -256,7 +256,7 @@ func TestExecutorRunAmbiguousEmptyOutput(t *testing.T) {
 	}
 }
 
-func TestExecutorRunSuspiciousReportedNonzeroExit(t *testing.T) {
+func TestExecutorRunUsesActualExitStatus(t *testing.T) {
 	logDir := t.TempDir()
 	exec := Executor{LogDir: logDir}
 
@@ -267,15 +267,15 @@ func TestExecutorRunSuspiciousReportedNonzeroExit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if result.Assessment != "suspicious" {
+	if result.Assessment != "success" {
 		t.Fatalf("Assessment = %q", result.Assessment)
 	}
-	if !strings.Contains(strings.Join(result.Signals, ","), "reported_nonzero_exit") {
-		t.Fatalf("Signals = %#v", result.Signals)
+	if len(result.Signals) != 0 {
+		t.Fatalf("Signals = %#v; printed exit text must remain uninterpreted", result.Signals)
 	}
 }
 
-func TestExecutorRunAmbiguousNoEffect(t *testing.T) {
+func TestExecutorRunDoesNotInterpretNoEffectText(t *testing.T) {
 	logDir := t.TempDir()
 	exec := Executor{LogDir: logDir}
 
@@ -286,15 +286,15 @@ func TestExecutorRunAmbiguousNoEffect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if result.Assessment != "ambiguous" {
+	if result.Assessment != "success" {
 		t.Fatalf("Assessment = %q", result.Assessment)
 	}
-	if !strings.Contains(strings.Join(result.Signals, ","), "no_effect") {
-		t.Fatalf("Signals = %#v", result.Signals)
+	if len(result.Signals) != 0 {
+		t.Fatalf("Signals = %#v; output text must remain uninterpreted", result.Signals)
 	}
 }
 
-func TestExecutorRunAmbiguousWarningText(t *testing.T) {
+func TestExecutorRunDoesNotInterpretWarningText(t *testing.T) {
 	logDir := t.TempDir()
 	exec := Executor{LogDir: logDir}
 
@@ -305,15 +305,15 @@ func TestExecutorRunAmbiguousWarningText(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if result.Assessment != "ambiguous" {
+	if result.Assessment != "success" {
 		t.Fatalf("Assessment = %q", result.Assessment)
 	}
-	if !strings.Contains(strings.Join(result.Signals, ","), "warning_text") {
-		t.Fatalf("Signals = %#v", result.Signals)
+	if len(result.Signals) != 0 {
+		t.Fatalf("Signals = %#v; output text must remain uninterpreted", result.Signals)
 	}
 }
 
-func TestExecutorRunSuspiciousUnableToGetPassword(t *testing.T) {
+func TestExecutorRunDoesNotInterpretPasswordText(t *testing.T) {
 	logDir := t.TempDir()
 	exec := Executor{LogDir: logDir}
 
@@ -324,10 +324,10 @@ func TestExecutorRunSuspiciousUnableToGetPassword(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if result.Assessment != "suspicious" {
+	if result.Assessment != "success" {
 		t.Fatalf("Assessment = %q", result.Assessment)
 	}
-	if !strings.Contains(strings.Join(result.Signals, ","), "incorrect_password") {
-		t.Fatalf("Signals = %#v", result.Signals)
+	if len(result.Signals) != 0 {
+		t.Fatalf("Signals = %#v; output text must remain uninterpreted", result.Signals)
 	}
 }

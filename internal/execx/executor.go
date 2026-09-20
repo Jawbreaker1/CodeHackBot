@@ -8,8 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -254,75 +252,32 @@ func cloneEnv(env map[string]string) map[string]string {
 	return out
 }
 
-var (
-	reportedExitPattern = regexp.MustCompile(`(?i)\bexit(?:[_ -]?code)?\s*[:=]\s*([0-9]+)\b`)
-	noLoadedPattern     = regexp.MustCompile(`(?i)\bno [a-z0-9 _-]{1,40} loaded\b`)
-)
-
+// assessResult records process facts only. Command output is evidence for the
+// model and findings pipeline; it is deliberately not interpreted here with
+// phrase or pattern matching.
 func assessResult(exitStatus int, stdoutSummary, stderrSummary string) (string, []string) {
-	signals := make([]string, 0, 5)
-	combined := strings.ToLower(strings.TrimSpace(strings.Join([]string{stdoutSummary, stderrSummary}, "\n")))
+	signals := make([]string, 0, 2)
 
 	if exitStatus != 0 {
 		signals = append(signals, "nonzero_exit")
 	}
-	if reportedNonzeroExit(combined) {
-		signals = appendSignal(signals, "reported_nonzero_exit")
-	}
-	if strings.TrimSpace(stdoutSummary) == "" || strings.TrimSpace(stdoutSummary) == "(none)" {
-		if strings.TrimSpace(stderrSummary) == "" || strings.TrimSpace(stderrSummary) == "(none)" {
-			signals = append(signals, "empty_output")
-		}
-	}
-	for _, marker := range []struct {
-		phrase string
-		signal string
-	}{
-		{"permission denied", "permission_denied"},
-		{"no such file or directory", "missing_path"},
-		{"cannot find", "missing_path"},
-		{"not found", "not_found_text"},
-		{"incorrect password", "incorrect_password"},
-		{"unable to get password", "incorrect_password"},
-		{"syntax error", "syntax_error"},
-		{"usage:", "usage_text"},
-		{"caution:", "warning_text"},
-		{"not overwritten", "no_effect"},
-		{"failed", "failure_text"},
-		{"error", "error_text"},
-	} {
-		if strings.Contains(combined, marker.phrase) {
-			signals = appendSignal(signals, marker.signal)
-		}
-	}
-	if noLoadedPattern.MatchString(combined) {
-		signals = appendSignal(signals, "no_effect")
+	if outputIsEmpty(stdoutSummary) && outputIsEmpty(stderrSummary) {
+		signals = append(signals, "empty_output")
 	}
 
 	switch {
 	case exitStatus != 0:
 		return "failed", signals
-	case hasSignal(signals, "reported_nonzero_exit"):
-		return "suspicious", signals
-	case hasSignal(signals, "permission_denied") || hasSignal(signals, "missing_path") || hasSignal(signals, "incorrect_password") || hasSignal(signals, "syntax_error") || hasSignal(signals, "failure_text") || hasSignal(signals, "error_text"):
-		return "suspicious", signals
-	case hasSignal(signals, "empty_output") || hasSignal(signals, "usage_text") || hasSignal(signals, "warning_text") || hasSignal(signals, "no_effect"):
+	case outputIsEmpty(stdoutSummary) && outputIsEmpty(stderrSummary):
 		return "ambiguous", signals
 	default:
 		return "success", signals
 	}
 }
 
-func reportedNonzeroExit(text string) bool {
-	matches := reportedExitPattern.FindStringSubmatch(text)
-	if len(matches) != 2 {
-		return false
-	}
-	code, err := strconv.Atoi(matches[1])
-	if err != nil {
-		return false
-	}
-	return code != 0
+func outputIsEmpty(v string) bool {
+	v = strings.TrimSpace(v)
+	return v == "" || v == "(none)"
 }
 
 func appendSignal(signals []string, signal string) []string {
