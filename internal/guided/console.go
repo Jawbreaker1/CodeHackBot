@@ -21,9 +21,10 @@ type line struct {
 // One reader owns stdin for the application lifetime. The mutex serializes
 // prompts and progress from concurrent workers without losing buffered input.
 type Console struct {
-	mu     sync.Mutex
-	writer io.Writer
-	lines  <-chan line
+	mu        sync.Mutex
+	writer    io.Writer
+	lines     <-chan line
+	dashboard assessmentDashboard
 }
 
 func NewConsole(ctx context.Context, reader io.Reader, writer io.Writer) *Console {
@@ -46,7 +47,7 @@ func NewConsole(ctx context.Context, reader io.Reader, writer io.Writer) *Consol
 			}
 		}
 	}()
-	return &Console{writer: writer, lines: lines}
+	return &Console{writer: writer, lines: lines, dashboard: newAssessmentDashboard()}
 }
 
 func (c *Console) Ask(ctx context.Context, prompt string) (string, error) {
@@ -74,21 +75,18 @@ func (c *Console) Print(format string, args ...any) {
 }
 
 func (c *Console) Progress(e assessment.Event) {
-	if e.Kind == "decision_started" {
-		c.Print("\n[%s] Choosing the next step.\n", e.TaskID)
-		return
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, line := range c.dashboard.apply(e) {
+		fmt.Fprintln(c.writer, line)
 	}
-	if e.Kind == "post_exec_eval_started" {
-		c.Print("\n[%s] Checking whether the evidence answers the task.\n", e.TaskID)
-		return
-	}
-	switch e.Kind {
-	case "planning", "plan", "plan_finished", "task_started", "execution_started", "execution_finished", "done", "failed", "blocked", "waiting_user", "aborted":
-		label := e.Kind
-		if e.TaskID != "" {
-			label = e.TaskID + " / " + e.Kind
-		}
-		c.Print("\n[%s] %s\n", label, e.Message)
+}
+
+func (c *Console) approvalRequested(taskID, command string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, line := range c.dashboard.apply(assessment.Event{TaskID: taskID, Kind: "approval_required", Message: command, Action: command}) {
+		fmt.Fprintln(c.writer, line)
 	}
 }
 
@@ -99,6 +97,7 @@ type taskApprover struct {
 }
 
 func (a taskApprover) Approve(ctx context.Context, r approval.Request) (approval.Decision, error) {
+	a.console.approvalRequested(a.task.ID, r.Command)
 	prompt := fmt.Sprintf("\nAction approval — %s\nPurpose: %s\nDeclared scope: %s\nWorking directory: %s\nExact invocation: %s\nAllow this action? [y/N] (Ctrl-C stops the entire assessment)", a.task.ID, a.task.Goal, a.scope, r.Cwd, r.Command)
 	for {
 		answer, err := a.console.Ask(ctx, prompt)

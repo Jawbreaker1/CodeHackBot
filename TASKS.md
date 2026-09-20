@@ -125,6 +125,7 @@ User requirement, 2026-09-19: usability and application assistance must reduce s
 
 The CLI and browser are presentation layers over the same orchestrator and evidence contracts. Do not create a second worker or assessment implementation for the web path.
 
+- [x] Show coordinator planning, queued workers, dependencies, phases, budgets, evidence counts, approval waits, and terminal worker status in the guided terminal output.
 - [ ] Extract the guided assessment lifecycle from `guided.App` into an application service with explicit commands, read models, approval requests, and progress events.
 - [ ] Keep Bubble Tea as the terminal adapter; test the CLI through the service boundary and evaluate the upstream v1-to-v2 migration separately.
 - [ ] Add an authenticated Go HTTP API with assessment create/read/start/stop, approval decisions, live events, and report/evidence access. Keep loopback binding as the default until remote deployment controls exist.

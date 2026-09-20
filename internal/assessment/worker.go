@@ -72,7 +72,15 @@ func (c Coordinator) runWorker(ctx context.Context, root string, state State, ta
 	if r.Error != "" {
 		message += "\n" + r.Error
 	}
-	c.emit(Event{TaskID: task.ID, Kind: r.Status, Message: message})
+	c.emit(Event{
+		TaskID:        task.ID,
+		Kind:          r.Status,
+		Message:       message,
+		Goal:          task.Goal,
+		DoneWhen:      task.DoneWhen,
+		DependsOn:     append([]string(nil), task.DependsOn...),
+		EvidenceCount: len(r.Evidence),
+	})
 	return r, nil
 }
 
@@ -100,6 +108,20 @@ func (p *workerProgress) EmitProgress(event workerloop.ProgressEvent, packet ctx
 		p.persistErr = fmt.Errorf("persist worker %s: %w", p.task.ID, err)
 		return p.persistErr
 	}
-	p.coordinator.emit(Event{TaskID: p.task.ID, Kind: string(event.Kind), Message: event.Message})
+	p.coordinator.emit(Event{
+		TaskID:          p.task.ID,
+		Kind:            string(event.Kind),
+		Message:         event.Message,
+		Goal:            p.task.Goal,
+		DoneWhen:        p.task.DoneWhen,
+		DependsOn:       append([]string(nil), p.task.DependsOn...),
+		Step:            event.StepIndex,
+		ActiveStep:      event.ActiveStep,
+		Action:          event.Action,
+		ExitStatus:      event.ExitStatus,
+		EvidenceCount:   len(p.evidence),
+		RemainingBudget: packet.CurrentStep.RemainingBudget,
+		ContextUsage:    packet.OperatorState.ContextUsage,
+	})
 	return nil
 }

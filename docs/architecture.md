@@ -99,6 +99,14 @@ The default client input ceiling is 48 KiB of combined message text. Worker view
 
 Recent operator messages preserve line breaks and indentation. Older conversation notes are bounded excerpts, not authoritative semantic memory. Deep copies isolate UI snapshots and compact model views from mutable execution state. Long investigations still require evaluation of retrieval quality and model-specific context sizing.
 
+### Active-context strategy
+
+The runtime separates local application context from the model-visible context. Local state owns authorization, scope, approvals, budgets, execution records, and durable evidence; the model receives a bounded projection of that state for its next decision. This follows the same separation described in the [OpenAI Agents context guidance](https://openai.github.io/openai-agents-python/context/): application state is not implicitly conversation history, and history management must be explicit.
+
+The projection keeps the original goal and completion condition, policy and scope, current evaluator feedback, plan history, newest operator input, and references to recorded evidence. It compacts older output before older conversation and retrieval excerpts, marks omitted material, and fails visibly if protected instructions alone exceed the configured ceiling. Retrieved material and model-authored summaries remain untrusted inputs; they can inform a decision but cannot replace runtime facts or broaden scope. Conversation rollover is bounded and persisted, while execution records remain lossless locally.
+
+The current implementation covers bounded projections, protected anchors, conversation rollover, plan history, and visible truncation. The next context increments are relevance-ranked retrieval across a run, a durable multi-worker event history, and independently verified run summaries. Each should be added only with a fixture that demonstrates the information loss it prevents; context size alone is not a reason to add another compaction layer.
+
 ## Persistence and stopping
 
 Session state is one local JSON snapshot per worker session, written through a temporary file and atomic replacement. Version 2 persists the original turn limit and consumed turns. Resume never replenishes that budget. Version 1 snapshots remain inspectable JSON but cannot be resumed because they lack reliable budget accounting. A pending invocation with an unknown outcome is never replayed automatically; inspect its evidence before starting a new task. This is not a multi-worker event store and does not provide exactly-once recovery of external tool effects.

@@ -13,8 +13,6 @@ import (
 	"github.com/Jawbreaker1/CodeHackBot/internal/llmclient"
 )
 
-type Event struct{ TaskID, Kind, Message string }
-
 type Coordinator struct {
 	LLM      llmclient.Client
 	Frame    behavior.Frame
@@ -82,6 +80,16 @@ func (c Coordinator) Run(ctx context.Context, root, goal, scope string) (state S
 			return state, err
 		}
 		c.emit(Event{Kind: "plan", Message: d.Summary})
+		for _, task := range d.Tasks {
+			c.emit(Event{
+				TaskID:    task.ID,
+				Kind:      "task_queued",
+				Message:   task.Goal,
+				Goal:      task.Goal,
+				DoneWhen:  task.DoneWhen,
+				DependsOn: append([]string(nil), task.DependsOn...),
+			})
+		}
 		if d.Complete {
 			state.Status = "completed"
 			for _, r := range state.Results {

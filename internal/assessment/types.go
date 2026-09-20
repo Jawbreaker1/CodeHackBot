@@ -31,6 +31,25 @@ type Task struct {
 	DependsOn []string `json:"depends_on"`
 }
 
+// Event is an observational transition for UI adapters. It carries enough
+// task metadata for a client to render a useful run view without reading
+// worker internals or guessing from prose.
+type Event struct {
+	TaskID          string   `json:"task_id,omitempty"`
+	Kind            string   `json:"kind"`
+	Message         string   `json:"message,omitempty"`
+	Goal            string   `json:"goal,omitempty"`
+	DoneWhen        string   `json:"done_when,omitempty"`
+	DependsOn       []string `json:"depends_on,omitempty"`
+	Step            int      `json:"step,omitempty"`
+	ActiveStep      string   `json:"active_step,omitempty"`
+	Action          string   `json:"action,omitempty"`
+	ExitStatus      string   `json:"exit_status,omitempty"`
+	EvidenceCount   int      `json:"evidence_count,omitempty"`
+	RemainingBudget string   `json:"remaining_budget,omitempty"`
+	ContextUsage    string   `json:"context_usage,omitempty"`
+}
+
 type Result struct {
 	Task     Task                        `json:"task"`
 	Status   string                      `json:"status"`
