@@ -6,6 +6,7 @@ let pendingMessage = null;
 let starting = false;
 let eventRecords = new Map();
 let signatures = {};
+let modelCatalog = [];
 const narrow = matchMedia('(max-width: 1150px)');
 const mobile = matchMedia('(max-width: 680px)');
 const activeStatuses = ['running', 'starting'];
@@ -15,6 +16,44 @@ async function api(path, options = {}) {
   const body = await response.json();
   if (!response.ok) throw new Error(body.error || response.statusText);
   return body;
+}
+function sessionModelPath() {
+  return current?.customer ? '/api/v1/assessments/' + encodeURIComponent(current.id) + '/model' : '/api/v1/intake/' + encodeURIComponent(current?.id || '') + '/model';
+}
+function sessionPath(view) {
+  return view?.customer ? '/api/v1/assessments/' + encodeURIComponent(view.id) : '/api/v1/intake/' + encodeURIComponent(view?.id || '');
+}
+function renderModelOptions(models, selected) {
+  const target = $('modelOptions');
+  if (!models.length) {
+    target.replaceChildren(node('p', 'empty', 'The provider did not publish a model catalog. Enter an exact model ID below.'));
+    return;
+  }
+  target.replaceChildren(...models.map(item => {
+    const label = node('label', 'model-option' + (item.id === selected ? ' active' : ''));
+    const radio = document.createElement('input');
+    radio.type = 'radio'; radio.name = 'model-choice'; radio.value = item.id; radio.checked = item.id === selected;
+    const copy = node('span', '', item.id);
+    if (item.current) copy.append(node('small', '', 'Configured provider model'));
+    label.append(radio, copy);
+    return label;
+  }));
+}
+async function openModelPicker() {
+  const dialog = $('modelDialog');
+  $('modelDialogHint').textContent = current?.can_change_model === false ? 'This session is busy. The model is frozen until the current turn or assessment finishes.' : 'Choose a model for this session. The selection is saved with the session and applies to its next turn.';
+  $('modelCustom').value = '';
+  $('modelOptions').replaceChildren(node('p', 'empty', 'Loading available models…'));
+  dialog.showModal();
+  try {
+    const data = await api('/api/v1/models');
+    modelCatalog = data.models || [];
+    renderModelOptions(modelCatalog, current?.model || data.current || '');
+    if (data.catalog_error) $('modelDialogHint').textContent += ' ' + data.catalog_error;
+  } catch (error) {
+    renderModelOptions([], current?.model || '');
+    $('modelDialogHint').textContent = error.message;
+  }
 }
 function showError(error) {
   $('errorBanner').textContent = error.message;
@@ -114,7 +153,9 @@ function renderTranscript() {
   }
   if (!items.length) {
     const welcome = node('div', 'welcome');
-    welcome.append(node('h2', '', 'What are we investigating?'), node('p', '', 'Explore a question. Follow the evidence.\nWork with your coordinator.'));
+    const mark = document.createElement('img');
+    mark.src = '/logo.svg'; mark.alt = ''; mark.className = 'welcome-icon brand-mark';
+    welcome.append(mark, node('h2', '', 'What are we investigating?'), node('p', '', 'Explore a question. Follow the evidence.\nWork with your coordinator.'));
     items.push(welcome);
   }
   replacePreservingDetails(pane, items);
@@ -125,8 +166,8 @@ function updateComposer() {
   $('chatInput').disabled = !current || !!finalized;
   $('send').disabled = !current || !!finalized || !!pendingMessage || !$('chatInput').value.trim();
   $('newAssessment').disabled = starting;
-  $('conversationState').textContent = current?.pending_tool ? 'Waiting for your approval · No tool is running' : pendingMessage ? 'Coordinator is responding…' : finalized ? 'Session ended · Start a new session to continue' : current?.customer ? 'Workers can run while you discuss the assessment' : 'Ready when you are';
-  $('chatInput').placeholder = finalized ? 'This session has ended' : 'Ask, investigate, or plan an assessment…';
+  $('conversationState').textContent = current?.pending_tool ? 'Waiting for your approval · No tool is running' : pendingMessage ? 'Coordinator is responding…' : current?.resumable ? 'Session paused · Open Workers to review and resume' : finalized ? 'Session ended · Start a new session to continue' : current?.customer ? 'Workers can run while you discuss the assessment' : 'Ready when you are';
+  $('chatInput').placeholder = current?.resumable ? 'Resume this session to continue' : finalized ? 'This session has ended' : 'Ask, investigate, or plan an assessment…';
 }
 function formatBytes(value) {
   const bytes = Number(value) || 0;
@@ -182,6 +223,7 @@ function renderOverview(view) {
   $('assessmentScope').textContent = view.scope || '';
   $('assessmentLimits').textContent = view.limits?.workers ? 'Up to ' + view.limits.workers + ' workers · ' + view.limits.tasks + ' tasks · ' + view.limits.model_calls + ' model calls' : '';
   $('stop').classList.toggle('hidden', !view.customer || !running);
+  $('resume').classList.toggle('hidden', !view.resumable);
   $('report').classList.toggle('hidden', !view.customer || running || view.status === 'draft');
   if (view.report_url) $('report').href = view.report_url;
   $('proposalReview').classList.toggle('hidden', !view.proposal);
@@ -197,10 +239,11 @@ function renderOverview(view) {
 function renderView(view) {
   current = view;
   for (const record of view.events || []) eventRecords.set(record.sequence, record);
-  $('sessionTitle').textContent = view.goal || 'New session';
-  $('sessionTitle').title = view.goal || 'New session';
+  $('sessionTitle').textContent = view.title || view.goal || 'New session';
+  $('sessionTitle').title = view.title || view.goal || 'New session';
   $('headerCustomer').textContent = view.customer || 'Workspace';
   $('model').textContent = view.model || 'Model not configured';
+  $('model').title = view.model ? 'Change model · ' + view.model : 'Choose a model';
   renderTranscript();
   renderOverview(view);
   if (changed('workers', [view.workers, view.context_window, view.pending_approvals, view.pending_questions, view.pending_tool, view.model])) {
@@ -229,10 +272,25 @@ function markSelection() {
 async function refreshSidebar() {
   try {
     const data = await api('/api/v1/customers');
-    const groups = (data.customers || []).map(g => ({id:g.id, sessions:g.sessions.map(s => ({id:s.id, goal:s.goal, status:s.status}))}));
-    if (!changed('sidebar', groups)) { markSelection(); return; }
+    const groups = (data.customers || []).map(g => ({id:g.id, sessions:g.sessions.map(s => ({id:s.id, goal:s.goal, title:s.goal, status:s.status}))}));
+    const intakes = (data.intakes || []).map(s => ({id:s.id, goal:s.title || 'New session', title:s.title || 'New session', status:s.status}));
+    if (!changed('sidebar', [groups, intakes])) { markSelection(); return; }
     const collapsed = new Set([...$('sidebarSessions').querySelectorAll('[data-customer][aria-expanded="false"]')].map(e => e.dataset.customer));
     const sections = [];
+    if (intakes.length) {
+      const section = node('section', 'customer-group');
+      const heading = node('button', 'customer-heading');
+      heading.append(node('span', '', 'Draft conversations'), node('span', 'customer-count', intakes.length));
+      const list = node('div', '');
+      for (const session of [...intakes].reverse()) {
+        const button = node('button', 'session-link');
+        button.dataset.session = session.id; button.title = session.title;
+        button.append(node('span', 'session-dot ' + session.status), node('span', 'session-link-title', session.title));
+        button.onclick = () => selectIntake(session.id);
+        list.append(button);
+      }
+      section.append(heading, list); sections.push(section);
+    }
     for (const group of groups) {
       const section = node('section', 'customer-group');
       const heading = node('button', 'customer-heading');
@@ -272,6 +330,7 @@ async function navigate(path) {
     const view = await api(path);
     if (token !== selection) return;
     renderView(view);
+    localStorage.setItem('birdhackbot.selectedSession', sessionPath(view));
     $('chat').scrollTop = $('chat').scrollHeight;
     if (!view.customer) $('chatInput').focus();
     $('shell').classList.remove('sidebar-open');
@@ -280,6 +339,7 @@ async function navigate(path) {
   } catch (error) { if (token === selection) showError(error); }
 }
 function selectSession(id) { return navigate('/api/v1/assessments/' + encodeURIComponent(id)); }
+function selectIntake(id) { return navigate('/api/v1/intake/' + encodeURIComponent(id)); }
 async function act(path, body, container) {
   const id = current.id;
   const token = selection;
@@ -311,6 +371,7 @@ $('composer').onsubmit = async event => {
     if (token !== selection) return;
     pendingMessage = null;
     renderView(view);
+    localStorage.setItem('birdhackbot.selectedSession', sessionPath(view));
     $('chatInput').focus();
   } catch (error) {
     if (token !== selection) return;
@@ -337,12 +398,28 @@ $('startForm').onsubmit = async event => {
     const view = await api('/api/v1/intake/' + encodeURIComponent(current.id) + '/start', {method:'POST', body:JSON.stringify({customer:$('customer').value.trim()})});
     if (token !== selection) return;
     eventRecords = new Map();
-    renderView(view); refreshSidebar(); setInspector(true);
+    renderView(view); localStorage.setItem('birdhackbot.selectedSession', sessionPath(view)); refreshSidebar(); setInspector(true);
   } catch (error) { if (token === selection) showError(error); }
   finally { starting = false; $('start').disabled = false; updateComposer(); }
 };
 $('stop').onclick = () => act('stop', {}, $('assessmentStatus').parentElement);
+$('resume').onclick = () => act('start', {}, $('assessmentStatus').parentElement);
 $('newAssessment').onclick = () => navigate('/api/v1/intake');
+$('model').onclick = openModelPicker;
+$('modelForm').onsubmit = async event => {
+  event.preventDefault();
+  if (event.submitter?.value === 'cancel') { $('modelDialog').close(); return; }
+  if (!current) return;
+  const custom = $('modelCustom').value.trim();
+  const selected = custom || $('modelOptions input[name="model-choice"]:checked')?.value || current.model;
+  if (!selected) { $('modelDialogHint').textContent = 'Choose or enter a model ID.'; return; }
+  $('modelApply').disabled = true;
+  try {
+    const view = await api(sessionModelPath(), {method:'POST', body: JSON.stringify({model:selected})});
+    renderView(view); $('modelDialog').close(); clearError();
+  } catch (error) { $('modelDialogHint').textContent = error.message; showError(error); }
+  finally { $('modelApply').disabled = false; }
+};
 $('toggleInspector').onclick = () => setInspector($('toggleInspector').getAttribute('aria-expanded') !== 'true');
 $('closeInspector').onclick = closePanels;
 $('collapseWorkers').onclick = () => {
@@ -371,7 +448,8 @@ narrow.addEventListener('change', () => { closePanels(); setInspector(!narrow.ma
 setInspector(!narrow.matches);
 selectTab($('workersTab'));
 $('toggleSidebar').setAttribute('aria-expanded', String(!mobile.matches));
-await navigate('/api/v1/intake');
+const savedSession = localStorage.getItem('birdhackbot.selectedSession');
+await navigate(savedSession && /^\/api\/v1\/(intake|assessments)\//.test(savedSession) ? savedSession : '/api/v1/intake');
 
 async function poll() {
   const token = selection;
@@ -379,12 +457,12 @@ async function poll() {
     try {
       const after = Math.max(0, ...eventRecords.keys());
       const view = await api('/api/v1/assessments/' + encodeURIComponent(current.id) + '?after=' + after);
-      if (token === selection) renderView(view);
+      if (token === selection) { clearError(); renderView(view); }
     } catch (error) { if (token === selection) showError(error); }
   } else if (current) {
     try {
       const view = await api('/api/v1/intake/' + encodeURIComponent(current.id));
-      if (token === selection) renderView(view);
+      if (token === selection) { clearError(); renderView(view); }
     } catch (error) { if (token === selection) showError(error); }
   }
   await refreshSidebar();

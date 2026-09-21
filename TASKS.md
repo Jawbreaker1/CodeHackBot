@@ -1,6 +1,6 @@
 # Tasks
 
-Updated 2026-09-20. This file owns immediate implementation order and status.
+Updated 2026-09-21. This file owns immediate implementation order and status.
 
 ## Agreed sequence
 
@@ -25,7 +25,7 @@ Objective: prove one shared worker can carry a bounded multi-step task from goal
 - [x] Implement the orchestrator contract around that same engine: bounded assignments, dependencies, result handoff, adaptation to failed/blocked work, shared budgets, cancellation, and evidence-backed synthesis. The guided application now exercises two independent tasks followed by dependent validation with separate workspaces and a shared model-call budget.
 - [ ] Validate the orchestrator with repeated real-model, generic multi-capability assessments and independently reviewed findings. Keep scope isolation, whole-assessment resume, and report verification as explicit product gates.
 
-Done means the worker and then the coordinator pass their explicit foundation gates in `docs/runbooks/acceptance-gates.md`. Preserve the useful existing coordinator; further knowledge, playbook, and source integration waits for these gates. Customer scope isolation, full assessment resume, and wider product acceptance remain separate explicit requirements.
+Done means the worker and then the coordinator pass their explicit foundation gates in `docs/runbooks/acceptance-gates.md`. Preserve the useful existing coordinator; further knowledge, playbook, and source integration waits for these gates. Customer scope isolation and wider product acceptance remain separate explicit requirements; the web session layer now provides explicit persisted discovery and resume, while exact-once external-effect recovery remains deferred.
 
 The dated [worker audit](docs/worker-foundation-audit-2026-09-20.md) records removed logic, replacement contracts and live-validation limits. The Qwen guided diagnostic split a requested single-worker task and omitted a line from its final content summary; it does not pass worker acceptance despite completing its assignments.
 
@@ -135,7 +135,8 @@ The CLI and browser are presentation layers over the same orchestrator and evide
 - [ ] Keep Bubble Tea as the terminal adapter; test the CLI through the service boundary and evaluate the upstream v1-to-v2 migration separately.
 - [x] Add the initial Go HTTP API with assessment create/read/start/stop, approval decisions, live events, and report access. Keep loopback binding as the default until authentication and remote deployment controls exist.
 - [x] Build the first browser workflow against that API: customer/session scope review, provider visibility, approval, progress, stop, and report review. Verify it with the same deterministic assessment fixture used by the CLI, including two sessions aggregated into one customer report.
-- [ ] Add authentication, origin/CSRF protection, durable session discovery/resume, and streaming events before remote web deployment.
+- [x] Add durable web session discovery/resume with per-session transcript/model metadata and an explicit interrupted-run resume action.
+- [ ] Add authentication, origin/CSRF protection, and streaming events before remote web deployment.
 - [ ] Treat the local subscription bridge as an internal model-provider service, never as a browser-facing execution endpoint.
 
 Implement this alongside the first orchestrator flow. Keep advanced CLI access and reuse existing runtime contracts; do not build a second execution path.

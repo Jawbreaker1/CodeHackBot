@@ -39,18 +39,24 @@ type Server struct {
 	runs    map[string]*run
 	intakes map[string]*intakeRun
 	seq     atomic.Uint64
+	loadErr error
 }
 
 type intakeRun struct {
-	mu           sync.RWMutex
-	id           string
-	conversation intake.Conversation
-	messages     []intakeMessage
-	proposal     *intake.Draft
-	assessmentID string
-	busy         bool
-	pendingTool  *intakeApproval
-	events       []eventRecord
+	mu             sync.RWMutex
+	id             string
+	root           string
+	client         llmclient.Client
+	conversation   intake.Conversation
+	conversationMu sync.RWMutex
+	messages       []intakeMessage
+	proposal       *intake.Draft
+	assessmentID   string
+	busy           bool
+	pendingTool    *intakeApproval
+	events         []eventRecord
+	updatedAt      time.Time
+	persistMu      sync.Mutex
 }
 
 type intakeMessage struct {
@@ -61,8 +67,11 @@ type intakeMessage struct {
 
 type intakeView struct {
 	ID              string              `json:"id"`
+	Title           string              `json:"title"`
 	Model           string              `json:"model"`
 	ModelConfigured bool                `json:"model_configured"`
+	ModelBusy       bool                `json:"model_busy"`
+	CanChangeModel  bool                `json:"can_change_model"`
 	Status          string              `json:"status"`
 	Messages        []intakeMessage     `json:"messages"`
 	Proposal        *intake.Draft       `json:"proposal,omitempty"`
@@ -86,23 +95,32 @@ type intakeMessageRequest struct {
 	Text string `json:"text"`
 }
 
+type modelRequest struct {
+	Model string `json:"model"`
+}
+
 type intakeStartRequest struct {
 	Customer string `json:"customer"`
 }
 
 type run struct {
-	mu       sync.RWMutex
-	id       string
-	customer string
-	root     string
-	goal     string
-	scope    string
-	status   string
-	state    assessment.State
-	started  bool
-	cancel   context.CancelFunc
-	done     chan struct{}
-	chatBusy bool
+	mu         sync.RWMutex
+	id         string
+	customer   string
+	root       string
+	client     llmclient.Client
+	goal       string
+	scope      string
+	status     string
+	state      assessment.State
+	started    bool
+	cancel     context.CancelFunc
+	done       chan struct{}
+	chatBusy   bool
+	resume     bool
+	updatedAt  time.Time
+	persistMu  sync.Mutex
+	persistErr error
 
 	sequence  uint64
 	events    []eventRecord
@@ -153,6 +171,10 @@ type assessmentView struct {
 	Scope            string               `json:"scope"`
 	Status           string               `json:"status"`
 	Model            string               `json:"model"`
+	ModelBusy        bool                 `json:"model_busy"`
+	CanChangeModel   bool                 `json:"can_change_model"`
+	Resumable        bool                 `json:"resumable"`
+	UpdatedAt        time.Time            `json:"updated_at,omitempty"`
 	Error            string               `json:"error,omitempty"`
 	StartedAt        time.Time            `json:"started_at,omitempty"`
 	FinishedAt       time.Time            `json:"finished_at,omitempty"`
@@ -215,7 +237,9 @@ func NewServer(config Config) *Server {
 	if config.Limits == (assessment.Limits{}) {
 		config.Limits = assessment.DefaultLimits()
 	}
-	return &Server{config: config, runs: make(map[string]*run), intakes: make(map[string]*intakeRun)}
+	server := &Server{config: config, runs: make(map[string]*run), intakes: make(map[string]*intakeRun)}
+	server.loadErr = server.restoreSessions()
+	return server
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -233,6 +257,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/api/v1/healthz" {
 		s.health(w, r)
+		return
+	}
+	if r.URL.Path == "/api/v1/models" {
+		s.models(w, r)
 		return
 	}
 	if r.URL.Path == "/api/v1/intake" || strings.HasPrefix(r.URL.Path, "/api/v1/intake/") {
@@ -264,9 +292,10 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":           "ok",
-		"model_configured": strings.TrimSpace(s.config.LLM.BaseURL) != "" && strings.TrimSpace(s.config.LLM.Model) != "",
-		"loopback_warning": "This preview has no authentication; bind it to loopback and use only an authorized lab.",
+		"status":             "ok",
+		"model_configured":   strings.TrimSpace(s.config.LLM.BaseURL) != "" && strings.TrimSpace(s.config.LLM.Model) != "",
+		"session_load_error": errorText(s.loadErr),
+		"loopback_warning":   "This preview has no authentication; bind it to loopback and use only an authorized lab.",
 	})
 }
 
@@ -276,8 +305,12 @@ func (s *Server) intakeRoute(w http.ResponseWriter, r *http.Request) {
 			methodNotAllowed(w, http.MethodGet)
 			return
 		}
-		current := s.newIntake()
-		writeJSON(w, http.StatusOK, current.view(s.config.LLM))
+		current, err := s.newIntake()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, current.view())
 		return
 	}
 	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/intake/"), "/"), "/")
@@ -287,7 +320,7 @@ func (s *Server) intakeRoute(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "intake session not found")
 			return
 		}
-		writeJSON(w, http.StatusOK, current.view(s.config.LLM))
+		writeJSON(w, http.StatusOK, current.view())
 		return
 	}
 	if len(parts) < 2 || len(parts) > 3 || parts[0] == "" {
@@ -316,10 +349,24 @@ func (s *Server) intakeRoute(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, current.view(s.config.LLM))
+		writeJSON(w, http.StatusOK, current.view())
 		return
 	}
 	switch parts[1] {
+	case "model":
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w, http.MethodPost)
+			return
+		}
+		var input modelRequest
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+		if err := s.changeIntakeModel(current, input.Model); err != nil {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, current.view())
 	case "approvals":
 		// Keep the route shape explicit: the pending observation ID belongs in
 		// the path, just like assessment action approvals.
@@ -337,7 +384,7 @@ func (s *Server) intakeRoute(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, current.view(s.config.LLM))
+		writeJSON(w, http.StatusOK, current.view())
 	case "start":
 		if r.Method != http.MethodPost {
 			methodNotAllowed(w, http.MethodPost)
@@ -358,12 +405,20 @@ func (s *Server) intakeRoute(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) newIntake() *intakeRun {
-	current := &intakeRun{id: fmt.Sprintf("intake-%06d", s.seq.Add(1))}
+func (s *Server) newIntake() (*intakeRun, error) {
+	id := fmt.Sprintf("intake-%s-%06d", time.Now().UTC().Format("20060102-150405.000000000"), s.seq.Add(1))
+	root := filepath.Join(s.config.SessionsRoot, "intake", id)
+	if err := os.MkdirAll(root, 0700); err != nil {
+		return nil, fmt.Errorf("create intake session directory: %w", err)
+	}
+	current := &intakeRun{id: id, root: root, client: s.config.LLM, updatedAt: time.Now().UTC()}
 	s.mu.Lock()
 	s.intakes[current.id] = current
 	s.mu.Unlock()
-	return current
+	if err := current.persist(); err != nil {
+		return nil, err
+	}
+	return current, nil
 }
 
 func (s *Server) getIntake(id string) *intakeRun {
@@ -388,7 +443,15 @@ func (s *Server) intakeMessage(ctx context.Context, current *intakeRun, text str
 	}
 	current.busy = true
 	current.messages = append(current.messages, intakeMessage{Role: "user", Text: text, At: time.Now().UTC()})
+	current.updatedAt = time.Now().UTC()
 	current.mu.Unlock()
+	if err := current.persist(); err != nil {
+		current.mu.Lock()
+		current.removeLastMessage("user", text)
+		current.busy = false
+		current.mu.Unlock()
+		return fmt.Errorf("save intake session: %w", err)
+	}
 	defer func() {
 		current.mu.Lock()
 		current.busy = false
@@ -401,17 +464,25 @@ func (s *Server) intakeMessage(ctx context.Context, current *intakeRun, text str
 		Approver:    &intakeToolApprover{run: current},
 		Emit:        current.recordObservation,
 	}
-	turn, err := current.conversation.Turn(ctx, s.config.LLM, text)
+	current.conversationMu.Lock()
+	turn, err := current.conversation.Turn(ctx, current.client, text)
+	current.conversationMu.Unlock()
 	if err != nil {
 		current.mu.Lock()
 		current.removeLastMessage("user", text)
+		current.updatedAt = time.Now().UTC()
 		current.mu.Unlock()
+		_ = current.persist()
 		return err
 	}
 	current.mu.Lock()
 	current.messages = append(current.messages, intakeMessage{Role: "assistant", Text: turn.Reply, At: time.Now().UTC()})
 	current.proposal = cloneDraft(turn.Proposal)
+	current.updatedAt = time.Now().UTC()
 	current.mu.Unlock()
+	if persistErr := current.persist(); persistErr != nil {
+		return persistErr
+	}
 	return nil
 }
 
@@ -434,14 +505,14 @@ func (s *Server) startIntake(current *intakeRun, customer string) (assessmentVie
 	if proposal == nil {
 		return assessmentView{}, fmt.Errorf("the coordinator has not proposed an assessment yet")
 	}
-	if strings.TrimSpace(s.config.LLM.BaseURL) == "" || strings.TrimSpace(s.config.LLM.Model) == "" {
+	current.mu.RLock()
+	client := current.client
+	current.mu.RUnlock()
+	if strings.TrimSpace(client.BaseURL) == "" || strings.TrimSpace(client.Model) == "" {
 		return assessmentView{}, fmt.Errorf("model endpoint and model are required; configure the web server first")
 	}
 	created, err := s.newRun(customer, proposal.Goal, proposal.Scope)
 	if err != nil {
-		return assessmentView{}, err
-	}
-	if err := s.start(created); err != nil {
 		return assessmentView{}, err
 	}
 	current.mu.Lock()
@@ -449,12 +520,23 @@ func (s *Server) startIntake(current *intakeRun, customer string) (assessmentVie
 	intakeMessages := append([]intakeMessage(nil), current.messages...)
 	current.mu.Unlock()
 	created.mu.Lock()
+	created.client = client
 	created.messages = intakeMessages
+	created.updatedAt = time.Now().UTC()
 	created.mu.Unlock()
+	if err := current.persist(); err != nil {
+		return assessmentView{}, err
+	}
+	if err := created.persist(); err != nil {
+		return assessmentView{}, err
+	}
+	if err := s.start(created); err != nil {
+		return assessmentView{}, err
+	}
 	return created.view(""), nil
 }
 
-func (r *intakeRun) view(client llmclient.Client) intakeView {
+func (r *intakeRun) view() intakeView {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	status := "conversation"
@@ -471,13 +553,20 @@ func (r *intakeRun) view(client llmclient.Client) intakeView {
 		status = "waiting_approval"
 		pending = &intakeApprovalView{ID: r.pendingTool.ID, Tool: r.pendingTool.Tool}
 	}
-	return intakeView{ID: r.id, Model: client.Model, ModelConfigured: strings.TrimSpace(client.BaseURL) != "" && strings.TrimSpace(client.Model) != "", Status: status, Messages: append([]intakeMessage(nil), r.messages...), Proposal: cloneDraft(r.proposal), PendingTool: pending, Events: append([]eventRecord(nil), r.events...), AssessmentID: r.assessmentID}
+	title := "New session"
+	if r.proposal != nil && strings.TrimSpace(r.proposal.Goal) != "" {
+		title = strings.TrimSpace(r.proposal.Goal)
+	} else if len(r.messages) > 0 && r.messages[0].Role == "user" {
+		title = compactTitle(r.messages[0].Text)
+	}
+	return intakeView{ID: r.id, Title: title, Model: r.client.Model, ModelConfigured: strings.TrimSpace(r.client.BaseURL) != "" && strings.TrimSpace(r.client.Model) != "", ModelBusy: r.busy, CanChangeModel: !r.busy && r.assessmentID == "", Status: status, Messages: append([]intakeMessage(nil), r.messages...), Proposal: cloneDraft(r.proposal), PendingTool: pending, Events: append([]eventRecord(nil), r.events...), AssessmentID: r.assessmentID}
 }
 
 func (r *intakeRun) recordObservation(event assessment.Event) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.events = append(r.events, eventRecord{Sequence: uint64(len(r.events) + 1), At: time.Now().UTC(), Event: event})
+	r.updatedAt = time.Now().UTC()
+	r.mu.Unlock()
 }
 
 type intakeToolApprover struct{ run *intakeRun }
@@ -496,6 +585,7 @@ func (a *intakeToolApprover) Approve(ctx context.Context, request approval.Reque
 	}
 	pending := &intakeApproval{ID: id, Tool: tool, Result: make(chan approval.Decision, 1)}
 	a.run.pendingTool = pending
+	a.run.updatedAt = time.Now().UTC()
 	a.run.mu.Unlock()
 	select {
 	case decision := <-pending.Result:
@@ -517,9 +607,9 @@ func (a *intakeToolApprover) Approve(ctx context.Context, request approval.Reque
 
 func (r *intakeRun) approveTool(id, decision string) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	pending := r.pendingTool
 	if pending == nil || pending.ID != id {
+		r.mu.Unlock()
 		return fmt.Errorf("observation is no longer pending")
 	}
 	decision = strings.ToLower(strings.TrimSpace(decision))
@@ -530,10 +620,13 @@ func (r *intakeRun) approveTool(id, decision string) error {
 	case "denied":
 		result = approval.DecisionDeny
 	default:
+		r.mu.Unlock()
 		return fmt.Errorf("unsupported observation decision")
 	}
 	r.pendingTool = nil
+	r.updatedAt = time.Now().UTC()
 	pending.Result <- result
+	r.mu.Unlock()
 	return nil
 }
 
@@ -602,6 +695,14 @@ type customerIndexView struct {
 	Sessions []assessmentView `json:"sessions"`
 }
 
+type intakeIndexView struct {
+	ID        string    `json:"id"`
+	Title     string    `json:"title"`
+	Status    string    `json:"status"`
+	Model     string    `json:"model"`
+	UpdatedAt time.Time `json:"updated_at,omitempty"`
+}
+
 func (s *Server) customers(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		methodNotAllowed(w, http.MethodGet)
@@ -621,7 +722,18 @@ func (s *Server) customers(w http.ResponseWriter, r *http.Request) {
 		views = append(views, customerIndexView{ID: view.ID, Status: view.Status, Sessions: view.Sessions})
 	}
 	sort.Slice(views, func(i, j int) bool { return views[i].ID < views[j].ID })
-	writeJSON(w, http.StatusOK, map[string]any{"customers": views})
+	s.mu.RLock()
+	intakes := make([]intakeIndexView, 0, len(s.intakes))
+	for _, current := range s.intakes {
+		view := current.view()
+		if view.AssessmentID != "" {
+			continue
+		}
+		intakes = append(intakes, intakeIndexView{ID: view.ID, Title: view.Title, Status: view.Status, Model: view.Model})
+	}
+	s.mu.RUnlock()
+	sort.Slice(intakes, func(i, j int) bool { return intakes[i].ID < intakes[j].ID })
+	writeJSON(w, http.StatusOK, map[string]any{"customers": views, "intakes": intakes})
 }
 
 func (s *Server) newRun(customer, goal, scope string) (*run, error) {
@@ -636,10 +748,13 @@ func (s *Server) newRun(customer, goal, scope string) (*run, error) {
 	if err := os.Mkdir(root, 0700); err != nil {
 		return nil, fmt.Errorf("create assessment directory: %w", err)
 	}
-	current := &run{id: id, customer: customer, root: root, goal: goal, scope: scope, status: "draft", done: make(chan struct{}), approvals: make(map[string]*pendingApproval), questions: make(map[string]*pendingQuestion)}
+	current := &run{id: id, customer: customer, root: root, client: s.config.LLM, goal: goal, scope: scope, status: "draft", done: make(chan struct{}), approvals: make(map[string]*pendingApproval), questions: make(map[string]*pendingQuestion), updatedAt: time.Now().UTC()}
 	s.mu.Lock()
 	s.runs[id] = current
 	s.mu.Unlock()
+	if err := current.persist(); err != nil {
+		return nil, fmt.Errorf("save assessment session: %w", err)
+	}
 	return current, nil
 }
 
@@ -664,6 +779,20 @@ func (s *Server) assessmentRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch parts[1] {
+	case "model":
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w, http.MethodPost)
+			return
+		}
+		var input modelRequest
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+		if err := s.changeRunModel(current, input.Model); err != nil {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		current.writeView(w, "")
 	case "start":
 		if r.Method != http.MethodPost {
 			methodNotAllowed(w, http.MethodPost)
@@ -849,21 +978,34 @@ func (s *Server) start(current *run) error {
 		current.mu.Unlock()
 		return fmt.Errorf("assessment has already been started")
 	}
-	if strings.TrimSpace(s.config.LLM.BaseURL) == "" || strings.TrimSpace(s.config.LLM.Model) == "" {
+	if strings.TrimSpace(current.client.BaseURL) == "" || strings.TrimSpace(current.client.Model) == "" {
 		current.mu.Unlock()
 		return fmt.Errorf("model endpoint and model are required; configure the web server first")
 	}
+	if current.state.Status == "completed" || current.state.Status == "completed_with_gaps" {
+		current.mu.Unlock()
+		return fmt.Errorf("assessment has already been finalized")
+	}
 	ctx, cancel := context.WithCancel(context.Background())
-	current.started, current.status, current.cancel = true, "starting", cancel
+	current.started, current.status, current.cancel, current.done, current.updatedAt = true, "starting", cancel, make(chan struct{}), time.Now().UTC()
 	current.mu.Unlock()
+	if err := current.persist(); err != nil {
+		cancel()
+		return fmt.Errorf("save assessment session: %w", err)
+	}
 	current.emit(assessment.Event{Kind: "assessment_started", Message: "Assessment accepted; the coordinator is preparing its first plan."})
 	go s.runAssessment(ctx, current)
 	return nil
 }
 
 func (s *Server) runAssessment(ctx context.Context, current *run) {
+	current.mu.RLock()
+	client := current.client
+	resume := current.resume
+	initial := current.state
+	current.mu.RUnlock()
 	runner := assessment.Coordinator{
-		LLM:    s.config.LLM,
+		LLM:    client,
 		Frame:  s.config.Frame,
 		Limits: s.config.Limits,
 		Emit:   current.emit,
@@ -876,7 +1018,13 @@ func (s *Server) runAssessment(ctx context.Context, current *run) {
 		Conversation: current.conversation,
 		Snapshot:     current.snapshot,
 	}
-	state, err := runner.Run(ctx, current.root, current.goal, current.scope)
+	var state assessment.State
+	var err error
+	if resume && initial.Goal != "" {
+		state, err = runner.RunState(ctx, current.root, initial)
+	} else {
+		state, err = runner.Run(ctx, current.root, current.goal, current.scope)
+	}
 	current.mu.Lock()
 	current.state = state
 	if err != nil {
@@ -887,16 +1035,28 @@ func (s *Server) runAssessment(ctx context.Context, current *run) {
 	} else {
 		current.status = state.Status
 	}
+	current.resume = true
+	done := current.done
+	current.cancel = nil
+	current.updatedAt = time.Now().UTC()
 	current.mu.Unlock()
+	_ = current.persist()
 	current.emit(assessment.Event{Kind: "assessment_finished", Message: current.status})
-	close(current.done)
+	close(done)
+	current.mu.Lock()
+	if current.done == done {
+		current.started = false
+	}
+	current.mu.Unlock()
 }
 
 func (r *run) snapshot(state assessment.State) {
 	r.mu.Lock()
 	r.state = state
 	r.status = state.Status
+	r.updatedAt = time.Now().UTC()
 	r.mu.Unlock()
+	_ = r.persist()
 }
 
 func (r *run) conversation() []string {
@@ -914,10 +1074,16 @@ func (r *run) emit(event assessment.Event) {
 	r.updateWorker(event)
 	r.sequence++
 	r.events = append(r.events, eventRecord{Sequence: r.sequence, At: time.Now().UTC(), Event: event})
+	r.updatedAt = time.Now().UTC()
 	if len(r.events) > 200 {
 		r.events = r.events[len(r.events)-200:]
 	}
 	r.mu.Unlock()
+	if err := r.persist(); err != nil {
+		r.mu.Lock()
+		r.persistErr = err
+		r.mu.Unlock()
+	}
 }
 
 func (r *run) stop() error {
@@ -950,7 +1116,9 @@ func (s *Server) message(ctx context.Context, r *run, text string) error {
 		r.messages = append(r.messages, intakeMessage{Role: "user", Text: text, At: time.Now().UTC()})
 		question.answer <- text
 		r.events = append(r.events, eventRecord{Sequence: r.nextSequenceLocked(), At: time.Now().UTC(), Event: assessment.Event{Kind: "operator_message", Message: text}})
+		r.updatedAt = time.Now().UTC()
 		r.mu.Unlock()
+		_ = r.persist()
 		return nil
 	}
 	if r.chatBusy {
@@ -960,6 +1128,7 @@ func (s *Server) message(ctx context.Context, r *run, text string) error {
 	r.chatBusy = true
 	r.messages = append(r.messages, intakeMessage{Role: "user", Text: text, At: time.Now().UTC()})
 	r.events = append(r.events, eventRecord{Sequence: r.nextSequenceLocked(), At: time.Now().UTC(), Event: assessment.Event{Kind: "operator_message", Message: text}})
+	r.updatedAt = time.Now().UTC()
 	state := r.state
 	pending := make([]string, 0, len(r.approvals)+len(r.questions))
 	for _, approval := range r.approvals {
@@ -975,19 +1144,26 @@ func (s *Server) message(ctx context.Context, r *run, text string) error {
 		{Role: "system", Content: "You are the assessment coordinator's conversational interface. Answer the operator directly and concisely while workers may be running. Explain progress, blockers, and next steps from the supplied state. Preserve scope and approval boundaries. Do not claim that a finding is confirmed from chat alone. Do not execute tools or change the plan from this chat response. Task working directories shown in pending actions are internal evidence workspaces managed by the runtime; they are not target scope. Judge command arguments against the declared scope."},
 		{Role: "user", Content: "Current assessment state (untrusted evidence): " + compactRunState(state, pending) + "\nOperator message: " + text},
 	}
-	reply, err := s.config.LLM.Chat(ctx, prompt)
+	r.mu.RLock()
+	client := r.client
+	r.mu.RUnlock()
+	reply, err := client.Chat(ctx, prompt)
 	r.mu.Lock()
 	r.chatBusy = false
 	if err != nil {
 		r.removeLastMessage("user", text)
 		r.events = append(r.events, eventRecord{Sequence: r.nextSequenceLocked(), At: time.Now().UTC(), Event: assessment.Event{Kind: "coordinator_error", Message: err.Error()}})
+		r.updatedAt = time.Now().UTC()
 		r.mu.Unlock()
+		_ = r.persist()
 		return fmt.Errorf("coordinator response: %w", err)
 	}
 	r.messages = append(r.messages, intakeMessage{Role: "assistant", Text: strings.TrimSpace(reply), At: time.Now().UTC()})
 	r.state.Usage.Calls++
 	r.events = append(r.events, eventRecord{Sequence: r.nextSequenceLocked(), At: time.Now().UTC(), Event: assessment.Event{Kind: "coordinator_message", Message: strings.TrimSpace(reply)}})
+	r.updatedAt = time.Now().UTC()
 	r.mu.Unlock()
+	_ = r.persist()
 	return nil
 }
 
@@ -1029,7 +1205,9 @@ func (r *run) ask(ctx context.Context, taskID, text string) (string, error) {
 	r.questions[id] = question
 	r.sequence++
 	r.events = append(r.events, eventRecord{Sequence: r.sequence, At: time.Now().UTC(), Event: assessment.Event{TaskID: taskID, Kind: "user_question", Message: text}})
+	r.updatedAt = time.Now().UTC()
 	r.mu.Unlock()
+	_ = r.persist()
 	select {
 	case answer := <-question.answer:
 		return answer, nil
@@ -1095,7 +1273,11 @@ func (r *run) approve(id, decision string) error {
 func (r *run) view(after string) assessmentView {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	view := assessmentView{Customer: r.customer, ID: r.id, Goal: r.goal, Scope: r.scope, Status: r.status, Model: r.state.Model, Error: r.state.Error, StartedAt: r.state.StartedAt, FinishedAt: r.state.FinishedAt, Usage: r.state.Usage, Plans: len(r.state.Plans), Results: append([]assessment.Result(nil), r.state.Results...), Messages: append([]intakeMessage(nil), r.messages...), ReportURL: "/api/v1/assessments/" + r.id + "/report"}
+	model := r.client.Model
+	if strings.TrimSpace(model) == "" {
+		model = r.state.Model
+	}
+	view := assessmentView{Customer: r.customer, ID: r.id, Goal: r.goal, Scope: r.scope, Status: r.status, Model: model, ModelBusy: r.chatBusy || r.started, CanChangeModel: !r.chatBusy && !r.started, Resumable: !r.started && r.status != "draft" && r.status != "completed" && r.status != "completed_with_gaps", UpdatedAt: r.updatedAt, Error: r.state.Error, StartedAt: r.state.StartedAt, FinishedAt: r.state.FinishedAt, Usage: r.state.Usage, Plans: len(r.state.Plans), Results: append([]assessment.Result(nil), r.state.Results...), Messages: append([]intakeMessage(nil), r.messages...), ReportURL: "/api/v1/assessments/" + r.id + "/report"}
 	view.Limits = r.state.Limits
 	for _, worker := range r.workers {
 		view.Workers = append(view.Workers, worker)

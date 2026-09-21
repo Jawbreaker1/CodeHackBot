@@ -188,6 +188,77 @@ func TestServerAggregatesSessionsByCustomer(t *testing.T) {
 	}
 }
 
+func TestServerRestoresIntakeTranscriptAndSessionModel(t *testing.T) {
+	root := t.TempDir()
+	model := httptest.NewServer(http.HandlerFunc(webModelFixture))
+	defer model.Close()
+	sessions := filepath.Join(root, "sessions")
+	config := Config{RepoRoot: root, SessionsRoot: sessions, LLM: llmclient.Client{BaseURL: model.URL + "/v1", Model: "first-model"}}
+	first := NewServer(config)
+	firstHTTP := httptest.NewServer(first)
+	intake := getJSON[intakeView](t, firstHTTP.URL+"/api/v1/intake")
+	selected := postJSON[intakeView](t, firstHTTP.URL+"/api/v1/intake/"+intake.ID+"/model", modelRequest{Model: "qwen/qwen3.8-27b"})
+	if selected.Model != "qwen/qwen3.8-27b" || !selected.CanChangeModel {
+		t.Fatalf("model selection = %#v", selected)
+	}
+	selected = postJSON[intakeView](t, firstHTTP.URL+"/api/v1/intake/"+intake.ID+"/messages", intakeMessageRequest{Text: "record the synthetic fixture"})
+	if len(selected.Messages) != 2 {
+		t.Fatalf("saved intake messages = %#v", selected.Messages)
+	}
+	firstHTTP.Close()
+
+	second := NewServer(config)
+	secondHTTP := httptest.NewServer(second)
+	defer secondHTTP.Close()
+	restored := getJSON[intakeView](t, secondHTTP.URL+"/api/v1/intake/"+intake.ID)
+	if restored.Model != "qwen/qwen3.8-27b" || len(restored.Messages) != 2 || restored.Messages[0].Text != "record the synthetic fixture" {
+		t.Fatalf("restored intake = %#v", restored)
+	}
+	index := getJSON[map[string][]intakeIndexView](t, secondHTTP.URL+"/api/v1/customers")
+	if len(index["intakes"]) != 1 || index["intakes"][0].ID != intake.ID {
+		t.Fatalf("restored intake index = %#v", index)
+	}
+}
+
+func TestServerRejectsModelChangesDuringAssessment(t *testing.T) {
+	root := t.TempDir()
+	server := NewServer(Config{RepoRoot: root, SessionsRoot: filepath.Join(root, "sessions"), LLM: llmclient.Client{BaseURL: "http://127.0.0.1:1/v1", Model: "initial"}})
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+	created := postJSON[assessmentView](t, httpServer.URL+"/api/v1/assessments", createRequest{Customer: "model-fixture", Goal: "model selection", Scope: "synthetic only"})
+	selected := postJSON[assessmentView](t, httpServer.URL+"/api/v1/assessments/"+created.ID+"/model", modelRequest{Model: "replacement"})
+	if selected.Model != "replacement" || !selected.CanChangeModel {
+		t.Fatalf("draft model selection = %#v", selected)
+	}
+	// Simulate the accepted/running state without making a network request to a
+	// provider that this focused test does not need.
+	run := server.getRun(created.ID)
+	run.mu.Lock()
+	run.started, run.status = true, "running"
+	run.mu.Unlock()
+	status, _ := requestJSON(t, http.MethodPost, httpServer.URL+"/api/v1/assessments/"+created.ID+"/model", modelRequest{Model: "third"})
+	if status == http.StatusOK {
+		t.Fatal("model changed after assessment start")
+	}
+}
+
+func TestServerRestoresDraftAssessmentWithoutAuthoritySnapshot(t *testing.T) {
+	root := t.TempDir()
+	sessions := filepath.Join(root, "sessions")
+	first := NewServer(Config{RepoRoot: root, SessionsRoot: sessions, LLM: llmclient.Client{BaseURL: "http://127.0.0.1:1/v1", Model: "draft-model"}})
+	firstHTTP := httptest.NewServer(first)
+	draft := postJSON[assessmentView](t, firstHTTP.URL+"/api/v1/assessments", createRequest{Customer: "draft-customer", Goal: "restore this draft", Scope: "synthetic only"})
+	firstHTTP.Close()
+
+	second := NewServer(Config{RepoRoot: root, SessionsRoot: sessions, LLM: llmclient.Client{BaseURL: "http://127.0.0.1:1/v1", Model: "draft-model"}})
+	secondHTTP := httptest.NewServer(second)
+	defer secondHTTP.Close()
+	restored := getJSON[assessmentView](t, secondHTTP.URL+"/api/v1/assessments/"+draft.ID)
+	if restored.Status != "draft" || restored.Goal != draft.Goal || restored.Scope != draft.Scope {
+		t.Fatalf("restored draft = %#v", restored)
+	}
+}
+
 func TestServerRunsSharedCoordinatorAndApprovalThroughHTTP(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("Authorized synthetic web fixture only.\n"), 0600); err != nil {
