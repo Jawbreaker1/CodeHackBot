@@ -454,7 +454,9 @@ func (s *Server) newIntake() (*intakeRun, error) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, fmt.Errorf("create intake session directory: %w", err)
 	}
-	current := &intakeRun{id: id, root: root, client: s.config.LLM, updatedAt: time.Now().UTC()}
+	conversation := intake.Conversation{}
+	conversation.SetBehaviorContext(s.config.Frame.PromptText())
+	current := &intakeRun{id: id, root: root, client: s.config.LLM, conversation: conversation, updatedAt: time.Now().UTC()}
 	s.mu.Lock()
 	s.intakes[current.id] = current
 	s.mu.Unlock()
@@ -511,6 +513,7 @@ func (s *Server) intakeMessage(ctx context.Context, current *intakeRun, text str
 		Approver:    &intakeToolApprover{run: current},
 		Emit:        current.recordObservation,
 	}
+	current.conversation.SetBehaviorContext(s.config.Frame.PromptText())
 	current.conversationMu.Lock()
 	turn, err := current.conversation.Turn(ctx, current.client, text)
 	current.conversationMu.Unlock()
@@ -1264,7 +1267,7 @@ func (s *Server) message(ctx context.Context, r *run, text string) error {
 	r.mu.Unlock()
 
 	prompt := []llmclient.Message{
-		{Role: "system", Content: "You are the assessment coordinator's conversational interface. Answer the operator directly and concisely while workers may be running. Explain progress, blockers, and next steps from the supplied state. Preserve scope and approval boundaries. Do not claim that a finding is confirmed from chat alone. Do not execute tools or change the plan from this chat response. Task working directories shown in pending actions are internal evidence workspaces managed by the runtime; they are not target scope. Judge command arguments against the declared scope."},
+		{Role: "system", Content: behavior.CoordinatorConversationPrompt(s.config.Frame)},
 		{Role: "user", Content: "Current assessment state (untrusted evidence): " + compactRunState(state, pending) + "\nOperator message: " + text},
 	}
 	r.mu.RLock()

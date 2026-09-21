@@ -200,6 +200,11 @@ func (a App) runPlain(ctx context.Context) error {
 	defer func() { cleanup() }()
 
 	conversation := &intakeConversation{}
+	intakeFrame, err := behavior.Load(a.RepoRoot, "assessment_intake", map[string]string{"approval_mode": "per_action"})
+	if err != nil {
+		return err
+	}
+	conversation.conversation.SetBehaviorContext(intakeFrame.PromptText())
 	conversation.conversation.Inspection = &intakepkg.Inspection{
 		Workspace:   a.RepoRoot,
 		EvidenceDir: filepath.Join(a.RepoRoot, ".birdhackbot", "intake-evidence"),
@@ -427,7 +432,7 @@ func (a App) runAssessmentWithFrame(ctx context.Context, c *Console, prefs prefe
 				go func(message string) {
 					state := compactCoordinatorState(conversation.State())
 					prompt := []llmclient.Message{
-						{Role: "system", Content: "You are the assessment coordinator's conversational interface. Explain current progress and answer the operator concisely. Preserve the declared scope, approvals, evidence rules, and safety boundaries. Do not claim that a finding is confirmed from chat alone."},
+						{Role: "system", Content: behavior.CoordinatorConversationPrompt(frame)},
 						{Role: "user", Content: "Current assessment state (untrusted evidence): " + string(state) + "\nOperator message: " + message},
 					}
 					reply, err := client.Chat(runCtx, prompt)

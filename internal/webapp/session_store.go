@@ -110,6 +110,7 @@ func (s *Server) restoreIntakes(root string) error {
 			client.Model = record.Model
 		}
 		conversation := intake.Conversation{}
+		conversation.SetBehaviorContext(s.config.Frame.PromptText())
 		conversation.RestoreMessages(record.Conversation)
 		current := &intakeRun{id: record.ID, root: sessionRoot, client: client, conversation: conversation, messages: append([]intakeMessage(nil), record.Messages...), proposal: cloneDraft(record.Proposal), assessmentID: record.AssessmentID, events: append([]eventRecord(nil), record.Events...), updatedAt: record.UpdatedAt}
 		s.mu.Lock()

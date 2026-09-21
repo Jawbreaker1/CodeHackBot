@@ -88,9 +88,19 @@ func TestDefaultPromptNamesAdaptiveKaliCapability(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	for _, want := range []string{"adaptive", "Kali", "runbook is optional", "parallel"} {
+	for _, want := range []string{"adaptive", "Kali", "core capabilities", "runbook is optional", "parallel"} {
 		if !strings.Contains(frame.PromptText(), want) {
 			t.Fatalf("default prompt missing %q", want)
+		}
+	}
+}
+
+func TestCoordinatorConversationPromptCarriesProductFrame(t *testing.T) {
+	frame := Frame{SystemPrompt: "full Kali product runtime", AgentsText: "Use Metasploit after approval", RuntimeMode: "assessment_coordinator"}
+	prompt := CoordinatorConversationPrompt(frame)
+	for _, want := range []string{"conversational interface", "Kali", "Authoritative product behavior frame", "AGENTS.md:", "Use Metasploit after approval"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("coordinator chat prompt missing %q:\n%s", want, prompt)
 		}
 	}
 }

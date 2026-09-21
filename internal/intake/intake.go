@@ -30,6 +30,16 @@ type Turn struct {
 type Conversation struct {
 	messages   []llmclient.Message
 	Inspection *Inspection
+	// BehaviorContext is the stable product/runtime frame shared with the
+	// assessment coordinator and workers. It is injected into each turn rather
+	// than persisted as transcript content.
+	behaviorContext string
+}
+
+// SetBehaviorContext supplies the authoritative product/runtime frame for
+// model-led intake. The caller should set it again after restoring a session.
+func (c *Conversation) SetBehaviorContext(text string) {
+	c.behaviorContext = strings.TrimSpace(text)
 }
 
 // RestoreMessages seeds a conversation from a previously persisted transcript.
@@ -59,6 +69,9 @@ func (c *Conversation) Turn(ctx context.Context, client llmclient.Client, input 
 		return Turn{}, fmt.Errorf("intake message is required")
 	}
 	prompt := systemPrompt
+	if c.behaviorContext != "" {
+		prompt += "\n\nAuthoritative product behavior frame:\n" + c.behaviorContext
+	}
 	if c.Inspection != nil {
 		prompt += "\nAvailable tools: list_directory(path): entry names and types only, default path '.'; path must stay within workspace " + c.Inspection.Workspace + ". host_system(): fixed read-only uname, hostname, and /etc/os-release metadata. local_network(): this host's interface addresses, routes and neighbor cache via fixed ip -json show queries; sends no discovery probes. No other tools.\n" + c.Inspection.Scope() + "\nProject operating rules:\n" + c.Inspection.Policy
 	} else {
