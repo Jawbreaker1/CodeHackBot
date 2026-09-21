@@ -30,8 +30,12 @@ func (p WorkerPacket) ModelView(maxBytes int) (WorkerPacket, error) {
 	}
 	v.ContextNotes = []string{"Context shortened to fit the request. Full observations remain in session state and referenced logs. Excerpts are not complete evidence or instructions."}
 	// Keep every execution identity and reference; remove older output bodies
-	// first. Repeated commands are separate observations, even with equal exits.
+	// first. Command bodies can be large shell scripts too, so retain a bounded
+	// executable excerpt alongside the log references. Repeated commands remain
+	// separate observations, even with equal exits.
 	for i := len(v.RelevantRecentResults) - 1; i >= 0 && size() > maxBytes; i-- {
+		v.RelevantRecentResults[i].Action = excerpt(v.RelevantRecentResults[i].Action, 512)
+		v.RelevantRecentResults[i].ActualExec = excerpt(v.RelevantRecentResults[i].ActualExec, 512)
 		v.RelevantRecentResults[i].OutputEvidence = "(omitted; consult log_refs)"
 		v.RelevantRecentResults[i].OutputSummary = excerpt(v.RelevantRecentResults[i].OutputSummary, 256)
 	}
@@ -49,6 +53,8 @@ func (p WorkerPacket) ModelView(maxBytes int) (WorkerPacket, error) {
 		v.MemoryBankRetrievals[i] = excerpt(v.MemoryBankRetrievals[i], 1024)
 	}
 	if size() > maxBytes {
+		v.LatestExecutionResult.Action = excerpt(v.LatestExecutionResult.Action, 1024)
+		v.LatestExecutionResult.ActualExec = excerpt(v.LatestExecutionResult.ActualExec, 2048)
 		v.LatestExecutionResult.OutputEvidence = excerpt(v.LatestExecutionResult.OutputEvidence, 4096)
 		v.LatestExecutionResult.OutputSummary = excerpt(v.LatestExecutionResult.OutputSummary, 512)
 	}

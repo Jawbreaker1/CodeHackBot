@@ -59,6 +59,7 @@ func (p *Provider) Complete(ctx context.Context, input Request) (map[string]any,
 		"model": input.Model, "instructions": strings.Join(instructions, "\n\n"), "input": messages,
 		"store": false, "stream": true, "tools": []any{}, "tool_choice": "none",
 	}
+	includeOutputLimit := input.MaxTokens > 0
 	if input.MaxTokens > 0 {
 		request["max_output_tokens"] = input.MaxTokens
 	}
@@ -105,6 +106,21 @@ func (p *Provider) Complete(ctx context.Context, input Request) (map[string]any,
 				}
 				return nil, &APIError{Status: 401, Message: "subscription authentication expired; refresh failed; sign in with codex login again"}
 			}
+			continue
+		}
+		// Some subscription backend revisions reject the optional output limit
+		// even though they accept the same model and messages. Retry once without
+		// that optional field; the backend then owns its configured output ceiling.
+		if resp.StatusCode == http.StatusBadRequest && includeOutputLimit {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			delete(request, "max_output_tokens")
+			body, err = json.Marshal(request)
+			if err != nil {
+				return nil, err
+			}
+			includeOutputLimit = false
+			attempt--
 			continue
 		}
 		defer resp.Body.Close()

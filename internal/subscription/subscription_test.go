@@ -77,6 +77,33 @@ func TestWorkerClientThroughBridge(t *testing.T) {
 	}
 }
 
+func TestOutputLimitFallbackForBackendWithoutOptionalField(t *testing.T) {
+	var calls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if calls.Add(1) == 1 {
+			if _, ok := payload["max_output_tokens"]; !ok {
+				t.Fatal("fixture did not receive the optional output limit")
+			}
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if _, ok := payload["max_output_tokens"]; ok {
+			t.Fatal("fallback retained the rejected optional output limit")
+		}
+		fmt.Fprint(w, completedEvent)
+	}))
+	defer upstream.Close()
+	provider := Provider{Auth: &testAuth{}, endpoint: upstream.URL}
+	got, err := provider.Complete(context.Background(), Request{Model: "test", MaxTokens: 128, Messages: []llmclient.Message{{Role: "user", Content: "hello"}}})
+	if err != nil || got == nil || calls.Load() != 2 {
+		t.Fatalf("fallback completion failed: calls=%d response=%v err=%v", calls.Load(), got, err)
+	}
+}
+
 func TestBridgeRejectsUnauthorizedAndToolRequests(t *testing.T) {
 	var calls atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1) }))

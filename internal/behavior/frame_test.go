@@ -78,3 +78,19 @@ func TestPromptTextIncludesStableSources(t *testing.T) {
 		}
 	}
 }
+
+func TestDefaultPromptNamesAdaptiveKaliCapability(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("rules"), 0o644); err != nil {
+		t.Fatalf("write AGENTS.md: %v", err)
+	}
+	frame, err := Load(root, "worker", nil)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	for _, want := range []string{"adaptive", "Kali", "runbook is optional", "parallel"} {
+		if !strings.Contains(frame.PromptText(), want) {
+			t.Fatalf("default prompt missing %q", want)
+		}
+	}
+}

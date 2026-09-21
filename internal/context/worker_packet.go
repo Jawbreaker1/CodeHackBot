@@ -104,9 +104,11 @@ type TurnBudget struct {
 
 func DefaultExecutionCapabilityInputs() []string {
 	return []string{
-		"operating_environment: standard Kali Linux environment with common offensive security tooling available",
+		"operating_environment: standard Kali Linux environment (full Kali Linux assessment image); verify installed binaries, modules, formats, and data sources before relying on them",
 		"tooling_preference: prefer established security tools and workflows over improvised shell logic when a standard tool fits the task",
-		"tooling_examples: common tooling may include Nmap, Metasploit Framework, Burp Suite, Wireshark, Gobuster, ffuf, sqlmap, Hydra, John the Ripper, Hashcat, Aircrack-ng, enum4linux, smbclient, and Impacket tooling",
+		"tooling_examples: common tooling may include Nmap, Metasploit Framework, Burp Suite, Wireshark, Gobuster, ffuf, sqlmap, Hydra, John the Ripper, Hashcat, Aircrack-ng, enum4linux, smbclient, Impacket, SearchSploit, and Exploit-DB data",
+		"research_and_helpers: use approved local CVE/NVD or Exploit-DB data and permitted online vulnerability sources; in air-gapped mode use only local sources; build and validate a small task-local helper when established tooling is insufficient",
+		"parallel_work: when independent bounded searches or recovery strategies exist, recommend isolated task partitions and a later evidence-backed validation instead of repeating the same attempt",
 		"execution_expectations: choose bounded, reproducible, evidence-producing actions and judge progress from real command output and artifacts",
 	}
 }

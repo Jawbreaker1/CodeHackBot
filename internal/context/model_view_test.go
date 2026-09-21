@@ -33,10 +33,10 @@ func TestModelViewBoundsHistoryWithoutChangingEvidenceOrTask(t *testing.T) {
 	p := NewInitialWorkerPacket(behavior.Frame{SystemPrompt: "policy", AgentsText: "rules", Parameters: map[string]string{"scope": "fixture only"}}, session.Foundation{Goal: "original goal", ReportingRequirement: "report evidence"}, "/tmp", "fixture", "per_action", 10)
 	p.RecentConversation = []string{"User: previous details", "Operator answer: first line\n  keep indentation\nlast line"}
 	for i := 0; i < 8; i++ {
-		p.RelevantRecentResults = append(p.RelevantRecentResults, ExecutionResult{Action: "same command", ExitStatus: "0", OutputEvidence: strings.Repeat("å", 10000), LogRefs: []string{fmt.Sprintf("/logs/%d", i)}})
+		p.RelevantRecentResults = append(p.RelevantRecentResults, ExecutionResult{Action: "same command", ActualExec: strings.Repeat("shell script ", 3000), ExitStatus: "0", OutputEvidence: strings.Repeat("å", 10000), LogRefs: []string{fmt.Sprintf("/logs/%d", i)}})
 	}
 	p.MemoryBankRetrievals = []string{strings.Repeat("supporting material", 3000)}
-	p.LatestExecutionResult = ExecutionResult{Action: "current", OutputEvidence: "latest evidence", ExitStatus: "1", LogRefs: []string{"/logs/latest"}}
+	p.LatestExecutionResult = ExecutionResult{Action: "current", ActualExec: strings.Repeat("current shell script ", 3000), OutputEvidence: "latest evidence", ExitStatus: "1", LogRefs: []string{"/logs/latest"}}
 	v, err := p.ModelView(14000)
 	if err != nil {
 		t.Fatal(err)
@@ -52,6 +52,12 @@ func TestModelViewBoundsHistoryWithoutChangingEvidenceOrTask(t *testing.T) {
 	}
 	if len(v.RelevantRecentResults) != 8 || len(p.RelevantRecentResults[7].OutputEvidence) != 20000 {
 		t.Fatal("persisted observations changed or identity dropped")
+	}
+	if len(v.RelevantRecentResults[7].ActualExec) >= len(p.RelevantRecentResults[7].ActualExec) {
+		t.Fatal("large command body was not compacted")
+	}
+	if len(v.LatestExecutionResult.ActualExec) >= len(p.LatestExecutionResult.ActualExec) {
+		t.Fatal("latest large command body was not compacted")
 	}
 	for i, r := range v.RelevantRecentResults {
 		if r.LogRefs[0] != fmt.Sprintf("/logs/%d", i) {
