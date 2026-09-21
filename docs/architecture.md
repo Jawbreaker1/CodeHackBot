@@ -125,6 +125,8 @@ The durable layers are intentionally lossless locally. A model request may omit 
 
 The document offload format is designed for rehydration rather than a second hidden memory system. Every stored document should carry the session ID, task ID when applicable, turn or stage, creation time, model/backend, source or invocation, and a short description of omitted material. Evidence documents additionally carry the prepared invocation, cwd, exit/cancellation status, log and artifact references, and the model-facing summary. Context snapshots record the rendered sections, byte ceiling, bytes used, compaction notes, and the protected sections that were retained. Writes remain local, append-oriented where practical, and atomic when replacing a session snapshot so an interrupted run does not silently corrupt the authority record.
 
+In the current layout, the assessment authority is `assessment.json`; each delegated task owns `tasks/<task-id>/session.json` and `result.json`, with its mutable workspace under `work/`, full command records under `logs/`, and inspectable packet snapshots under `context/`. The coordinator passes the next model only compact result cards and those stable paths. This makes an evidence-heavy run inspectable and resumable without copying its entire history into every prompt.
+
 Knowledge moves through explicit contracts:
 
 1. **Coordinator to worker.** The coordinator sends one bounded task with its question, done condition, inherited goal and scope, approval mode, dependencies, relevant compact result cards, and references to prior evidence. The worker receives a separate mutable workspace and does not inherit the coordinator's full prompt or every other worker's raw output.
