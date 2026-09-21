@@ -9,7 +9,7 @@ import (
 )
 
 func (l Loop) execute(ctx context.Context, current *ctxpacket.WorkerPacket, response Response) (bool, error) {
-	if err := l.emit(EventActionProposed, *current, response.Command); err != nil {
+	if err := l.emitWithRationale(EventActionProposed, *current, response.Command, response.Summary); err != nil {
 		return false, err
 	}
 	action, failure := prepareAction(response, current.OperatorState.WorkingDir)

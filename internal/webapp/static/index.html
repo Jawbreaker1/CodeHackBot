@@ -27,6 +27,7 @@
       <header class="main-header">
         <button id="toggleSidebar" class="icon-button" aria-label="Toggle sessions" aria-controls="sidebar" aria-expanded="true"><svg class="icon"><use href="#icon-panel"/></svg></button>
         <div class="heading"><span id="headerCustomer" class="breadcrumb">Workspace</span><h1 id="sessionTitle">New session</h1></div>
+        <div id="workStatus" class="work-status hidden" aria-live="polite"><span class="work-pulse" aria-hidden="true"></span><span id="workStatusText"></span></div>
         <button id="toggleInspector" class="subtle-button" aria-controls="inspector" aria-expanded="true"><svg class="icon"><use href="#icon-panel"/></svg><span>Workers</span><span id="workerCount" class="count">0</span><span id="attentionDot" class="attention-dot hidden"></span></button>
       </header>
       <div id="errorBanner" class="error-banner hidden" role="alert"></div>
@@ -63,7 +64,7 @@
           <button id="findingsTab" role="tab" aria-selected="false" aria-controls="findingsPanel" data-panel="findingsPanel">Findings <span id="findingCount">0</span></button>
           <button id="activityTab" role="tab" aria-selected="false" aria-controls="activityPanel" data-panel="activityPanel">Activity</button>
         </div>
-        <section id="workersPanel" role="tabpanel" aria-labelledby="workersTab"><div id="workers"><p class="empty">No delegated work yet. Discuss your objective with the coordinator to get started.</p></div></section>
+        <section id="workersPanel" role="tabpanel" aria-labelledby="workersTab"><div class="panel-toolbar"><span>Live workers</span><button id="collapseWorkers" class="text-button" type="button">Collapse details</button></div><div id="workers"><p class="empty">No delegated work yet. Discuss your objective with the coordinator to get started.</p></div></section>
         <section id="findingsPanel" role="tabpanel" aria-labelledby="findingsTab" class="hidden"><div id="findings"></div><a id="customerReport" class="report-link hidden" target="_blank" rel="noopener">Unified customer report ↗</a></section>
         <section id="activityPanel" role="tabpanel" aria-labelledby="activityTab" class="hidden"><ol id="activity" class="activity-list"></ol></section>
       </div>

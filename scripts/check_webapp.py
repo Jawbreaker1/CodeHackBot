@@ -55,6 +55,8 @@ def run_session(base, customer, goal):
             break
         time.sleep(0.05)
     assert view["status"] == "completed" and approved and len(view["results"]) == 1, view
+    assert view["context_window"]["limit_bytes"] > 0 and view["context_window"]["used_bytes"] > 0, view
+    assert any(worker.get("context_used_bytes", 0) > 0 for worker in view["workers"]), view
     status, report = call_text(base, view["report_url"])
     assert status == 200 and "web fixture" in report, report
     return view

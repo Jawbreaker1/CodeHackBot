@@ -31,7 +31,7 @@ type preferences struct {
 // SubscriptionInputByteLimit gives Daybreak a larger evidence budget than the
 // conservative local-model default while still failing visibly before a
 // provider request becomes unbounded.
-const SubscriptionInputByteLimit = 128 * 1024
+const SubscriptionInputByteLimit = llmclient.SubscriptionInputByteLimit
 
 func configureProvider(ctx context.Context, c *Console, path string) (preferences, error) {
 	var p preferences
@@ -139,6 +139,17 @@ func savePreferences(ctx context.Context, c *Console, path string, p preferences
 	if p.Provider == "local" && p.MaxOutputTokens == 0 {
 		p.MaxOutputTokens = 32768
 	}
+	if p.Provider == "subscription" {
+		// Migrate preferences created before the subscription profile had its
+		// larger context/output budgets. The guided flow has no separate lower
+		// subscription-budget setting, so an older default is stale state.
+		if p.MaxInputBytes == 0 || p.MaxInputBytes == llmclient.DefaultInputByteLimit {
+			p.MaxInputBytes = SubscriptionInputByteLimit
+		}
+		if p.MaxOutputTokens == 0 {
+			p.MaxOutputTokens = llmclient.SubscriptionMaxOutputTokens
+		}
+	}
 	if p.MaxInputBytes == 0 {
 		if p.Provider == "subscription" {
 			p.MaxInputBytes = SubscriptionInputByteLimit
@@ -224,6 +235,7 @@ func startProvider(ctx context.Context, p preferences) (llmclient.Client, func()
 		}
 		return client, func() {}, nil
 	}
+	client.MaxOutputTokens = llmclient.SubscriptionMaxOutputTokens
 	// Reuse the existing subscription adapter; the application owns its local
 	// listener and ephemeral credential, never provider credential copies.
 	codexDir := os.Getenv("CODEX_HOME")

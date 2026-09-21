@@ -47,6 +47,10 @@ svg { flex-shrink: 0; }
 .main-header { height: 62px; min-height: 62px; padding: 0 22px; display: flex; align-items: center; gap: 12px; }
 .heading { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; }
 h1 { margin: 0; font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; overflow: hidden; }
+.work-status { display: inline-flex; align-items: center; gap: 7px; min-width: 0; margin-left: auto; margin-right: 14px; color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.work-status[data-state="waiting"] { color: var(--attention); }
+.work-pulse { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: currentColor; animation: work-pulse 1.3s ease-in-out infinite; }
+@keyframes work-pulse { 0%, 100% { opacity: .35; transform: scale(.8); } 50% { opacity: 1; transform: scale(1); } }
 .breadcrumb { color: var(--faint); font-size: 12px; white-space: nowrap; }
 .breadcrumb::after { content: '/'; padding-left: 10px; color: #60605b; }
 .icon-button { width: 30px; height: 30px; display: grid; place-items: center; color: var(--muted); flex-shrink: 0; }
@@ -111,6 +115,8 @@ textarea::placeholder { color: #94938d; }
 .tabs button[aria-selected="true"] { border-color: #c6c4ba; color: var(--text); }
 .tabs button:hover { background: none; color: var(--text); }
 .tabs span { font-size: 10px; margin-left: 3px; }
+.panel-toolbar { display: flex; align-items: center; justify-content: space-between; padding: 11px 0 2px; color: var(--faint); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
+.panel-toolbar .text-button { text-transform: none; letter-spacing: 0; }
 .empty { font-size: 12px; color: var(--faint); line-height: 1.7; padding: 8px; }
 #workers > .empty { padding: 16px 0; }
 .worker { padding: 19px 0; border-bottom: 1px solid var(--line); }
@@ -118,6 +124,7 @@ textarea::placeholder { color: #94938d; }
 .worker-heading h3 { font-size: 12px; font-weight: 600; margin: 0; overflow-wrap: anywhere; }
 .worker-goal { margin: 10px 0; color: var(--muted); line-height: 1.6; font-size: 12px; }
 .worker-detail { margin: 9px 0; font-size: 11px; line-height: 1.6; color: var(--muted); overflow-wrap: anywhere; }
+.worker-approval-note { margin: 10px 0; padding: 7px 9px; border-left: 2px solid var(--attention); color: var(--attention); font-size: 10px; }
 .worker-plan { margin: 8px 0; padding-left: 18px; color: var(--faint); font-size: 11px; line-height: 1.8; }
 .worker-plan .active { color: var(--text); }
 .detail-grid { display: grid; grid-template-columns: auto 1fr; font-size: 11px; gap: 7px 16px; margin: 13px 0; }
@@ -132,6 +139,10 @@ details p { margin: 10px 0; }
 .action-label { margin: 12px 0 4px; font-size: 10px; color: var(--faint); }
 .approval { border-left: 2px solid #8e7957; padding: 1px 0 1px 12px; margin: 15px 0; }
 .approval h4 { color: var(--attention); font-size: 11px; font-weight: 500; margin: 6px 0; }
+.chat-approval { margin: 14px 0 20px; padding: 13px 14px; border: 1px solid #8e7957; border-radius: 8px; background: #8e79570d; }
+.chat-approval-title { color: var(--attention); font-size: 12px; font-weight: 600; }
+.chat-approval .worker-detail { margin: 7px 0 10px; }
+.chat-approval .command { max-height: 180px; }
 .action-row { display: flex; gap: 8px; margin: 10px 0; }
 .action-row button, .primary-button { padding: 7px 11px; font-size: 11px; background: #dedcd4; color: #262622; }
 .action-row button:hover:not(:disabled), .primary-button:hover:not(:disabled) { background: #f5f3ec; }

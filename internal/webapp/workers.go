@@ -19,6 +19,7 @@ type workerView struct {
 	ActiveStep          string                    `json:"active_step"`
 	PlanSteps           []string                  `json:"plan_steps"`
 	Action              string                    `json:"action"`
+	Rationale           string                    `json:"rationale,omitempty"`
 	ExitStatus          string                    `json:"exit_status"`
 	EvidenceCount       int                       `json:"evidence_count"`
 	Evidence            []assessment.EvidenceView `json:"evidence"`
@@ -64,6 +65,9 @@ func (r *run) updateWorker(e assessment.Event) {
 	}
 	if e.Action != "" {
 		w.Action = e.Action
+	}
+	if e.Rationale != "" {
+		w.Rationale = e.Rationale
 	}
 	if e.ExitStatus != "" {
 		w.ExitStatus = e.ExitStatus

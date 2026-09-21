@@ -19,8 +19,9 @@ import (
 const responsesURL = "https://chatgpt.com/backend-api/codex/responses"
 
 type Request struct {
-	Model    string              `json:"model"`
-	Messages []llmclient.Message `json:"messages"`
+	Model     string              `json:"model"`
+	Messages  []llmclient.Message `json:"messages"`
+	MaxTokens int                 `json:"max_tokens,omitempty"`
 	// Accepted for the existing worker protocol; reasoning models use their default.
 	Temperature *float64 `json:"temperature,omitempty"`
 }
@@ -54,10 +55,14 @@ func (p *Provider) Complete(ctx context.Context, input Request) (map[string]any,
 	if strings.TrimSpace(input.Model) == "" || len(messages) == 0 {
 		return nil, &APIError{Status: 400, Message: "model and conversation messages are required"}
 	}
-	body, err := json.Marshal(map[string]any{
+	request := map[string]any{
 		"model": input.Model, "instructions": strings.Join(instructions, "\n\n"), "input": messages,
 		"store": false, "stream": true, "tools": []any{}, "tool_choice": "none",
-	})
+	}
+	if input.MaxTokens > 0 {
+		request["max_output_tokens"] = input.MaxTokens
+	}
+	body, err := json.Marshal(request)
 	if err != nil {
 		return nil, err
 	}

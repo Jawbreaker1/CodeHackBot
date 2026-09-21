@@ -28,8 +28,8 @@ func main() {
 	model := flag.String("llm-model", "", "LLM model ID")
 	tokenFile := flag.String("llm-token-file", "", "optional local subscription bridge token file")
 	reasoning := flag.String("reasoning-effort", "", "provider reasoning effort, such as low")
-	maxOutput := flag.Int("max-output-tokens", 32768, "maximum output tokens per model request")
-	maxInput := flag.Int("max-input-bytes", llmclient.DefaultInputByteLimit, "maximum combined model input bytes")
+	maxOutput := flag.Int("max-output-tokens", 32768, "maximum output tokens per local-model request")
+	maxInput := flag.Int("max-input-bytes", 0, "maximum combined model input bytes (profile default when omitted)")
 	flag.Parse()
 	if *version {
 		fmt.Println(buildinfo.Version)
@@ -49,12 +49,18 @@ func main() {
 		fatal(err)
 	}
 	requestReasoning, requestMaxOutput := *reasoning, *maxOutput
+	inputLimit := *maxInput
 	// The local subscription bridge deliberately exposes only its text contract;
 	// provider-specific reasoning and max-token fields are for local servers.
 	if strings.TrimSpace(*tokenFile) != "" {
-		requestReasoning, requestMaxOutput = "", 0
+		requestReasoning, requestMaxOutput = "", llmclient.SubscriptionMaxOutputTokens
+		if inputLimit == 0 {
+			inputLimit = llmclient.SubscriptionInputByteLimit
+		}
+	} else if inputLimit == 0 {
+		inputLimit = llmclient.DefaultInputByteLimit
 	}
-	client := llmclient.Client{BaseURL: *baseURL, Model: *model, AuthTokenFile: *tokenFile, ReasoningEffort: requestReasoning, MaxOutputTokens: requestMaxOutput, MaxInputBytes: *maxInput}
+	client := llmclient.Client{BaseURL: *baseURL, Model: *model, AuthTokenFile: *tokenFile, ReasoningEffort: requestReasoning, MaxOutputTokens: requestMaxOutput, MaxInputBytes: inputLimit}
 	server := webapp.NewServer(webapp.Config{RepoRoot: root, SessionsRoot: *sessions, LLM: client, Frame: frame, Limits: assessment.DefaultLimits()})
 	httpServer := &http.Server{Addr: *addr, Handler: server, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	stopContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

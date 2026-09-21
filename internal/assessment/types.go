@@ -44,6 +44,7 @@ type Event struct {
 	Step                int           `json:"step,omitempty"`
 	ActiveStep          string        `json:"active_step,omitempty"`
 	Action              string        `json:"action,omitempty"`
+	Rationale           string        `json:"rationale,omitempty"`
 	ExitStatus          string        `json:"exit_status,omitempty"`
 	EvidenceCount       int           `json:"evidence_count,omitempty"`
 	RemainingBudget     string        `json:"remaining_budget,omitempty"`

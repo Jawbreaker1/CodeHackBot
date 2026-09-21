@@ -51,6 +51,29 @@ function messageNode(message) {
   entry.append(node('div', 'transcript-role', message.role === 'user' ? 'You' : message.role === 'assistant' ? 'Coordinator' : 'System'), node('div', 'transcript-text', message.text));
   return entry;
 }
+function chatApprovalNode(item, kind) {
+  const box = node('article', 'chat-approval');
+  box.setAttribute('aria-live', 'assertive');
+  const title = kind === 'observation' ? 'Read-only observation needs approval' : 'Worker action needs approval';
+  box.append(node('div', 'chat-approval-title', title));
+  if (kind === 'observation') {
+    box.append(node('p', 'worker-detail', 'The coordinator wants to inspect local metadata before continuing. No worker action will run until you allow it.'));
+    box.append(node('pre', 'command', JSON.stringify(item.tool, null, 2)));
+  } else {
+    box.append(node('p', 'worker-detail', (item.task_id ? item.task_id + ' · ' : '') + (item.impact || 'Review the exact invocation and its possible effects before allowing it.')));
+    box.append(node('pre', 'command', item.command));
+    box.append(disclosure('Working directory', node('code', 'evidence-ref', item.cwd), 'chat-cwd-' + item.id));
+  }
+  const row = node('div', 'action-row');
+  for (const [decision, label, style] of [['approved_once', kind === 'observation' ? 'Allow once' : 'Approve once', ''], ['denied', 'Deny', 'secondary']]) {
+    const button = node('button', style, label);
+    button.type = 'button';
+    button.onclick = () => act('approvals/' + encodeURIComponent(item.id), {decision}, row);
+    row.append(button);
+  }
+  box.append(row);
+  return box;
+}
 function traceNode(records) {
   const list = node('ol', 'activity-list');
   for (const record of records) list.append(eventNode(record));
@@ -66,7 +89,7 @@ function traceNode(records) {
 function renderTranscript() {
   const messages = [...(current?.messages || [])];
   const records = [...eventRecords.values()];
-  if (!changed('transcript', [messages, records, pendingMessage, current?.pending_tool])) return;
+  if (!changed('transcript', [messages, records, pendingMessage, current?.pending_tool, current?.pending_approvals])) return;
   const pane = $('chat');
   const follow = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 100;
   const scrollTop = pane.scrollTop;
@@ -82,14 +105,12 @@ function renderTranscript() {
     else { flushTrace(); items.push(messageNode(item.message)); }
   }
   flushTrace();
+  for (const approval of current?.pending_approvals || []) items.push(chatApprovalNode(approval, 'action'));
+  if (current?.pending_tool) items.push(chatApprovalNode(current.pending_tool, 'observation'));
   if (pendingMessage) {
     const last = messages[messages.length - 1];
     if (!last || last.role !== 'user' || last.text !== pendingMessage) items.push(messageNode({role:'user', text:pendingMessage}));
-    if (current?.pending_tool) {
-      const review = node('button', 'review-notice', 'Local observation needs your approval · Review request ↗');
-      review.onclick = () => { setInspector(true); selectTab($('workersTab')); };
-      items.push(review);
-    } else items.push(node('div', 'pending-message', 'Coordinator is responding…'));
+    items.push(node('div', 'pending-message', current?.pending_tool || current?.pending_approvals?.length ? 'Waiting for your approval…' : 'Coordinator is responding…'));
   }
   if (!items.length) {
     const welcome = node('div', 'welcome');
@@ -112,11 +133,38 @@ function formatBytes(value) {
   if (bytes < 1024) return bytes + ' B';
   return (bytes / 1024).toFixed(1) + ' KiB';
 }
+function renderWorkStatus(view) {
+  const active = new Set(['task_started', 'decision_started', 'plan_finished', 'execution_started', 'execution_finished', 'post_exec_eval_started', 'post_exec_eval_finished', 'user_answered']);
+  const workers = (view.workers || []).filter(worker => active.has(worker.phase));
+  const approvals = view.pending_approvals || [];
+  let label = '';
+  let state = 'working';
+  if (view.pending_tool || approvals.length) {
+    state = 'waiting';
+    label = 'Approval needed · ' + (approvals.length ? approvals.map(item => item.task_id).join(', ') : 'local observation');
+  } else if (workers.some(worker => worker.phase === 'execution_started')) {
+    const names = workers.filter(worker => worker.phase === 'execution_started').map(worker => worker.id);
+    label = 'Executing · ' + names.join(', ');
+  } else if (workers.length) {
+    label = 'Working · ' + workers.map(worker => worker.id).join(', ');
+  } else if (view.customer && ['running', 'starting'].includes(view.status)) {
+    const latest = [...eventRecords.values()].sort((a, b) => a.sequence - b.sequence).at(-1)?.event;
+    if (latest?.kind === 'planning') label = 'Coordinator planning';
+    else if (latest?.kind === 'execution_started') label = 'Executor running';
+    else label = 'Assessment running';
+  } else if (pendingMessage) {
+    label = 'Coordinator working';
+  }
+  $('workStatus').classList.toggle('hidden', !label);
+  $('workStatus').dataset.state = state;
+  $('workStatusText').textContent = label;
+}
 function renderOverview(view) {
   const running = activeStatuses.includes(view.status);
   const status = view.customer ? view.status : view.pending_tool ? 'Needs approval' : view.status === 'thinking' ? 'Thinking' : view.proposal ? 'Ready for review' : 'Conversation';
   $('assessmentStatus').textContent = status;
   $('assessmentStatus').dataset.state = view.status;
+  renderWorkStatus(view);
   $('assessmentGoal').textContent = view.goal || 'Workers appear here as the coordinator delegates work.';
   $('assessmentMetrics').classList.toggle('hidden', !view.customer);
   $('assessmentMetrics').textContent = (view.usage?.calls || 0) + ' recorded calls · ' + (view.plans || 0) + ' plans';
@@ -297,6 +345,9 @@ $('stop').onclick = () => act('stop', {}, $('assessmentStatus').parentElement);
 $('newAssessment').onclick = () => navigate('/api/v1/intake');
 $('toggleInspector').onclick = () => setInspector($('toggleInspector').getAttribute('aria-expanded') !== 'true');
 $('closeInspector').onclick = closePanels;
+$('collapseWorkers').onclick = () => {
+  for (const details of $('workers').querySelectorAll('details')) details.open = false;
+};
 $('drawerBackdrop').onclick = closePanels;
 $('reviewProposal').onclick = () => { setInspector(true); $('proposalReview').scrollIntoView({block:'nearest'}); };
 $('toggleSidebar').onclick = () => {

@@ -51,6 +51,9 @@ func TestWorkerClientThroughBridge(t *testing.T) {
 		if _, exists := payload["temperature"]; exists {
 			t.Error("unsupported temperature sent upstream")
 		}
+		if payload["max_output_tokens"] != float64(1234) {
+			t.Errorf("max output was not forwarded: %v", payload["max_output_tokens"])
+		}
 		fmt.Fprint(w, completedEvent)
 	}))
 	defer upstream.Close()
@@ -64,7 +67,7 @@ func TestWorkerClientThroughBridge(t *testing.T) {
 	}
 	bridge := httptest.NewServer(Handler(&Provider{Auth: &testAuth{}, endpoint: upstream.URL}, token))
 	defer bridge.Close()
-	client := llmclient.Client{BaseURL: bridge.URL + "/v1", Model: "chosen-model", AuthTokenFile: path}
+	client := llmclient.Client{BaseURL: bridge.URL + "/v1", Model: "chosen-model", AuthTokenFile: path, MaxOutputTokens: 1234}
 	got, err := client.Complete(context.Background(), []llmclient.Message{{Role: "system", Content: "Return JSON"}, {Role: "user", Content: "Hello"}}, llmclient.ChatOptions{Profile: llmclient.ProfileStructuredControl})
 	if err != nil {
 		t.Fatal(err)

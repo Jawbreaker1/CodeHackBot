@@ -36,6 +36,7 @@ type ProgressEvent struct {
 	ExitStatus          string
 	Assessment          string
 	FailureClass        string
+	Rationale           string
 	ContextUsedBytes    int
 	ContextLimitBytes   int
 	ContextUsagePercent int

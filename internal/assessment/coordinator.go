@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/approval"
 	"github.com/Jawbreaker1/CodeHackBot/internal/behavior"
@@ -292,9 +294,71 @@ func coordinatorPrompt(state State) string {
 			"The last available round must synthesize existing results; do not start work that requires another round. Keep all previous still-relevant findings in the final response.",
 			"Scope enforcement is supplied externally by the isolated lab. This runtime does not enforce a network allowlist. No DoS, persistence, real data exfiltration, or out-of-scope traffic.",
 		},
-		"assessment":        state,
+		"assessment":        compactCoordinatorState(state),
 		"recorded_evidence": refs,
 	}
 	data, _ := json.Marshal(payload)
 	return string(data)
+}
+
+type compactResult struct {
+	Task     Task           `json:"task"`
+	Status   string         `json:"status"`
+	Summary  string         `json:"summary,omitempty"`
+	Error    string         `json:"error,omitempty"`
+	Evidence []EvidenceView `json:"evidence,omitempty"`
+}
+
+type coordinatorPromptState struct {
+	Version          int             `json:"version"`
+	ID               string          `json:"id"`
+	Goal             string          `json:"goal"`
+	Scope            string          `json:"scope"`
+	Model            string          `json:"model"`
+	Status           string          `json:"status"`
+	Limits           Limits          `json:"limits"`
+	Plans            []Decision      `json:"plans"`
+	Results          []compactResult `json:"results"`
+	OperatorMessages []string        `json:"operator_messages,omitempty"`
+	Usage            Usage           `json:"usage"`
+}
+
+func compactCoordinatorState(state State) coordinatorPromptState {
+	messages := make([]string, 0, len(state.OperatorMessages))
+	for _, message := range state.OperatorMessages {
+		messages = append(messages, promptExcerpt(message, 2048))
+	}
+	return coordinatorPromptState{
+		Version: state.Version, ID: state.ID, Goal: state.Goal, Scope: state.Scope,
+		Model: state.Model, Status: state.Status, Limits: state.Limits,
+		Plans: state.Plans, Results: compactPriorResults(state.Results),
+		OperatorMessages: messages, Usage: state.Usage,
+	}
+}
+
+func compactPriorResults(results []Result) []compactResult {
+	compact := make([]compactResult, 0, len(results))
+	for _, result := range results {
+		item := compactResult{Task: result.Task, Status: result.Status, Summary: promptExcerpt(result.Summary, 4096), Error: promptExcerpt(result.Error, 2048)}
+		for _, evidence := range result.Evidence {
+			item.Evidence = append(item.Evidence, EvidenceView{
+				Command: promptExcerpt(evidence.ActualExec, 2048), ExitStatus: evidence.ExitStatus,
+				Summary: promptExcerpt(evidence.OutputSummary, 1024),
+				LogRefs: append([]string(nil), evidence.LogRefs...), ArtifactRefs: append([]string(nil), evidence.ArtifactRefs...),
+			})
+		}
+		compact = append(compact, item)
+	}
+	return compact
+}
+
+func promptExcerpt(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	for limit > 0 && !utf8.RuneStart(value[limit]) {
+		limit--
+	}
+	return strings.TrimSpace(value[:limit]) + "\n[excerpt truncated; consult the recorded evidence]"
 }

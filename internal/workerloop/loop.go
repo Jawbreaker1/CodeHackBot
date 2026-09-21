@@ -223,6 +223,10 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 }
 
 func (l Loop) emit(kind ProgressEventKind, p ctxpacket.WorkerPacket, message string) error {
+	return l.emitWithRationale(kind, p, message, "")
+}
+
+func (l Loop) emitWithRationale(kind ProgressEventKind, p ctxpacket.WorkerPacket, message, rationale string) error {
 	event := newProgressEvent(kind, p.Budget.Used, message)
 	event.ActiveStep = p.PlanState.ActiveStep
 	event.Action, event.ExitStatus = p.LatestExecutionResult.Action, p.LatestExecutionResult.ExitStatus
@@ -230,6 +234,7 @@ func (l Loop) emit(kind ProgressEventKind, p ctxpacket.WorkerPacket, message str
 		event.Action = p.OperatorState.PendingExec
 	}
 	event.Assessment, event.FailureClass = p.LatestExecutionResult.Assessment, p.LatestExecutionResult.FailureClass
+	event.Rationale = rationale
 	event.ContextUsedBytes = p.OperatorState.ContextUsedBytes
 	event.ContextLimitBytes = p.OperatorState.ContextLimitBytes
 	event.ContextUsagePercent = contextUsagePercent(event.ContextUsedBytes, event.ContextLimitBytes)

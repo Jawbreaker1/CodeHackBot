@@ -27,6 +27,22 @@ func testCoordinator(url string) Coordinator {
 	return Coordinator{LLM: llmclient.Client{BaseURL: url, Model: "fixture-model"}, Frame: behavior.Frame{SystemPrompt: "Authorized lab test", AgentsText: "Use synthetic fixtures only"}, Approver: func(Task) approval.Approver { return approval.StaticApprover{Decision: approval.DecisionApproveOnce} }}
 }
 
+func TestCoordinatorPromptCompactsPriorExecutionBodies(t *testing.T) {
+	large := strings.Repeat("full shell script and output ", 10000)
+	state := State{
+		Version: 1, ID: "compact-fixture", Goal: "review evidence", Scope: "fixture only",
+		Results: []Result{
+			{Task: Task{ID: "worker-a", Goal: "inspect", DoneWhen: "evidence recorded"}, Status: "done", Summary: "bounded result", Evidence: []ctxpacket.ExecutionResult{
+				{ActualExec: large, OutputEvidence: large, OutputSummary: "short summary", LogRefs: []string{"/tmp/evidence.log"}},
+			}},
+		},
+	}
+	prompt := coordinatorPrompt(state)
+	if len(prompt) > 20000 || strings.Contains(prompt, large) || !strings.Contains(prompt, "/tmp/evidence.log") {
+		t.Fatalf("coordinator prompt was not compacted: bytes=%d", len(prompt))
+	}
+}
+
 func TestCoordinatorDelegatesThenValidatesWithSharedBudgetAndEvidence(t *testing.T) {
 	var mu sync.Mutex
 	active, peak, arrivals := 0, 0, 0
@@ -41,7 +57,13 @@ func TestCoordinatorDelegatesThenValidatesWithSharedBudgetAndEvidence(t *testing
 		}
 		var payload struct {
 			Role       string `json:"role"`
-			Assessment State  `json:"assessment"`
+			Assessment struct {
+				Results []struct {
+					Evidence []struct {
+						LogRefs []string `json:"log_refs"`
+					} `json:"evidence"`
+				} `json:"results"`
+			} `json:"assessment"`
 		}
 		_ = json.Unmarshal([]byte(req.Messages[1].Content), &payload)
 		if payload.Role == "assessment_coordinator" {

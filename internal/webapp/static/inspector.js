@@ -104,24 +104,9 @@ export function eventNode(record) {
   entry.append(time, node('strong', '', (e.task_id ? e.task_id + ' · ' : '') + phaseLabel(e.kind)));
   if (e.message) entry.append(node('p', 'pre-wrap', e.message));
   if (e.action) entry.append(node('pre', 'command', e.action));
+  if (e.rationale) entry.append(disclosure('Model summary', node('p', 'pre-wrap', e.rationale), 'rationale-' + record.sequence));
   if (e.evidence) entry.append(e.kind === 'execution_finished' ? observationResultNode(e.evidence, record.sequence) : evidenceNode(e.evidence));
   return entry;
-}
-function approvalNode(item, act) {
-  const box = node('div', 'approval');
-  box.append(node('h4', '', 'Approval required'));
-  box.append(node('p', 'worker-detail', item.impact || 'Review the exact invocation carefully. The coordinator did not provide an impact summary.'));
-  box.append(node('pre', 'command', item.command));
-  box.append(disclosure('Working directory', node('code', 'evidence-ref', item.cwd), 'cwd-' + item.id));
-  const row = node('div', 'action-row');
-  for (const [decision, label, style] of [['approved_once', 'Approve once', ''], ['denied', 'Deny', 'secondary']]) {
-    const button = node('button', style, label);
-    button.type = 'button';
-    button.onclick = () => act('approvals/' + encodeURIComponent(item.id), {decision}, row);
-    row.append(button);
-  }
-  box.append(row);
-  return box;
 }
 function questionNode(item, act) {
   const box = node('form', 'approval');
@@ -139,21 +124,6 @@ function questionNode(item, act) {
   box.onsubmit = event => { event.preventDefault(); act('questions/' + encodeURIComponent(item.id), {text: input.value}, row); };
   return box;
 }
-function observationNode(item, act) {
-  const box = node('div', 'approval observation-approval');
-  box.append(node('h4', '', 'Coordinator requests a read-only observation'));
-  box.append(node('p', 'worker-detail', 'This reads local metadata only. It does not probe a target, read file contents, or modify the workspace.'));
-  box.append(node('pre', 'command', JSON.stringify(item.tool, null, 2)));
-  const row = node('div', 'action-row');
-  for (const [decision, label, style] of [['approved_once', 'Allow once', ''], ['denied', 'Deny', 'secondary']]) {
-    const button = node('button', style, label);
-    button.type = 'button';
-    button.onclick = () => act('approvals/' + encodeURIComponent(item.id), {decision}, row);
-    row.append(button);
-  }
-  box.append(row);
-  return box;
-}
 export function renderWorkers(view, act) {
   const workers = new Map((view.workers || []).map(w => [w.id, w]));
   // An approval can arrive just before the first progress snapshot.
@@ -161,7 +131,7 @@ export function renderWorkers(view, act) {
     if (!workers.has(item.task_id)) workers.set(item.task_id, {id: item.task_id, phase:'task_started'});
   }
   const cards = [];
-  if (view.pending_tool) cards.push(observationNode(view.pending_tool, act));
+  if (view.pending_tool) cards.push(node('div', 'worker-approval-note', 'Read-only observation approval is shown in the conversation.'));
   for (const w of workers.values()) {
     const approvals = (view.pending_approvals || []).filter(a => a.task_id === w.id);
     const questions = (view.pending_questions || []).filter(q => q.task_id === w.id);
@@ -177,8 +147,7 @@ export function renderWorkers(view, act) {
       const metric = node('span'); metric.append(node('strong', '', value), document.createTextNode(' ' + label)); metrics.append(metric);
     }
     card.append(metrics);
-    if (w.action && !approvals.length) card.append(node('div', 'action-label', phase === 'execution_started' ? 'Running' : 'Latest action'), node('pre', 'command', w.action));
-    for (const a of approvals) card.append(approvalNode(a, act));
+    if (approvals.length) card.append(node('div', 'worker-approval-note', 'Approval requested in the conversation'));
     for (const q of questions) card.append(questionNode(q, act));
     const details = node('div');
     details.append(grid([
@@ -186,6 +155,8 @@ export function renderWorkers(view, act) {
       ['Context window', contextLabel(w)], ['Context remaining', w.context_limit_bytes ? formatBytes(Math.max(0, w.context_limit_bytes - w.context_used_bytes)) : 'Not reported'], ['Dependencies', (w.depends_on || []).join(', ') || 'None'],
       ['Last exit', w.exit_status || '—'], ['Updated', w.updated_at ? new Date(w.updated_at).toLocaleTimeString() : '—'],
     ]));
+    if (w.action) details.append(node('div', 'action-label', phase === 'execution_started' ? 'Running invocation' : 'Latest invocation'), node('pre', 'command', w.action));
+    if (w.rationale) details.append(disclosure('Model summary', node('p', 'pre-wrap', w.rationale), 'worker-rationale-' + w.id));
     if (w.done_when) details.append(node('div', 'action-label', 'Completion criteria'), node('p', '', w.done_when));
     if (w.detail) details.append(node('div', 'action-label', 'Latest update'), node('p', 'pre-wrap', w.detail));
     if (w.plan_steps?.length) {

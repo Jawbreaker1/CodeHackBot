@@ -37,6 +37,17 @@ type Client struct {
 // profile does not declare a larger request budget.
 const DefaultInputByteLimit = 48 * 1024
 
+// SubscriptionInputByteLimit is the application-side input budget used for
+// the subscription bridge. The bridge keeps this separate from local-model
+// defaults because Daybreak's verified provider profile has a much larger
+// context window.
+const SubscriptionInputByteLimit = 128 * 1024
+
+// SubscriptionMaxOutputTokens is passed through the bridge to the Responses
+// backend when the subscription profile is active. Provider-side limits still
+// win; this is a request ceiling, not a guarantee.
+const SubscriptionMaxOutputTokens = 128000
+
 // Message is a chat message.
 type Message struct {
 	Role             string `json:"role"`
