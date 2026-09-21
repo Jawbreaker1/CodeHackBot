@@ -46,8 +46,15 @@ def run_session(base, customer, goal):
     assert chat["messages"][-1]["role"] == "assistant" and "waiting" in chat["messages"][-1]["text"], chat
     deadline = time.monotonic() + 10
     approved = False
+    plan_approved = False
     while time.monotonic() < deadline:
         _, view = call(base, f"/api/v1/assessments/{assessment_id}")
+        if view.get("pending_plan") and not plan_approved:
+            plan = view["pending_plan"]
+            task_ids = [task["id"] for task in plan.get("tasks", [])]
+            assert task_ids, plan
+            call(base, f"/api/v1/assessments/{assessment_id}/plans/{plan['id']}", "POST", {"decision": "approved", "approved_task_ids": task_ids})
+            plan_approved = True
         if view["pending_approvals"] and not approved:
             approval_id = view["pending_approvals"][0]["id"]
             call(base, f"/api/v1/assessments/{assessment_id}/approvals/{approval_id}", "POST", {"decision": "approved_once"})

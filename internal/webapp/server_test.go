@@ -1,6 +1,7 @@
 package webapp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -40,6 +41,15 @@ func TestServerCreatesDraftAndServesUI(t *testing.T) {
 		t.Fatal("operator console stylesheet is missing")
 	}
 	_ = css.Body.Close()
+	analysisPage, err := http.Get(httpServer.URL + "/analysis")
+	if err != nil || analysisPage.StatusCode != http.StatusOK {
+		t.Fatal("analysis workspace is missing")
+	}
+	analysisBody, _ := io.ReadAll(analysisPage.Body)
+	_ = analysisPage.Body.Close()
+	if !strings.Contains(string(analysisBody), "Analysis workspace") {
+		t.Fatal("analysis workspace shell is missing")
+	}
 
 	created := postJSON[assessmentView](t, httpServer.URL+"/api/v1/assessments", createRequest{Customer: "fixture-lab", Goal: "inspect the fixture", Scope: "only local synthetic commands; approve each action"})
 	if created.Status != "draft" || created.ID == "" {
@@ -315,6 +325,100 @@ func TestServerAggregatesSessionsByCustomer(t *testing.T) {
 	}
 }
 
+func TestAnalysisPrioritizesFindingsAndAggregatesSessions(t *testing.T) {
+	server := NewServer(Config{RepoRoot: t.TempDir()})
+	first, err := server.newRun("analysis-customer", "first security check", "synthetic target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := server.newRun("analysis-customer", "second security check", "synthetic target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.mu.Lock()
+	first.status = "completed"
+	first.state = assessment.State{ID: first.id, Goal: first.goal, Scope: first.scope, Status: "completed", Model: "daybreak", Plans: []assessment.Decision{{Summary: "validated", Findings: []assessment.Finding{{Title: "Critical auth bypass", Status: "reproduced", Severity: "critical", Confidence: "high", CVEIDs: []string{"CVE-2026-1234"}, AffectedSoftware: []string{"fixture 1.2"}, References: []string{"advisory.json"}, Impact: "account access", Steps: []string{"repeat"}, Evidence: []string{"validate.log"}, Remediation: []string{"patch"}}}}}}
+	first.mu.Unlock()
+	second.mu.Lock()
+	second.status = "completed"
+	second.state = assessment.State{ID: second.id, Goal: second.goal, Scope: second.scope, Status: "completed", Model: "qwen/qwen3.8-27b", Plans: []assessment.Decision{{Summary: "candidate", Gaps: []string{"authenticated coverage remains"}, Findings: []assessment.Finding{{Title: "Medium configuration issue", Status: "candidate", Severity: "medium", Confidence: "low", Impact: "configuration exposure", Steps: []string{"inspect"}, Evidence: []string{"inspect.log"}, Remediation: []string{"harden"}}}}}}
+	second.mu.Unlock()
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/assessments/"+first.id+"/analysis", nil)
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("assessment analysis status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var assessmentAnalysis analysisView
+	if err := json.Unmarshal(recorder.Body.Bytes(), &assessmentAnalysis); err != nil {
+		t.Fatal(err)
+	}
+	if len(assessmentAnalysis.Findings) != 1 || assessmentAnalysis.Findings[0].Priority != "critical" || assessmentAnalysis.Findings[0].CVEIDs[0] != "CVE-2026-1234" {
+		t.Fatalf("assessment analysis=%+v", assessmentAnalysis)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/customers/analysis-customer/analysis", nil)
+	recorder = httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("customer analysis status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var customerAnalysisView analysisView
+	if err := json.Unmarshal(recorder.Body.Bytes(), &customerAnalysisView); err != nil {
+		t.Fatal(err)
+	}
+	if customerAnalysisView.SessionCount != 2 || len(customerAnalysisView.Sessions) != 2 || len(customerAnalysisView.Findings) != 2 || customerAnalysisView.Findings[0].Title != "Critical auth bypass" || len(customerAnalysisView.NextActions) < 2 {
+		t.Fatalf("customer analysis=%+v", customerAnalysisView)
+	}
+}
+
+func TestPlanReviewSelectsTasksBeforeExecution(t *testing.T) {
+	server := NewServer(Config{RepoRoot: t.TempDir()})
+	run, err := server.newRun("plan-customer", "plan fixture", "synthetic only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := assessment.Decision{Summary: "Choose bounded checks", Tasks: []assessment.Task{{ID: "inspect", Goal: "Inspect the fixture", DoneWhen: "inspection recorded"}, {ID: "validate", Goal: "Validate the fixture", DoneWhen: "validation recorded"}}}
+	result := make(chan assessment.PlanReview, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	go func() {
+		review, reviewErr := run.reviewPlanWait(ctx, plan)
+		if reviewErr != nil {
+			t.Errorf("plan review wait: %v", reviewErr)
+			return
+		}
+		result <- review
+	}()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		run.mu.RLock()
+		pending := run.plan
+		run.mu.RUnlock()
+		if pending != nil {
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/assessments/"+run.id+"/plans/"+pending.ID, strings.NewReader(`{"decision":"approved","approved_task_ids":["inspect"]}`))
+			request.Header.Set("Content-Type", "application/json")
+			recorder := httptest.NewRecorder()
+			server.ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("plan review status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+			select {
+			case review := <-result:
+				if len(review.TaskIDs) != 1 || review.TaskIDs[0] != "inspect" {
+					t.Fatalf("selected plan=%+v", review)
+				}
+				return
+			case <-time.After(time.Second):
+				t.Fatal("plan review callback did not resume")
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("plan review was not surfaced")
+}
+
 func TestServerRestoresIntakeTranscriptAndSessionModel(t *testing.T) {
 	root := t.TempDir()
 	model := httptest.NewServer(http.HandlerFunc(webModelFixture))
@@ -409,9 +513,18 @@ func TestServerRunsSharedCoordinatorAndApprovalThroughHTTP(t *testing.T) {
 
 	deadline := time.Now().Add(5 * time.Second)
 	approved := false
+	planApproved := false
 	var latest assessmentView
 	for time.Now().Before(deadline) {
 		latest = getJSON[assessmentView](t, httpServer.URL+"/api/v1/assessments/"+created.ID)
+		if !planApproved && latest.PendingPlan != nil {
+			ids := make([]string, 0, len(latest.PendingPlan.Tasks))
+			for _, task := range latest.PendingPlan.Tasks {
+				ids = append(ids, task.ID)
+			}
+			postJSON[assessmentView](t, httpServer.URL+"/api/v1/assessments/"+created.ID+"/plans/"+latest.PendingPlan.ID, planReviewRequest{Decision: "approved", ApprovedTaskIDs: ids})
+			planApproved = true
+		}
 		if !approved && len(latest.PendingApprovals) > 0 {
 			approvalID := latest.PendingApprovals[0].ID
 			postJSON[assessmentView](t, httpServer.URL+"/api/v1/assessments/"+created.ID+"/approvals/"+approvalID, approvalRequest{Decision: "approved_once"})
@@ -422,8 +535,8 @@ func TestServerRunsSharedCoordinatorAndApprovalThroughHTTP(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if latest.Status != "completed" || !approved || len(latest.Results) != 1 || len(latest.Workers) != 1 {
-		t.Fatalf("final view = %#v (approved=%v)", latest, approved)
+	if latest.Status != "completed" || !approved || !planApproved || len(latest.Results) != 1 || len(latest.Workers) != 1 {
+		t.Fatalf("final view = %#v (approved=%v plan_approved=%v)", latest, approved, planApproved)
 	}
 	if latest.Workers[0].ID != "observe" || latest.Workers[0].EvidenceCount != 1 || latest.Workers[0].Phase != "done" {
 		t.Fatalf("worker view = %#v", latest.Workers[0])

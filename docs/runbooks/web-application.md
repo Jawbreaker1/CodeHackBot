@@ -27,6 +27,10 @@ The server discovers these records on startup. A run that was active when the pr
 
 The customer view at `/api/v1/customers/<customer-id>` combines all sessions created for that customer in the running server. It includes session status, model-authored draft findings from every plan, and links to each session report. `/api/v1/customers/<customer-id>/report` produces a unified Markdown summary. Findings remain drafts for operator review; a CVE match or model statement is not independent verification.
 
+After a session starts, the coordinator's first non-empty plan is shown in the main conversation. Select the bounded tasks to run or reject the plan; skipped tasks are retained in the report as operator decisions. Each selected task still presents exact tool invocations for approval. CVE and advisory references, observed software, validation status, and evidence links are shown in the analysis workspace at `/analysis?assessment=<session-id>`. Use `/analysis?customer=<customer-id>` for the unified customer view. The analysis surface is separate from chat so priorities, gaps, evidence, remediation, and next actions remain visible while the coordinator conversation continues.
+
+The formal Markdown report is generated from the same persisted assessment state and includes scope, the selected test sequence, findings, advisory references, reproduction steps, remediation, evidence references, work logs, and stated gaps. It is a reviewable draft rather than an automatic assurance document; preserve the local session directory when a customer needs the full execution record.
+
 The preview still has no authentication, origin/CSRF protection, or streaming transport. Keep it on loopback and use only an authorized lab; remote deployment remains out of scope until those controls exist.
 
 ## Deterministic check

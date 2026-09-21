@@ -75,6 +75,9 @@ The [competitive assessment](docs/competitive-assessment-2026-09-19.md) supports
 - [x] Support model-directed local advisory investigation and follow-up requests through ordinary approved actions. A dedicated corpus/research service and connected research validation remain deferred.
 - [x] Route useful candidates to dependent validation and require recorded evidence for draft findings. Structural checks do not independently verify a finding.
 - [x] Expose this flow through guided startup, visible progress, worker questions, per-action approvals, and broadcast stop.
+- [x] Require operator selection of proposed web test tasks before execution; retain approved/skipped choices in the assessment plan and report.
+- [x] Preserve structured advisory/CVE references and observed software on findings, with transparent severity/confidence prioritization in a separate web analysis view.
+- [x] Include selected test sequence, advisory references, evidence register, remediation, and assessment gaps in the formal Markdown draft report.
 - [x] Validate the complete flow on controlled fixtures through the built application: three corrected-build Daybreak runs passed, and the deterministic generic orchestration path now covers two independent tasks followed by dependent validation. Contexts, dependencies, actual output, reports, and cancellation were inspected. Local-model acceptance remains open below.
 - [x] Freeze the first synthetic fixture's expected findings, negative controls, and research gap before running it.
 - [ ] Validate Qwen 3.8 on the current task/report contract with low reasoning and the larger output budget; retain the failed pilot and require explicit validation dependencies and reference checks.

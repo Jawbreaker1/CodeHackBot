@@ -63,6 +63,7 @@ h1 { margin: 0; font-size: 13px; font-weight: 500; text-overflow: ellipsis; whit
 .icon-button { width: 30px; height: 30px; display: grid; place-items: center; color: var(--muted); flex-shrink: 0; }
 #toggleSidebar { display: none; }
 .subtle-button { display: flex; gap: 7px; align-items: center; padding: 6px 8px; color: var(--muted); font-size: 12px; }
+.analysis-link { text-decoration: none; }
 .count { font-size: 10px; padding: 1px 5px; border-radius: 4px; background: #ffffff09; }
 .attention-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--attention); }
 #chat { flex: 1; min-height: 0; overflow: auto; padding: 24px max(24px, calc((100% - 760px) / 2)) 36px; scroll-behavior: smooth; }
@@ -151,6 +152,10 @@ details p { margin: 10px 0; }
 .chat-approval-title { color: var(--attention); font-size: 12px; font-weight: 600; }
 .chat-approval .worker-detail { margin: 7px 0 10px; }
 .chat-approval .command { max-height: 180px; }
+.plan-choices { display: grid; gap: 6px; margin: 12px 0; }
+.plan-choice { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; row-gap: 2px; padding: 9px; border: 1px solid var(--line); border-radius: 6px; background: #ffffff05; font-size: 11px; }
+.plan-choice input { width: auto; grid-row: span 2; margin-top: 2px; accent-color: var(--attention); }
+.plan-choice small { grid-column: 2; color: var(--faint); font-size: 10px; }
 .action-row { display: flex; gap: 8px; margin: 10px 0; }
 .action-row button, .primary-button { padding: 7px 11px; font-size: 11px; background: #dedcd4; color: #262622; }
 .action-row button:hover:not(:disabled), .primary-button:hover:not(:disabled) { background: #f5f3ec; }

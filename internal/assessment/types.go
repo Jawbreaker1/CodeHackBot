@@ -77,21 +77,34 @@ type Result struct {
 
 // Findings are model-authored drafts, never independent verification claims.
 type Finding struct {
-	Title          string   `json:"title"`
-	Status         string   `json:"status"` // candidate or reproduced
-	ValidationTask string   `json:"validation_task,omitempty"`
-	Impact         string   `json:"impact"`
-	Steps          []string `json:"steps"`
-	Evidence       []string `json:"evidence"`
-	Remediation    []string `json:"remediation"`
+	Title            string   `json:"title"`
+	Status           string   `json:"status"`               // candidate or reproduced
+	Severity         string   `json:"severity,omitempty"`   // critical, high, medium, low, or info
+	Confidence       string   `json:"confidence,omitempty"` // high, medium, or low
+	CVEIDs           []string `json:"cve_ids,omitempty"`
+	AffectedSoftware []string `json:"affected_software,omitempty"`
+	References       []string `json:"references,omitempty"`
+	ValidationTask   string   `json:"validation_task,omitempty"`
+	Impact           string   `json:"impact"`
+	Steps            []string `json:"steps"`
+	Evidence         []string `json:"evidence"`
+	Remediation      []string `json:"remediation"`
 }
 
 type Decision struct {
-	Summary  string    `json:"summary"`
-	Tasks    []Task    `json:"tasks"`
-	Complete bool      `json:"complete"`
-	Findings []Finding `json:"findings"`
-	Gaps     []string  `json:"gaps"`
+	Summary         string    `json:"summary"`
+	Tasks           []Task    `json:"tasks"`
+	ApprovedTaskIDs []string  `json:"approved_task_ids,omitempty"`
+	SkippedTaskIDs  []string  `json:"skipped_task_ids,omitempty"`
+	Complete        bool      `json:"complete"`
+	Findings        []Finding `json:"findings"`
+	Gaps            []string  `json:"gaps"`
+}
+
+// PlanReview is the operator's selection of model-proposed tasks. The model
+// proposes; the operator decides which bounded tasks may run.
+type PlanReview struct {
+	TaskIDs []string
 }
 
 type State struct {
@@ -193,6 +206,12 @@ func validateDecision(d Decision, state State) error {
 		if f.Status != "candidate" && f.Status != "reproduced" {
 			return fmt.Errorf("unknown finding status %q", f.Status)
 		}
+		if f.Severity != "" && !validFindingSeverity(f.Severity) {
+			return fmt.Errorf("unknown finding severity %q", f.Severity)
+		}
+		if f.Confidence != "" && !validFindingConfidence(f.Confidence) {
+			return fmt.Errorf("unknown finding confidence %q", f.Confidence)
+		}
 		for _, ref := range f.Evidence {
 			if !refs[ref] {
 				return fmt.Errorf("finding references unrecorded evidence: %s", ref)
@@ -219,6 +238,24 @@ func validateDecision(d Decision, state State) error {
 		}
 	}
 	return nil
+}
+
+func validFindingSeverity(value string) bool {
+	switch value {
+	case "critical", "high", "medium", "low", "info":
+		return true
+	default:
+		return false
+	}
+}
+
+func validFindingConfidence(value string) bool {
+	switch value {
+	case "high", "medium", "low":
+		return true
+	default:
+		return false
+	}
 }
 
 func validID(id string) bool {

@@ -115,6 +115,32 @@ function chatApprovalNode(item, kind) {
   box.append(row);
   return box;
 }
+function planReviewNode(plan) {
+  const box = node('article', 'chat-approval plan-review');
+  box.setAttribute('aria-live', 'assertive');
+  box.append(node('div', 'chat-approval-title', 'Review proposed test sequence'));
+  box.append(node('p', 'worker-detail', 'The coordinator has proposed bounded tests. Select what should run; unselected tasks will not execute or become evidence.'));
+  const choices = node('div', 'plan-choices');
+  for (const task of plan.tasks || []) {
+    const label = node('label', 'plan-choice');
+    const input = document.createElement('input');
+    input.type = 'checkbox'; input.value = task.id; input.checked = true;
+    label.append(input, node('span', '', task.id + ' · ' + task.goal), node('small', '', 'Done when: ' + task.done_when));
+    choices.append(label);
+  }
+  box.append(choices);
+  const row = node('div', 'action-row');
+  const run = node('button', '', 'Run selected'); run.type = 'button';
+  run.onclick = () => {
+    const ids = [...choices.querySelectorAll('input:checked')].map(input => input.value);
+    if (!ids.length) return showError(new Error('Select at least one proposed task, or reject the plan.'));
+    act('plans/' + encodeURIComponent(plan.id), {decision: 'approved', approved_task_ids: ids}, row);
+  };
+  const reject = node('button', 'secondary', 'Reject plan'); reject.type = 'button';
+  reject.onclick = () => act('plans/' + encodeURIComponent(plan.id), {decision: 'denied'}, row);
+  row.append(run, reject); box.append(row);
+  return box;
+}
 function traceNode(records) {
   const list = node('ol', 'activity-list');
   for (const record of records) list.append(eventNode(record));
@@ -130,7 +156,7 @@ function traceNode(records) {
 function renderTranscript() {
   const messages = [...(current?.messages || [])];
   const records = [...eventRecords.values()];
-  if (!changed('transcript', [messages, records, pendingMessage, current?.pending_tool, current?.pending_approvals])) return;
+  if (!changed('transcript', [messages, records, pendingMessage, current?.pending_tool, current?.pending_approvals, current?.pending_plan])) return;
   const pane = $('chat');
   const follow = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 100;
   const scrollTop = pane.scrollTop;
@@ -148,6 +174,7 @@ function renderTranscript() {
   flushTrace();
   for (const approval of current?.pending_approvals || []) items.push(chatApprovalNode(approval, 'action'));
   if (current?.pending_tool) items.push(chatApprovalNode(current.pending_tool, 'observation'));
+  if (current?.pending_plan) items.push(planReviewNode(current.pending_plan));
   if (pendingMessage) {
     const last = messages[messages.length - 1];
     if (!last || last.role !== 'user' || last.text !== pendingMessage) items.push(messageNode({role:'user', text:pendingMessage}));
@@ -168,7 +195,7 @@ function updateComposer() {
   $('chatInput').disabled = !current || !!finalized;
   $('send').disabled = !current || !!finalized || !!pendingMessage || !$('chatInput').value.trim();
   $('newAssessment').disabled = starting;
-  $('conversationState').textContent = current?.pending_tool ? 'Waiting for your approval · No tool is running' : pendingMessage ? 'Coordinator is responding…' : current?.resumable ? 'Session paused · Open Workers to review and resume' : finalized ? 'Session ended · Start a new session to continue' : current?.customer ? 'Workers can run while you discuss the assessment' : 'Ready when you are';
+  $('conversationState').textContent = current?.pending_plan ? 'Waiting for your test selection · No worker is running' : current?.pending_tool ? 'Waiting for your approval · No tool is running' : pendingMessage ? 'Coordinator is responding…' : current?.resumable ? 'Session paused · Open Workers to review and resume' : finalized ? 'Session ended · Start a new session to continue' : current?.customer ? 'Workers can run while you discuss the assessment' : 'Ready when you are';
   $('chatInput').placeholder = current?.resumable ? 'Resume this session to continue' : finalized ? 'This session has ended' : 'Ask, investigate, or plan an assessment…';
 }
 function formatBytes(value) {
@@ -182,7 +209,10 @@ function renderWorkStatus(view) {
   const approvals = view.pending_approvals || [];
   let label = '';
   let state = 'working';
-  if (view.pending_tool || approvals.length) {
+  if (view.pending_plan) {
+    state = 'waiting';
+    label = 'Plan review · choose tests before execution';
+  } else if (view.pending_tool || approvals.length) {
     state = 'waiting';
     label = 'Approval needed · ' + (approvals.length ? approvals.map(item => item.task_id).join(', ') : 'local observation');
   } else if (workers.some(worker => worker.phase === 'execution_started')) {
@@ -204,7 +234,7 @@ function renderWorkStatus(view) {
 }
 function renderOverview(view) {
   const running = activeStatuses.includes(view.status);
-  const status = view.customer ? view.status : view.pending_tool ? 'Needs approval' : view.status === 'thinking' ? 'Thinking' : view.proposal ? 'Ready for review' : 'Conversation';
+  const status = view.customer ? (view.pending_plan ? 'Plan ready' : view.status) : view.pending_tool ? 'Needs approval' : view.status === 'thinking' ? 'Thinking' : view.proposal ? 'Ready for review' : 'Conversation';
   $('assessmentStatus').textContent = status;
   $('assessmentStatus').dataset.state = view.status;
   renderWorkStatus(view);
@@ -237,6 +267,8 @@ function renderOverview(view) {
   }
   $('customerReport').classList.toggle('hidden', !view.customer);
   if (view.customer) $('customerReport').href = '/api/v1/customers/' + encodeURIComponent(view.customer) + '/report';
+  $('analysisLink').classList.toggle('hidden', !view.customer);
+  if (view.customer) $('analysisLink').href = '/analysis?assessment=' + encodeURIComponent(view.id);
 }
 function renderView(view) {
   current = view;
@@ -257,7 +289,7 @@ function renderView(view) {
     if (records.length) $('activity').replaceChildren(...records.map(eventNode));
     else $('activity').replaceChildren(node('li', 'empty', 'Runtime events will appear here.'));
   }
-  const attention = (view.pending_approvals?.length || 0) + (view.pending_questions?.length || 0) + (view.pending_tool ? 1 : 0);
+  const attention = (view.pending_approvals?.length || 0) + (view.pending_questions?.length || 0) + (view.pending_tool ? 1 : 0) + (view.pending_plan ? 1 : 0);
   $('attentionDot').classList.toggle('hidden', !attention);
   $('toggleInspector').title = attention ? attention + ' pending operator actions' : 'Show worker details';
   updateComposer();

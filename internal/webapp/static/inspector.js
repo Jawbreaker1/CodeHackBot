@@ -180,7 +180,9 @@ export function renderFindings(view) {
   const items = [];
   for (const f of view.findings || []) {
     const item = node('article', 'finding');
-    item.append(node('span', 'muted', 'Model-authored · ' + f.status), node('h3', '', f.title), node('p', '', f.impact));
+    item.append(node('span', 'muted', 'Model-authored · ' + f.status + (f.severity ? ' · ' + f.severity : '') + (f.confidence ? ' · ' + f.confidence + ' confidence' : '')), node('h3', '', f.title), node('p', '', f.impact));
+    if (f.cve_ids?.length) item.append(node('p', 'muted', 'CVE references: ' + f.cve_ids.join(', ')));
+    if (f.affected_software?.length) item.append(node('p', 'muted', 'Affected software: ' + f.affected_software.join(', ')));
     for (const [label, values] of [['Reproduction steps', f.steps], ['Evidence references', f.evidence], ['Remediation', f.remediation]]) {
       const list = node('ul');
       for (const value of values || []) list.append(node('li', 'pre-wrap', value));

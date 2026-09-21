@@ -43,6 +43,18 @@ func TestCoordinatorPromptCompactsPriorExecutionBodies(t *testing.T) {
 	}
 }
 
+func TestFindingAdvisoryFieldsRemainStructuredAndValidated(t *testing.T) {
+	state := State{Limits: DefaultLimits(), Results: []Result{{Task: Task{ID: "research"}, Status: "done", Evidence: []ctxpacket.ExecutionResult{{LogRefs: []string{"research.log"}}}}}}
+	finding := Finding{Title: "Known issue", Status: "candidate", Severity: "high", Confidence: "medium", CVEIDs: []string{"CVE-2026-1234"}, AffectedSoftware: []string{"fixture 1.2"}, References: []string{"https://example.invalid/advisory"}, Impact: "fixture", Steps: []string{"repeat the check"}, Evidence: []string{"research.log"}, Remediation: []string{"upgrade"}}
+	if err := validateDecision(Decision{Summary: "research recorded", Complete: true, Findings: []Finding{finding}}, state); err != nil {
+		t.Fatalf("structured advisory finding rejected: %v", err)
+	}
+	finding.Severity = "urgent"
+	if err := validateDecision(Decision{Summary: "research recorded", Complete: true, Findings: []Finding{finding}}, state); err == nil {
+		t.Fatal("invalid finding severity was accepted")
+	}
+}
+
 func TestCoordinatorDelegatesThenValidatesWithSharedBudgetAndEvidence(t *testing.T) {
 	var mu sync.Mutex
 	active, peak, arrivals := 0, 0, 0

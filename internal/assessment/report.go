@@ -31,8 +31,39 @@ func writeReport(root string, s State) error {
 	if len(s.Plans) > 0 {
 		d := s.Plans[len(s.Plans)-1]
 		fmt.Fprintf(&b, "## Summary\n\n%s\n\n", d.Summary)
+		if len(d.Tasks) > 0 {
+			b.WriteString("## Proposed test sequence\n\n")
+			for _, task := range d.Tasks {
+				state := "proposed"
+				for _, id := range d.ApprovedTaskIDs {
+					if id == task.ID {
+						state = "approved and run"
+					}
+				}
+				for _, id := range d.SkippedTaskIDs {
+					if id == task.ID {
+						state = "skipped by operator"
+					}
+				}
+				fmt.Fprintf(&b, "- `%s` — **%s** — %s (done when: %s)\n", task.ID, state, task.Goal, task.DoneWhen)
+			}
+			b.WriteString("\n")
+		}
 		for _, f := range d.Findings {
-			fmt.Fprintf(&b, "## %s\n\nStatus: %s (model assessment; operator review required)\n\nImpact: %s\n\nSteps to reproduce:\n\n", f.Title, f.Status, f.Impact)
+			fmt.Fprintf(&b, "## %s\n\nStatus: %s (model assessment; operator review required)\n\n", f.Title, f.Status)
+			if f.Severity != "" {
+				fmt.Fprintf(&b, "Severity: **%s**\n\n", f.Severity)
+			}
+			if f.Confidence != "" {
+				fmt.Fprintf(&b, "Confidence: **%s**\n\n", f.Confidence)
+			}
+			if len(f.CVEIDs) > 0 {
+				fmt.Fprintf(&b, "CVE references: %s\n\n", strings.Join(f.CVEIDs, ", "))
+			}
+			if len(f.AffectedSoftware) > 0 {
+				fmt.Fprintf(&b, "Affected software: %s\n\n", strings.Join(f.AffectedSoftware, ", "))
+			}
+			fmt.Fprintf(&b, "Impact: %s\n\nSteps to reproduce:\n\n", f.Impact)
 			for i, step := range f.Steps {
 				fmt.Fprintf(&b, "%d. %s\n", i+1, step)
 			}
@@ -43,6 +74,12 @@ func writeReport(root string, s State) error {
 			b.WriteString("\nEvidence:\n\n")
 			for _, ref := range f.Evidence {
 				fmt.Fprintf(&b, "- %s\n", ref)
+			}
+			if len(f.References) > 0 {
+				b.WriteString("\nResearch references:\n\n")
+				for _, ref := range f.References {
+					fmt.Fprintf(&b, "- %s\n", ref)
+				}
 			}
 			b.WriteString("\n")
 		}
@@ -61,11 +98,24 @@ func writeReport(root string, s State) error {
 			fmt.Fprintf(&b, "Limitation: %s\n\n", r.Error)
 		}
 		for _, e := range r.Evidence {
+			if e.ActualExec != "" {
+				fmt.Fprintf(&b, "Invocation: `%s`\n\nExit status: `%s`\n\n", markdownCode(e.ActualExec), markdownCode(e.ExitStatus))
+			}
+			if e.OutputSummary != "" {
+				fmt.Fprintf(&b, "Observed result: %s\n\n", e.OutputSummary)
+			}
 			for _, ref := range e.LogRefs {
+				fmt.Fprintf(&b, "- %s\n", ref)
+			}
+			for _, ref := range e.ArtifactRefs {
 				fmt.Fprintf(&b, "- %s\n", ref)
 			}
 		}
 		b.WriteString("\n")
 	}
 	return os.WriteFile(filepath.Join(root, "report.md"), []byte(b.String()), 0600)
+}
+
+func markdownCode(value string) string {
+	return strings.ReplaceAll(value, "`", "'")
 }

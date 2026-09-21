@@ -130,6 +130,7 @@ type run struct {
 	approvals map[string]*pendingApproval
 	questions map[string]*pendingQuestion
 	workers   map[string]workerView
+	plan      *pendingPlan
 }
 
 type eventRecord struct {
@@ -152,6 +153,12 @@ type pendingQuestion struct {
 	answer chan string
 }
 
+type pendingPlan struct {
+	ID     string
+	plan   assessment.Decision
+	result chan assessment.PlanReview
+}
+
 type createRequest struct {
 	Customer string `json:"customer"`
 	Goal     string `json:"goal"`
@@ -164,6 +171,11 @@ type messageRequest struct {
 
 type approvalRequest struct {
 	Decision string `json:"decision"`
+}
+
+type planReviewRequest struct {
+	Decision        string   `json:"decision"`
+	ApprovedTaskIDs []string `json:"approved_task_ids"`
 }
 
 type assessmentView struct {
@@ -190,8 +202,15 @@ type assessmentView struct {
 	Events           []eventRecord        `json:"events"`
 	PendingApprovals []approvalView       `json:"pending_approvals"`
 	PendingQuestions []questionView       `json:"pending_questions"`
+	PendingPlan      *planApprovalView    `json:"pending_plan,omitempty"`
 	Messages         []intakeMessage      `json:"messages"`
 	ReportURL        string               `json:"report_url,omitempty"`
+}
+
+type planApprovalView struct {
+	ID      string            `json:"id"`
+	Summary string            `json:"summary"`
+	Tasks   []assessment.Task `json:"tasks"`
 }
 
 // contextWindowView reports the largest current worker request against the
@@ -255,6 +274,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write([]byte(indexHTML))
+		return
+	}
+	if r.URL.Path == "/analysis" {
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w, http.MethodGet)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(analysisHTML))
 		return
 	}
 	if r.URL.Path == "/api/v1/healthz" {
@@ -879,12 +907,32 @@ func (s *Server) assessmentRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		current.writeView(w, "")
+	case "plans":
+		if len(parts) != 3 || r.Method != http.MethodPost {
+			methodNotAllowed(w, http.MethodPost)
+			return
+		}
+		var input planReviewRequest
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+		if err := current.reviewPlan(parts[2], input); err != nil {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		current.writeView(w, "")
 	case "report":
 		if r.Method != http.MethodGet {
 			methodNotAllowed(w, http.MethodGet)
 			return
 		}
 		current.report(w)
+	case "analysis":
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w, http.MethodGet)
+			return
+		}
+		writeJSON(w, http.StatusOK, current.analysis())
 	default:
 		http.NotFound(w, r)
 	}
@@ -906,7 +954,31 @@ func (s *Server) customerRoute(w http.ResponseWriter, r *http.Request) {
 		s.customerReport(w, view)
 		return
 	}
+	if len(parts) == 2 && parts[1] == "analysis" && r.Method == http.MethodGet {
+		writeJSON(w, http.StatusOK, s.customerAnalysis(parts[0]))
+		return
+	}
 	methodNotAllowed(w, http.MethodGet)
+}
+
+func (s *Server) customerAnalysis(id string) analysisView {
+	s.mu.RLock()
+	runs := make([]*run, 0)
+	for _, current := range s.runs {
+		current.mu.RLock()
+		matches := current.customer == id
+		current.mu.RUnlock()
+		if matches {
+			runs = append(runs, current)
+		}
+	}
+	s.mu.RUnlock()
+	sessions := make([]analysisView, 0, len(runs))
+	for _, current := range runs {
+		sessions = append(sessions, current.analysis())
+	}
+	sort.Slice(sessions, func(i, j int) bool { return sessions[i].ID < sessions[j].ID })
+	return buildCustomerAnalysis(id, sessions)
 }
 
 func (s *Server) customerView(id string) customerView {
@@ -966,10 +1038,23 @@ func (s *Server) customerReport(w http.ResponseWriter, view customerView) {
 		b.WriteString("No model-authored findings have been recorded. This is not evidence that the customer environment is secure.\n")
 	} else {
 		for _, item := range view.Findings {
-			fmt.Fprintf(&b, "### %s\n\nSession: `%s`\n\nStatus: %s\n\nImpact: %s\n\n", item.Finding.Title, item.SessionID, item.Finding.Status, item.Finding.Impact)
+			fmt.Fprintf(&b, "### %s\n\nSession: `%s`\n\nStatus: %s\n\n", item.Finding.Title, item.SessionID, item.Finding.Status)
+			if item.Finding.Severity != "" {
+				fmt.Fprintf(&b, "Severity: **%s**\n\n", item.Finding.Severity)
+			}
+			if len(item.Finding.CVEIDs) > 0 {
+				fmt.Fprintf(&b, "CVE references: %s\n\n", strings.Join(item.Finding.CVEIDs, ", "))
+			}
+			fmt.Fprintf(&b, "Impact: %s\n\n", item.Finding.Impact)
 			b.WriteString("Evidence:\n\n")
 			for _, evidence := range item.Finding.Evidence {
 				fmt.Fprintf(&b, "- %s\n", evidence)
+			}
+			if len(item.Finding.References) > 0 {
+				b.WriteString("\nResearch references:\n\n")
+				for _, ref := range item.Finding.References {
+					fmt.Fprintf(&b, "- %s\n", ref)
+				}
 			}
 			b.WriteString("\n")
 		}
@@ -1042,6 +1127,9 @@ func (s *Server) runAssessment(ctx context.Context, current *run) {
 		},
 		AskUser: func(ctx context.Context, task assessment.Task, question string) (string, error) {
 			return current.ask(ctx, task.ID, question)
+		},
+		PlanApproval: func(ctx context.Context, plan assessment.Decision) (assessment.PlanReview, error) {
+			return current.reviewPlanWait(ctx, plan)
 		},
 		Conversation: current.conversation,
 		Snapshot:     current.snapshot,
@@ -1254,6 +1342,78 @@ func (r *run) ask(ctx context.Context, taskID, text string) (string, error) {
 	}
 }
 
+func (r *run) reviewPlanWait(ctx context.Context, plan assessment.Decision) (assessment.PlanReview, error) {
+	r.mu.Lock()
+	if r.plan != nil {
+		r.mu.Unlock()
+		return assessment.PlanReview{}, fmt.Errorf("another plan is already awaiting review")
+	}
+	id := r.nextIDLocked("plan")
+	pending := &pendingPlan{ID: id, plan: plan, result: make(chan assessment.PlanReview, 1)}
+	r.plan = pending
+	r.events = append(r.events, eventRecord{Sequence: r.sequence, At: time.Now().UTC(), Event: assessment.Event{Kind: "plan_review", Message: plan.Summary}})
+	r.updatedAt = time.Now().UTC()
+	r.mu.Unlock()
+	_ = r.persist()
+	select {
+	case review := <-pending.result:
+		return review, nil
+	case <-ctx.Done():
+		r.mu.Lock()
+		if r.plan == pending {
+			r.plan = nil
+		}
+		r.mu.Unlock()
+		return assessment.PlanReview{}, ctx.Err()
+	}
+}
+
+func (r *run) reviewPlan(id string, input planReviewRequest) error {
+	r.mu.Lock()
+	pending := r.plan
+	if pending == nil || pending.ID != id {
+		r.mu.Unlock()
+		return fmt.Errorf("plan is no longer awaiting review")
+	}
+	decision := strings.ToLower(strings.TrimSpace(input.Decision))
+	if decision == "deny" || decision == "denied" || decision == "reject" || decision == "rejected" {
+		r.plan = nil
+		r.updatedAt = time.Now().UTC()
+		r.mu.Unlock()
+		pending.result <- assessment.PlanReview{}
+		_ = r.persist()
+		return nil
+	}
+	if decision != "" && decision != "approve" && decision != "approved" && decision != "approved_once" {
+		r.mu.Unlock()
+		return fmt.Errorf("unsupported plan decision")
+	}
+	ids := append([]string(nil), input.ApprovedTaskIDs...)
+	if len(ids) == 0 {
+		for _, task := range pending.plan.Tasks {
+			ids = append(ids, task.ID)
+		}
+	}
+	known := make(map[string]bool, len(pending.plan.Tasks))
+	for _, task := range pending.plan.Tasks {
+		known[task.ID] = true
+	}
+	seen := make(map[string]bool, len(ids))
+	for _, taskID := range ids {
+		if !known[taskID] || seen[taskID] {
+			r.mu.Unlock()
+			return fmt.Errorf("plan selection contains an unknown or duplicate task")
+		}
+		seen[taskID] = true
+	}
+	r.plan = nil
+	r.updatedAt = time.Now().UTC()
+	r.mu.Unlock()
+	pending.result <- assessment.PlanReview{TaskIDs: ids}
+	_ = r.persist()
+	return nil
+}
+
 func (r *run) answer(id, text string) error {
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -1336,6 +1496,9 @@ func (r *run) view(after string) assessmentView {
 	}
 	for _, question := range r.questions {
 		view.PendingQuestions = append(view.PendingQuestions, questionView{ID: question.ID, TaskID: question.taskID, Text: question.text})
+	}
+	if r.plan != nil {
+		view.PendingPlan = &planApprovalView{ID: r.plan.ID, Summary: r.plan.plan.Summary, Tasks: append([]assessment.Task(nil), r.plan.plan.Tasks...)}
 	}
 	sort.Slice(view.PendingApprovals, func(i, j int) bool { return view.PendingApprovals[i].ID < view.PendingApprovals[j].ID })
 	sort.Slice(view.PendingQuestions, func(i, j int) bool { return view.PendingQuestions[i].ID < view.PendingQuestions[j].ID })
