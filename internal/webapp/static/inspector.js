@@ -51,6 +51,42 @@ export function evidenceNode(evidence) {
   for (const ref of [...(evidence.log_refs || []), ...(evidence.artifact_refs || [])]) item.append(node('code', 'evidence-ref', ref));
   return item;
 }
+function observationResultNode(evidence, sequence) {
+  let observation;
+  try { observation = JSON.parse(evidence.summary || ''); } catch (_) { return evidenceNode(evidence); }
+  if (!observation || !observation.tool || !observation.data) return evidenceNode(evidence);
+  const box = node('div', 'observation-result');
+  const tool = observation.tool.name || 'observation';
+  if (tool === 'list_directory' && Array.isArray(observation.data.entries)) {
+    const entries = observation.data.entries;
+    box.append(node('strong', '', `${entries.length} entries · ${observation.data.path || 'workspace'}`));
+    const list = node('ul', 'observation-list');
+    for (const entry of entries) list.append(node('li', '', `${entry.type === 'directory' ? '▸' : '·'} ${entry.name}`));
+    box.append(list);
+    if (observation.data.truncated) box.append(node('p', 'muted', 'Listing truncated at the observation limit.'));
+  } else if (tool === 'host_system') {
+    const values = [];
+    if (observation.data.hostname) values.push(['Hostname', observation.data.hostname.trim()]);
+    if (observation.data.kernel) values.push(['Kernel', observation.data.kernel.trim()]);
+    if (observation.data.architecture) values.push(['Architecture', observation.data.architecture.trim()]);
+    box.append(node('strong', '', 'Host identity · fixed read-only metadata'), grid(values));
+    if (observation.data.os_release) box.append(disclosure('/etc/os-release', node('pre', 'pre-wrap', observation.data.os_release), 'os-release-' + sequence));
+  } else if (typeof observation.data === 'object') {
+    box.append(node('strong', '', `${tool} result`));
+    const summary = node('ul', 'observation-list');
+    for (const [key, value] of Object.entries(observation.data)) {
+      const count = Array.isArray(value) ? `${value.length} records` : typeof value === 'object' ? 'structured data' : String(value);
+      summary.append(node('li', '', `${key}: ${count}`));
+    }
+    box.append(summary);
+  }
+  const raw = node('pre', 'pre-wrap', JSON.stringify(observation, null, 2));
+  box.append(disclosure('Raw observation', raw, 'observation-' + sequence));
+  if (observation.evidence_ref) box.append(node('code', 'evidence-ref', observation.evidence_ref));
+  const refs = new Set([...(evidence.log_refs || []), ...(evidence.artifact_refs || [])]);
+  for (const ref of refs) box.append(node('code', 'evidence-ref', ref));
+  return box;
+}
 export function eventNode(record) {
   const e = record.event;
   const entry = node('li', 'activity-item');
@@ -58,7 +94,7 @@ export function eventNode(record) {
   entry.append(time, node('strong', '', (e.task_id ? e.task_id + ' · ' : '') + phaseLabel(e.kind)));
   if (e.message) entry.append(node('p', 'pre-wrap', e.message));
   if (e.action) entry.append(node('pre', 'command', e.action));
-  if (e.evidence) entry.append(evidenceNode(e.evidence));
+  if (e.evidence) entry.append(e.kind === 'execution_finished' ? observationResultNode(e.evidence, record.sequence) : evidenceNode(e.evidence));
   return entry;
 }
 function approvalNode(item, act) {

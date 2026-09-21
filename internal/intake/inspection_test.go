@@ -40,3 +40,28 @@ func TestListDirectoryIsBoundedToWorkspaceAndRecordsEvidence(t *testing.T) {
 		t.Fatalf("escape should be a typed denial, not a runtime error: %v", err)
 	}
 }
+
+func TestHostSystemObservationUsesFixedMetadataQueries(t *testing.T) {
+	workspace := t.TempDir()
+	evidence := filepath.Join(t.TempDir(), "evidence")
+	inspection := Inspection{Workspace: workspace, EvidenceDir: evidence, Approver: approval.StaticApprover{Decision: approval.DecisionApproveOnce}}
+	result, err := inspection.Run(context.Background(), ToolCall{Name: "host_system"})
+	if err != nil || result.Status != "ok" || result.EvidenceRef == "" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	data, err := json.Marshal(result.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var host struct {
+		Kernel       string `json:"kernel"`
+		Hostname     string `json:"hostname"`
+		Architecture string `json:"architecture"`
+	}
+	if err := json.Unmarshal(data, &host); err != nil {
+		t.Fatal(err)
+	}
+	if host.Kernel == "" || host.Hostname == "" || host.Architecture == "" {
+		t.Fatalf("host metadata=%s", data)
+	}
+}

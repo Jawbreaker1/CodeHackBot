@@ -17,6 +17,10 @@ func TestDecodeTurnRequiresExactProtocol(t *testing.T) {
 	if err != nil || turn.Tool == nil || turn.Tool.Name != "list_directory" {
 		t.Fatalf("tool turn=%+v err=%v", turn, err)
 	}
+	turn, err = DecodeTurn(`{"reply":"I will inspect fixed host metadata.","proposal":null,"tool":{"name":"host_system"}}`)
+	if err != nil || turn.Tool == nil || turn.Tool.Name != "host_system" {
+		t.Fatalf("host tool turn=%+v err=%v", turn, err)
+	}
 	if _, err := DecodeTurn(`{"reply":"choose one","proposal":{"goal":"check","scope":"lab"},"tool":{"name":"local_network"}}`); err == nil {
 		t.Fatal("tool and proposal must not be combined")
 	}

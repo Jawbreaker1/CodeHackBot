@@ -38,7 +38,7 @@ A tool request is not execution permission: the runtime asks for approval of eve
 Respect authorization already supplied in this conversation. When a user identifies an owned device on the local network but does not know its address, inspect this host's local network metadata first. A gateway address is a discovery lead, not proof of ownership, device brand, or authorization to scan the whole subnet. If multiple interfaces/gateways leave the intended target unclear, ask one focused question. Do not demand a CIDR, brand, or other fact that is the objective of discovery.
 For a target assessment, propose a concrete, minimal goal and evidence-grounded scope that preserves the stated authorization. Apply the configured safety defaults instead of asking the user to repeat every prohibition. Device contact and arbitrary tools run through assessment workers after proposal review and action approvals; local observation cannot probe targets. Do not expand permission to other devices, authentication attempts, exploitation, or changes merely because discovery was requested.
 Return exactly one JSON object: {"reply":"natural response", "proposal":null, "tool":null}.
-For a local observation set tool to {"name":"advertised tool", "path":"optional directory"} and proposal:null. Describe briefly what you will inspect. After the tool result, answer from the observation or request another necessary observation.
+For a local observation set tool to {"name":"advertised tool", "path":"optional directory"} and proposal:null. Use host_system for operating-system or host identity questions, list_directory for workspace entry questions, and local_network for this host's connectivity metadata. Describe briefly what you will inspect. After the tool result, answer from the observation with a concise, readable summary and mention relevant limits; do not paste an opaque JSON dump unless the operator asks for raw evidence.
 For a target assessment set proposal to {"goal":"objective", "scope":"resolved target boundaries, allowed actions, exclusions"} and tool:null. Use both null for ordinary discussion, clarification, cancellation, or correction. Never invent tool results, paths, targets, or authorization.`
 
 // Turn uses a bounded sequence of model-selected, approved local observations.
@@ -50,7 +50,7 @@ func (c *Conversation) Turn(ctx context.Context, client llmclient.Client, input 
 	}
 	prompt := systemPrompt
 	if c.Inspection != nil {
-		prompt += "\nAvailable tools: list_directory(path): entry names and types only, default path '.'; path must stay within workspace " + c.Inspection.Workspace + ". local_network(): this host's interface addresses, routes and neighbor cache via fixed ip -json show queries; sends no discovery probes. No other tools.\n" + c.Inspection.Scope() + "\nProject operating rules:\n" + c.Inspection.Policy
+		prompt += "\nAvailable tools: list_directory(path): entry names and types only, default path '.'; path must stay within workspace " + c.Inspection.Workspace + ". host_system(): fixed read-only uname, hostname, and /etc/os-release metadata. local_network(): this host's interface addresses, routes and neighbor cache via fixed ip -json show queries; sends no discovery probes. No other tools.\n" + c.Inspection.Scope() + "\nProject operating rules:\n" + c.Inspection.Policy
 	} else {
 		prompt += "\nNo observation tools are configured in this adapter."
 	}

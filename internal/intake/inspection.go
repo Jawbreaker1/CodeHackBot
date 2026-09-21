@@ -38,7 +38,7 @@ type Observation struct {
 	EvidenceRef string   `json:"evidence_ref,omitempty"`
 }
 
-const inspectionScope = "Local observation only: directory entry names/types within the configured workspace and this host's kernel network metadata. No file contents, device probes, network packets, mutations, or arbitrary commands."
+const inspectionScope = "Local observation only: directory entry names/types within the configured workspace, this host's operating-system metadata, and kernel network metadata. Host metadata is limited to fixed read-only queries (uname, hostname, and /etc/os-release when present). No arbitrary commands, credential files, file contents beyond that fixed metadata, device probes, network packets, or mutations."
 
 func (i *Inspection) Scope() string { return inspectionScope }
 
@@ -66,6 +66,11 @@ func (i *Inspection) Run(ctx context.Context, call ToolCall) (Observation, error
 	case "local_network":
 		if call.Path != "" {
 			observation.Error = "local_network accepts no path or target"
+			return observation, nil
+		}
+	case "host_system":
+		if call.Path != "" {
+			observation.Error = "host_system accepts no path or target"
 			return observation, nil
 		}
 	default:
@@ -99,6 +104,8 @@ func (i *Inspection) Run(ctx context.Context, call ToolCall) (Observation, error
 		observation.Data, err = listDirectory(root, relative)
 	case "local_network":
 		observation.Data, err = i.localNetwork(ctx, root)
+	case "host_system":
+		observation.Data, err = i.hostSystem(ctx, root)
 	}
 	if err != nil {
 		observation.Error = err.Error()
@@ -196,4 +203,56 @@ func (i *Inspection) localNetwork(ctx context.Context, root string) (any, error)
 		out[query] = data
 	}
 	return out, nil
+}
+
+type hostSystemObservation struct {
+	Kernel       string `json:"kernel"`
+	Hostname     string `json:"hostname"`
+	Architecture string `json:"architecture"`
+	OSRelease    string `json:"os_release,omitempty"`
+}
+
+func (i *Inspection) hostSystem(ctx context.Context, root string) (any, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	kernel, err := fixedMetadataCommand(ctx, i.EvidenceDir, root, "uname", "-a")
+	if err != nil {
+		return nil, fmt.Errorf("uname query: %w", err)
+	}
+	hostname, err := fixedMetadataCommand(ctx, i.EvidenceDir, root, "hostname")
+	if err != nil {
+		return nil, fmt.Errorf("hostname query: %w", err)
+	}
+	architecture, err := fixedMetadataCommand(ctx, i.EvidenceDir, root, "uname", "-m")
+	if err != nil {
+		return nil, fmt.Errorf("architecture query: %w", err)
+	}
+	var release string
+	if data, readErr := os.ReadFile("/etc/os-release"); readErr == nil {
+		if len(data) > 16*1024 {
+			return nil, fmt.Errorf("/etc/os-release exceeds the observation limit")
+		}
+		release = string(data)
+	} else if !os.IsNotExist(readErr) {
+		return nil, fmt.Errorf("read /etc/os-release: %w", readErr)
+	}
+	return hostSystemObservation{Kernel: kernel, Hostname: hostname, Architecture: architecture, OSRelease: release}, nil
+}
+
+func fixedMetadataCommand(ctx context.Context, evidenceDir, root, command string, args ...string) (string, error) {
+	result, err := (execx.Executor{LogDir: evidenceDir}).Run(ctx, execx.Action{Command: command, Args: args, Cwd: root})
+	if err != nil {
+		return "", err
+	}
+	if len(result.ArtifactRefs) == 0 {
+		return "", fmt.Errorf("query produced no recorded output")
+	}
+	data, err := os.ReadFile(result.ArtifactRefs[0])
+	if err != nil {
+		return "", err
+	}
+	if len(data) > 16*1024 {
+		return "", fmt.Errorf("query output exceeds the observation limit")
+	}
+	return string(data), nil
 }
