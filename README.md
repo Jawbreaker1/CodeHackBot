@@ -2,13 +2,29 @@
 
 BirdHackBot is being built as System Verification's security testing platform for authorized assessments. The intended primary product is a multi-agent orchestrator coordinating investigation, source analysis, target validation, and reproducible reporting.
 
+<p align="center">
+  <img src="docs/assets/birdhackbot-logo.svg" alt="BirdHackBot logo" width="96">
+</p>
+
+The product is organized around a conversation with a coordinator. Explain the situation in plain language, review the proposed test sequence, choose which bounded tasks may run, and follow the workers as they collect evidence. Chat is the control surface; analysis and reporting are separate review surfaces.
+
+## Screenshots
+
+The screenshots below are captured from the loopback web application. They show the coordinator console and a unified customer analysis view using a harmless synthetic fixture.
+
+![BirdHackBot coordinator console](docs/screenshots/coordinator-console.png)
+
+![BirdHackBot customer analysis](docs/screenshots/customer-analysis.png)
+
 ## What works today
 
 The active implementation uses one adaptive worker for standalone and delegated tasks: model-authored plans and revisions, per-action approvals, exact argv or explicit shell execution, whole-goal evaluation, local evidence, bounded context views, and session snapshots. The [worker audit](docs/worker-foundation-audit-2026-09-20.md) records the current rebuild and validation limits.
 
 A local authenticated REST bridge provides subscription-backed OpenAI inference. Launching without flags now opens an interactive guided assessment with a coordinator, up to two concurrent workers, serialized action approvals, saved evidence, resumable assessment state, and a draft report. Source-to-deployment correlation and independent finding verification remain planned. The runtime does not enforce target allowlists or provide its own network sandbox; execution relies on the isolated lab environment and the operating rules in [AGENTS.md](AGENTS.md).
 
-The initial browser surface is available through `birdhackbot-web`. It is chat-first: the shared intake protocol lets the coordinator explain the harness, resolve exploratory discovery with bounded read-only observations (including fixed host identity metadata), clarify scope, and propose an assessment before the operator sees a compact review card. Typed observations such as directory listings appear as readable cards with expandable raw evidence. It then uses the same coordinator and worker runtime as the terminal UI, keeps scope and approvals explicit, and groups multiple assessment sessions under a customer workspace. The customer view aggregates session status, model-authored draft findings, and links to each session report plus a unified Markdown report. This preview is loopback-oriented and has no authentication yet.
+The initial browser surface is available through `birdhackbot-web`. It is chat-first: the shared intake protocol lets the coordinator explain the harness, resolve exploratory discovery with bounded read-only observations (including fixed host identity metadata), clarify scope, and propose an assessment before the operator sees a compact review card. After starting, the coordinator proposes a bounded test sequence in the main conversation; the operator can select or reject tasks before workers execute. Typed observations such as directory listings appear as readable cards with expandable raw evidence. The browser uses the same coordinator and worker runtime as the terminal UI, keeps scope and approvals explicit, and groups multiple assessment sessions under a customer workspace.
+
+The dedicated analysis workspace is available at `/analysis?assessment=<session-id>` and `/analysis?customer=<customer-id>`. It aggregates sessions, prioritizes findings using reported severity, confidence, and validation status, shows assessment gaps and next actions, and links to the formal Markdown report. Software observations can lead to model-directed CVE/advisory research through permitted online sources or local Kali resources. Advisory references, observed software, and evidence paths are retained as structured provenance; a CVE match remains a candidate until a separate validation task produces target evidence. This preview is loopback-oriented and has no authentication yet.
 
 Current implementation order: **core cleanup → subscription API wrapper → orchestration → source-assisted assessment**. [TASKS.md](TASKS.md) records actual progress.
 
@@ -47,6 +63,8 @@ go build -buildvcs=false -o birdhackbot-web ./cmd/birdhackbot-web
 ```
 
 The web server defaults to `127.0.0.1:8080`. Keep it on loopback until authentication, origin protection, and deployment controls are added. The browser is a presentation and lifecycle adapter; it never executes a tool or calls the model directly.
+
+When an assessment finishes, open the analysis link from the coordinator header. The session report is available at `/api/v1/assessments/<session-id>/report`; the unified customer report is available at `/api/v1/customers/<customer-id>/report`. Reports include scope, selected and skipped tests, findings, advisory references, reproduction steps, remediation, execution logs, evidence references, and stated gaps. They remain model-authored drafts for professional review.
 
 For a bounded headless task:
 
