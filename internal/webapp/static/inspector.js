@@ -8,6 +8,7 @@ export function node(tag, className, text) {
 
 // Labels for typed runtime events. These are presentation, not intent parsing.
 const phases = {
+  observation_requested: 'Local observation',
   task_queued: 'Queued', task_started: 'Starting', decision_started: 'Thinking',
   plan_finished: 'Plan updated', action_proposed: 'Action proposed',
   approval_required: 'Needs approval', execution_started: 'Running tool',
@@ -62,7 +63,9 @@ export function eventNode(record) {
 }
 function approvalNode(item, act) {
   const box = node('div', 'approval');
-  box.append(node('h4', '', 'Approval required'), node('pre', 'command', item.command));
+  box.append(node('h4', '', 'Approval required'));
+  box.append(node('p', 'worker-detail', item.impact || 'Review the exact invocation carefully. The coordinator did not provide an impact summary.'));
+  box.append(node('pre', 'command', item.command));
   box.append(disclosure('Working directory', node('code', 'evidence-ref', item.cwd), 'cwd-' + item.id));
   const row = node('div', 'action-row');
   for (const [decision, label, style] of [['approved_once', 'Approve once', ''], ['denied', 'Deny', 'secondary']]) {
@@ -90,6 +93,21 @@ function questionNode(item, act) {
   box.onsubmit = event => { event.preventDefault(); act('questions/' + encodeURIComponent(item.id), {text: input.value}, row); };
   return box;
 }
+function observationNode(item, act) {
+  const box = node('div', 'approval observation-approval');
+  box.append(node('h4', '', 'Coordinator requests a read-only observation'));
+  box.append(node('p', 'worker-detail', 'This reads local metadata only. It does not probe a target, read file contents, or modify the workspace.'));
+  box.append(node('pre', 'command', JSON.stringify(item.tool, null, 2)));
+  const row = node('div', 'action-row');
+  for (const [decision, label, style] of [['approved_once', 'Allow once', ''], ['denied', 'Deny', 'secondary']]) {
+    const button = node('button', style, label);
+    button.type = 'button';
+    button.onclick = () => act('approvals/' + encodeURIComponent(item.id), {decision}, row);
+    row.append(button);
+  }
+  box.append(row);
+  return box;
+}
 export function renderWorkers(view, act) {
   const workers = new Map((view.workers || []).map(w => [w.id, w]));
   // An approval can arrive just before the first progress snapshot.
@@ -97,6 +115,7 @@ export function renderWorkers(view, act) {
     if (!workers.has(item.task_id)) workers.set(item.task_id, {id: item.task_id, phase:'task_started'});
   }
   const cards = [];
+  if (view.pending_tool) cards.push(observationNode(view.pending_tool, act));
   for (const w of workers.values()) {
     const approvals = (view.pending_approvals || []).filter(a => a.task_id === w.id);
     const questions = (view.pending_questions || []).filter(q => q.task_id === w.id);

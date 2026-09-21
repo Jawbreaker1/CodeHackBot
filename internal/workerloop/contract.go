@@ -19,6 +19,7 @@ type Response struct {
 	Command  string      `json:"command,omitempty"`
 	Args     []string    `json:"args,omitempty"`
 	UseShell bool        `json:"use_shell,omitempty"`
+	Impact   string      `json:"impact,omitempty"`
 	Summary  string      `json:"summary,omitempty"`
 	Question string      `json:"question,omitempty"`
 	Plan     *PlanUpdate `json:"plan,omitempty"`
@@ -63,7 +64,7 @@ func ParseResponse(text string) (Response, error) {
 	default:
 		return r, fmt.Errorf("unsupported response type %q", r.Type)
 	}
-	if r.Type != "action" && (r.Command != "" || len(r.Args) != 0 || r.UseShell) {
+	if r.Type != "action" && (r.Command != "" || len(r.Args) != 0 || r.UseShell || r.Impact != "") {
 		return r, fmt.Errorf("only action may contain execution fields")
 	}
 	if r.Plan != nil {

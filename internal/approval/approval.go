@@ -22,6 +22,9 @@ type Request struct {
 	Command  string
 	UseShell bool
 	Cwd      string
+	// Impact is model-authored context about what the action is expected to do.
+	// It never grants permission; the exact invocation remains authoritative.
+	Impact string
 }
 
 // Approver decides whether an action may execute.

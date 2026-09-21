@@ -85,6 +85,73 @@ func TestServerUsesModelLedIntakeAndCoordinatorChat(t *testing.T) {
 	}
 }
 
+func TestServerApprovesModelSelectedLocalObservationBeforeProposal(t *testing.T) {
+	root := t.TempDir()
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Messages []llmclient.Message `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		response := `{"reply":"I can inspect the workspace entries before proposing the check.","proposal":null,"tool":{"name":"list_directory","path":"."}}`
+		for _, message := range request.Messages {
+			if message.Role == "user" && strings.Contains(message.Content, "Tool observation") {
+				response = `{"reply":"The workspace observation is complete. I can propose the bounded check now.","proposal":{"goal":"review the discovered workspace","scope":"Configured workspace entries only; no target contact or mutation."},"tool":null}`
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"choices":[{"message":{"content":%q}}],"usage":{"total_tokens":1}}`, response)
+	}))
+	defer model.Close()
+	server := NewServer(Config{RepoRoot: root, SessionsRoot: filepath.Join(root, "sessions"), LLM: llmclient.Client{BaseURL: model.URL + "/v1", Model: "observation-fixture"}})
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+
+	initial := getJSON[intakeView](t, httpServer.URL+"/api/v1/intake")
+	resultCh := make(chan intakeView, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		status, body := requestJSON(t, http.MethodPost, httpServer.URL+"/api/v1/intake/"+initial.ID+"/messages", intakeMessageRequest{Text: "List the files in the workspace so we can decide what to inspect."})
+		if status < 200 || status >= 300 {
+			errCh <- fmt.Errorf("message status=%d body=%s", status, body)
+			return
+		}
+		var view intakeView
+		if err := json.Unmarshal([]byte(body), &view); err != nil {
+			errCh <- err
+			return
+		}
+		resultCh <- view
+	}()
+
+	deadline := time.Now().Add(3 * time.Second)
+	var pending *intakeApprovalView
+	for time.Now().Before(deadline) {
+		view := getJSON[intakeView](t, httpServer.URL+"/api/v1/intake/"+initial.ID)
+		if view.PendingTool != nil {
+			pending = view.PendingTool
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if pending == nil || pending.Tool.Name != "list_directory" {
+		t.Fatal("model-selected observation was not surfaced for approval")
+	}
+	postJSON[intakeView](t, httpServer.URL+"/api/v1/intake/"+initial.ID+"/approvals/"+pending.ID, approvalRequest{Decision: "approved_once"})
+	select {
+	case err := <-errCh:
+		t.Fatal(err)
+	case view := <-resultCh:
+		if view.Status != "ready" || view.Proposal == nil || len(view.Messages) != 2 {
+			t.Fatalf("final intake view=%#v", view)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("intake message did not complete after observation approval")
+	}
+}
+
 func TestServerAggregatesSessionsByCustomer(t *testing.T) {
 	root := t.TempDir()
 	server := NewServer(Config{RepoRoot: root})

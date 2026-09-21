@@ -54,7 +54,7 @@ function messageNode(message) {
 function traceNode(records) {
   const list = node('ol', 'activity-list');
   for (const record of records) list.append(eventNode(record));
-  const tasks = new Set(records.map(r => r.event.task_id).filter(Boolean));
+  const tasks = new Set(records.map(r => r.event.task_id).filter(id => id && id !== 'coordinator'));
   const tools = records.filter(r => r.event.kind === 'execution_finished').length;
   const label = ['Coordinator activity'];
   if (tasks.size) label.push(tasks.size + ' worker' + (tasks.size === 1 ? '' : 's'));
@@ -66,7 +66,7 @@ function traceNode(records) {
 function renderTranscript() {
   const messages = [...(current?.messages || [])];
   const records = [...eventRecords.values()];
-  if (!changed('transcript', [messages, records, pendingMessage])) return;
+  if (!changed('transcript', [messages, records, pendingMessage, current?.pending_tool])) return;
   const pane = $('chat');
   const follow = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 100;
   const scrollTop = pane.scrollTop;
@@ -85,7 +85,11 @@ function renderTranscript() {
   if (pendingMessage) {
     const last = messages[messages.length - 1];
     if (!last || last.role !== 'user' || last.text !== pendingMessage) items.push(messageNode({role:'user', text:pendingMessage}));
-    items.push(node('div', 'pending-message', 'Coordinator is responding…'));
+    if (current?.pending_tool) {
+      const review = node('button', 'review-notice', 'Local observation needs your approval · Review request ↗');
+      review.onclick = () => { setInspector(true); selectTab($('workersTab')); };
+      items.push(review);
+    } else items.push(node('div', 'pending-message', 'Coordinator is responding…'));
   }
   if (!items.length) {
     const welcome = node('div', 'welcome');
@@ -100,12 +104,12 @@ function updateComposer() {
   $('chatInput').disabled = !current || !!finalized;
   $('send').disabled = !current || !!finalized || !!pendingMessage || !$('chatInput').value.trim();
   $('newAssessment').disabled = starting;
-  $('conversationState').textContent = pendingMessage ? 'Coordinator is responding…' : finalized ? 'Session ended · Start a new session to continue' : current?.customer ? 'Workers can run while you discuss the assessment' : 'Ready when you are';
+  $('conversationState').textContent = current?.pending_tool ? 'Waiting for your approval · No tool is running' : pendingMessage ? 'Coordinator is responding…' : finalized ? 'Session ended · Start a new session to continue' : current?.customer ? 'Workers can run while you discuss the assessment' : 'Ready when you are';
   $('chatInput').placeholder = finalized ? 'This session has ended' : 'Ask, investigate, or plan an assessment…';
 }
 function renderOverview(view) {
   const running = activeStatuses.includes(view.status);
-  const status = view.customer ? view.status : view.proposal ? 'Ready for review' : 'Not started';
+  const status = view.customer ? view.status : view.pending_tool ? 'Needs approval' : view.status === 'thinking' ? 'Thinking' : view.proposal ? 'Ready for review' : 'Conversation';
   $('assessmentStatus').textContent = status;
   $('assessmentStatus').dataset.state = view.status;
   $('assessmentGoal').textContent = view.goal || 'Workers appear here as the coordinator delegates work.';
@@ -136,7 +140,7 @@ function renderView(view) {
   $('model').textContent = view.model || 'Model not configured';
   renderTranscript();
   renderOverview(view);
-  if (changed('workers', [view.workers, view.pending_approvals, view.pending_questions, view.model])) {
+  if (changed('workers', [view.workers, view.pending_approvals, view.pending_questions, view.pending_tool, view.model])) {
     $('workerCount').textContent = renderWorkers(view, act);
   }
   if (changed('findings', view.findings)) renderFindings(view);
@@ -145,7 +149,7 @@ function renderView(view) {
     if (records.length) $('activity').replaceChildren(...records.map(eventNode));
     else $('activity').replaceChildren(node('li', 'empty', 'Runtime events will appear here.'));
   }
-  const attention = (view.pending_approvals?.length || 0) + (view.pending_questions?.length || 0);
+  const attention = (view.pending_approvals?.length || 0) + (view.pending_questions?.length || 0) + (view.pending_tool ? 1 : 0);
   $('attentionDot').classList.toggle('hidden', !attention);
   $('toggleInspector').title = attention ? attention + ' pending operator actions' : 'Show worker details';
   updateComposer();
@@ -218,7 +222,8 @@ async function act(path, body, container) {
   const token = selection;
   for (const button of container.querySelectorAll('button')) button.disabled = true;
   try {
-    const view = await api('/api/v1/assessments/' + encodeURIComponent(id) + '/' + path, {method:'POST', body: JSON.stringify(body)});
+    const prefix = current.customer ? '/api/v1/assessments/' : '/api/v1/intake/';
+    const view = await api(prefix + encodeURIComponent(id) + '/' + path, {method:'POST', body: JSON.stringify(body)});
     if (token === selection) { clearError(); renderView(view); }
   } catch (error) {
     if (token === selection) showError(error);
@@ -268,6 +273,7 @@ $('startForm').onsubmit = async event => {
   try {
     const view = await api('/api/v1/intake/' + encodeURIComponent(current.id) + '/start', {method:'POST', body:JSON.stringify({customer:$('customer').value.trim()})});
     if (token !== selection) return;
+    eventRecords = new Map();
     renderView(view); refreshSidebar(); setInspector(true);
   } catch (error) { if (token === selection) showError(error); }
   finally { starting = false; $('start').disabled = false; updateComposer(); }
@@ -307,6 +313,11 @@ async function poll() {
     try {
       const after = Math.max(0, ...eventRecords.keys());
       const view = await api('/api/v1/assessments/' + encodeURIComponent(current.id) + '?after=' + after);
+      if (token === selection) renderView(view);
+    } catch (error) { if (token === selection) showError(error); }
+  } else if (current) {
+    try {
+      const view = await api('/api/v1/intake/' + encodeURIComponent(current.id));
       if (token === selection) renderView(view);
     } catch (error) { if (token === selection) showError(error); }
   }

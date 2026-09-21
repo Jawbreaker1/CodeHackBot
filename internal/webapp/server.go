@@ -49,6 +49,8 @@ type intakeRun struct {
 	proposal     *intake.Draft
 	assessmentID string
 	busy         bool
+	pendingTool  *intakeApproval
+	events       []eventRecord
 }
 
 type intakeMessage struct {
@@ -58,13 +60,26 @@ type intakeMessage struct {
 }
 
 type intakeView struct {
-	ID              string          `json:"id"`
-	Model           string          `json:"model"`
-	ModelConfigured bool            `json:"model_configured"`
-	Status          string          `json:"status"`
-	Messages        []intakeMessage `json:"messages"`
-	Proposal        *intake.Draft   `json:"proposal,omitempty"`
-	AssessmentID    string          `json:"assessment_id,omitempty"`
+	ID              string              `json:"id"`
+	Model           string              `json:"model"`
+	ModelConfigured bool                `json:"model_configured"`
+	Status          string              `json:"status"`
+	Messages        []intakeMessage     `json:"messages"`
+	Proposal        *intake.Draft       `json:"proposal,omitempty"`
+	PendingTool     *intakeApprovalView `json:"pending_tool,omitempty"`
+	Events          []eventRecord       `json:"events"`
+	AssessmentID    string              `json:"assessment_id,omitempty"`
+}
+
+type intakeApproval struct {
+	ID     string
+	Tool   intake.ToolCall
+	Result chan approval.Decision
+}
+
+type intakeApprovalView struct {
+	ID   string          `json:"id"`
+	Tool intake.ToolCall `json:"tool"`
 }
 
 type intakeMessageRequest struct {
@@ -173,6 +188,7 @@ type approvalView struct {
 	Command  string `json:"command"`
 	UseShell bool   `json:"use_shell"`
 	Cwd      string `json:"cwd"`
+	Impact   string `json:"impact,omitempty"`
 }
 
 type questionView struct {
@@ -254,7 +270,20 @@ func (s *Server) intakeRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/intake/"), "/"), "/")
-	if len(parts) != 2 || parts[0] == "" {
+	if len(parts) == 1 && parts[0] != "" && r.Method == http.MethodGet {
+		current := s.getIntake(parts[0])
+		if current == nil {
+			writeError(w, http.StatusNotFound, "intake session not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, current.view(s.config.LLM))
+		return
+	}
+	if len(parts) < 2 || len(parts) > 3 || parts[0] == "" {
+		http.NotFound(w, r)
+		return
+	}
+	if len(parts) == 3 && parts[1] != "approvals" {
 		http.NotFound(w, r)
 		return
 	}
@@ -263,7 +292,27 @@ func (s *Server) intakeRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "intake session not found")
 		return
 	}
+	if len(parts) == 3 {
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w, http.MethodPost)
+			return
+		}
+		var input approvalRequest
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+		if err := current.approveTool(parts[2], input.Decision); err != nil {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, current.view(s.config.LLM))
+		return
+	}
 	switch parts[1] {
+	case "approvals":
+		// Keep the route shape explicit: the pending observation ID belongs in
+		// the path, just like assessment action approvals.
+		http.NotFound(w, r)
 	case "messages":
 		if r.Method != http.MethodPost {
 			methodNotAllowed(w, http.MethodPost)
@@ -334,6 +383,13 @@ func (s *Server) intakeMessage(ctx context.Context, current *intakeRun, text str
 		current.busy = false
 		current.mu.Unlock()
 	}()
+	current.conversation.Inspection = &intake.Inspection{
+		Workspace:   s.config.RepoRoot,
+		EvidenceDir: filepath.Join(s.config.SessionsRoot, "intake", current.id),
+		Policy:      "Authorized lab only. Keep observations minimal and local; do not access credentials or mutate files.",
+		Approver:    &intakeToolApprover{run: current},
+		Emit:        current.recordObservation,
+	}
 	turn, err := current.conversation.Turn(ctx, s.config.LLM, text)
 	if err != nil {
 		current.mu.Lock()
@@ -343,10 +399,7 @@ func (s *Server) intakeMessage(ctx context.Context, current *intakeRun, text str
 	}
 	current.mu.Lock()
 	current.messages = append(current.messages, intakeMessage{Role: "assistant", Text: turn.Reply, At: time.Now().UTC()})
-	if turn.Proposal != nil {
-		proposal := *turn.Proposal
-		current.proposal = &proposal
-	}
+	current.proposal = cloneDraft(turn.Proposal)
 	current.mu.Unlock()
 	return nil
 }
@@ -359,7 +412,11 @@ func (s *Server) startIntake(current *intakeRun, customer string) (assessmentVie
 	current.mu.RLock()
 	proposal := current.proposal
 	assessmentID := current.assessmentID
+	busy := current.busy
 	current.mu.RUnlock()
+	if busy {
+		return assessmentView{}, fmt.Errorf("wait for the coordinator to finish before starting the assessment")
+	}
 	if assessmentID != "" {
 		return assessmentView{}, fmt.Errorf("this conversation already started an assessment")
 	}
@@ -398,7 +455,75 @@ func (r *intakeRun) view(client llmclient.Client) intakeView {
 	if r.assessmentID != "" {
 		status = "started"
 	}
-	return intakeView{ID: r.id, Model: client.Model, ModelConfigured: strings.TrimSpace(client.BaseURL) != "" && strings.TrimSpace(client.Model) != "", Status: status, Messages: append([]intakeMessage(nil), r.messages...), Proposal: cloneDraft(r.proposal), AssessmentID: r.assessmentID}
+	var pending *intakeApprovalView
+	if r.pendingTool != nil {
+		status = "waiting_approval"
+		pending = &intakeApprovalView{ID: r.pendingTool.ID, Tool: r.pendingTool.Tool}
+	}
+	return intakeView{ID: r.id, Model: client.Model, ModelConfigured: strings.TrimSpace(client.BaseURL) != "" && strings.TrimSpace(client.Model) != "", Status: status, Messages: append([]intakeMessage(nil), r.messages...), Proposal: cloneDraft(r.proposal), PendingTool: pending, Events: append([]eventRecord(nil), r.events...), AssessmentID: r.assessmentID}
+}
+
+func (r *intakeRun) recordObservation(event assessment.Event) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, eventRecord{Sequence: uint64(len(r.events) + 1), At: time.Now().UTC(), Event: event})
+}
+
+type intakeToolApprover struct{ run *intakeRun }
+
+func (a *intakeToolApprover) Approve(ctx context.Context, request approval.Request) (approval.Decision, error) {
+	a.run.mu.Lock()
+	if a.run.pendingTool != nil {
+		a.run.mu.Unlock()
+		return approval.DecisionDeny, fmt.Errorf("another local observation is already pending")
+	}
+	id := fmt.Sprintf("observation-%d", time.Now().UnixNano())
+	var tool intake.ToolCall
+	if err := json.Unmarshal([]byte(request.Command), &tool); err != nil {
+		a.run.mu.Unlock()
+		return approval.DecisionDeny, fmt.Errorf("invalid observation request")
+	}
+	pending := &intakeApproval{ID: id, Tool: tool, Result: make(chan approval.Decision, 1)}
+	a.run.pendingTool = pending
+	a.run.mu.Unlock()
+	select {
+	case decision := <-pending.Result:
+		a.run.mu.Lock()
+		if a.run.pendingTool == pending {
+			a.run.pendingTool = nil
+		}
+		a.run.mu.Unlock()
+		return decision, nil
+	case <-ctx.Done():
+		a.run.mu.Lock()
+		if a.run.pendingTool == pending {
+			a.run.pendingTool = nil
+		}
+		a.run.mu.Unlock()
+		return approval.DecisionDeny, ctx.Err()
+	}
+}
+
+func (r *intakeRun) approveTool(id, decision string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	pending := r.pendingTool
+	if pending == nil || pending.ID != id {
+		return fmt.Errorf("observation is no longer pending")
+	}
+	decision = strings.ToLower(strings.TrimSpace(decision))
+	var result approval.Decision
+	switch decision {
+	case "approved_once":
+		result = approval.DecisionApproveOnce
+	case "denied":
+		result = approval.DecisionDeny
+	default:
+		return fmt.Errorf("unsupported observation decision")
+	}
+	r.pendingTool = nil
+	pending.Result <- result
+	return nil
 }
 
 func cloneDraft(draft *intake.Draft) *intake.Draft {
@@ -978,7 +1103,7 @@ func (r *run) view(after string) assessmentView {
 		view.Events = append([]eventRecord(nil), r.events...)
 	}
 	for _, pending := range r.approvals {
-		view.PendingApprovals = append(view.PendingApprovals, approvalView{ID: pending.ID, TaskID: pending.taskID, Command: pending.request.Command, UseShell: pending.request.UseShell, Cwd: pending.request.Cwd})
+		view.PendingApprovals = append(view.PendingApprovals, approvalView{ID: pending.ID, TaskID: pending.taskID, Command: pending.request.Command, UseShell: pending.request.UseShell, Cwd: pending.request.Cwd, Impact: pending.request.Impact})
 	}
 	for _, question := range r.questions {
 		view.PendingQuestions = append(view.PendingQuestions, questionView{ID: question.ID, TaskID: question.taskID, Text: question.text})

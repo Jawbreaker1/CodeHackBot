@@ -191,7 +191,11 @@ type taskApprover struct {
 
 func (a taskApprover) Approve(ctx context.Context, r approval.Request) (approval.Decision, error) {
 	a.console.approvalRequested(a.task.ID, r.Command)
-	prompt := fmt.Sprintf("\nAction approval — %s\nPurpose: %s\nDeclared scope: %s\nWorking directory: %s\nExact invocation: %s\nAllow this action? [y/N] (Ctrl-C stops the entire assessment)", a.task.ID, a.task.Goal, a.scope, r.Cwd, r.Command)
+	impact := strings.TrimSpace(r.Impact)
+	if impact == "" {
+		impact = "The coordinator did not provide an impact summary; review the exact invocation carefully."
+	}
+	prompt := fmt.Sprintf("\nAction approval — %s\nPurpose: %s\nDeclared scope: %s\nWorking directory: %s\nExpected effect / risk: %s\nExact invocation: %s\nAllow this action? [y/N] (Ctrl-C stops the entire assessment)", a.task.ID, a.task.Goal, a.scope, r.Cwd, impact, r.Command)
 	for {
 		answer, err := a.console.Ask(ctx, prompt)
 		if err != nil {

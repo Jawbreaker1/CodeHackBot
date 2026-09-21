@@ -15,6 +15,7 @@ import (
 	"github.com/Jawbreaker1/CodeHackBot/internal/approval"
 	"github.com/Jawbreaker1/CodeHackBot/internal/assessment"
 	"github.com/Jawbreaker1/CodeHackBot/internal/behavior"
+	intakepkg "github.com/Jawbreaker1/CodeHackBot/internal/intake"
 	"github.com/Jawbreaker1/CodeHackBot/internal/llmclient"
 )
 
@@ -198,9 +199,16 @@ func (a App) runPlain(ctx context.Context) error {
 	}
 	defer func() { cleanup() }()
 
-	intake := &intakeConversation{}
+	conversation := &intakeConversation{}
+	conversation.conversation.Inspection = &intakepkg.Inspection{
+		Workspace:   a.RepoRoot,
+		EvidenceDir: filepath.Join(a.RepoRoot, ".birdhackbot", "intake-evidence"),
+		Policy:      "Authorized lab only. Keep observations minimal and local; do not access credentials or mutate files.",
+		Approver:    observationApprover{console: c},
+		Emit:        c.Progress,
+	}
 	for {
-		draft, resume, err := a.readGoalOrCommand(ctx, c, preferencesPath, &prefs, &client, &cleanup, intake)
+		draft, resume, err := a.readGoalOrCommand(ctx, c, preferencesPath, &prefs, &client, &cleanup, conversation)
 		if err != nil {
 			return err
 		}
@@ -244,6 +252,30 @@ func (a App) runPlain(ctx context.Context) error {
 		c.Print("\nAssessment directory: %s\n", root)
 		c.assessmentStarted()
 		return a.runAssessmentWithFrame(ctx, c, prefs, client, root, assessment.State{Goal: goal, Scope: scope}, frame)
+	}
+}
+
+// observationApprover makes the coordinator's local inspection request visible
+// before it runs. It is intentionally separate from worker action approval:
+// observations are read-only and bounded, while worker commands retain the
+// normal exact-command approval flow.
+type observationApprover struct{ console *Console }
+
+func (a observationApprover) Approve(ctx context.Context, request approval.Request) (approval.Decision, error) {
+	prompt := fmt.Sprintf("\nCoordinator observation approval\nThis is a read-only local observation. It will not probe a target, read file contents, or modify the workspace.\nExact request: %s\nWorking directory: %s\nAllow this observation? [y/N]", request.Command, request.Cwd)
+	for {
+		answer, err := a.console.Ask(ctx, prompt)
+		if err != nil {
+			return approval.DecisionDeny, err
+		}
+		switch strings.ToLower(strings.TrimSpace(answer)) {
+		case "y", "yes":
+			return approval.DecisionApproveOnce, nil
+		case "", "n", "no":
+			return approval.DecisionDeny, nil
+		default:
+			prompt = "Please enter y to allow this read-only observation or n to deny it."
+		}
 	}
 }
 
