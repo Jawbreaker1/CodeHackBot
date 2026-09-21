@@ -227,6 +227,10 @@ func (r *intakeRun) persist() error {
 	r.persistMu.Lock()
 	defer r.persistMu.Unlock()
 	r.mu.RLock()
+	if r.deleted {
+		r.mu.RUnlock()
+		return fmt.Errorf("session has been deleted")
+	}
 	r.conversationMu.RLock()
 	conversation := r.conversation.Messages()
 	r.conversationMu.RUnlock()
@@ -240,6 +244,10 @@ func (r *run) persist() error {
 	r.persistMu.Lock()
 	defer r.persistMu.Unlock()
 	r.mu.RLock()
+	if r.deleted {
+		r.mu.RUnlock()
+		return fmt.Errorf("session has been deleted")
+	}
 	workers := make([]workerView, 0, len(r.workers))
 	for _, worker := range r.workers {
 		workers = append(workers, worker)

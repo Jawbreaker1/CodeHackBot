@@ -32,7 +32,7 @@ func TestServerCreatesDraftAndServesUI(t *testing.T) {
 		t.Fatalf("GET / status = %d", response.StatusCode)
 	}
 	body, err := io.ReadAll(response.Body)
-	if err != nil || !strings.Contains(string(body), "What are we investigating?") || !strings.Contains(string(body), "Customers & sessions") || !strings.Contains(string(body), "workStatus") || !strings.Contains(string(body), "collapseWorkers") {
+	if err != nil || !strings.Contains(string(body), "What are we investigating?") || !strings.Contains(string(body), "Customers & sessions") || !strings.Contains(string(body), "workStatus") || !strings.Contains(string(body), "collapseWorkers") || !strings.Contains(string(body), "icon-trash") {
 		t.Fatal("embedded operator console UI is missing")
 	}
 	css, err := http.Get(httpServer.URL + "/app.css")
@@ -47,6 +47,133 @@ func TestServerCreatesDraftAndServesUI(t *testing.T) {
 	}
 	if got := postStatus(t, httpServer.URL+"/api/v1/assessments/"+created.ID+"/start", nil); got != http.StatusConflict {
 		t.Fatalf("start without model status = %d", got)
+	}
+}
+
+func TestServerDeletesDraftSessions(t *testing.T) {
+	root := t.TempDir()
+	sessions := filepath.Join(root, "sessions")
+	server := NewServer(Config{RepoRoot: root, SessionsRoot: sessions, LLM: llmclient.Client{BaseURL: "http://127.0.0.1:1/v1", Model: "fixture"}})
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+
+	intake := getJSON[intakeView](t, httpServer.URL+"/api/v1/intake")
+	staleIntake := server.getIntake(intake.ID)
+	intakeRoot := filepath.Join(sessions, "intake", intake.ID)
+	status, body := requestJSON(t, http.MethodDelete, httpServer.URL+"/api/v1/intake/"+intake.ID, nil)
+	if status != http.StatusNoContent || body != "" {
+		t.Fatalf("delete intake status=%d body=%q", status, body)
+	}
+	if _, err := os.Stat(intakeRoot); !os.IsNotExist(err) {
+		t.Fatalf("deleted intake directory still exists: %v", err)
+	}
+	if status, _ := requestJSON(t, http.MethodGet, httpServer.URL+"/api/v1/intake/"+intake.ID, nil); status != http.StatusNotFound {
+		t.Fatalf("deleted intake GET status=%d", status)
+	}
+	if err := staleIntake.persist(); err == nil {
+		t.Fatal("stale save recreated a deleted conversation")
+	}
+
+	assessmentDraft := postJSON[assessmentView](t, httpServer.URL+"/api/v1/assessments", createRequest{Customer: "delete-fixture", Goal: "remove this draft", Scope: "synthetic only"})
+	assessmentRoot := filepath.Join(sessions, "delete-fixture", assessmentDraft.ID)
+	staleRun := server.getRun(assessmentDraft.ID)
+	status, body = requestJSON(t, http.MethodDelete, httpServer.URL+"/api/v1/assessments/"+assessmentDraft.ID, nil)
+	if status != http.StatusNoContent || body != "" {
+		t.Fatalf("delete assessment status=%d body=%q", status, body)
+	}
+	if _, err := os.Stat(assessmentRoot); !os.IsNotExist(err) {
+		t.Fatalf("deleted assessment directory still exists: %v", err)
+	}
+	if status, _ := requestJSON(t, http.MethodGet, httpServer.URL+"/api/v1/assessments/"+assessmentDraft.ID, nil); status != http.StatusNotFound {
+		t.Fatalf("deleted assessment GET status=%d", status)
+	}
+	if err := staleRun.persist(); err == nil {
+		t.Fatal("stale save recreated a deleted assessment")
+	}
+	restarted := NewServer(server.config)
+	if restarted.loadErr != nil || len(restarted.runs) != 0 || len(restarted.intakes) != 0 {
+		t.Fatalf("deleted sessions reappeared after restart: %v", restarted.loadErr)
+	}
+}
+
+func TestDeleteAssessmentRemovesLinkedConversationAndPreservesSibling(t *testing.T) {
+	root := t.TempDir()
+	server := NewServer(Config{RepoRoot: root})
+	first, err := server.newRun("customer", "first", "synthetic fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sibling, err := server.newRun("customer", "second", "synthetic fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := server.newIntake()
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation.assessmentID = first.id
+	if err := conversation.persist(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(first.root, "report.md"), []byte("fixture evidence"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Discover the pre-existing assessment_id relationship after restart.
+	server = NewServer(server.config)
+	if err := server.deleteRun(server.getRun(first.id)); err != nil {
+		t.Fatal(err)
+	}
+	for _, removed := range []string{first.root, conversation.root} {
+		if _, err := os.Stat(removed); !os.IsNotExist(err) {
+			t.Fatalf("session data remains at %s: %v", removed, err)
+		}
+	}
+	server = NewServer(server.config)
+	view := server.customerView("customer")
+	if server.loadErr != nil || len(server.intakes) != 0 || len(view.Sessions) != 1 || view.Sessions[0].ID != sibling.id {
+		t.Fatalf("unexpected remaining sessions: %+v; error: %v", view, server.loadErr)
+	}
+}
+
+func TestDeleteRejectsBusyConversationAndUnsafeRoot(t *testing.T) {
+	server := NewServer(Config{RepoRoot: t.TempDir()})
+	conversation, err := server.newIntake()
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation.busy = true
+	if err := server.deleteIntake(conversation); err == nil {
+		t.Fatal("deleted busy conversation")
+	}
+	for _, root := range []string{server.config.SessionsRoot, filepath.Dir(conversation.root), t.TempDir()} {
+		if err := server.removeSessionRoot(root); err == nil {
+			t.Fatalf("accepted non-session path %s", root)
+		}
+	}
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(server.config.SessionsRoot, "redirect")); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.removeSessionRoot(filepath.Join(server.config.SessionsRoot, "redirect", "session")); err == nil {
+		t.Fatal("accepted redirected parent")
+	}
+}
+
+func TestServerRejectsDeletingRunningSession(t *testing.T) {
+	root := t.TempDir()
+	sessions := filepath.Join(root, "sessions")
+	server := NewServer(Config{RepoRoot: root, SessionsRoot: sessions, LLM: llmclient.Client{BaseURL: "http://127.0.0.1:1/v1", Model: "fixture"}})
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+
+	created := postJSON[assessmentView](t, httpServer.URL+"/api/v1/assessments", createRequest{Customer: "running-fixture", Goal: "keep while active", Scope: "synthetic only"})
+	run := server.getRun(created.ID)
+	run.mu.Lock()
+	run.started, run.status = true, "running"
+	run.mu.Unlock()
+	status, body := requestJSON(t, http.MethodDelete, httpServer.URL+"/api/v1/assessments/"+created.ID, nil)
+	if status != http.StatusConflict || !strings.Contains(body, "stop the assessment") {
+		t.Fatalf("running delete status=%d body=%q", status, body)
 	}
 }
 

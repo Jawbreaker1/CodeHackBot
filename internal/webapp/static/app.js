@@ -7,13 +7,15 @@ let starting = false;
 let eventRecords = new Map();
 let signatures = {};
 let modelCatalog = [];
+let deletingSession = null;
 const narrow = matchMedia('(max-width: 1150px)');
 const mobile = matchMedia('(max-width: 680px)');
 const activeStatuses = ['running', 'starting'];
 
 async function api(path, options = {}) {
   const response = await fetch(path, {headers: {'Content-Type': 'application/json'}, ...options});
-  const body = await response.json();
+  const text = await response.text();
+  const body = text ? JSON.parse(text) : {};
   if (!response.ok) throw new Error(body.error || response.statusText);
   return body;
 }
@@ -269,6 +271,50 @@ function markSelection() {
     else button.removeAttribute('aria-current');
   }
 }
+function sessionRow(session, isIntake) {
+  const label = session.title || session.goal || 'Untitled session';
+  const row = node('div', 'session-row');
+  const button = node('button', 'session-link');
+  button.dataset.session = session.id;
+  button.title = isIntake ? label : label + ' · ' + session.status;
+  const dot = node('span', 'session-dot ' + session.status);
+  dot.setAttribute('aria-hidden', 'true');
+  button.append(dot, node('span', 'session-link-title', label));
+  button.setAttribute('aria-label', label + (isIntake ? '' : ' · ' + session.status) + ' · ' + session.id.slice(-6));
+  button.onclick = () => isIntake ? selectIntake(session.id) : selectSession(session.id);
+  const remove = node('button', 'session-delete');
+  remove.type = 'button';
+  remove.title = 'Delete session';
+  remove.setAttribute('aria-label', 'Delete ' + label);
+  const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  icon.setAttribute('class', 'icon');
+  const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+  use.setAttribute('href', '#icon-trash');
+  icon.append(use);
+  remove.append(icon);
+  remove.onclick = () => deleteSession(session, isIntake);
+  row.append(button, remove);
+  return row;
+}
+async function deleteSession(session, isIntake) {
+  if (deletingSession) return;
+  const label = session.title || session.goal || 'this session';
+  const contents = isIntake ? 'conversation and local observations' : 'conversation, evidence, and report, including its findings in the customer summary';
+  if (!window.confirm('Delete "' + label + '"?\n\nThis permanently removes its ' + contents + '. This cannot be undone.')) return;
+  const path = (isIntake ? '/api/v1/intake/' : '/api/v1/assessments/') + encodeURIComponent(session.id);
+  deletingSession = session.id;
+  try {
+    await api(path, {method: 'DELETE'});
+    clearError();
+    if (current?.id === session.id) {
+      localStorage.removeItem('birdhackbot.selectedSession');
+      await navigate('/api/v1/intake');
+    } else {
+      await refreshSidebar();
+    }
+  } catch (error) { showError(error); }
+  finally { deletingSession = null; }
+}
 async function refreshSidebar() {
   try {
     const data = await api('/api/v1/customers');
@@ -283,11 +329,7 @@ async function refreshSidebar() {
       heading.append(node('span', '', 'Draft conversations'), node('span', 'customer-count', intakes.length));
       const list = node('div', '');
       for (const session of [...intakes].reverse()) {
-        const button = node('button', 'session-link');
-        button.dataset.session = session.id; button.title = session.title;
-        button.append(node('span', 'session-dot ' + session.status), node('span', 'session-link-title', session.title));
-        button.onclick = () => selectIntake(session.id);
-        list.append(button);
+        list.append(sessionRow(session, true));
       }
       section.append(heading, list); sections.push(section);
     }
@@ -300,15 +342,7 @@ async function refreshSidebar() {
       const list = node('div', collapsed.has(group.id) ? 'hidden' : '');
       heading.onclick = () => { const hide = !list.classList.contains('hidden'); list.classList.toggle('hidden', hide); heading.setAttribute('aria-expanded', String(!hide)); };
       for (const session of [...group.sessions].reverse()) {
-        const button = node('button', 'session-link');
-        button.dataset.session = session.id;
-        button.title = session.goal + ' · ' + session.status;
-        const dot = node('span', 'session-dot ' + session.status);
-        dot.setAttribute('aria-hidden', 'true');
-        button.append(dot, node('span', 'session-link-title', session.goal));
-        button.setAttribute('aria-label', session.goal + ' · ' + session.status + ' · ' + session.id.slice(-6));
-        button.onclick = () => selectSession(session.id);
-        list.append(button);
+        list.append(sessionRow(session, false));
       }
       section.append(heading, list);
       sections.push(section);
@@ -453,17 +487,21 @@ await navigate(savedSession && /^\/api\/v1\/(intake|assessments)\//.test(savedSe
 
 async function poll() {
   const token = selection;
+  if (current?.id === deletingSession) {
+    setTimeout(poll, 1500);
+    return;
+  }
   if (current?.customer) {
     try {
       const after = Math.max(0, ...eventRecords.keys());
       const view = await api('/api/v1/assessments/' + encodeURIComponent(current.id) + '?after=' + after);
       if (token === selection) { clearError(); renderView(view); }
-    } catch (error) { if (token === selection) showError(error); }
+    } catch (error) { if (token === selection && current?.id !== deletingSession) showError(error); }
   } else if (current) {
     try {
       const view = await api('/api/v1/intake/' + encodeURIComponent(current.id));
       if (token === selection) { clearError(); renderView(view); }
-    } catch (error) { if (token === selection) showError(error); }
+    } catch (error) { if (token === selection && current?.id !== deletingSession) showError(error); }
   }
   await refreshSidebar();
   setTimeout(poll, 1500);

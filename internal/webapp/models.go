@@ -77,8 +77,12 @@ func (s *Server) changeIntakeModel(current *intakeRun, model string) error {
 		return err
 	}
 	current.mu.Lock()
-	if current.busy || current.assessmentID != "" {
+	deleted := current.deleted
+	if deleted || current.busy || current.assessmentID != "" {
 		current.mu.Unlock()
+		if deleted {
+			return fmt.Errorf("session has been deleted")
+		}
 		return fmt.Errorf("model cannot change while this session is active")
 	}
 	current.client.Model = model
@@ -96,8 +100,12 @@ func (s *Server) changeRunModel(current *run, model string) error {
 		return err
 	}
 	current.mu.Lock()
-	if current.started || current.chatBusy {
+	deleted := current.deleted
+	if deleted || current.started || current.chatBusy {
 		current.mu.Unlock()
+		if deleted {
+			return fmt.Errorf("session has been deleted")
+		}
 		return fmt.Errorf("model cannot change while this session is active")
 	}
 	current.client.Model = model

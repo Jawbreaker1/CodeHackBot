@@ -52,6 +52,7 @@ type intakeRun struct {
 	messages       []intakeMessage
 	proposal       *intake.Draft
 	assessmentID   string
+	deleted        bool
 	busy           bool
 	pendingTool    *intakeApproval
 	events         []eventRecord
@@ -114,6 +115,7 @@ type run struct {
 	status     string
 	state      assessment.State
 	started    bool
+	deleted    bool
 	cancel     context.CancelFunc
 	done       chan struct{}
 	chatBusy   bool
@@ -314,6 +316,19 @@ func (s *Server) intakeRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/intake/"), "/"), "/")
+	if len(parts) == 1 && parts[0] != "" && r.Method == http.MethodDelete {
+		current := s.getIntake(parts[0])
+		if current == nil {
+			writeError(w, http.StatusNotFound, "intake session not found")
+			return
+		}
+		if err := s.deleteIntake(current); err != nil {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if len(parts) == 1 && parts[0] != "" && r.Method == http.MethodGet {
 		current := s.getIntake(parts[0])
 		if current == nil {
@@ -433,6 +448,10 @@ func (s *Server) intakeMessage(ctx context.Context, current *intakeRun, text str
 		return fmt.Errorf("message is required")
 	}
 	current.mu.Lock()
+	if current.deleted {
+		current.mu.Unlock()
+		return fmt.Errorf("session has been deleted")
+	}
 	if current.assessmentID != "" {
 		current.mu.Unlock()
 		return fmt.Errorf("this conversation already started an assessment")
@@ -491,23 +510,20 @@ func (s *Server) startIntake(current *intakeRun, customer string) (assessmentVie
 	if !validCustomerID(customer) {
 		return assessmentView{}, fmt.Errorf("customer must contain only letters, numbers, hyphens, or underscores")
 	}
-	current.mu.RLock()
-	proposal := current.proposal
-	assessmentID := current.assessmentID
-	busy := current.busy
-	current.mu.RUnlock()
-	if busy {
-		return assessmentView{}, fmt.Errorf("wait for the coordinator to finish before starting the assessment")
+	current.mu.Lock()
+	if current.deleted || current.busy || current.assessmentID != "" || current.proposal == nil {
+		current.mu.Unlock()
+		return assessmentView{}, fmt.Errorf("assessment requires an idle, undeleted conversation with a proposal")
 	}
-	if assessmentID != "" {
-		return assessmentView{}, fmt.Errorf("this conversation already started an assessment")
-	}
-	if proposal == nil {
-		return assessmentView{}, fmt.Errorf("the coordinator has not proposed an assessment yet")
-	}
-	current.mu.RLock()
+	proposal := cloneDraft(current.proposal)
 	client := current.client
-	current.mu.RUnlock()
+	current.busy = true
+	current.mu.Unlock()
+	defer func() {
+		current.mu.Lock()
+		current.busy = false
+		current.mu.Unlock()
+	}()
 	if strings.TrimSpace(client.BaseURL) == "" || strings.TrimSpace(client.Model) == "" {
 		return assessmentView{}, fmt.Errorf("model endpoint and model are required; configure the web server first")
 	}
@@ -770,6 +786,14 @@ func (s *Server) assessmentRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "assessment not found")
 		return
 	}
+	if len(parts) == 1 && r.Method == http.MethodDelete {
+		if err := s.deleteRun(current); err != nil {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if len(parts) == 1 {
 		if r.Method != http.MethodGet {
 			methodNotAllowed(w, http.MethodGet)
@@ -974,6 +998,10 @@ func (s *Server) getRun(id string) *run {
 
 func (s *Server) start(current *run) error {
 	current.mu.Lock()
+	if current.deleted {
+		current.mu.Unlock()
+		return fmt.Errorf("session has been deleted")
+	}
 	if current.started {
 		current.mu.Unlock()
 		return fmt.Errorf("assessment has already been started")
@@ -1088,8 +1116,11 @@ func (r *run) emit(event assessment.Event) {
 
 func (r *run) stop() error {
 	r.mu.RLock()
-	cancel, started, status := r.cancel, r.started, r.status
+	deleted, cancel, started, status := r.deleted, r.cancel, r.started, r.status
 	r.mu.RUnlock()
+	if deleted {
+		return fmt.Errorf("session has been deleted")
+	}
 	if !started || cancel == nil {
 		return fmt.Errorf("assessment is not running")
 	}
@@ -1107,6 +1138,10 @@ func (s *Server) message(ctx context.Context, r *run, text string) error {
 		return fmt.Errorf("message is required")
 	}
 	r.mu.Lock()
+	if r.deleted {
+		r.mu.Unlock()
+		return fmt.Errorf("session has been deleted")
+	}
 	if !r.started || (r.status != "running" && r.status != "starting") {
 		r.mu.Unlock()
 		return fmt.Errorf("start the assessment before sending messages")

@@ -27,7 +27,8 @@ def call(base, path, method="GET", value=None):
         request.add_header("Content-Type", "application/json")
     try:
         with urlopen(request, timeout=5) as response:
-            return response.status, json.loads(response.read().decode())
+            body = response.read().decode()
+            return response.status, json.loads(body) if body else None
     except HTTPError as error:
         body = error.read().decode(errors="replace")
         raise AssertionError(f"{method} {path}: HTTP {error.code}: {body}") from error
@@ -51,7 +52,7 @@ def run_session(base, customer, goal):
             approval_id = view["pending_approvals"][0]["id"]
             call(base, f"/api/v1/assessments/{assessment_id}/approvals/{approval_id}", "POST", {"decision": "approved_once"})
             approved = True
-        if view["status"] in ("completed", "incomplete", "aborted"):
+        if view["status"] in ("completed", "incomplete", "aborted") and not view["model_busy"]:
             break
         time.sleep(0.05)
     assert view["status"] == "completed" and approved and len(view["results"]) == 1, view
@@ -123,7 +124,18 @@ def main():
             assert {session["id"] for session in customer["sessions"]} == {first["id"], second["id"]}, customer
             status, report = call_text(base, customer["report_url"])
             assert status == 200 and first["id"] in report and second["id"] in report, report
-            print("web application: HTTP lifecycle and customer aggregation passed", flush=True)
+            status, _ = call(base, f"/api/v1/assessments/{first['id']}", "DELETE")
+            assert status == 204
+            assert not (root / "sessions" / "web-customer" / first["id"]).exists()
+            _, customer = call(base, "/api/v1/customers/web-customer")
+            assert [session["id"] for session in customer["sessions"]] == [second["id"]], customer
+            _, report = call_text(base, customer["report_url"])
+            assert first["id"] not in report and second["id"] in report, report
+            _, draft = call(base, "/api/v1/intake")
+            status, _ = call(base, f"/api/v1/intake/{draft['id']}", "DELETE")
+            assert status == 204
+            assert not (root / "sessions" / "intake" / draft["id"]).exists()
+            print("web application: HTTP lifecycle, customer aggregation, and session deletion passed", flush=True)
     finally:
         if process is not None and process.poll() is None:
             process.send_signal(signal.SIGTERM)

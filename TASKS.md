@@ -136,6 +136,7 @@ The CLI and browser are presentation layers over the same orchestrator and evide
 - [x] Add the initial Go HTTP API with assessment create/read/start/stop, approval decisions, live events, and report access. Keep loopback binding as the default until authentication and remote deployment controls exist.
 - [x] Build the first browser workflow against that API: customer/session scope review, provider visibility, approval, progress, stop, and report review. Verify it with the same deterministic assessment fixture used by the CLI, including two sessions aggregated into one customer report.
 - [x] Add durable web session discovery/resume with per-session transcript/model metadata and an explicit interrupted-run resume action.
+- [x] Add explicit confirmed deletion for draft and finalized web sessions, including their linked intake metadata and local evidence directories.
 - [ ] Add authentication, origin/CSRF protection, and streaming events before remote web deployment.
 - [ ] Treat the local subscription bridge as an internal model-provider service, never as a browser-facing execution endpoint.
 
