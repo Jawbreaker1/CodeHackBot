@@ -49,6 +49,11 @@
           <div class="status-row"><span id="assessmentStatus" class="status">Not started</span><button id="stop" class="text-button danger hidden">Stop all</button></div>
           <p id="assessmentGoal" class="overview-goal">Workers appear here as the coordinator delegates work.</p>
           <div id="assessmentMetrics" class="metrics hidden"></div>
+          <div id="contextWindow" class="context-window hidden" aria-label="Current input context usage">
+            <div class="context-window-header"><span>Input context</span><strong id="contextUsageLabel"></strong></div>
+            <div class="context-track"><span id="contextFill"></span></div>
+            <div id="contextUsageDetail" class="muted"></div>
+          </div>
           <details id="scopeDetails" class="hidden"><summary>Scope & limits</summary><p id="assessmentScope" class="pre-wrap"></p><p id="assessmentLimits" class="muted"></p></details>
           <a id="report" class="report-link hidden" target="_blank" rel="noopener">Session report ↗</a>
         </section>

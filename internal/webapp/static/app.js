@@ -107,6 +107,11 @@ function updateComposer() {
   $('conversationState').textContent = current?.pending_tool ? 'Waiting for your approval · No tool is running' : pendingMessage ? 'Coordinator is responding…' : finalized ? 'Session ended · Start a new session to continue' : current?.customer ? 'Workers can run while you discuss the assessment' : 'Ready when you are';
   $('chatInput').placeholder = finalized ? 'This session has ended' : 'Ask, investigate, or plan an assessment…';
 }
+function formatBytes(value) {
+  const bytes = Number(value) || 0;
+  if (bytes < 1024) return bytes + ' B';
+  return (bytes / 1024).toFixed(1) + ' KiB';
+}
 function renderOverview(view) {
   const running = activeStatuses.includes(view.status);
   const status = view.customer ? view.status : view.pending_tool ? 'Needs approval' : view.status === 'thinking' ? 'Thinking' : view.proposal ? 'Ready for review' : 'Conversation';
@@ -115,6 +120,16 @@ function renderOverview(view) {
   $('assessmentGoal').textContent = view.goal || 'Workers appear here as the coordinator delegates work.';
   $('assessmentMetrics').classList.toggle('hidden', !view.customer);
   $('assessmentMetrics').textContent = (view.usage?.calls || 0) + ' recorded calls · ' + (view.plans || 0) + ' plans';
+  const context = view.context_window || {};
+  const hasContext = !!(view.customer && context.limit_bytes > 0);
+  $('contextWindow').classList.toggle('hidden', !hasContext);
+  if (hasContext) {
+    const percent = Math.max(0, Math.min(100, Number(context.percent) || 0));
+    $('contextUsageLabel').textContent = formatBytes(context.used_bytes) + ' / ' + formatBytes(context.limit_bytes);
+    $('contextFill').style.width = percent + '%';
+    $('contextFill').dataset.state = percent >= 90 ? 'high' : percent >= 75 ? 'warm' : '';
+    $('contextUsageDetail').textContent = percent + '% used · ' + formatBytes(context.remaining_bytes) + ' remaining · application input-byte ceiling';
+  }
   $('scopeDetails').classList.toggle('hidden', !view.scope);
   $('assessmentScope').textContent = view.scope || '';
   $('assessmentLimits').textContent = view.limits?.workers ? 'Up to ' + view.limits.workers + ' workers · ' + view.limits.tasks + ' tasks · ' + view.limits.model_calls + ' model calls' : '';
@@ -140,7 +155,7 @@ function renderView(view) {
   $('model').textContent = view.model || 'Model not configured';
   renderTranscript();
   renderOverview(view);
-  if (changed('workers', [view.workers, view.pending_approvals, view.pending_questions, view.pending_tool, view.model])) {
+  if (changed('workers', [view.workers, view.context_window, view.pending_approvals, view.pending_questions, view.pending_tool, view.model])) {
     $('workerCount').textContent = renderWorkers(view, act);
   }
   if (changed('findings', view.findings)) renderFindings(view);

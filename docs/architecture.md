@@ -107,6 +107,14 @@ The projection keeps the original goal and completion condition, policy and scop
 
 The current implementation covers bounded projections, protected anchors, conversation rollover, plan history, and visible truncation. The next context increments are relevance-ranked retrieval across a run, a durable multi-worker event history, and independently verified run summaries. Each should be added only with a fixture that demonstrates the information loss it prevents; context size alone is not a reason to add another compaction layer.
 
+The browser assessment inspector exposes the latest worker request as a typed
+context meter: bytes used, the configured application ceiling, remaining bytes,
+and percentage used. The assessment overview reports the largest current
+worker request so concurrent work remains easy to scan. This is measured from
+the exact system and user message text sent by the application after projection;
+it is deliberately labelled an input-byte ceiling rather than a token count.
+Provider-reported cumulative token usage remains a separate assessment metric.
+
 ## Persistence and stopping
 
 Session state is one local JSON snapshot per worker session, written through a temporary file and atomic replacement. Version 2 persists the original turn limit and consumed turns. Resume never replenishes that budget. Version 1 snapshots remain inspectable JSON but cannot be resumed because they lack reliable budget accounting. A pending invocation with an unknown outcome is never replayed automatically; inspect its evidence before starting a new task. This is not a multi-worker event store and does not provide exactly-once recovery of external tool effects.

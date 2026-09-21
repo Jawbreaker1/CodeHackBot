@@ -96,6 +96,14 @@ textarea::placeholder { color: #94938d; }
 .overview-goal { font-size: 12px; line-height: 1.6; margin: 11px 0; }
 .metrics { display: flex; flex-wrap: wrap; gap: 13px; margin: 12px 0; color: var(--faint); font-size: 11px; }
 .metrics strong { color: var(--text); font-weight: 500; }
+.context-window { margin: 12px 0 4px; padding: 10px; border: 1px solid var(--line); border-radius: 7px; background: #ffffff04; }
+.context-window-header { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 11px; }
+.context-window-header strong { color: var(--text); font-weight: 500; }
+.context-track { height: 4px; margin-top: 8px; overflow: hidden; border-radius: 99px; background: #ffffff12; }
+.context-fill { display: block; width: 0; height: 100%; background: #8d9b89; transition: width .2s; }
+.context-fill[data-state="warm"] { background: var(--attention); }
+.context-fill[data-state="high"] { background: var(--error); }
+.context-window .muted { margin: 7px 0 0; font-size: 10px; }
 .text-button { padding: 4px 6px; font-size: 11px; }
 .danger { color: var(--error); }
 .tabs { display: flex; gap: 17px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: #1d1d1d; z-index: 1; }

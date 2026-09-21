@@ -35,22 +35,25 @@ type Task struct {
 // task metadata for a client to render a useful run view without reading
 // worker internals or guessing from prose.
 type Event struct {
-	TaskID          string        `json:"task_id,omitempty"`
-	Kind            string        `json:"kind"`
-	Message         string        `json:"message,omitempty"`
-	Goal            string        `json:"goal,omitempty"`
-	DoneWhen        string        `json:"done_when,omitempty"`
-	DependsOn       []string      `json:"depends_on,omitempty"`
-	Step            int           `json:"step,omitempty"`
-	ActiveStep      string        `json:"active_step,omitempty"`
-	Action          string        `json:"action,omitempty"`
-	ExitStatus      string        `json:"exit_status,omitempty"`
-	EvidenceCount   int           `json:"evidence_count,omitempty"`
-	RemainingBudget string        `json:"remaining_budget,omitempty"`
-	ContextUsage    string        `json:"context_usage,omitempty"`
-	ModelCalls      int           `json:"model_calls,omitempty"`
-	PlanSteps       []string      `json:"plan_steps,omitempty"`
-	Evidence        *EvidenceView `json:"evidence,omitempty"`
+	TaskID              string        `json:"task_id,omitempty"`
+	Kind                string        `json:"kind"`
+	Message             string        `json:"message,omitempty"`
+	Goal                string        `json:"goal,omitempty"`
+	DoneWhen            string        `json:"done_when,omitempty"`
+	DependsOn           []string      `json:"depends_on,omitempty"`
+	Step                int           `json:"step,omitempty"`
+	ActiveStep          string        `json:"active_step,omitempty"`
+	Action              string        `json:"action,omitempty"`
+	ExitStatus          string        `json:"exit_status,omitempty"`
+	EvidenceCount       int           `json:"evidence_count,omitempty"`
+	RemainingBudget     string        `json:"remaining_budget,omitempty"`
+	ContextUsage        string        `json:"context_usage,omitempty"`
+	ContextUsedBytes    int           `json:"context_used_bytes,omitempty"`
+	ContextLimitBytes   int           `json:"context_limit_bytes,omitempty"`
+	ContextUsagePercent int           `json:"context_usage_percent,omitempty"`
+	ModelCalls          int           `json:"model_calls,omitempty"`
+	PlanSteps           []string      `json:"plan_steps,omitempty"`
+	Evidence            *EvidenceView `json:"evidence,omitempty"`
 }
 
 // EvidenceView is a compact execution observation for UI adapters. It contains

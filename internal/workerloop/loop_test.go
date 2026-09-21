@@ -265,6 +265,16 @@ func TestProgressSnapshotsAndEvaluatorPromptPreserveTaskContract(t *testing.T) {
 			t.Fatalf("missing %s in %v", want, kinds)
 		}
 	}
+	if out.Packet.OperatorState.ContextUsedBytes <= 0 || out.Packet.OperatorState.ContextLimitBytes != loop.LLM.InputByteLimit() {
+		t.Fatalf("context accounting missing from terminal packet: used=%d limit=%d", out.Packet.OperatorState.ContextUsedBytes, out.Packet.OperatorState.ContextLimitBytes)
+	}
+	for _, event := range sink.events {
+		if event.Kind == EventDecisionStarted || event.Kind == EventPostExecEvalStarted {
+			if event.ContextUsedBytes <= 0 || event.ContextLimitBytes != loop.LLM.InputByteLimit() {
+				t.Fatalf("context accounting missing from %s: %+v", event.Kind, event)
+			}
+		}
+	}
 	prompt := buildGoalEvaluationPrompt(out.Packet, "claimed answer")
 	for _, want := range []string{p.SessionFoundation.Goal, p.CurrentStep.DoneCondition, "claimed answer", "scope"} {
 		if !strings.Contains(prompt, want) {

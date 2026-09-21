@@ -9,23 +9,26 @@ import (
 // Keeping it separate from the bounded event feed lets a newly opened browser
 // see a worker's full current state even after earlier events have rolled off.
 type workerView struct {
-	ID              string                    `json:"id"`
-	Goal            string                    `json:"goal"`
-	DoneWhen        string                    `json:"done_when"`
-	DependsOn       []string                  `json:"depends_on"`
-	Phase           string                    `json:"phase"`
-	Detail          string                    `json:"detail"`
-	Step            int                       `json:"step"`
-	ActiveStep      string                    `json:"active_step"`
-	PlanSteps       []string                  `json:"plan_steps"`
-	Action          string                    `json:"action"`
-	ExitStatus      string                    `json:"exit_status"`
-	EvidenceCount   int                       `json:"evidence_count"`
-	Evidence        []assessment.EvidenceView `json:"evidence"`
-	RemainingBudget string                    `json:"remaining_budget"`
-	ContextUsage    string                    `json:"context_usage"`
-	ModelCalls      int                       `json:"model_calls"`
-	UpdatedAt       time.Time                 `json:"updated_at"`
+	ID                  string                    `json:"id"`
+	Goal                string                    `json:"goal"`
+	DoneWhen            string                    `json:"done_when"`
+	DependsOn           []string                  `json:"depends_on"`
+	Phase               string                    `json:"phase"`
+	Detail              string                    `json:"detail"`
+	Step                int                       `json:"step"`
+	ActiveStep          string                    `json:"active_step"`
+	PlanSteps           []string                  `json:"plan_steps"`
+	Action              string                    `json:"action"`
+	ExitStatus          string                    `json:"exit_status"`
+	EvidenceCount       int                       `json:"evidence_count"`
+	Evidence            []assessment.EvidenceView `json:"evidence"`
+	RemainingBudget     string                    `json:"remaining_budget"`
+	ContextUsage        string                    `json:"context_usage"`
+	ContextUsedBytes    int                       `json:"context_used_bytes,omitempty"`
+	ContextLimitBytes   int                       `json:"context_limit_bytes,omitempty"`
+	ContextUsagePercent int                       `json:"context_usage_percent,omitempty"`
+	ModelCalls          int                       `json:"model_calls"`
+	UpdatedAt           time.Time                 `json:"updated_at"`
 }
 
 // Called under run.mu. Published slices are replaced, never modified in place.
@@ -70,6 +73,15 @@ func (r *run) updateWorker(e assessment.Event) {
 	}
 	if e.ContextUsage != "" && e.ContextUsage != "(unset)" {
 		w.ContextUsage = e.ContextUsage
+	}
+	if e.ContextUsedBytes > 0 {
+		w.ContextUsedBytes = e.ContextUsedBytes
+	}
+	if e.ContextLimitBytes > 0 {
+		w.ContextLimitBytes = e.ContextLimitBytes
+	}
+	if e.ContextUsagePercent > 0 {
+		w.ContextUsagePercent = e.ContextUsagePercent
 	}
 	w.EvidenceCount = max(w.EvidenceCount, e.EvidenceCount)
 	w.ModelCalls = max(w.ModelCalls, e.ModelCalls)

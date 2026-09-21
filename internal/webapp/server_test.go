@@ -50,6 +50,17 @@ func TestServerCreatesDraftAndServesUI(t *testing.T) {
 	}
 }
 
+func TestAggregateContextWindowUsesLargestCurrentWorkerRequest(t *testing.T) {
+	state := assessment.State{MaxInputBytes: 1000}
+	view := aggregateContextWindow(state, []workerView{
+		{ID: "worker-a", ContextUsedBytes: 100, ContextLimitBytes: 1000},
+		{ID: "worker-b", ContextUsedBytes: 250, ContextLimitBytes: 1000},
+	})
+	if view.UsedBytes != 250 || view.LimitBytes != 1000 || view.RemainingBytes != 750 || view.Percent != 25 {
+		t.Fatalf("context window = %+v", view)
+	}
+}
+
 func TestServerUsesModelLedIntakeAndCoordinatorChat(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("Authorized synthetic web fixture only.\n"), 0600); err != nil {

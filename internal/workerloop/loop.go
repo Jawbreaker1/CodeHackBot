@@ -106,7 +106,7 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 			return out, err
 		}
 		current.CurrentStep.RemainingBudget = fmt.Sprintf("%d steps", current.Budget.Limit-current.Budget.Used)
-		view, err := l.modelView(current)
+		view, err := l.modelView(&current, buildUserPrompt)
 		if err != nil {
 			return out, err
 		}
@@ -191,7 +191,9 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 		if err := l.emit(EventPostExecEvalStarted, current, "evaluating original goal against evidence"); err != nil {
 			return out, err
 		}
-		view, err = l.modelView(current)
+		view, err = l.modelView(&current, func(packet ctxpacket.WorkerPacket) string {
+			return buildGoalEvaluationPrompt(packet, response.Summary)
+		})
 		if err != nil {
 			return out, err
 		}
@@ -228,6 +230,9 @@ func (l Loop) emit(kind ProgressEventKind, p ctxpacket.WorkerPacket, message str
 		event.Action = p.OperatorState.PendingExec
 	}
 	event.Assessment, event.FailureClass = p.LatestExecutionResult.Assessment, p.LatestExecutionResult.FailureClass
+	event.ContextUsedBytes = p.OperatorState.ContextUsedBytes
+	event.ContextLimitBytes = p.OperatorState.ContextLimitBytes
+	event.ContextUsagePercent = contextUsagePercent(event.ContextUsedBytes, event.ContextLimitBytes)
 	if err := emitProgressIfConfigured(l.Progress, event, p.Clone()); err != nil {
 		return fmt.Errorf("record worker progress: %w", err)
 	}
@@ -244,9 +249,79 @@ func (l Loop) capture(step int, stage string, p ctxpacket.WorkerPacket) error {
 	return nil
 }
 
-func (l Loop) modelView(p ctxpacket.WorkerPacket) (ctxpacket.WorkerPacket, error) {
+// modelView returns a bounded packet and records the exact text size of the
+// request that will be sent for the supplied prompt builder. The byte ceiling
+// is an application limit; it deliberately makes no claim about tokenization.
+func (l Loop) modelView(p *ctxpacket.WorkerPacket, prompt func(ctxpacket.WorkerPacket) string) (ctxpacket.WorkerPacket, error) {
+	limit := l.LLM.InputByteLimit()
 	// Reserve room for the decision/evaluation instructions and JSON quoting.
-	return p.ModelView(l.LLM.InputByteLimit() - 8192)
+	allowance := limit - 8192
+	if allowance <= 0 {
+		allowance = limit
+	}
+	for attempt := 0; attempt < 5; attempt++ {
+		view, err := p.ModelView(allowance)
+		if err != nil {
+			return ctxpacket.WorkerPacket{}, err
+		}
+		used := modelInputBytes(view, prompt)
+		setContextUsage(&view, used, limit)
+		// The typed usage is part of the packet shown to the model. Re-render
+		// once after setting it so the displayed accounting matches the request.
+		used = modelInputBytes(view, prompt)
+		setContextUsage(&view, used, limit)
+		used = modelInputBytes(view, prompt)
+		if used <= limit {
+			p.OperatorState = view.OperatorState
+			return view, nil
+		}
+		// ModelView bounds the packet render, while the client enforces the
+		// complete message text. Tighten the packet allowance by the observed
+		// excess and leave a small margin for JSON escaping changes.
+		allowance -= used - limit
+		if allowance <= 0 {
+			break
+		}
+	}
+	return ctxpacket.WorkerPacket{}, fmt.Errorf("worker model context needs more than the %d-byte input ceiling after compaction", limit)
+}
+
+func modelInputBytes(packet ctxpacket.WorkerPacket, prompt func(ctxpacket.WorkerPacket) string) int {
+	return len(packet.BehaviorFrame.PromptText()) + len(prompt(packet))
+}
+
+func setContextUsage(packet *ctxpacket.WorkerPacket, used, limit int) {
+	packet.OperatorState.ContextUsedBytes = used
+	packet.OperatorState.ContextLimitBytes = limit
+	packet.OperatorState.ContextUsage = formatContextUsage(used, limit)
+}
+
+func contextUsagePercent(used, limit int) int {
+	if limit <= 0 {
+		return 0
+	}
+	percent := used * 100 / limit
+	if percent < 0 {
+		return 0
+	}
+	if percent > 100 {
+		return 100
+	}
+	return percent
+}
+
+func formatContextUsage(used, limit int) string {
+	if limit <= 0 {
+		return fmt.Sprintf("%s", formatContextBytes(used))
+	}
+	return fmt.Sprintf("%s / %s (%d%%)", formatContextBytes(used), formatContextBytes(limit), contextUsagePercent(used, limit))
+}
+
+func formatContextBytes(value int) string {
+	if value < 1024 {
+		return fmt.Sprintf("%d B", value)
+	}
+	return fmt.Sprintf("%.1f KiB", float64(value)/1024)
 }
 
 func applyPlan(p *ctxpacket.WorkerPacket, plan PlanUpdate) {

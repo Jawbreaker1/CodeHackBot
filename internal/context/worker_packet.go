@@ -63,11 +63,16 @@ type OperatorState struct {
 	ModeHint      string
 	Model         string
 	ContextUsage  string
-	WorkingDir    string
-	PendingAction string
-	PendingMode   string
-	PendingExec   string
-	PendingLog    string
+	// ContextUsedBytes and ContextLimitBytes describe the latest model request
+	// after context projection. They are application byte accounting, not a
+	// provider tokenizer estimate.
+	ContextUsedBytes  int
+	ContextLimitBytes int
+	WorkingDir        string
+	PendingAction     string
+	PendingMode       string
+	PendingExec       string
+	PendingLog        string
 }
 
 // WorkerPacket is the authoritative v1 worker context packet.
@@ -279,6 +284,8 @@ func renderOperatorState(s OperatorState) string {
 		"mode_hint: " + blankOrValue(s.ModeHint),
 		"model: " + blankOrValue(s.Model),
 		"context_usage: " + blankOrValue(s.ContextUsage),
+		"context_used_bytes: " + strconv.Itoa(s.ContextUsedBytes),
+		"context_limit_bytes: " + strconv.Itoa(s.ContextLimitBytes),
 		"working_dir: " + blankOrValue(s.WorkingDir),
 		"pending_action: " + blankOrValue(s.PendingAction),
 		"pending_mode: " + blankOrValue(s.PendingMode),

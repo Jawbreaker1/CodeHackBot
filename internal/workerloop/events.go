@@ -27,15 +27,18 @@ const (
 // ProgressEvent is a live runtime transition for UI and orchestration surfaces.
 // It is observational only; the authoritative current-task state remains in the packet.
 type ProgressEvent struct {
-	Kind         ProgressEventKind
-	At           time.Time
-	StepIndex    int
-	Message      string
-	ActiveStep   string
-	Action       string
-	ExitStatus   string
-	Assessment   string
-	FailureClass string
+	Kind                ProgressEventKind
+	At                  time.Time
+	StepIndex           int
+	Message             string
+	ActiveStep          string
+	Action              string
+	ExitStatus          string
+	Assessment          string
+	FailureClass        string
+	ContextUsedBytes    int
+	ContextLimitBytes   int
+	ContextUsagePercent int
 }
 
 type ProgressSink interface {

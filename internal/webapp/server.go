@@ -157,6 +157,7 @@ type assessmentView struct {
 	StartedAt        time.Time            `json:"started_at,omitempty"`
 	FinishedAt       time.Time            `json:"finished_at,omitempty"`
 	Usage            assessment.Usage     `json:"usage"`
+	ContextWindow    contextWindowView    `json:"context_window"`
 	Plans            int                  `json:"plans"`
 	Workers          []workerView         `json:"workers"`
 	Findings         []assessment.Finding `json:"findings"`
@@ -167,6 +168,16 @@ type assessmentView struct {
 	PendingQuestions []questionView       `json:"pending_questions"`
 	Messages         []intakeMessage      `json:"messages"`
 	ReportURL        string               `json:"report_url,omitempty"`
+}
+
+// contextWindowView reports the largest current worker request against the
+// assessment's configured application input ceiling. These are bytes of
+// message text, not provider token counts.
+type contextWindowView struct {
+	UsedBytes      int `json:"used_bytes"`
+	LimitBytes     int `json:"limit_bytes"`
+	RemainingBytes int `json:"remaining_bytes"`
+	Percent        int `json:"percent"`
 }
 
 type customerView struct {
@@ -1090,6 +1101,7 @@ func (r *run) view(after string) assessmentView {
 		view.Workers = append(view.Workers, worker)
 	}
 	sort.Slice(view.Workers, func(i, j int) bool { return view.Workers[i].ID < view.Workers[j].ID })
+	view.ContextWindow = aggregateContextWindow(r.state, view.Workers)
 	for _, plan := range r.state.Plans {
 		view.Findings = append(view.Findings, plan.Findings...)
 	}
@@ -1111,6 +1123,31 @@ func (r *run) view(after string) assessmentView {
 	sort.Slice(view.PendingApprovals, func(i, j int) bool { return view.PendingApprovals[i].ID < view.PendingApprovals[j].ID })
 	sort.Slice(view.PendingQuestions, func(i, j int) bool { return view.PendingQuestions[i].ID < view.PendingQuestions[j].ID })
 	return view
+}
+
+func aggregateContextWindow(state assessment.State, workers []workerView) contextWindowView {
+	limit := state.MaxInputBytes
+	used := 0
+	for _, worker := range workers {
+		if worker.ContextUsedBytes > used {
+			used = worker.ContextUsedBytes
+		}
+		if limit == 0 && worker.ContextLimitBytes > limit {
+			limit = worker.ContextLimitBytes
+		}
+	}
+	remaining := limit - used
+	if remaining < 0 {
+		remaining = 0
+	}
+	percent := 0
+	if limit > 0 {
+		percent = used * 100 / limit
+		if percent > 100 {
+			percent = 100
+		}
+	}
+	return contextWindowView{UsedBytes: used, LimitBytes: limit, RemainingBytes: remaining, Percent: percent}
 }
 
 func (r *run) writeView(w http.ResponseWriter, after string) {

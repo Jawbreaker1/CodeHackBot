@@ -43,6 +43,16 @@ function grid(values) {
   for (const [label, value] of values) list.append(node('dt', '', label), node('dd', '', value));
   return list;
 }
+function formatBytes(value) {
+  const bytes = Number(value) || 0;
+  if (bytes < 1024) return bytes + ' B';
+  return (bytes / 1024).toFixed(1) + ' KiB';
+}
+function contextLabel(worker) {
+  if (!worker.context_limit_bytes) return worker.context_usage || 'Not reported';
+  const percent = Number(worker.context_usage_percent) || Math.min(100, Math.round((worker.context_used_bytes || 0) * 100 / worker.context_limit_bytes));
+  return `${formatBytes(worker.context_used_bytes)} / ${formatBytes(worker.context_limit_bytes)} (${percent}%)`;
+}
 export function evidenceNode(evidence) {
   const item = node('div', 'evidence-item');
   item.append(node('div', 'muted', 'Exit: ' + (evidence.exit_status || 'Not reported')));
@@ -173,7 +183,7 @@ export function renderWorkers(view, act) {
     const details = node('div');
     details.append(grid([
       ['Model', view.model || 'Not reported'], ['Remaining budget', w.remaining_budget || 'Not reported'],
-      ['Context usage', w.context_usage || 'Not reported'], ['Dependencies', (w.depends_on || []).join(', ') || 'None'],
+      ['Context window', contextLabel(w)], ['Context remaining', w.context_limit_bytes ? formatBytes(Math.max(0, w.context_limit_bytes - w.context_used_bytes)) : 'Not reported'], ['Dependencies', (w.depends_on || []).join(', ') || 'None'],
       ['Last exit', w.exit_status || '—'], ['Updated', w.updated_at ? new Date(w.updated_at).toLocaleTimeString() : '—'],
     ]));
     if (w.done_when) details.append(node('div', 'action-label', 'Completion criteria'), node('p', '', w.done_when));
