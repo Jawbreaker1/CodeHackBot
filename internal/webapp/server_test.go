@@ -32,9 +32,14 @@ func TestServerCreatesDraftAndServesUI(t *testing.T) {
 		t.Fatalf("GET / status = %d", response.StatusCode)
 	}
 	body, err := io.ReadAll(response.Body)
-	if err != nil || !strings.Contains(string(body), "Start with a security question") || !strings.Contains(string(body), "Customers") {
+	if err != nil || !strings.Contains(string(body), "What are we investigating?") || !strings.Contains(string(body), "Customers & sessions") {
 		t.Fatal("embedded operator console UI is missing")
 	}
+	css, err := http.Get(httpServer.URL + "/app.css")
+	if err != nil || css.StatusCode != http.StatusOK {
+		t.Fatal("operator console stylesheet is missing")
+	}
+	_ = css.Body.Close()
 
 	created := postJSON[assessmentView](t, httpServer.URL+"/api/v1/assessments", createRequest{Customer: "fixture-lab", Goal: "inspect the fixture", Scope: "only local synthetic commands; approve each action"})
 	if created.Status != "draft" || created.ID == "" {
@@ -141,8 +146,11 @@ func TestServerRunsSharedCoordinatorAndApprovalThroughHTTP(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if latest.Status != "completed" || !approved || len(latest.Results) != 1 {
+	if latest.Status != "completed" || !approved || len(latest.Results) != 1 || len(latest.Workers) != 1 {
 		t.Fatalf("final view = %#v (approved=%v)", latest, approved)
+	}
+	if latest.Workers[0].ID != "observe" || latest.Workers[0].EvidenceCount != 1 || latest.Workers[0].Phase != "done" {
+		t.Fatalf("worker view = %#v", latest.Workers[0])
 	}
 	if _, err := os.Stat(filepath.Join(root, "sessions", created.Customer, created.ID, "report.md")); err != nil {
 		t.Fatalf("report missing: %v", err)

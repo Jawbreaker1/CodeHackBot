@@ -1,127 +1,37 @@
 package webapp
 
-const indexHTML = `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>BirdHackBot · operator console</title>
-  <style>
-    :root {
-      color-scheme: dark;
-      --canvas: #0b0d10;
-      --sidebar: #101318;
-      --surface: #15191f;
-      --surface-2: #191e25;
-      --field: #0d1014;
-      --line: #282e37;
-      --line-strong: #3a424d;
-      --text: #e5e8ec;
-      --muted: #8c949f;
-      --faint: #626b77;
-      --blue: #8bb8ff;
-      --blue-strong: #4d8fe8;
-      --green: #72d6a3;
-      --amber: #e6b86f;
-      --red: #f18c8c;
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    }
-    * { box-sizing: border-box; }
-    html, body { height: 100%; }
-    body { margin: 0; background: var(--canvas); color: var(--text); font-size: 13px; }
-    button, textarea, input { font: inherit; }
-    button { cursor: pointer; }
-    button:disabled { cursor: wait; opacity: .45; }
-    .app-shell { height: 100vh; min-height: 620px; display: grid; grid-template-columns: 236px minmax(0, 1fr) 304px; overflow: hidden; }
-    .sidebar, .inspector { background: var(--sidebar); min-width: 0; }
-    .sidebar { border-right: 1px solid var(--line); display: flex; flex-direction: column; }
-    .inspector { border-left: 1px solid var(--line); overflow: auto; }
-    .brand-row { height: 58px; padding: 0 16px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 10px; }
-    .brand-mark { width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid var(--line-strong); color: var(--blue); font-size: 10px; font-weight: 800; letter-spacing: -.08em; }
-    .brand-name { font-weight: 760; letter-spacing: -.02em; }
-    .brand-subtitle { display: block; color: var(--faint); font-size: 10px; font-weight: 500; margin-top: 1px; letter-spacing: .02em; }
-    .new-assessment { margin: 14px 12px 16px; height: 34px; padding: 0 12px; border: 1px solid #3a659c; background: #17243a; color: #cfe1ff; text-align: left; }
-    .new-assessment:hover { background: #1e304d; border-color: var(--blue-strong); }
-    .side-label { padding: 0 14px 8px; color: var(--faint); font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
-    #sidebarSessions { flex: 1; overflow: auto; padding: 0 8px 12px; }
-    .customer-group { margin-bottom: 12px; }
-    .customer-heading { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 7px; border: 0; background: transparent; color: var(--muted); text-align: left; font-size: 11px; font-weight: 700; }
-    .customer-heading:hover { color: var(--text); }
-    .customer-heading .customer-count { color: var(--faint); font-size: 10px; font-weight: 500; }
-    .session-link { width: 100%; display: block; padding: 8px 8px 8px 18px; border: 0; border-left: 2px solid transparent; background: transparent; color: var(--muted); text-align: left; }
-    .session-link:hover { color: var(--text); background: #171c23; }
-    .session-link.active { border-left-color: var(--blue); color: var(--text); background: #1a222d; }
-    .session-link-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
-    .session-link-meta { display: flex; justify-content: space-between; gap: 8px; margin-top: 3px; color: var(--faint); font-size: 10px; }
-    .session-link-meta .running { color: var(--amber); }.session-link-meta .completed { color: var(--green); }.session-link-meta .aborted, .session-link-meta .incomplete { color: var(--red); }
-    .sidebar-empty { padding: 10px 8px; color: var(--faint); font-size: 11px; line-height: 1.45; }
-    .sidebar-footer { border-top: 1px solid var(--line); padding: 12px 14px; color: var(--faint); font-size: 10px; line-height: 1.45; }
-    .sidebar-footer strong { display: block; color: var(--muted); font-size: 11px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .main-column { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--canvas); }
-    .main-header { height: 58px; border-bottom: 1px solid var(--line); padding: 0 22px; display: flex; align-items: center; justify-content: space-between; gap: 18px; }
-    .main-heading { min-width: 0; }.main-heading h1 { margin: 0; font-size: 14px; font-weight: 650; letter-spacing: -.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.main-heading p { margin: 3px 0 0; color: var(--faint); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .header-meta { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 11px; white-space: nowrap; }.state-pill { padding: 3px 7px; border: 1px solid var(--line-strong); color: var(--muted); text-transform: lowercase; }.state-pill.ready, .state-pill.completed { color: var(--green); border-color: #315f4a; }.state-pill.running, .state-pill.starting, .state-pill.thinking { color: var(--amber); border-color: #665330; }.state-pill.aborted, .state-pill.incomplete { color: var(--red); border-color: #683b42; }
-    #chat { flex: 1; min-height: 0; overflow: auto; padding: 26px clamp(20px, 6vw, 86px) 34px; }
-    .transcript-empty { max-width: 640px; margin: 18vh auto 0; text-align: center; color: var(--muted); }.transcript-empty strong { display: block; color: var(--text); font-size: 18px; font-weight: 620; letter-spacing: -.03em; margin-bottom: 8px; }.transcript-empty p { margin: 0; line-height: 1.55; }
-    .transcript-entry { display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 18px; max-width: 940px; margin: 0 auto; padding: 15px 0; border-top: 1px solid #1c2128; }.transcript-entry:first-child { border-top: 0; }.transcript-role { padding-top: 2px; color: var(--faint); font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }.transcript-entry.user .transcript-role { color: var(--blue); }.transcript-entry.assistant .transcript-role { color: var(--green); }.transcript-entry.system { display: block; margin-top: 5px; padding: 10px 12px; border: 1px solid var(--line); color: var(--muted); font-size: 11px; }.transcript-entry.system .transcript-role { display: inline; margin-right: 7px; }.transcript-text { min-width: 0; white-space: pre-wrap; line-height: 1.58; overflow-wrap: anywhere; }
-    .composer { border-top: 1px solid var(--line); padding: 14px clamp(20px, 6vw, 86px) 18px; }.composer-inner { max-width: 940px; margin: 0 auto; }.composer-row { display: flex; align-items: flex-end; gap: 9px; }.composer textarea { flex: 1; min-height: 48px; max-height: 150px; resize: vertical; padding: 12px 13px; border: 1px solid var(--line-strong); border-radius: 3px; outline: none; background: var(--field); color: var(--text); line-height: 1.45; }.composer textarea:focus, .inspector input:focus { border-color: var(--blue-strong); box-shadow: 0 0 0 2px #3e70ad33; }.send-button { height: 48px; padding: 0 16px; border: 1px solid #6396db; border-radius: 3px; background: #214472; color: #e5f0ff; font-weight: 650; }.send-button:hover { background: #2a568d; }.composer-hint { margin-top: 7px; color: var(--faint); font-size: 10px; }
-    .inspector-section { padding: 17px 15px; border-bottom: 1px solid var(--line); }.inspector-section h2 { margin: 0 0 13px; color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }.inspector-section p { margin: 7px 0; color: var(--muted); font-size: 11px; line-height: 1.48; }.kv { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 9px; padding: 5px 0; border-bottom: 1px solid #1d2229; font-size: 11px; }.kv:last-child { border-bottom: 0; }.kv span { color: var(--faint); }.kv strong { min-width: 0; color: var(--text); text-align: right; font-weight: 560; overflow-wrap: anywhere; }.value-status { color: var(--green)!important; }.value-waiting { color: var(--amber)!important; }.value-bad { color: var(--red)!important; }
-    .proposal-review { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }.proposal-review label { display: block; margin: 11px 0 5px; color: var(--faint); font-size: 10px; }.proposal-value { margin: 0; white-space: pre-wrap; line-height: 1.45; font-size: 11px; }.inspector input { width: 100%; height: 32px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 3px; outline: none; background: var(--field); color: var(--text); }.primary-button { width: 100%; margin-top: 12px; height: 33px; border: 1px solid #6396db; border-radius: 3px; background: #214472; color: #e5f0ff; font-size: 11px; font-weight: 650; }.primary-button:hover { background: #2a568d; }.danger-button { margin-top: 12px; height: 29px; padding: 0 9px; border: 1px solid #6b3b42; border-radius: 3px; background: transparent; color: var(--red); font-size: 10px; }.danger-button:hover { background: #271619; }.link-button { display: inline-block; margin-top: 10px; color: var(--blue); font-size: 11px; text-decoration: none; }.link-button:hover { text-decoration: underline; }
-    .approval-item { margin-top: 10px; padding: 10px; border-left: 2px solid var(--amber); background: #1a1814; }.approval-title { color: var(--amber); font-size: 10px; font-weight: 750; }.approval-command { display: block; margin: 7px 0; color: #e7c98f; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }.approval-actions { display: flex; gap: 6px; }.approval-actions button { height: 27px; padding: 0 8px; border: 1px solid #608ec9; border-radius: 3px; background: #214472; color: #e5f0ff; font-size: 10px; }.approval-actions .deny { border-color: #6b3b42; background: transparent; color: var(--red); }.question-input { margin-top: 8px; }.activity-list, .result-list { display: flex; flex-direction: column; gap: 8px; max-height: 250px; overflow: auto; }.activity-item { padding-left: 9px; border-left: 1px solid #3a4654; color: var(--muted); font-size: 10px; line-height: 1.4; }.activity-item strong { color: var(--text); font-weight: 580; }.result-item { padding-bottom: 8px; border-bottom: 1px solid #1d2229; }.result-item:last-child { border-bottom: 0; }.result-item strong { display: block; color: var(--text); font-size: 11px; font-weight: 620; }.result-item span { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.4; }.empty { color: var(--faint); font-size: 10px; line-height: 1.45; }.hidden { display: none!important; }
-    @media (max-width: 1050px) { .app-shell { grid-template-columns: 210px minmax(0, 1fr); }.inspector { display: none; } }
-    @media (max-width: 680px) { .app-shell { display: block; height: auto; min-height: 100vh; overflow: visible; }.sidebar { min-height: 210px; max-height: 280px; border-right: 0; border-bottom: 1px solid var(--line); }.sidebar-footer { display: none; }.main-column { min-height: 660px; }.main-header { padding: 0 14px; }.header-meta { display: none; }.transcript-entry { grid-template-columns: 64px minmax(0, 1fr); gap: 10px; }.composer { padding: 12px 14px 15px; } }
-  </style>
-</head>
-<body>
-  <div class="app-shell">
-    <aside class="sidebar" aria-label="Assessment sessions">
-      <div class="brand-row"><div class="brand-mark">BH</div><div class="brand-name">BirdHackBot<span class="brand-subtitle">security operator console</span></div></div>
-      <button id="newAssessment" class="new-assessment" type="button">＋ New assessment</button>
-      <div class="side-label">Customers</div>
-      <div id="sidebarSessions"><div class="sidebar-empty">No assessment sessions yet. Start a conversation with the coordinator.</div></div>
-      <div class="sidebar-footer"><strong id="sidebarModel">Connecting…</strong><span id="sidebarConnection">Checking model connection</span></div>
-    </aside>
+import (
+	"embed"
+	"net/http"
+)
 
-    <main class="main-column">
-      <header class="main-header"><div class="main-heading"><h1 id="sessionTitle">New assessment</h1><p id="sessionSubtitle">Talk to the coordinator to shape an authorized security assessment.</p></div><div class="header-meta"><span id="headerCustomer">No customer</span><span id="headerState" class="state-pill">conversation</span></div></header>
-      <section id="chat" aria-live="polite"></section>
-      <form id="composer" class="composer"><div class="composer-inner"><div class="composer-row"><textarea id="chatInput" aria-label="Message the coordinator" rows="2" placeholder="Message the coordinator…" required></textarea><button id="send" class="send-button" type="submit">Send</button></div><div id="composerHint" class="composer-hint">The coordinator owns the discussion. Nothing executes until you review and start an assessment.</div></div></form>
-    </main>
+//go:embed static/index.html
+var indexHTML string
 
-    <aside class="inspector" aria-label="Assessment inspector">
-      <section class="inspector-section"><h2>Assessment</h2><div class="kv"><span>Status</span><strong id="assessmentStatus">Conversation</strong></div><div class="kv"><span>Model</span><strong id="model">Connecting…</strong></div><div class="kv"><span>Customer</span><strong id="assessmentCustomer">—</strong></div><div class="kv"><span>Calls</span><strong id="assessmentCalls">0</strong></div><p id="assessmentGoal">Describe what you want to understand. The coordinator will ask for the detail it needs.</p><div id="proposalReview" class="proposal-review hidden"><h2>Ready to start</h2><label>Objective</label><p id="proposalGoal" class="proposal-value"></p><label>Scope and permissions</label><p id="proposalScope" class="proposal-value"></p><label for="customer">Customer workspace</label><input id="customer" aria-label="Customer workspace" pattern="[A-Za-z0-9_-]+" maxlength="80" placeholder="customer-id" required><button id="start" class="primary-button" type="button">Start assessment</button></div><button id="stop" class="danger-button hidden" type="button">Stop assessment</button><a id="report" class="link-button hidden" target="_blank">Open session report ↗</a></section>
-      <section id="approvalSection" class="inspector-section hidden"><h2>Needs your attention</h2><div id="approvalBox"></div></section>
-      <section class="inspector-section"><h2>Activity</h2><div id="activity" class="activity-list"><div class="empty">Activity will appear when an assessment is running.</div></div></section>
-      <section class="inspector-section"><h2>Results</h2><div id="results" class="result-list"><div class="empty">No findings or worker results yet.</div></div><div id="customerReportWrap" class="hidden"><a id="customerReport" class="link-button" target="_blank">Open customer report ↗</a></div></section>
-    </aside>
-  </div>
-<script>
-(() => {
-  let intakeId = null, assessmentId = null, customer = null, after = 0, sending = false;
-  const $ = (id) => document.getElementById(id);
-  const api = (url, options = {}) => fetch(url, {headers:{'Content-Type':'application/json'}, ...options}).then(async r => { const body=await r.json().catch(()=>({})); if(!r.ok) throw new Error(body.error || r.statusText); return body; });
-  const fail = (error) => { appendMessage('system', 'Coordinator unavailable: ' + error.message); sending=false; updateComposer(); };
-  const stateClass = (value) => String(value || '').toLowerCase().replace(/[^a-z]+/g, '-');
-  const setHeader = (title, subtitle, customerName, status) => { $('sessionTitle').textContent=title || 'Assessment'; $('sessionSubtitle').textContent=subtitle || ''; $('headerCustomer').textContent=customerName || 'No customer'; $('headerState').textContent=status || 'conversation'; $('headerState').className='state-pill '+stateClass(status); };
-  const appendMessage = (role, text) => { const item=document.createElement('article'); item.className='transcript-entry '+role; const label=document.createElement('div'); label.className='transcript-role'; label.textContent=role==='user'?'You':role==='assistant'?'Coordinator':'System'; const body=document.createElement('div'); body.className='transcript-text'; body.textContent=text; item.append(label,body); $('chat').append(item); };
-  const renderMessages = (messages) => { $('chat').replaceChildren(); if(!messages || messages.length===0) { const empty=document.createElement('div'); empty.className='transcript-empty'; const title=document.createElement('strong'); title.textContent='Start with a security question'; const text=document.createElement('p'); text.textContent='Describe what you want to investigate in plain language. The coordinator will clarify the target, boundaries, and permitted actions before proposing work.'; empty.append(title,text); $('chat').append(empty); } else (messages||[]).forEach(m=>appendMessage(m.role,m.text)); $('chat').scrollTop=$('chat').scrollHeight; };
-  const updateComposer = () => { $('send').disabled=sending; $('chatInput').disabled=sending || (!intakeId && !assessmentId); $('chatInput').placeholder=assessmentId?'Ask about progress, blockers, or the next discovery…':'Message the coordinator…'; $('composerHint').textContent=assessmentId?'The coordinator can explain live worker state while approvals remain under your control.':'The coordinator owns the discussion. Nothing executes until you review and start an assessment.'; };
-  const renderEvents = (events) => { if(after===0) $('activity').replaceChildren(); (events||[]).forEach(record=>{ if(record.sequence<=after)return; after=record.sequence; const item=document.createElement('div'); item.className='activity-item'; const title=document.createElement('strong'); title.textContent=(record.event&&record.event.task_id?'['+record.event.task_id+'] ':'')+(record.event&&record.event.kind || 'event'); const message=record.event&&(record.event.message||record.event.action); item.append(title,document.createTextNode(message?': '+message:'')); $('activity').append(item); }); if(!$('activity').children.length) { const empty=document.createElement('div'); empty.className='empty'; empty.textContent='Activity will appear when an assessment is running.'; $('activity').append(empty); } $('activity').scrollTop=$('activity').scrollHeight; };
-  const renderResults = (view) => { const box=$('results'); box.replaceChildren(); const results=view.results||[]; if(!results.length) { const empty=document.createElement('div'); empty.className='empty'; empty.textContent='No findings or worker results yet.'; box.append(empty); return; } results.forEach(result=>{ const item=document.createElement('div'); item.className='result-item'; const title=document.createElement('strong'); title.textContent=(result.task&&result.task.id?result.task.id:'Worker result')+' · '+(result.status||'reported'); const detail=document.createElement('span'); detail.textContent=result.summary||'No summary supplied.'; item.append(title,detail); box.append(item); }); };
-  const renderApprovals = (view) => { const section=$('approvalSection'); const box=$('approvalBox'); box.replaceChildren(); let count=0; (view.pending_approvals||[]).forEach(item=>{ count++; const card=document.createElement('div'); card.className='approval-item'; const title=document.createElement('div'); title.className='approval-title'; title.textContent='Approval · '+item.task_id; const code=document.createElement('code'); code.className='approval-command'; code.textContent=item.command+'\\n'+item.cwd; const actions=document.createElement('div'); actions.className='approval-actions'; [['approved_once','Approve once',''],['denied','Deny','deny']].forEach(([decision,label,kind])=>{const b=document.createElement('button');b.type='button';b.textContent=label;if(kind)b.className=kind;b.onclick=()=>api('/api/v1/assessments/'+assessmentId+'/approvals/'+encodeURIComponent(item.id),{method:'POST',body:JSON.stringify({decision})}).then(renderAssessment).catch(fail);actions.append(b);}); card.append(title,code,actions);box.append(card); }); (view.pending_questions||[]).forEach(item=>{ count++; const card=document.createElement('div'); card.className='approval-item'; const title=document.createElement('div'); title.className='approval-title'; title.textContent='Question · '+item.task_id; const prompt=document.createElement('div'); prompt.className='proposal-value'; prompt.textContent=item.text; const input=document.createElement('input'); input.className='question-input'; input.placeholder='Answer'; const b=document.createElement('button'); b.type='button'; b.className='primary-button'; b.textContent='Answer'; b.onclick=()=>api('/api/v1/assessments/'+assessmentId+'/questions/'+encodeURIComponent(item.id),{method:'POST',body:JSON.stringify({text:input.value})}).then(renderAssessment).catch(fail); card.append(title,prompt,input,b);box.append(card); }); section.classList.toggle('hidden',count===0); };
-  const renderIntake = (view) => { intakeId=view.id; assessmentId=null; customer=null; $('start').disabled=false; $('model').textContent=view.model_configured?view.model:'Model not configured'; $('sidebarModel').textContent=view.model_configured?view.model:'Model not configured'; $('sidebarConnection').textContent=view.model_configured?'Model connection ready':'Configure a model endpoint'; $('assessmentStatus').textContent=view.status; $('assessmentStatus').className=view.status==='ready'?'value-status':view.status==='thinking'?'value-waiting':''; $('assessmentCustomer').textContent='—'; $('assessmentCalls').textContent='0'; $('assessmentGoal').textContent='Describe what you want to understand. The coordinator will ask for the detail it needs.'; $('proposalReview').classList.toggle('hidden',!view.proposal); if(view.proposal){$('proposalGoal').textContent=view.proposal.goal;$('proposalScope').textContent=view.proposal.scope;} $('stop').classList.add('hidden'); $('report').classList.add('hidden'); $('approvalSection').classList.add('hidden'); $('customerReportWrap').classList.add('hidden'); renderEvents([]); renderResults({}); renderMessages(view.messages); setHeader('New assessment','Talk to the coordinator to shape an authorized security assessment.','No customer',view.status); updateComposer(); refreshSidebar(); };
-  const renderAssessment = (view) => { assessmentId=view.id; intakeId=null; customer=view.customer; $('model').textContent=view.model||$('sidebarModel').textContent; $('assessmentStatus').textContent=view.status; $('assessmentStatus').className=view.status==='completed'?'value-status':(view.status==='running'||view.status==='starting')?'value-waiting':(view.status==='aborted'||view.status==='incomplete')?'value-bad':''; $('assessmentCustomer').textContent=view.customer; $('assessmentCalls').textContent=(view.usage&&view.usage.calls)||0; $('assessmentGoal').textContent=view.goal; $('stop').classList.toggle('hidden',!['running','starting'].includes(view.status)); $('stop').disabled=!['running','starting'].includes(view.status); if(view.report_url){$('report').href=view.report_url;$('report').classList.remove('hidden');} else $('report').classList.add('hidden'); $('proposalReview').classList.add('hidden'); renderMessages(view.messages); renderEvents(view.events); renderApprovals(view); renderResults(view); setHeader(view.id,view.goal,view.customer,view.status); updateComposer(); api('/api/v1/customers/'+encodeURIComponent(customer)).then(renderCustomer).catch(()=>{}); refreshSidebar(); };
-  const renderCustomer = (view) => { if(!view||!view.id)return; $('customerReportWrap').classList.remove('hidden'); $('customerReport').href=view.report_url; if(view.findings&&view.findings.length && !assessmentId) { const box=$('results'); box.replaceChildren(); view.findings.forEach(item=>{const row=document.createElement('div');row.className='result-item';const title=document.createElement('strong');title.textContent=item.finding.title+' · '+item.finding.status;const detail=document.createElement('span');detail.textContent=item.finding.impact;row.append(title,detail);box.append(row);}); } };
-  const refreshSidebar = () => api('/api/v1/customers').then(data=>{ const root=$('sidebarSessions'); root.replaceChildren(); const groups=data.customers||[]; if(!groups.length){const empty=document.createElement('div');empty.className='sidebar-empty';empty.textContent='No assessment sessions yet. Start a conversation with the coordinator.';root.append(empty);return;} groups.forEach(group=>{const section=document.createElement('section');section.className='customer-group';const heading=document.createElement('button');heading.type='button';heading.className='customer-heading';const name=document.createElement('span');name.textContent=group.id;const count=document.createElement('span');count.className='customer-count';count.textContent=(group.sessions||[]).length+' session'+((group.sessions||[]).length===1?'':'s');heading.append(name,count);section.append(heading);(group.sessions||[]).forEach(session=>{const link=document.createElement('button');link.type='button';link.className='session-link'+(session.id===assessmentId?' active':'');const title=document.createElement('span');title.className='session-link-title';title.textContent=session.goal||session.id;const meta=document.createElement('span');meta.className='session-link-meta';const state=document.createElement('span');state.className=stateClass(session.status);state.textContent=session.status;const id=document.createElement('span');id.textContent=session.id.slice(-6);meta.append(state,id);link.append(title,meta);link.onclick=()=>selectAssessment(session.id);section.append(link);});root.append(section);}); }).catch(()=>{});
-  const selectAssessment = (id) => { assessmentId=null; intakeId=null; after=0; api('/api/v1/assessments/'+encodeURIComponent(id)).then(view=>{after=0;renderAssessment(view);}).catch(fail); };
-  const refresh = () => { if(!assessmentId)return; api('/api/v1/assessments/'+encodeURIComponent(assessmentId)+'?after='+after).then(renderAssessment).catch(()=>{}); };
-  const beginIntake = () => { assessmentId=null; intakeId=null; after=0; api('/api/v1/intake').then(renderIntake).catch(fail); };
-  $('composer').onsubmit=(event)=>{event.preventDefault();const text=$('chatInput').value.trim();if(!text||sending)return;sending=true;updateComposer();const url=assessmentId?'/api/v1/assessments/'+encodeURIComponent(assessmentId)+'/messages':'/api/v1/intake/'+encodeURIComponent(intakeId)+'/messages';api(url,{method:'POST',body:JSON.stringify({text})}).then(view=>{ $('chatInput').value=''; sending=false; if(assessmentId)renderAssessment(view); else renderIntake(view); }).catch(fail);};
-  $('start').onclick=()=>{const value=$('customer').value.trim();if(!value)return;$('start').disabled=true;api('/api/v1/intake/'+encodeURIComponent(intakeId)+'/start',{method:'POST',body:JSON.stringify({customer:value})}).then(view=>{customer=value;renderAssessment(view);}).catch(error=>{fail(error);$('start').disabled=false;});};
-  $('stop').onclick=()=>api('/api/v1/assessments/'+encodeURIComponent(assessmentId)+'/stop',{method:'POST'}).then(renderAssessment).catch(fail);
-  $('newAssessment').onclick=beginIntake;
-  refreshSidebar(); beginIntake(); setInterval(refresh,1000); setInterval(refreshSidebar,3000);
-})();
-</script>
-</body>
-</html>`
+//go:embed static/*.css static/*.js
+var uiAssets embed.FS
+
+func serveUI(w http.ResponseWriter, r *http.Request) bool {
+	var kind string
+	switch r.URL.Path {
+	case "/app.css":
+		kind = "text/css; charset=utf-8"
+	case "/app.js", "/inspector.js":
+		kind = "text/javascript; charset=utf-8"
+	default:
+		return false
+	}
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return true
+	}
+	data, err := uiAssets.ReadFile("static" + r.URL.Path)
+	if err != nil {
+		http.NotFound(w, r)
+		return true
+	}
+	w.Header().Set("Content-Type", kind)
+	w.Header().Set("Cache-Control", "no-cache")
+	_, _ = w.Write(data)
+	return true
+}

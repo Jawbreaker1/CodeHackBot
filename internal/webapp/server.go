@@ -94,6 +94,7 @@ type run struct {
 	messages  []intakeMessage
 	approvals map[string]*pendingApproval
 	questions map[string]*pendingQuestion
+	workers   map[string]workerView
 }
 
 type eventRecord struct {
@@ -131,23 +132,26 @@ type approvalRequest struct {
 }
 
 type assessmentView struct {
-	Customer         string              `json:"customer"`
-	ID               string              `json:"id"`
-	Goal             string              `json:"goal"`
-	Scope            string              `json:"scope"`
-	Status           string              `json:"status"`
-	Model            string              `json:"model"`
-	Error            string              `json:"error,omitempty"`
-	StartedAt        time.Time           `json:"started_at,omitempty"`
-	FinishedAt       time.Time           `json:"finished_at,omitempty"`
-	Usage            assessment.Usage    `json:"usage"`
-	Plans            int                 `json:"plans"`
-	Results          []assessment.Result `json:"results"`
-	Events           []eventRecord       `json:"events"`
-	PendingApprovals []approvalView      `json:"pending_approvals"`
-	PendingQuestions []questionView      `json:"pending_questions"`
-	Messages         []intakeMessage     `json:"messages"`
-	ReportURL        string              `json:"report_url,omitempty"`
+	Customer         string               `json:"customer"`
+	ID               string               `json:"id"`
+	Goal             string               `json:"goal"`
+	Scope            string               `json:"scope"`
+	Status           string               `json:"status"`
+	Model            string               `json:"model"`
+	Error            string               `json:"error,omitempty"`
+	StartedAt        time.Time            `json:"started_at,omitempty"`
+	FinishedAt       time.Time            `json:"finished_at,omitempty"`
+	Usage            assessment.Usage     `json:"usage"`
+	Plans            int                  `json:"plans"`
+	Workers          []workerView         `json:"workers"`
+	Findings         []assessment.Finding `json:"findings"`
+	Limits           assessment.Limits    `json:"limits"`
+	Results          []assessment.Result  `json:"results"`
+	Events           []eventRecord        `json:"events"`
+	PendingApprovals []approvalView       `json:"pending_approvals"`
+	PendingQuestions []questionView       `json:"pending_questions"`
+	Messages         []intakeMessage      `json:"messages"`
+	ReportURL        string               `json:"report_url,omitempty"`
 }
 
 type customerView struct {
@@ -188,6 +192,9 @@ func NewServer(config Config) *Server {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if serveUI(w, r) {
+		return
+	}
 	if r.URL.Path == "/" {
 		if r.Method != http.MethodGet {
 			methodNotAllowed(w, http.MethodGet)
@@ -329,6 +336,9 @@ func (s *Server) intakeMessage(ctx context.Context, current *intakeRun, text str
 	}()
 	turn, err := current.conversation.Turn(ctx, s.config.LLM, text)
 	if err != nil {
+		current.mu.Lock()
+		current.removeLastMessage("user", text)
+		current.mu.Unlock()
 		return err
 	}
 	current.mu.Lock()
@@ -397,6 +407,16 @@ func cloneDraft(draft *intake.Draft) *intake.Draft {
 	}
 	copy := *draft
 	return &copy
+}
+
+func (r *intakeRun) removeLastMessage(role, text string) {
+	if len(r.messages) == 0 {
+		return
+	}
+	last := r.messages[len(r.messages)-1]
+	if last.Role == role && last.Text == text {
+		r.messages = r.messages[:len(r.messages)-1]
+	}
 }
 
 func (s *Server) assessments(w http.ResponseWriter, r *http.Request) {
@@ -755,6 +775,7 @@ func (r *run) conversation() []string {
 
 func (r *run) emit(event assessment.Event) {
 	r.mu.Lock()
+	r.updateWorker(event)
 	r.sequence++
 	r.events = append(r.events, eventRecord{Sequence: r.sequence, At: time.Now().UTC(), Event: event})
 	if len(r.events) > 200 {
@@ -822,6 +843,7 @@ func (s *Server) message(ctx context.Context, r *run, text string) error {
 	r.mu.Lock()
 	r.chatBusy = false
 	if err != nil {
+		r.removeLastMessage("user", text)
 		r.events = append(r.events, eventRecord{Sequence: r.nextSequenceLocked(), At: time.Now().UTC(), Event: assessment.Event{Kind: "coordinator_error", Message: err.Error()}})
 		r.mu.Unlock()
 		return fmt.Errorf("coordinator response: %w", err)
@@ -831,6 +853,16 @@ func (s *Server) message(ctx context.Context, r *run, text string) error {
 	r.events = append(r.events, eventRecord{Sequence: r.nextSequenceLocked(), At: time.Now().UTC(), Event: assessment.Event{Kind: "coordinator_message", Message: strings.TrimSpace(reply)}})
 	r.mu.Unlock()
 	return nil
+}
+
+func (r *run) removeLastMessage(role, text string) {
+	if len(r.messages) == 0 {
+		return
+	}
+	last := r.messages[len(r.messages)-1]
+	if last.Role == role && last.Text == text {
+		r.messages = r.messages[:len(r.messages)-1]
+	}
 }
 
 func compactRunState(state assessment.State, pending []string) string {
@@ -928,6 +960,14 @@ func (r *run) view(after string) assessmentView {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	view := assessmentView{Customer: r.customer, ID: r.id, Goal: r.goal, Scope: r.scope, Status: r.status, Model: r.state.Model, Error: r.state.Error, StartedAt: r.state.StartedAt, FinishedAt: r.state.FinishedAt, Usage: r.state.Usage, Plans: len(r.state.Plans), Results: append([]assessment.Result(nil), r.state.Results...), Messages: append([]intakeMessage(nil), r.messages...), ReportURL: "/api/v1/assessments/" + r.id + "/report"}
+	view.Limits = r.state.Limits
+	for _, worker := range r.workers {
+		view.Workers = append(view.Workers, worker)
+	}
+	sort.Slice(view.Workers, func(i, j int) bool { return view.Workers[i].ID < view.Workers[j].ID })
+	for _, plan := range r.state.Plans {
+		view.Findings = append(view.Findings, plan.Findings...)
+	}
 	if n, err := strconv.ParseUint(strings.TrimSpace(after), 10, 64); err == nil {
 		for _, event := range r.events {
 			if event.Sequence > n {
