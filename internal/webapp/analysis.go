@@ -22,6 +22,7 @@ type analysisView struct {
 	ReportURL    string                   `json:"report_url,omitempty"`
 	Status       string                   `json:"status"`
 	Summary      string                   `json:"summary,omitempty"`
+	Conclusion   string                   `json:"conclusion,omitempty"`
 	SessionCount int                      `json:"session_count"`
 	Risk         analysisRisk             `json:"risk"`
 	Findings     []analysisFinding        `json:"findings"`
@@ -98,6 +99,7 @@ func buildAnalysis(id, customer string, state assessment.State, inputs []analysi
 	view.Findings = prioritizeFindings(inputs)
 	view.Risk = summarizeRisk(view.Findings)
 	view.Gaps = latestGaps(state.Plans)
+	view.Conclusion = assessmentConclusion(state)
 	view.Summary = analysisSummary(view.Status, view.Risk, len(view.Findings), len(view.Gaps))
 	view.NextActions = nextActions(view.Findings, view.Gaps)
 	return view
@@ -238,11 +240,12 @@ func summarizeRisk(findings []analysisFinding) analysisRisk {
 }
 
 func latestGaps(plans []assessment.Decision) []string {
-	var gaps []string
-	for _, plan := range plans {
-		gaps = append(gaps, plan.Gaps...)
+	if len(plans) == 0 {
+		return nil
 	}
-	return uniqueStrings(gaps)
+	// Decisions replace the current gap list, just as in the formal report.
+	// Earlier plans stay in the audit history, including gaps since resolved.
+	return uniqueStrings(plans[len(plans)-1].Gaps)
 }
 
 func uniqueStrings(values []string) []string {

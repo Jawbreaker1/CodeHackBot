@@ -44,6 +44,20 @@ func TestLoopApprovesActualInvocationAndWorkingDirectory(t *testing.T) {
 	if approver.request.UseShell || approver.request.Cwd != dir {
 		t.Fatalf("approval=%+v", approver.request)
 	}
+	audit, err := os.ReadFile(result.LogRefs[0] + ".approval.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record struct {
+		Request  approval.Request
+		Decision approval.Decision
+	}
+	if err := json.Unmarshal(audit, &record); err != nil {
+		t.Fatal(err)
+	}
+	if record.Request.Command != approver.request.Command || record.Decision != approval.DecisionApproveOnce {
+		t.Fatalf("approval audit does not match invocation: %s", audit)
+	}
 	log, err := os.ReadFile(result.LogRefs[0])
 	if err != nil {
 		t.Fatal(err)

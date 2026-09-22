@@ -83,7 +83,7 @@ func (i *Inspection) Run(ctx context.Context, call ToolCall) (Observation, error
 	encoded, _ := json.Marshal(call)
 	description := string(encoded)
 	i.emit(assessment.Event{Kind: "action_proposed", Goal: inspectionScope, Action: description, Message: "Inspect local environment"})
-	decision, err := i.Approver.Approve(ctx, approval.Request{Command: description, Cwd: root})
+	decision, err := i.Approver.Approve(ctx, approval.Request{Command: description, Cwd: root, Summary: "Inspect local " + call.Name, Target: root, Risk: "low", Impact: "Read local metadata without changing files or probing a target"})
 	if err != nil {
 		return observation, err
 	}

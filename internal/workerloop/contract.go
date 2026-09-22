@@ -21,6 +21,8 @@ type Response struct {
 	Args      []string    `json:"args,omitempty"`
 	UseShell  bool        `json:"use_shell,omitempty"`
 	Impact    string      `json:"impact,omitempty"`
+	Target    string      `json:"target,omitempty"`
+	Risk      string      `json:"risk,omitempty"`
 	Artifacts []string    `json:"artifacts,omitempty"`
 	Summary   string      `json:"summary,omitempty"`
 	Question  string      `json:"question,omitempty"`
@@ -45,6 +47,9 @@ func ParseResponse(text string) (Response, error) {
 	}
 	switch r.Type {
 	case "action":
+		if r.Risk != "" && r.Risk != "low" && r.Risk != "dangerous" && r.Risk != "unknown" {
+			return r, fmt.Errorf("action risk must be low, dangerous, or unknown")
+		}
 		if strings.TrimSpace(r.Command) == "" {
 			return r, fmt.Errorf("action command is required")
 		}
@@ -66,7 +71,7 @@ func ParseResponse(text string) (Response, error) {
 	default:
 		return r, fmt.Errorf("unsupported response type %q", r.Type)
 	}
-	if r.Type != "action" && (r.Command != "" || len(r.Args) != 0 || r.UseShell || r.Impact != "") {
+	if r.Type != "action" && (r.Command != "" || len(r.Args) != 0 || r.UseShell || r.Impact != "" || r.Target != "" || r.Risk != "") {
 		return r, fmt.Errorf("only action may contain execution fields")
 	}
 	if r.Type != "action" && len(r.Artifacts) != 0 {

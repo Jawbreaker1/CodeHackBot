@@ -171,6 +171,14 @@ def run_case(binary, root, endpoint, mode):
             terminal.expect("Reasoning effort:")
             terminal.send("low")
         terminal.expect("birdhackbot> ")
+        if mode == "auto":
+            terminal.send("/permissions")
+            terminal.expect("Choose 1–3")
+            terminal.send("3")
+            terminal.expect("Type confirm to apply.")
+            terminal.send("confirm")
+            terminal.expect("Approval setting: Approve everything")
+            terminal.expect("birdhackbot> ")
         terminal.send("Who are you?")
         terminal.expect("Coordinator: I am the assessment orchestrator.")
         terminal.expect("birdhackbot> ")
@@ -188,11 +196,15 @@ def run_case(binary, root, endpoint, mode):
             terminal.expect("Question from observe:")
             terminal.send("fixture answer")
         if mode == "recovery":
+            terminal.expect("Allow this action?")
+            terminal.send("d")
             before = terminal.expect("Allow this action?")
             assert "Exact invocation: cat missing-fixture.txt" in before, terminal.transcript
             terminal.send("y")
-        approvals = 3 if mode == "orchestration" else 1
+        approvals = 0 if mode == "auto" else 3 if mode == "orchestration" else 1
         for approval_index in range(approvals):
+            terminal.expect("Allow this action?")
+            terminal.send("d")
             before = terminal.expect("Allow this action?")
             expected = "sh -c 'printf ready > ready; sleep 30'" if mode == "stop" else "printf '%s' 'terminal fixture'"
             if mode != "orchestration":
@@ -273,7 +285,7 @@ def main():
         with tempfile.TemporaryDirectory(prefix="birdhackbot-terminal-") as temporary:
             base = Path(temporary)
             endpoint = f"http://127.0.0.1:{server.server_port}/v1"
-            for mode in ["success", "reuse", "deny", "stop", "cancel", "provider-error", "question", "recovery", "orchestration"]:
+            for mode in ["success", "reuse", "auto", "deny", "stop", "cancel", "provider-error", "question", "recovery", "orchestration"]:
                 root = base / ("success" if mode == "reuse" else mode)
                 root.mkdir(exist_ok=True)
                 (root / "AGENTS.md").write_text("Authorized synthetic fixture commands only.\n")

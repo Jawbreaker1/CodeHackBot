@@ -51,7 +51,7 @@ func main() {
 	if researchMode != "connected" && researchMode != "air_gapped" && researchMode != "offline" {
 		fatal(fmt.Errorf("BIRDHACKBOT_RESEARCH_MODE must be connected or air_gapped"))
 	}
-	frame, err := behavior.Load(root, "assessment_coordinator", map[string]string{"approval_mode": "per_action", "research_mode": researchMode})
+	frame, err := behavior.Load(root, "assessment_coordinator", map[string]string{"approval_mode": "operator_selected_session_policy", "research_mode": researchMode})
 	if err != nil {
 		fatal(err)
 	}
@@ -69,7 +69,10 @@ func main() {
 	}
 	client := llmclient.Client{BaseURL: *baseURL, Model: *model, AuthTokenFile: *tokenFile, ReasoningEffort: requestReasoning, MaxOutputTokens: requestMaxOutput, MaxInputBytes: inputLimit}
 	server := webapp.NewServer(webapp.Config{RepoRoot: root, SessionsRoot: *sessions, LLM: client, Frame: frame, Limits: assessment.DefaultLimits()})
-	httpServer := &http.Server{Addr: *addr, Handler: server, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
+	// Conversation requests may wait for inference or human approval. A short
+	// write deadline can discard a completed response and cause a POST retry.
+	// Model requests and shutdown retain their own cancellation limits.
+	httpServer := &http.Server{Addr: *addr, Handler: server, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	stopContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go func() {

@@ -46,6 +46,7 @@ type Server struct {
 }
 
 type intakeRun struct {
+	permissionMode approval.Mode
 	mu             sync.RWMutex
 	id             string
 	root           string
@@ -288,6 +289,7 @@ type messageView struct {
 }
 
 type intakeView struct {
+	PermissionMode  approval.Mode       `json:"permission_mode"`
 	ID              string              `json:"id"`
 	Customer        string              `json:"customer,omitempty"`
 	Title           string              `json:"title"`
@@ -331,24 +333,25 @@ type intakeCustomerRequest struct {
 }
 
 type run struct {
-	mu         sync.RWMutex
-	id         string
-	customer   string
-	root       string
-	client     llmclient.Client
-	goal       string
-	scope      string
-	status     string
-	state      assessment.State
-	started    bool
-	deleted    bool
-	cancel     context.CancelFunc
-	done       chan struct{}
-	chatBusy   bool
-	resume     bool
-	updatedAt  time.Time
-	persistMu  sync.Mutex
-	persistErr error
+	permissionMode approval.Mode
+	mu             sync.RWMutex
+	id             string
+	customer       string
+	root           string
+	client         llmclient.Client
+	goal           string
+	scope          string
+	status         string
+	state          assessment.State
+	started        bool
+	deleted        bool
+	cancel         context.CancelFunc
+	done           chan struct{}
+	chatBusy       bool
+	resume         bool
+	updatedAt      time.Time
+	persistMu      sync.Mutex
+	persistErr     error
 
 	sequence  uint64
 	events    []eventRecord
@@ -405,11 +408,13 @@ type planReviewRequest struct {
 }
 
 type assessmentView struct {
+	PermissionMode   approval.Mode        `json:"permission_mode"`
 	Customer         string               `json:"customer"`
 	ID               string               `json:"id"`
 	Goal             string               `json:"goal"`
 	Scope            string               `json:"scope"`
 	Status           string               `json:"status"`
+	Conclusion       string               `json:"conclusion,omitempty"`
 	Model            string               `json:"model"`
 	ModelBusy        bool                 `json:"model_busy"`
 	CanChangeModel   bool                 `json:"can_change_model"`
@@ -463,6 +468,9 @@ type customerFinding struct {
 }
 
 type approvalView struct {
+	Summary  string `json:"summary"`
+	Target   string `json:"target"`
+	Risk     string `json:"risk"`
 	ID       string `json:"id"`
 	TaskID   string `json:"task_id"`
 	Command  string `json:"command"`
@@ -625,6 +633,8 @@ func (s *Server) intakeRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch parts[1] {
+	case "permissions":
+		s.changeIntakePermissions(w, r, current)
 	case "model":
 		if r.Method != http.MethodPost {
 			methodNotAllowed(w, http.MethodPost)
@@ -756,8 +766,22 @@ func (s *Server) serveAssessmentArtifact(w http.ResponseWriter, r *http.Request,
 			}
 		}
 	}
+	for _, worker := range current.workers {
+		for _, evidence := range worker.Evidence {
+			for _, ref := range evidence.ArtifactRefs {
+				if filepath.Clean(ref) == wanted {
+					found = true
+				}
+			}
+		}
+		for _, ref := range worker.ExpectedArtifacts {
+			if filepath.Clean(ref) == wanted && resolvedWithin(filepath.Join(root, "tasks", worker.ID, "work"), wanted) {
+				found = true
+			}
+		}
+	}
 	current.mu.RUnlock()
-	if !found || !pathWithin(root, wanted) {
+	if !found || !resolvedWithin(root, wanted) {
 		writeError(w, http.StatusNotFound, "artifact not found")
 		return
 	}
@@ -928,6 +952,7 @@ func (s *Server) startIntake(current *intakeRun, customer string) (assessmentVie
 		return assessmentView{}, err
 	}
 	created.mu.Lock()
+	created.permissionMode = current.permissionMode
 	created.client = client
 	created.messages = intakeMessages
 	created.updatedAt = time.Now().UTC()
@@ -991,7 +1016,7 @@ func (r *intakeRun) view() intakeView {
 	} else if len(r.messages) > 0 && r.messages[0].Role == "user" {
 		title = compactTitle(r.messages[0].Text)
 	}
-	return intakeView{ID: r.id, Customer: r.customer, Title: title, Model: r.client.Model, ModelConfigured: strings.TrimSpace(r.client.BaseURL) != "" && strings.TrimSpace(r.client.Model) != "", ModelBusy: r.busy, CanChangeModel: !r.busy && r.assessmentID == "", Status: status, Messages: messageViews(r.messages, "intake", r.id), Proposal: cloneDraft(r.proposal), PendingTool: pending, Events: append([]eventRecord(nil), r.events...), AssessmentID: r.assessmentID}
+	return intakeView{PermissionMode: r.permissionMode.Normalized(), ID: r.id, Customer: r.customer, Title: title, Model: r.client.Model, ModelConfigured: strings.TrimSpace(r.client.BaseURL) != "" && strings.TrimSpace(r.client.Model) != "", ModelBusy: r.busy, CanChangeModel: !r.busy && r.assessmentID == "", Status: status, Messages: messageViews(r.messages, "intake", r.id), Proposal: cloneDraft(r.proposal), PendingTool: pending, Events: append([]eventRecord(nil), r.events...), AssessmentID: r.assessmentID}
 }
 
 func (r *intakeRun) recordObservation(event assessment.Event) {
@@ -1004,6 +1029,12 @@ func (r *intakeRun) recordObservation(event assessment.Event) {
 type intakeToolApprover struct{ run *intakeRun }
 
 func (a *intakeToolApprover) Approve(ctx context.Context, request approval.Request) (approval.Decision, error) {
+	a.run.mu.RLock()
+	mode := a.run.permissionMode
+	a.run.mu.RUnlock()
+	if !mode.RequiresApproval(request) {
+		return approval.DecisionApproveSession, ctx.Err()
+	}
 	a.run.mu.Lock()
 	if a.run.pendingTool != nil {
 		a.run.mu.Unlock()
@@ -1250,6 +1281,10 @@ func (s *Server) assessmentRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch parts[1] {
+	case "permissions":
+		s.changeRunPermissions(w, r, current)
+	case "watch":
+		current.watch(w, r)
 	case "model":
 		if r.Method != http.MethodPost {
 			methodNotAllowed(w, http.MethodPost)
@@ -1681,7 +1716,6 @@ func (s *Server) message(ctx context.Context, r *run, text string, refs []attach
 	r.messages = append(r.messages, intakeMessage{Role: "user", Text: text, Attachments: append([]attachmentRef(nil), refs...), At: time.Now().UTC()})
 	r.events = append(r.events, eventRecord{Sequence: r.nextSequenceLocked(), At: time.Now().UTC(), Event: assessment.Event{Kind: "operator_message", Message: text}})
 	r.updatedAt = time.Now().UTC()
-	state := r.state
 	pending := make([]string, 0, len(r.approvals)+len(r.questions))
 	for _, approval := range r.approvals {
 		pending = append(pending, "approval required for "+approval.request.Command+" in "+approval.request.Cwd)
@@ -1690,11 +1724,12 @@ func (s *Server) message(ctx context.Context, r *run, text string, refs []attach
 		pending = append(pending, "question for "+question.taskID+": "+question.text)
 	}
 	sort.Strings(pending)
+	stateContext := compactRunState(r.state, pending, r.workers, r.permissionMode)
 	r.mu.Unlock()
 
 	prompt := []llmclient.Message{
 		{Role: "system", Content: behavior.CoordinatorConversationPrompt(s.config.Frame)},
-		{Role: "user", Content: "Current assessment state (untrusted evidence): " + compactRunState(state, pending) + "\nOperator message: " + text + attachmentSummary(refs), Attachments: attachments},
+		{Role: "user", Content: "Current assessment state (untrusted evidence, observed at request time; live tool evidence is not a completed worker conclusion): " + stateContext + "\nOperator message: " + text + attachmentSummary(refs), Attachments: attachments},
 	}
 	r.mu.RLock()
 	client := r.client
@@ -1738,27 +1773,6 @@ func (r *run) removeLastMessage(role, text string) {
 	if last.Role == role && last.Text == text {
 		r.messages = r.messages[:len(r.messages)-1]
 	}
-}
-
-func compactRunState(state assessment.State, pending []string) string {
-	results := make([]string, 0, len(state.Results))
-	for _, result := range state.Results {
-		summary := strings.Join(strings.Fields(result.Summary), " ")
-		if len(summary) > 240 {
-			summary = summary[:237] + "..."
-		}
-		results = append(results, result.Task.ID+"="+result.Status+": "+summary)
-	}
-	data, _ := json.Marshal(struct {
-		Status     string   `json:"status"`
-		Goal       string   `json:"goal"`
-		Scope      string   `json:"scope"`
-		Plans      int      `json:"plans"`
-		Results    []string `json:"results"`
-		Pending    []string `json:"pending_operator_actions"`
-		ModelCalls int      `json:"model_calls"`
-	}{Status: state.Status, Goal: state.Goal, Scope: state.Scope, Plans: len(state.Plans), Results: results, Pending: pending, ModelCalls: state.Usage.Calls})
-	return string(data)
 }
 
 func (r *run) ask(ctx context.Context, taskID, text string) (string, error) {
@@ -1914,7 +1928,10 @@ func (r *run) view(after string) assessmentView {
 	}
 	view := assessmentView{Customer: r.customer, ID: r.id, Goal: r.goal, Scope: r.scope, Status: r.status, Model: model, ModelBusy: r.chatBusy || r.started, CanChangeModel: !r.chatBusy && !r.started, Resumable: !r.started && r.status != "draft" && r.status != "completed" && r.status != "completed_with_gaps", UpdatedAt: r.updatedAt, Error: r.state.Error, StartedAt: r.state.StartedAt, FinishedAt: r.state.FinishedAt, Usage: r.state.Usage, Plans: len(r.state.Plans), Results: append([]assessment.Result(nil), r.state.Results...), Messages: messageViews(r.messages, "assessments", r.id), ReportURL: "/api/v1/assessments/" + r.id + "/report"}
 	view.Limits = r.state.Limits
+	view.PermissionMode = r.permissionMode.Normalized()
+	view.Conclusion = assessmentConclusion(r.state)
 	for _, worker := range r.workers {
+		worker.Evidence = append([]assessment.EvidenceView(nil), worker.Evidence...)
 		view.Workers = append(view.Workers, worker)
 	}
 	sort.Slice(view.Workers, func(i, j int) bool { return view.Workers[i].ID < view.Workers[j].ID })
@@ -1943,7 +1960,7 @@ func (r *run) view(after string) assessmentView {
 		}
 	}
 	for _, pending := range r.approvals {
-		view.PendingApprovals = append(view.PendingApprovals, approvalView{ID: pending.ID, TaskID: pending.taskID, Command: pending.request.Command, UseShell: pending.request.UseShell, Cwd: pending.request.Cwd, Impact: pending.request.Impact})
+		view.PendingApprovals = append(view.PendingApprovals, approvalView{ID: pending.ID, TaskID: pending.taskID, Command: pending.request.Command, UseShell: pending.request.UseShell, Cwd: pending.request.Cwd, Impact: pending.request.Impact, Summary: pending.request.Summary, Target: pending.request.Target, Risk: pending.request.Risk})
 	}
 	for _, question := range r.questions {
 		view.PendingQuestions = append(view.PendingQuestions, questionView{ID: question.ID, TaskID: question.taskID, Text: question.text})
@@ -2014,6 +2031,10 @@ type runApprover struct {
 
 func (a *runApprover) Approve(ctx context.Context, request approval.Request) (approval.Decision, error) {
 	a.run.mu.Lock()
+	if !a.run.permissionMode.RequiresApproval(request) {
+		a.run.mu.Unlock()
+		return approval.DecisionApproveSession, ctx.Err()
+	}
 	id := a.run.nextIDLocked("approval")
 	pending := &pendingApproval{ID: id, taskID: a.taskID, request: request, result: make(chan approval.Decision, 1)}
 	a.run.approvals[id] = pending

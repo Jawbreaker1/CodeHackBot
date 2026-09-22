@@ -212,7 +212,7 @@ func (a App) runPlain(ctx context.Context) error {
 	defer func() { cleanup() }()
 
 	conversation := &intakeConversation{}
-	intakeFrame, err := behavior.Load(a.RepoRoot, "assessment_intake", a.behaviorParameters("per_action", ""))
+	intakeFrame, err := behavior.Load(a.RepoRoot, "assessment_intake", a.behaviorParameters("operator_selected_session_policy", ""))
 	if err != nil {
 		return err
 	}
@@ -237,7 +237,7 @@ func (a App) runPlain(ctx context.Context) error {
 		}
 		goal, scope := draft.Goal, draft.Scope
 		limits := assessment.DefaultLimits()
-		c.Print("\nAssessment review\nGoal: %s\nDeclared scope: %s\nProvider: %s / %s\nPermissions: approve each action\nLimits: up to %d workers, %d tasks, %d model calls\n", goal, scope, prefs.Provider, prefs.Model, limits.Workers, limits.Tasks, limits.ModelCalls)
+		c.Print("\nAssessment review\nGoal: %s\nDeclared scope: %s\nProvider: %s / %s\nPermissions: %s\nLimits: up to %d workers, %d tasks, %d model calls\n", goal, scope, prefs.Provider, prefs.Model, c.approvalMode().Label(), limits.Workers, limits.Tasks, limits.ModelCalls)
 		c.Print("Requested reasoning: %s\n", reasoningLabel(prefs))
 		if prefs.Provider == "local" {
 			c.Print("Local response budget: %d output tokens, up to 10 minutes per request. Ctrl-C remains available.\n", prefs.MaxOutputTokens)
@@ -254,7 +254,7 @@ func (a App) runPlain(ctx context.Context) error {
 			c.Print("Assessment canceled before execution.\n")
 			return nil
 		}
-		frame, err := behavior.Load(a.RepoRoot, "assessment_coordinator", a.behaviorParameters("per_action", scope))
+		frame, err := behavior.Load(a.RepoRoot, "assessment_coordinator", a.behaviorParameters("operator_selected_session_policy", scope))
 		if err != nil {
 			return err
 		}
@@ -279,6 +279,9 @@ func (a App) runPlain(ctx context.Context) error {
 type observationApprover struct{ console *Console }
 
 func (a observationApprover) Approve(ctx context.Context, request approval.Request) (approval.Decision, error) {
+	if !a.console.approvalMode().RequiresApproval(request) {
+		return approval.DecisionApproveSession, ctx.Err()
+	}
 	prompt := fmt.Sprintf("\nCoordinator observation approval\nThis is a read-only local observation. It will not probe a target, read file contents, or modify the workspace.\nExact request: %s\nWorking directory: %s\nAllow this observation? [y/N]", request.Command, request.Cwd)
 	for {
 		answer, err := a.console.Ask(ctx, prompt)
@@ -304,6 +307,10 @@ func (a App) readGoalOrCommand(ctx context.Context, c *Console, path string, pre
 		}
 		trimmed := strings.TrimSpace(value)
 		switch strings.ToLower(trimmed) {
+		case "/permissions":
+			if err := c.choosePermissions(ctx); err != nil {
+				return nil, nil, err
+			}
 		case "/settings", "settings":
 			(*cleanup)()
 			next, err := configureProvider(ctx, c, path)
@@ -320,7 +327,7 @@ func (a App) readGoalOrCommand(ctx context.Context, c *Console, path string, pre
 			chosen, err := chooseSavedAssessment(ctx, c, filepath.Join(a.RepoRoot, "sessions"))
 			return nil, chosen, err
 		case "/help", "help":
-			c.Print("Talk naturally with the orchestrator. It answers questions and asks for missing assessment details. /settings changes provider/model; /resume reopens an unfinished assessment; /help repeats this message.\n")
+			c.Print("Talk naturally with the orchestrator. It answers questions and asks for missing assessment details. /permissions changes execution approval level; /settings changes provider/model; /resume reopens an unfinished assessment; /help repeats this message.\n")
 		default:
 			if trimmed == "" {
 				continue
@@ -339,7 +346,7 @@ func (a App) readGoalOrCommand(ctx context.Context, c *Console, path string, pre
 }
 
 func (a App) runAssessment(ctx context.Context, c *Console, prefs preferences, client llmclient.Client, root string, saved assessment.State) error {
-	frame, err := behavior.Load(a.RepoRoot, "assessment_coordinator", a.behaviorParameters("per_action", saved.Scope))
+	frame, err := behavior.Load(a.RepoRoot, "assessment_coordinator", a.behaviorParameters("operator_selected_session_policy", saved.Scope))
 	if err != nil {
 		return err
 	}
@@ -418,8 +425,12 @@ func (a App) runAssessmentWithFrame(ctx context.Context, c *Console, prefs prefe
 				continue
 			}
 			switch strings.ToLower(line) {
+			case "/permissions":
+				if err := c.choosePermissions(runCtx); err != nil {
+					c.Print("Permissions unchanged: %v\n", err)
+				}
 			case "/help", "help":
-				c.Print("While running: type a message to queue it for the coordinator, /workers shows worker state, /status shows the saved run status, /stop cancels the assessment. Model settings apply to the next assessment.\n")
+				c.Print("While running: type a message to queue it for the coordinator, /workers shows worker state, /permissions changes execution approval level, /status shows the saved run status, /stop cancels the assessment. Model settings apply to the next assessment.\n")
 			case "/workers", "workers":
 				for _, row := range c.DashboardSnapshot() {
 					c.Print("%s\n", row)

@@ -55,6 +55,8 @@ type Event struct {
 	ModelCalls          int           `json:"model_calls,omitempty"`
 	PlanSteps           []string      `json:"plan_steps,omitempty"`
 	Evidence            *EvidenceView `json:"evidence,omitempty"`
+	ExecutionLog        string        `json:"execution_log,omitempty"`
+	ExpectedArtifacts   []string      `json:"expected_artifacts,omitempty"`
 }
 
 // EvidenceView is a compact execution observation for UI adapters. It contains

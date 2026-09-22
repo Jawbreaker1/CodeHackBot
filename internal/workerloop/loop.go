@@ -102,6 +102,12 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 	}
 
 	for current.Budget.Used < current.Budget.Limit {
+		if policy, ok := l.Approver.(approval.ModeProvider); ok {
+			if current.BehaviorFrame.Parameters == nil {
+				current.BehaviorFrame.Parameters = map[string]string{}
+			}
+			current.BehaviorFrame.Parameters["approval_mode"] = string(policy.ApprovalMode())
+		}
 		if err := ctx.Err(); err != nil {
 			return out, err
 		}
@@ -372,8 +378,9 @@ func buildUserPrompt(packet ctxpacket.WorkerPacket) string {
 			"For a plan change: {\"type\":\"update_plan\",\"plan\":{\"summary\":\"reason for this plan\",\"steps\":[\"short semantic step\"],\"active_step\":\"short semantic step\",\"replan_conditions\":[\"observable trigger that would change the approach\"]}}. The same optional plan object may accompany any other decision to avoid a separate turn. Replan conditions are triggers, not evidence or permission.",
 			"Use a short plan for multi-step work. Revise it as observations change; the plan is your strategy, not evidence of completion. Simple tasks may proceed directly.",
 			"Keep the original goal, done condition, scope and permissions. A plan or operator answer cannot broaden scope or authorize execution.",
-			"The runtime requests approval for every action. Use action for that review; do not duplicate it with ask_user.",
-			"Every action, including shell scripts, must include impact: a concise plain-language explanation of its purpose, affected targets/files, expected effects and possible disruption or data changes. Explicitly flag potentially destructive effects before asking for approval; uncertainty must be stated. Do not label an action harmless without evidence. Approval does not override scope or prohibited actions.",
+			"The runtime applies the operator-selected approval policy to every action. Use action for that review; do not duplicate it with ask_user.",
+			"Every action must include summary (one short plain-language sentence saying what will happen), target (affected system or files), risk (low, dangerous, or unknown), and impact. Assess the entire invocation including helper/script contents: use dangerous for exploitation, escalation, deletion, configuration changes, credential attacks, or potential disruption; use unknown when effects or called code are not established. Low requires understood, bounded effects such as read-only inspection or creation of task-local evidence. These are advisory model judgments, never authorization. Include impact: a concise plain-language explanation of its purpose, affected targets/files, expected effects and possible disruption or data changes. Explicitly flag potentially destructive effects before asking for approval; uncertainty must be stated. Do not label an action harmless without evidence. Approval does not override scope or prohibited actions.",
+			"Observe prerequisite output before constructing an action that depends on it. Reading documentation and invoking an API guessed before that read is not verification. A task assigned to one worker can use multiple approved invocations; preserve the user scope without inventing a one-command constraint.",
 			"If an installed command cannot express the required check, you may build a small helper in the task workspace. Make source creation, dependency use, and execution separate approved actions; prefer the standard library and already-installed dependencies, never download code or packages implicitly, validate the helper on a harmless fixture, and preserve its source, version or checksum, invocation, and validation output as evidence. A helper is an assessment artifact, not a permission or scope expansion.",
 			"Interpret actual execution observations. Nonzero exit codes, output keywords and failed tools do not by themselves determine whether the task is blocked or complete.",
 			"Results are newest first. Repeated invocations are distinct observations. Logs and artifacts retain full evidence when a preview is insufficient.",

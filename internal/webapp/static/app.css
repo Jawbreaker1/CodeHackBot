@@ -257,3 +257,22 @@ input:focus { border-color: #aaaa9e; }
 .rich-heading { margin: 12px 0 6px; color: var(--text); font-size: 14px; font-weight: 600; }
 .rich-list { margin: 6px 0 9px 18px; padding: 0; line-height: 1.6; }
 .rich-list li { margin: 3px 0; }
+
+/* Execution permission and observation controls share the session surface. */
+.permission-row { display: flex; align-items: center; margin: 7px 0 3px; }
+.permission-row .text-button { font-size: 11px; color: var(--muted); }
+.approval-target { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; margin: 8px 0; }
+.approval-risk { color: var(--attention); font-size: 12px; }
+.chat-approval details { margin: 12px 0; }
+.permission-ack { display: flex; gap: 10px; padding: 15px 0; align-items: flex-start; font-size: 13px; }
+.watch-button { margin: 4px 0 12px; padding: 7px 10px; background: var(--surface); font-size: 12px; }
+.watch-dialog { width: min(960px, 94vw); max-height: 92dvh; overflow: auto; color: var(--text); background: var(--canvas); border: 1px solid var(--line); border-radius: 14px; padding: 24px; }
+.watch-dialog::backdrop { background: #0009; }
+.watch-dialog h2 { margin: 0; font-size: 18px; }
+.watch-image { display: block; width: 100%; max-height: 48dvh; object-fit: contain; background: var(--rail); margin: 16px 0; border-radius: 6px; }
+.watch-output { max-height: 24dvh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; color: var(--muted); }
+.evidence-ref { overflow-wrap: anywhere; }
+
+.worker-goal { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+
+.watch-dialog > .dialog-heading { position: sticky; top: -24px; background: var(--canvas); padding: 12px 0; z-index: 1; }

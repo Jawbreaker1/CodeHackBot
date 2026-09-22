@@ -24,6 +24,7 @@ const (
 	consoleOutput consoleEventKind = iota
 	consolePrompt
 	consoleAssessmentStarted
+	consolePermissions
 )
 
 type consoleEvent struct {
@@ -34,15 +35,16 @@ type consoleEvent struct {
 // One reader owns stdin for the application lifetime. The mutex serializes
 // prompts and progress from concurrent workers without losing buffered input.
 type Console struct {
-	mu        sync.Mutex
-	askMu     sync.Mutex
-	writer    io.Writer
-	requests  chan promptRequest
-	commands  chan line
-	dashboard assessmentDashboard
-	ctx       context.Context
-	events    func(consoleEvent)
-	eventMu   sync.Mutex
+	permissionMode approval.Mode
+	mu             sync.Mutex
+	askMu          sync.Mutex
+	writer         io.Writer
+	requests       chan promptRequest
+	commands       chan line
+	dashboard      assessmentDashboard
+	ctx            context.Context
+	events         func(consoleEvent)
+	eventMu        sync.Mutex
 }
 
 type promptRequest struct{ response chan line }
@@ -190,18 +192,31 @@ type taskApprover struct {
 }
 
 func (a taskApprover) Approve(ctx context.Context, r approval.Request) (approval.Decision, error) {
-	a.console.approvalRequested(a.task.ID, r.Command)
+	if !a.console.approvalMode().RequiresApproval(r) {
+		return approval.DecisionApproveSession, ctx.Err()
+	}
+	a.console.approvalRequested(a.task.ID, r.Summary)
 	impact := strings.TrimSpace(r.Impact)
 	if impact == "" {
 		impact = "The coordinator did not provide an impact summary; review the exact invocation carefully."
 	}
-	prompt := fmt.Sprintf("\nAction approval — %s\nPurpose: %s\nDeclared scope: %s\nWorking directory: %s\nExpected effect / risk: %s\nExact invocation: %s\nAllow this action? [y/N] (Ctrl-C stops the entire assessment)", a.task.ID, a.task.Goal, a.scope, r.Cwd, impact, r.Command)
+	purpose := r.Summary
+	if purpose == "" {
+		purpose = a.task.Goal
+	}
+	prompt := fmt.Sprintf("\n%s — %s\nTarget: %s\nImpact: %s\nAllow this action? [y/N, d=command details, p=approval settings]", a.task.ID, purpose, r.Target, impact)
 	for {
 		answer, err := a.console.Ask(ctx, prompt)
 		if err != nil {
 			return approval.DecisionDeny, err
 		}
 		switch strings.ToLower(answer) {
+		case "d", "details":
+			a.console.Print("Exact invocation: %s\nWorking directory: %s\nDeclared scope: %s\nModel risk assessment: %s\n", r.Command, r.Cwd, a.scope, r.Risk)
+		case "p", "/permissions":
+			if err := a.console.choosePermissions(ctx); err != nil {
+				return approval.DecisionDeny, err
+			}
 		case "y", "yes":
 			return approval.DecisionApproveOnce, nil
 		case "", "n", "no":

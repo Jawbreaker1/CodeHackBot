@@ -2,6 +2,7 @@ package webapp
 
 import (
 	"github.com/Jawbreaker1/CodeHackBot/internal/assessment"
+	"path/filepath"
 	"time"
 )
 
@@ -9,6 +10,8 @@ import (
 // Keeping it separate from the bounded event feed lets a newly opened browser
 // see a worker's full current state even after earlier events have rolled off.
 type workerView struct {
+	ExecutionLog        string                    `json:"execution_log,omitempty"`
+	ExpectedArtifacts   []string                  `json:"expected_artifacts,omitempty"`
 	ID                  string                    `json:"id"`
 	Goal                string                    `json:"goal"`
 	DoneWhen            string                    `json:"done_when"`
@@ -41,6 +44,19 @@ func (r *run) updateWorker(e assessment.Event) {
 		r.workers = make(map[string]workerView)
 	}
 	w := r.workers[e.TaskID]
+	if e.ExecutionLog != "" {
+		w.ExecutionLog = e.ExecutionLog
+		w.ExpectedArtifacts = nil
+		workspace := filepath.Join(r.root, "tasks", e.TaskID, "work")
+		for _, ref := range e.ExpectedArtifacts {
+			if !filepath.IsAbs(ref) {
+				ref = filepath.Join(workspace, ref)
+			}
+			if pathWithin(workspace, ref) {
+				w.ExpectedArtifacts = append(w.ExpectedArtifacts, ref)
+			}
+		}
+	}
 	w.ID, w.Phase, w.UpdatedAt = e.TaskID, e.Kind, time.Now().UTC()
 	if e.Goal != "" {
 		w.Goal = e.Goal

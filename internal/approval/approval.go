@@ -19,6 +19,9 @@ const (
 
 // Request is a minimal execution approval request.
 type Request struct {
+	Summary  string
+	Target   string
+	Risk     string
 	Command  string
 	UseShell bool
 	Cwd      string

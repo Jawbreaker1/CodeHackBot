@@ -32,22 +32,23 @@ type tuiOutput struct {
 type tuiDone struct{ err error }
 
 type guidedTUI struct {
-	ctx           context.Context
-	cancel        context.CancelFunc
-	input         textinput.Model
-	inputPipe     io.WriteCloser
-	spinner       spinner.Model
-	conversation  viewport.Model
-	output        <-chan tuiOutput
-	done          <-chan error
-	lines         []string
-	width, height int
-	busy          bool
-	waiting       bool
-	active        bool
-	inputPrompt   string
-	stopping      bool
-	err           error
+	ctx             context.Context
+	cancel          context.CancelFunc
+	input           textinput.Model
+	inputPipe       io.WriteCloser
+	spinner         spinner.Model
+	conversation    viewport.Model
+	output          <-chan tuiOutput
+	done            <-chan error
+	lines           []string
+	width, height   int
+	busy            bool
+	waiting         bool
+	active          bool
+	inputPrompt     string
+	permissionLabel string
+	stopping        bool
+	err             error
 }
 
 func (a App) runTUI(parent context.Context) error {
@@ -129,6 +130,8 @@ func (m guidedTUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.inputPrompt = strings.TrimSpace(value.text)
 			m.input.Prompt = ""
 			m.input.Placeholder = m.inputPrompt
+		case consolePermissions:
+			m.permissionLabel = value.text
 		case consoleAssessmentStarted:
 			m.active = true
 			m.waiting = false
@@ -241,15 +244,19 @@ func (m guidedTUI) View() string {
 	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("81"))
 	pane := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
 	left := pane.Width(m.conversation.Width + 2).Height(m.conversation.Height + 2).Render(title.Render(" Conversation and activity ") + "\n" + m.conversation.View())
+	permissionLabel := m.permissionLabel
+	if permissionLabel == "" {
+		permissionLabel = "Approve every execution"
+	}
 	rightBody := strings.Join([]string{
 		"phase: live orchestrator",
 		"workers: delegated by coordinator",
-		"approvals: required per action",
+		"approvals: " + permissionLabel,
 		"",
 		"The coordinator owns intent, planning, and scope questions.",
 		"Worker progress appears in the conversation pane.",
 		"",
-		"/workers  /status  /help  /stop",
+		"/workers /permissions /status /help /stop",
 	}, "\n")
 	right := pane.Width(maxTUI(24, m.width-m.conversation.Width-9)).Height(m.conversation.Height + 2).Render(title.Render(" Assessment status ") + "\n" + rightBody)
 	inputTitle := " Input "

@@ -34,13 +34,17 @@ def call(base, path, method="GET", value=None):
         raise AssertionError(f"{method} {path}: HTTP {error.code}: {body}") from error
 
 
-def run_session(base, customer, goal):
+def run_session(base, customer, goal, mode="per_action"):
+    expect_approval = mode != "full_access"
     status, intake = call(base, "/api/v1/intake")
     assert status == 200 and intake["status"] == "conversation", intake
+    if mode != "per_action":
+        _, intake = call(base, f"/api/v1/intake/{intake['id']}/permissions", "POST", {"mode": mode, "acknowledge": True})
     _, intake = call(base, f"/api/v1/intake/{intake['id']}/messages", "POST", {"text": goal})
     assert intake["status"] == "ready" and intake["proposal"], intake
     status, view = call(base, f"/api/v1/intake/{intake['id']}/start", "POST", {"customer": customer})
     assert status == 201 and view["customer"] == customer, view
+    assert view["permission_mode"] == mode, view
     assessment_id = view["id"]
     _, chat = call(base, f"/api/v1/assessments/{assessment_id}/messages", "POST", {"text": "What is the worker doing right now?"})
     assert chat["messages"][-1]["role"] == "assistant" and "waiting" in chat["messages"][-1]["text"], chat
@@ -62,7 +66,7 @@ def run_session(base, customer, goal):
         if view["status"] in ("completed", "incomplete", "aborted") and not view["model_busy"]:
             break
         time.sleep(0.05)
-    assert view["status"] == "completed" and approved and len(view["results"]) == 1, view
+    assert view["status"] == "completed" and approved == expect_approval and len(view["results"]) == 1, view
     assert view["context_window"]["limit_bytes"] > 0 and view["context_window"]["used_bytes"] > 0, view
     assert any(worker.get("context_used_bytes", 0) > 0 for worker in view["workers"]), view
     status, report = call_text(base, view["report_url"])
@@ -126,6 +130,8 @@ def main():
                 raise AssertionError("web health check did not become ready")
             first = run_session(base, "web-customer", "record the first web fixture")
             second = run_session(base, "web-customer", "record the second web fixture")
+            run_session(base, "permissions", "record automatic web fixture", "full_access")
+            run_session(base, "permissions", "record unclassified web fixture", "dangerous_only")
             _, customer = call(base, "/api/v1/customers/web-customer")
             assert len(customer["sessions"]) == 2, customer
             assert {session["id"] for session in customer["sessions"]} == {first["id"], second["id"]}, customer
@@ -142,7 +148,7 @@ def main():
             status, _ = call(base, f"/api/v1/intake/{draft['id']}", "DELETE")
             assert status == 204
             assert not (root / "sessions" / "intake" / draft["id"]).exists()
-            print("web application: HTTP lifecycle, customer aggregation, and session deletion passed", flush=True)
+            print("web application: HTTP lifecycle, approval modes, customer aggregation, and session deletion passed", flush=True)
     finally:
         if process is not None and process.poll() is None:
             process.send_signal(signal.SIGTERM)

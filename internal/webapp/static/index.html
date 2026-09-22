@@ -43,6 +43,7 @@
           <div id="attachmentList" class="attachment-list hidden" aria-live="polite"></div>
           <div class="composer-footer"><span class="composer-identity"><button id="attach" class="text-button" type="button" aria-label="Attach screenshots or documents">Attach</button><input id="attachments" type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,application/pdf" hidden><span class="divider">/</span>Coordinator <span class="divider">/</span> <button id="model" class="model-button" type="button" aria-haspopup="dialog" aria-label="Change language model">Connecting…</button></span><button id="send" class="submit-button" type="submit" aria-label="Send message" title="Send message · Enter"><svg class="icon"><use href="#icon-arrow"/></svg></button></div>
         </form>
+        <div class="permission-row"><button id="permissions" class="text-button" type="button" aria-label="Change approval mode" aria-haspopup="dialog">Approve every execution</button></div>
         <div class="compose-meta"><span id="conversationState">Ready when you are</span><span>Enter to send <span class="meta-separator">·</span> Shift + Enter for a new line</span></div>
       </div>
     </main>
@@ -82,6 +83,27 @@
       <label class="model-custom" for="modelCustom">Use an exact model ID<input id="modelCustom" autocomplete="off" spellcheck="false" placeholder="provider/model-id"></label>
       <div class="dialog-actions"><button class="text-button" value="cancel">Cancel</button><button id="modelApply" class="primary-button" value="default">Use model</button></div>
     </form>
+  </dialog>
+  <dialog id="permissionsDialog" class="model-dialog" aria-labelledby="permissionsTitle">
+    <form id="permissionsForm">
+      <div class="dialog-heading"><h2 id="permissionsTitle">Execution approvals</h2><button id="closePermissions" class="text-button" type="button" aria-label="Close approval settings">Close</button></div>
+      <p class="muted">Applies to this session. Scope and prohibited actions still apply. Pending approvals remain yours to decide.</p>
+      <div class="model-options">
+        <label class="model-option"><input type="radio" name="permission-mode" value="per_action"><span>Approve every execution<small>Review each command before it runs.</small></span></label>
+        <label class="model-option"><input type="radio" name="permission-mode" value="dangerous_only"><span>Approve dangerous executions<small>Routine actions run automatically. Model-assessed dangerous or uncertain actions ask first.</small></span></label>
+        <label class="model-option"><input type="radio" name="permission-mode" value="full_access"><span>Approve everything<small>All scoped executions run without prompting. Use only in your authorized VM environment.</small></span></label>
+      </div>
+      <label id="permissionAcknowledgement" class="permission-ack hidden"><input id="permissionAck" type="checkbox">I understand that this allows automatic executions in this session.</label>
+      <p id="permissionError" class="danger" role="alert"></p>
+      <div class="dialog-actions"><button class="primary-button" type="submit">Apply to session</button></div>
+    </form>
+  </dialog>
+  <dialog id="watchDialog" class="watch-dialog" aria-labelledby="watchTitle">
+    <div class="dialog-heading"><div><h2 id="watchTitle">Worker execution</h2><span id="watchPhase" class="muted"></span></div><div class="action-row"><button id="watchStop" class="text-button danger" type="button">Stop all workers</button><button id="closeWatch" class="text-button" type="button">Close</button></div></div>
+    <p class="muted">Live tool output and the latest declared screenshot. This view observes the worker; it does not control the target browser.</p>
+    <img id="watchImage" class="watch-image hidden" alt="Current worker browser view">
+    <details><summary>Exact invocation</summary><pre id="watchCommand" class="command"></pre></details>
+    <h3>Tool activity</h3><pre id="watchOutput" class="watch-output" aria-live="polite"></pre>
   </dialog>
 </body>
 </html>

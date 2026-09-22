@@ -115,16 +115,19 @@ function messageNode(message) {
 function chatApprovalNode(item, kind) {
   const box = node('article', 'chat-approval');
   box.setAttribute('aria-live', 'assertive');
-  const title = kind === 'observation' ? 'Read-only observation needs approval' : 'Worker action needs approval';
+  const observation = kind === 'observation';
+  const observationNames = {host_system: 'Identify this computer’s operating system', local_network: 'Inspect this computer’s network metadata', list_directory: 'List files in the workspace'};
+  const title = observation ? observationNames[item.tool.name] || 'Inspect local metadata' : item.summary || 'Review worker execution';
   box.append(node('div', 'chat-approval-title', title));
-  if (kind === 'observation') {
-    box.append(node('p', 'worker-detail', 'The coordinator wants to inspect local metadata before continuing. No worker action will run until you allow it.'));
-    box.append(node('pre', 'command', JSON.stringify(item.tool, null, 2)));
-  } else {
-    box.append(node('p', 'worker-detail', (item.task_id ? item.task_id + ' · ' : '') + (item.impact || 'Review the exact invocation and its possible effects before allowing it.')));
-    box.append(node('pre', 'command', item.command));
-    box.append(disclosure('Working directory', node('code', 'evidence-ref', item.cwd), 'chat-cwd-' + item.id));
-  }
+  const impact = observation ? 'Reads local metadata. No target probing or file changes.' : item.impact || 'The worker has not explained the effects. Review the command before approving.';
+  if (!observation && item.target) box.append(node('p', 'approval-target', item.target));
+  box.append(node('p', 'worker-detail', impact));
+  if (!observation && item.risk !== 'low') box.append(node('p', 'approval-risk', item.risk === 'dangerous' ? 'Potentially dangerous · review before running' : 'Risk uncertain · review before running'));
+  const technical = node('div');
+  technical.append(node('pre', 'command', observation ? JSON.stringify(item.tool, null, 2) : item.command));
+  if (item.cwd) technical.append(node('code', 'evidence-ref', item.cwd));
+  if (item.task_id) technical.append(node('p', 'muted', 'Worker: ' + item.task_id));
+  box.append(disclosure('Command details', technical, 'approval-command-' + item.id));
   const row = node('div', 'action-row');
   for (const [decision, label, style] of [['approved_once', kind === 'observation' ? 'Allow once' : 'Approve once', ''], ['denied', 'Deny', 'secondary']]) {
     const button = node('button', style, label);
@@ -176,7 +179,7 @@ function traceNode(records) {
 function renderTranscript() {
   const messages = [...(current?.messages || [])];
   const records = [...eventRecords.values()];
-  if (!changed('transcript', [messages, records, pendingMessage, current?.pending_tool, current?.pending_approvals, current?.pending_plan])) return;
+  if (!changed('transcript', [messages, records, pendingMessage, current?.pending_tool, current?.pending_approvals, current?.pending_plan, current?.conclusion])) return;
   const pane = $('chat');
   const follow = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 100;
   const scrollTop = pane.scrollTop;
@@ -192,6 +195,7 @@ function renderTranscript() {
     else { flushTrace(); items.push(messageNode(item.message)); }
   }
   flushTrace();
+  if (current?.conclusion) items.push(messageNode({role: 'assistant', text: current.conclusion, at: 'conclusion-' + current.id}));
   for (const approval of current?.pending_approvals || []) items.push(chatApprovalNode(approval, 'action'));
   if (current?.pending_tool) items.push(chatApprovalNode(current.pending_tool, 'observation'));
   if (current?.pending_plan) items.push(planReviewNode(current.pending_plan));
@@ -300,11 +304,13 @@ function renderView(view) {
   $('sessionTitle').title = view.title || view.goal || 'New session';
   $('headerCustomer').textContent = view.customer || 'Workspace';
   $('model').textContent = view.model || 'Model not configured';
+  $('permissions').textContent = permissionLabels[view.permission_mode] || permissionLabels.per_action;
+  $('permissions').disabled = !isAssessmentView(view) && view.model_busy;
   $('model').title = view.model ? 'Change model · ' + view.model : 'Choose a model';
   renderTranscript();
   renderOverview(view);
   if (changed('workers', [view.workers, view.context_window, view.pending_approvals, view.pending_questions, view.pending_tool, view.model])) {
-    $('workerCount').textContent = renderWorkers(view, act);
+    $('workerCount').textContent = renderWorkers(view, act, openWatch);
   }
   if (changed('findings', view.findings)) renderFindings(view);
   const records = [...eventRecords.values()];
@@ -436,6 +442,7 @@ async function refreshSidebar() {
   } catch (error) { showError(error); }
 }
 async function navigate(path) {
+  closeWatch();
   const token = ++selection;
   current = null;
   pendingMessage = null;
@@ -590,6 +597,61 @@ narrow.addEventListener('change', () => { closePanels(); setInspector(!narrow.ma
 setInspector(!narrow.matches);
 selectTab($('workersTab'));
 $('toggleSidebar').setAttribute('aria-expanded', String(!mobile.matches));
+const permissionLabels = {per_action: 'Approve every execution', dangerous_only: 'Approve dangerous executions', full_access: 'Approve everything'};
+$('permissions').onclick = () => {
+  const selected = current?.permission_mode || 'per_action';
+  $('permissionsForm').querySelector('input[value="' + selected + '"]').checked = true;
+  $('permissionAck').checked = false;
+  $('permissionError').textContent = '';
+  syncPermissionChoice(); $('permissionsDialog').showModal();
+};
+function syncPermissionChoice() {
+  const mode = $('permissionsForm').querySelector('input[name="permission-mode"]:checked')?.value;
+  $('permissionAcknowledgement').classList.toggle('hidden', mode === 'per_action');
+  $('permissionAck').required = mode !== 'per_action';
+}
+$('permissionsForm').onchange = syncPermissionChoice;
+$('closePermissions').onclick = () => $('permissionsDialog').close();
+$('permissionsForm').onsubmit = async event => {
+  event.preventDefault();
+  const mode = $('permissionsForm').querySelector('input[name="permission-mode"]:checked').value;
+  const token = selection;
+  try {
+    const view = await api(sessionPath(current) + '/permissions', {method:'POST', body:JSON.stringify({mode, acknowledge:$('permissionAck').checked})});
+    if (token === selection) renderView(view);
+    $('permissionsDialog').close();
+  } catch (error) { $('permissionError').textContent = error.message; }
+};
+let watchTimer = null;
+let watchGeneration = 0;
+function closeWatch() { watchGeneration++; clearTimeout(watchTimer); $('watchDialog').close(); }
+$('closeWatch').onclick = closeWatch;
+$('watchDialog').addEventListener('cancel', () => { watchGeneration++; clearTimeout(watchTimer); });
+$('watchStop').onclick = async () => { await act('stop', {}, $('watchDialog')); };
+function openWatch(workerID) {
+  const token = selection, generation = ++watchGeneration;
+  const path = sessionPath(current) + '/watch?worker=' + encodeURIComponent(workerID);
+  clearTimeout(watchTimer);
+  $('watchTitle').textContent = workerID;
+  $('watchOutput').textContent = 'Waiting for tool output…';
+  $('watchImage').classList.add('hidden');
+  $('watchDialog').showModal();
+  async function update() {
+    if (token !== selection || generation !== watchGeneration || !$('watchDialog').open) return;
+    try {
+      const data = await api(path);
+      if (token !== selection || generation !== watchGeneration || !$('watchDialog').open) return;
+      $('watchPhase').textContent = data.phase === 'execution_started' ? 'Running · updates every second' : 'Execution ended · recorded output';
+      $('watchCommand').textContent = data.action;
+      $('watchOutput').textContent = data.stdout + (data.stderr ? '\n' + data.stderr : '') || (data.phase === 'execution_started' ? 'No output yet. The worker is still running.' : 'This execution produced no console output.');
+      const image = $('watchImage');
+      if (data.images.length) { image.src = data.images[0] + '&preview=' + Date.now(); image.classList.remove('hidden'); }
+      $('watchStop').classList.toggle('hidden', !activeStatuses.includes(current.status));
+    } catch (error) { $('watchOutput').textContent = error.message; }
+    watchTimer = setTimeout(update, 1000);
+  }
+  update();
+}
 const savedSession = localStorage.getItem('birdhackbot.selectedSession');
 await navigate(savedSession && /^\/api\/v1\/(intake|assessments)\//.test(savedSession) ? savedSession : '/api/v1/intake');
 

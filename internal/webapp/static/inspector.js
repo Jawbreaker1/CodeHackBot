@@ -235,7 +235,7 @@ function questionNode(item, act) {
   box.onsubmit = event => { event.preventDefault(); act('questions/' + encodeURIComponent(item.id), {text: input.value}, row); };
   return box;
 }
-export function renderWorkers(view, act) {
+export function renderWorkers(view, act, watch) {
   const workers = new Map((view.workers || []).map(w => [w.id, w]));
   // An approval can arrive just before the first progress snapshot.
   for (const item of [...(view.pending_approvals || []), ...(view.pending_questions || [])]) {
@@ -258,9 +258,14 @@ export function renderWorkers(view, act) {
       const metric = node('span'); metric.append(node('strong', '', value), document.createTextNode(' ' + label)); metrics.append(metric);
     }
     card.append(metrics);
+    if (w.execution_log && watch) {
+      const button = node('button', 'watch-button', w.phase === 'execution_started' ? 'Watch execution' : 'Inspect last execution');
+      button.type = 'button'; button.onclick = () => watch(w.id); card.append(button);
+    }
     if (approvals.length) card.append(node('div', 'worker-approval-note', 'Approval requested in the conversation'));
     for (const q of questions) card.append(questionNode(q, act));
     const details = node('div');
+    details.append(node('div', 'action-label', 'Task objective'), node('p', 'worker-detail', w.goal));
     details.append(grid([
       ['Model', view.model || 'Not reported'], ['Remaining budget', w.remaining_budget || 'Not reported'],
       ['Context window', contextLabel(w)], ['Context remaining', w.context_limit_bytes ? formatBytes(Math.max(0, w.context_limit_bytes - w.context_used_bytes)) : 'Not reported'], ['Dependencies', (w.depends_on || []).join(', ') || 'None'],

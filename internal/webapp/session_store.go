@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Jawbreaker1/CodeHackBot/internal/approval"
 	"github.com/Jawbreaker1/CodeHackBot/internal/assessment"
 	"github.com/Jawbreaker1/CodeHackBot/internal/intake"
 	"github.com/Jawbreaker1/CodeHackBot/internal/llmclient"
@@ -21,22 +22,23 @@ import (
 const sessionRecordVersion = 1
 
 type sessionRecord struct {
-	Version      int                 `json:"version"`
-	Kind         string              `json:"kind"`
-	ID           string              `json:"id"`
-	Customer     string              `json:"customer,omitempty"`
-	Goal         string              `json:"goal,omitempty"`
-	Scope        string              `json:"scope,omitempty"`
-	Model        string              `json:"model,omitempty"`
-	Status       string              `json:"status,omitempty"`
-	AssessmentID string              `json:"assessment_id,omitempty"`
-	Messages     []intakeMessage     `json:"messages,omitempty"`
-	Conversation []llmclient.Message `json:"conversation,omitempty"`
-	Proposal     *intake.Draft       `json:"proposal,omitempty"`
-	Events       []eventRecord       `json:"events,omitempty"`
-	Workers      []workerView        `json:"workers,omitempty"`
-	Sequence     uint64              `json:"sequence,omitempty"`
-	UpdatedAt    time.Time           `json:"updated_at"`
+	PermissionMode approval.Mode       `json:"permission_mode,omitempty"`
+	Version        int                 `json:"version"`
+	Kind           string              `json:"kind"`
+	ID             string              `json:"id"`
+	Customer       string              `json:"customer,omitempty"`
+	Goal           string              `json:"goal,omitempty"`
+	Scope          string              `json:"scope,omitempty"`
+	Model          string              `json:"model,omitempty"`
+	Status         string              `json:"status,omitempty"`
+	AssessmentID   string              `json:"assessment_id,omitempty"`
+	Messages       []intakeMessage     `json:"messages,omitempty"`
+	Conversation   []llmclient.Message `json:"conversation,omitempty"`
+	Proposal       *intake.Draft       `json:"proposal,omitempty"`
+	Events         []eventRecord       `json:"events,omitempty"`
+	Workers        []workerView        `json:"workers,omitempty"`
+	Sequence       uint64              `json:"sequence,omitempty"`
+	UpdatedAt      time.Time           `json:"updated_at"`
 }
 
 func (s *Server) restoreSessions() error {
@@ -112,7 +114,7 @@ func (s *Server) restoreIntakes(root string) error {
 		conversation := intake.Conversation{}
 		conversation.SetBehaviorContext(s.config.Frame.PromptText())
 		conversation.RestoreMessages(record.Conversation)
-		current := &intakeRun{id: record.ID, root: sessionRoot, customer: record.Customer, client: client, conversation: conversation, messages: append([]intakeMessage(nil), record.Messages...), proposal: cloneDraft(record.Proposal), assessmentID: record.AssessmentID, events: append([]eventRecord(nil), record.Events...), updatedAt: record.UpdatedAt}
+		current := &intakeRun{permissionMode: record.PermissionMode.Normalized(), id: record.ID, root: sessionRoot, customer: record.Customer, client: client, conversation: conversation, messages: append([]intakeMessage(nil), record.Messages...), proposal: cloneDraft(record.Proposal), assessmentID: record.AssessmentID, events: append([]eventRecord(nil), record.Events...), updatedAt: record.UpdatedAt}
 		s.mu.Lock()
 		s.intakes[current.id] = current
 		s.mu.Unlock()
@@ -170,7 +172,7 @@ func (s *Server) restoreRun(customer, root string) error {
 	if updated.IsZero() {
 		updated = state.FinishedAt
 	}
-	current := &run{id: id, customer: customer, root: root, client: client, goal: state.Goal, scope: state.Scope, status: status, state: state, resume: true, done: make(chan struct{}), approvals: make(map[string]*pendingApproval), questions: make(map[string]*pendingQuestion), sequence: record.Sequence, events: events, workers: workers, messages: append([]intakeMessage(nil), record.Messages...), updatedAt: updated}
+	current := &run{permissionMode: record.PermissionMode.Normalized(), id: id, customer: customer, root: root, client: client, goal: state.Goal, scope: state.Scope, status: status, state: state, resume: true, done: make(chan struct{}), approvals: make(map[string]*pendingApproval), questions: make(map[string]*pendingQuestion), sequence: record.Sequence, events: events, workers: workers, messages: append([]intakeMessage(nil), record.Messages...), updatedAt: updated}
 	s.mu.Lock()
 	s.runs[id] = current
 	s.mu.Unlock()
@@ -235,7 +237,7 @@ func (r *intakeRun) persist() error {
 	r.conversationMu.RLock()
 	conversation := r.conversation.Messages()
 	r.conversationMu.RUnlock()
-	record := sessionRecord{Version: sessionRecordVersion, Kind: "intake", ID: r.id, Customer: r.customer, Model: r.client.Model, Messages: append([]intakeMessage(nil), r.messages...), Conversation: conversation, Proposal: cloneDraft(r.proposal), AssessmentID: r.assessmentID, Events: append([]eventRecord(nil), r.events...), UpdatedAt: r.updatedAt}
+	record := sessionRecord{PermissionMode: r.permissionMode.Normalized(), Version: sessionRecordVersion, Kind: "intake", ID: r.id, Customer: r.customer, Model: r.client.Model, Messages: append([]intakeMessage(nil), r.messages...), Conversation: conversation, Proposal: cloneDraft(r.proposal), AssessmentID: r.assessmentID, Events: append([]eventRecord(nil), r.events...), UpdatedAt: r.updatedAt}
 	root := r.root
 	r.mu.RUnlock()
 	return atomicWriteJSON(filepath.Join(root, "session.json"), record)
@@ -253,7 +255,7 @@ func (r *run) persist() error {
 	for _, worker := range r.workers {
 		workers = append(workers, worker)
 	}
-	record := sessionRecord{Version: sessionRecordVersion, Kind: "assessment", ID: r.id, Customer: r.customer, Goal: r.goal, Scope: r.scope, Model: r.client.Model, Status: r.status, Messages: append([]intakeMessage(nil), r.messages...), Events: append([]eventRecord(nil), r.events...), Workers: workers, Sequence: r.sequence, UpdatedAt: r.updatedAt}
+	record := sessionRecord{PermissionMode: r.permissionMode.Normalized(), Version: sessionRecordVersion, Kind: "assessment", ID: r.id, Customer: r.customer, Goal: r.goal, Scope: r.scope, Model: r.client.Model, Status: r.status, Messages: append([]intakeMessage(nil), r.messages...), Events: append([]eventRecord(nil), r.events...), Workers: workers, Sequence: r.sequence, UpdatedAt: r.updatedAt}
 	root := r.root
 	r.mu.RUnlock()
 	return atomicWriteJSON(filepath.Join(root, "session.json"), record)

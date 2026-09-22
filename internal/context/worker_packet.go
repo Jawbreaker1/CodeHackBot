@@ -73,6 +73,7 @@ type OperatorState struct {
 	PendingMode       string
 	PendingExec       string
 	PendingLog        string
+	PendingArtifacts  []string
 }
 
 // WorkerPacket is the authoritative v1 worker context packet.

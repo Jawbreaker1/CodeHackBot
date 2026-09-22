@@ -2,7 +2,10 @@ package workerloop
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"time"
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/approval"
 	ctxpacket "github.com/Jawbreaker1/CodeHackBot/internal/context"
@@ -28,9 +31,22 @@ func (l Loop) execute(ctx context.Context, current *ctxpacket.WorkerPacket, resp
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	decision, err := l.Approver.Approve(ctx, approval.Request{Command: plan.ActualExec, UseShell: plan.Action.UseShell, Cwd: plan.Action.Cwd, Impact: response.Impact})
+	request := approval.Request{Command: plan.ActualExec, UseShell: plan.Action.UseShell, Cwd: plan.Action.Cwd, Impact: response.Impact, Summary: response.Summary, Target: response.Target, Risk: response.Risk}
+	decision, err := l.Approver.Approve(ctx, request)
 	if err != nil {
 		return false, fmt.Errorf("approval failed: %w", err)
+	}
+	auditPath := plan.LogPath + ".approval.json"
+	audit, err := json.MarshalIndent(struct {
+		At       time.Time
+		Request  approval.Request
+		Decision approval.Decision
+	}{time.Now().UTC(), request, decision}, "", "  ")
+	if err != nil {
+		return false, err
+	}
+	if err = os.WriteFile(auditPath, audit, 0600); err != nil {
+		return false, fmt.Errorf("record approval: %w", err)
 	}
 	current.OperatorState.ApprovalState = string(decision)
 	if decision != approval.DecisionApproveOnce && decision != approval.DecisionApproveSession {
@@ -43,6 +59,7 @@ func (l Loop) execute(ctx context.Context, current *ctxpacket.WorkerPacket, resp
 	current.OperatorState.PendingMode = plan.ExecutionMode
 	current.OperatorState.PendingExec = plan.ActualExec
 	current.OperatorState.PendingLog = plan.LogPath
+	current.OperatorState.PendingArtifacts = append([]string(nil), response.Artifacts...)
 	if err := l.capture(current.Budget.Used, "pre-action", *current); err != nil {
 		return false, err
 	}
@@ -57,6 +74,8 @@ func (l Loop) execute(ctx context.Context, current *ctxpacket.WorkerPacket, resp
 	declaredArtifacts, artifactErr := registerArtifacts(current.OperatorState.WorkingDir, response.Artifacts)
 	current.OperatorState.PendingAction, current.OperatorState.PendingMode = "", ""
 	current.OperatorState.PendingExec, current.OperatorState.PendingLog = "", ""
+	current.OperatorState.PendingArtifacts = nil
+	declaredArtifacts = append(declaredArtifacts, auditPath)
 	evidence := combineSummaries(result.StdoutSummary, result.StderrSummary)
 	if artifactErr != nil {
 		evidence = combineSummaries(evidence, "Declared artifact was not registered: "+artifactErr.Error())

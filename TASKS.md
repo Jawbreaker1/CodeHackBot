@@ -1,6 +1,6 @@
 # Tasks
 
-Updated 2026-09-21. This file owns immediate implementation order and status.
+Updated 2026-09-23. This file owns immediate implementation order and status.
 
 ## Agreed sequence
 
@@ -151,3 +151,16 @@ Implement this alongside the first orchestrator flow. Keep advanced CLI access a
 `ROADMAP.md` owns future direction. Full target-scope enforcement, exactly-once external-effect recovery, independent finding verification, and scored comparisons remain required product work.
 
 Earlier phase checklists are archived in `docs/archive/pre-core-cleanup-2026-09-19/TASKS.md`. They are historical records, not additional current work orders.
+
+## Current slice: approvals and observable browser execution
+
+- [x] Three explicit session approval modes shared by web and terminal: every execution, dangerous/uncertain executions, and all executions allowed. Model-authored action descriptions drive risk presentation; command-text parsing does not classify risk.
+- [x] Compact main-chat approval cards with expandable invocation details, session permission picker, and CLI `/permissions`.
+- [x] Optional worker watch view showing live output and declared browser preview; named Playwright steps and local trace evidence.
+- [x] Project live worker observations into coordinator chat before task completion; show final conclusions in chat and analysis; remove historical resolved gaps from current analysis.
+- [x] First Daybreak GUI browser smoke completed with a real click, registered PNG and trace; files independently inspected. This is a local harness smoke, not pentest-effectiveness acceptance.
+- [x] Complete the follow-up Daybreak GUI smoke for revised approvals, watch view, progress replies, and persisted context/evidence. The browser interaction and independent artifact check passed after recovery; the whole session is not a clean acceptance pass.
+- [ ] Reconcile final assessment status with recovered worker failures: the current runtime retains `incomplete` if an earlier worker blocked, even after a successful recovery and final coordinator conclusion. Keep the failed attempt in history; define completion versus remaining gaps in the shared coordinator contract.
+
+Remaining foundation and comparative acceptance gates above still apply. The
+watch view is observational, not interactive remote control of the target browser.

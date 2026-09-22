@@ -75,7 +75,7 @@ In direct mode, `command` names an executable and `args` contains literal argume
 
 In shell mode, `command` is the entire script and `args` must be absent. Execution uses `/bin/sh -c`; a login shell must not silently change the prepared working directory or environment.
 
-The executor prepares an invocation before approval, snapshots caller-owned arguments/environment overrides, and resolves the working directory. Approval displays that invocation and directory. Only explicit once/session approval permits execution. The same prepared plan is then executed and recorded.
+The executor prepares an invocation before approval, snapshots caller-owned arguments/environment overrides, and resolves the working directory. Approval displays that invocation and directory. Execution is permitted by an explicit action decision or an operator-selected session policy. The same prepared plan is then executed and recorded.
 
 Commands receive closed stdin. On Unix, processes run in a separate session; cancellation kills the owned process group. This is not a sandbox against a deliberately escaping process. The deployment environment still supplies isolation.
 
@@ -160,6 +160,36 @@ action completes. The coordinator receives those paths through the ordinary
 evidence catalog and can schedule a later validation task. Browser state and
 captures remain local task artifacts and are never implicitly uploaded.
 
+### Session approvals and observable execution
+
+Both interfaces use the shared `approval.Mode` policy: approve every execution
+(the default), approve dangerous executions, or approve everything. The model
+supplies a short action summary, affected target, impact, and structured risk
+(`low`, `dangerous`, or `unknown`). Dangerous-only mode automatically permits
+only complete low-risk descriptions; unknown or missing assessments require
+review. This is a model risk judgment, not a security sandbox or a command
+allowlist. Full access is an explicit session override inside the authorized
+VM. Scope and prohibitions still apply. No command-text heuristics classify risk.
+
+The browser stores this selection with the session; new sessions default to
+per-action review. Changing mode never resolves a pending approval implicitly.
+The CLI exposes the same choices through `/permissions` and starts each app
+invocation with per-action review. Approval cards lead with purpose, target,
+and effects; exact invocations and working directories are available on demand.
+The worker writes an approval record beside the execution log before running.
+
+The optional worker watch view reads bounded tails of runtime-recorded tool
+streams and declared image previews. The browser helper provides named step
+updates, navigation events, and a periodically refreshed screenshot. Live
+previews remain observations; only completed execution artifacts enter the
+worker result/evidence catalog. Paths must remain within the task workspace.
+No screenshot or trace is automatically sent to the model.
+
+The coordinator chat receives current worker phase and latest observed tool
+evidence even before a task finishes. Final chat and analysis conclusions come
+from the latest completed coordinator decision; current gaps come from the
+latest decision, with earlier gaps retained only in the plan history.
+
 ### Visual and document inputs
 
 The web composer accepts up to four local PNG, JPEG, WebP, GIF, or PDF files per message, with bounded per-file and total sizes. The server writes them beneath the isolated session directory, keeps only attachment metadata in the session transcript, and serves them back through an ID-checked local route. The current user turn receives typed image/file parts; a failed or retried turn never copies file bytes into the long-lived intake transcript. The OpenAI-compatible client emits image parts for multimodal chat endpoints. The subscription bridge translates those parts to Responses `input_image` and `input_file` items, so Daybreak can inspect screenshots and PDFs; a local model must advertise compatible multimodal input for images, and PDF support through a local endpoint is provider-specific. Visual observations are untrusted evidence and never independently establish a vulnerability.
@@ -214,7 +244,7 @@ Software discovery must support vulnerability research during the assessment. In
 
 Advisory matches become investigation candidates. The coordinator prioritizes useful leads and delegates scoped validation, revising its plan from the results. A matching software banner or CVE record alone is insufficient to report a confirmed target vulnerability. Online research does not expand the authorized testing scope.
 
-The coordinator's non-empty task list is a proposed test sequence. In the browser path the operator selects the bounded tasks that may run before workers start; omitted tasks are recorded as skipped and cannot produce evidence. Per-action approvals still apply to every invocation. Findings preserve advisory identifiers, affected software, source references, severity, and confidence as structured fields; identifiers are not parsed into a claim and a match alone remains a candidate. Execution logs and registered artifact references remain the evidence register for the formal report.
+The coordinator's non-empty task list is a proposed test sequence. In the browser path the operator selects the bounded tasks that may run before workers start; omitted tasks are recorded as skipped and cannot produce evidence. The selected session approval policy still applies to every invocation. Findings preserve advisory identifiers, affected software, source references, severity, and confidence as structured fields; identifiers are not parsed into a claim and a match alone remains a candidate. Execution logs and registered artifact references remain the evidence register for the formal report.
 
 The web analysis view is a read model over assessment state, separate from the coordinator transcript. It aggregates sessions by customer, ranks findings using the reported severity, confidence, and candidate/reproduced status, shows why each item is prioritized, and lists next actions and gaps. This ranking is deliberately transparent and does not pretend to be CVSS scoring. The Markdown report includes the selected test sequence, findings, advisory references, evidence references, remediation, and assessment gaps. These are model-authored drafts requiring operator review; a formal report is not a guarantee that no vulnerability exists.
 
