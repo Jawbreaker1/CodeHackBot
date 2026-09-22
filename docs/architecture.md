@@ -4,13 +4,13 @@ Status: active implementation contracts and bounded future direction. Updated 20
 
 ## Product and implementation order
 
-BirdHackBot is being built as System Verification's security testing platform. The primary product will be an orchestrator coordinating bounded investigations, validation, and evidence-backed reporting. All workers use one execution engine.
+BirdHackBot is System Verification's security testing platform. The primary product is an orchestrator coordinating bounded investigations, validation, and evidence-backed reporting. All workers use one execution engine.
 
 Current sequence: **core cleanup → subscription API wrapper → orchestration → source-assisted assessment**. `TASKS.md` owns immediate work; `ROADMAP.md` owns future direction. Astra is the development model. The intended OpenAI pentest runtime is Daybreak on GPT-5.6 Sol, alongside local models. Provider/model access must be verified during integration.
 
-Foundation acceptance precedes capability expansion: complete and validate the agentic worker, then the coordinator around that same worker, before further knowledge/source integration. Cleanup acceptance is narrower than worker acceptance. Standalone and delegated tasks now use the same adaptive decision loop; the coordinator no longer forces a separate direct-execution path. Multi-step and provider acceptance still require inspected live evidence.
+The foundation is implemented and exercised before capability expansion: the agentic worker, the coordinator around that worker, and their browser/terminal paths share the same adaptive decision loop. Cleanup acceptance is narrower than worker acceptance. Standalone and delegated tasks now use the same adaptive decision loop; the coordinator no longer forces a separate direct-execution path. Multi-step and provider acceptance still require inspected live evidence.
 
-The active runtime implements a local worker, subscription inference bridge, and generic guided assessment coordinator. The built application exercises independent and dependent delegated tasks from startup. Reports are model-authored drafts; independent finding review and source-to-deployment correlation are not implemented. The web adapter now persists session navigation and conversation metadata beside each assessment, discovers it on restart, and exposes explicit resume for interrupted/incomplete runs; exact-once recovery of unknown external effects remains out of scope.
+The active runtime implements a shared adaptive worker engine capable of isolated concurrent task runs, a subscription inference bridge, and a generic guided assessment coordinator. The built application exercises independent and dependent delegated tasks from startup. Reports are model-authored drafts; independent finding review and source-to-deployment correlation are not implemented. The web adapter now persists session navigation and conversation metadata beside each assessment, discovers it on restart, and exposes explicit resume for interrupted/incomplete runs; exact-once recovery of unknown external effects remains out of scope.
 
 The previous detailed design is preserved in `docs/archive/pre-core-cleanup-2026-09-19/architecture.md`. It is historical and does not override this document.
 
