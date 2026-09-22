@@ -18,7 +18,7 @@ The screenshots below are captured from the loopback web application. They show 
 
 ## What works today
 
-The active implementation uses one adaptive worker for standalone and delegated tasks: model-authored plans and revisions, per-action approvals, exact argv or explicit shell execution, whole-goal evaluation, local evidence, bounded context views, and session snapshots. The [worker audit](docs/worker-foundation-audit-2026-09-20.md) records the current rebuild and validation limits.
+The active implementation uses one shared adaptive worker loop for both standalone and delegated tasks. Each delegated task gets its own worker run, workspace, context packet, approvals, evidence, and session snapshot; the coordinator can run up to two independent worker runs concurrently and schedule dependent validation in a later round. The [worker audit](docs/worker-foundation-audit-2026-09-20.md) records the current rebuild and validation limits.
 
 A local authenticated REST bridge provides subscription-backed OpenAI inference. Launching without flags now opens an interactive guided assessment with a coordinator, up to two concurrent workers, serialized action approvals, saved evidence, resumable assessment state, and a draft report. Source-to-deployment correlation and independent finding verification remain planned. The runtime does not enforce target allowlists or provide its own network sandbox; execution relies on the isolated lab environment and the operating rules in [AGENTS.md](AGENTS.md).
 

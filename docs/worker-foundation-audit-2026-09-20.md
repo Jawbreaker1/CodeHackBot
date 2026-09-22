@@ -4,7 +4,7 @@ This is dated implementation evidence. `architecture.md` owns the active contrac
 
 ## Decision
 
-Replace the worker's competing control paths while preserving the tested executor, approval contract, evidence capture and application surfaces. The deciding model owns plans, recovery and interpretation. Runtime code owns validation, budgets, recording, approval, execution and termination. This is the same worker for standalone and delegated tasks.
+Replace the worker's competing control paths while preserving the tested executor, approval contract, evidence capture and application surfaces. The deciding model owns plans, recovery and interpretation. Runtime code owns validation, budgets, recording, approval, execution and termination. Standalone work and delegated tasks use the same adaptive worker loop implementation; each task is a separate run with isolated state and workspace, and the coordinator may run independent task runs concurrently.
 
 ## Findings and changes
 
