@@ -3,8 +3,10 @@
 BirdHackBot is System Verification's security testing platform for authorized assessments. Its primary workflow is a model-led multi-agent orchestrator coordinating Kali-based investigation, source analysis, target validation, and reproducible reporting.
 
 <p align="center">
-  <img src="docs/assets/birdhackbot-logo.svg" alt="BirdHackBot." width="420">
+  <img src="docs/assets/birdhackbot-logo.svg" alt="BirdHackBot. full raven wordmark" width="420">
 </p>
+
+The full raven wordmark is used for larger presentation; the web console switches to a compact raven-head mark at favicon and small-header sizes so the eye and silhouette remain legible.
 
 The product is organized around a conversation with a coordinator. Explain the situation in plain language, let the coordinator build and adapt a test sequence, choose which bounded tasks may run, and follow parallel workers as they collect evidence. Chat is the control surface; analysis and reporting are separate review surfaces.
 
