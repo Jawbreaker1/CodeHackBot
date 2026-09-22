@@ -41,6 +41,15 @@ func TestServerCreatesDraftAndServesUI(t *testing.T) {
 		t.Fatal("operator console stylesheet is missing")
 	}
 	_ = css.Body.Close()
+	wordmark, err := http.Get(httpServer.URL + "/wordmark.svg")
+	if err != nil || wordmark.StatusCode != http.StatusOK {
+		t.Fatal("operator wordmark is missing")
+	}
+	wordmarkBody, _ := io.ReadAll(wordmark.Body)
+	_ = wordmark.Body.Close()
+	if !strings.Contains(string(wordmarkBody), "BirdHackBot") || !strings.Contains(string(wordmarkBody), "#e5484d") {
+		t.Fatal("operator wordmark is incomplete")
+	}
 	analysisPage, err := http.Get(httpServer.URL + "/analysis")
 	if err != nil || analysisPage.StatusCode != http.StatusOK {
 		t.Fatal("analysis workspace is missing")

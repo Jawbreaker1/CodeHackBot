@@ -1,11 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 450 96" role="img" aria-labelledby="title desc">
   <title id="title">BirdHackBot.</title>
   <desc id="desc">BirdHackBot wordmark with a geometric raven and red period</desc>
-  <path fill="#242424" stroke="#242424" stroke-width="2" stroke-linejoin="round" d="M8 39 24 28c8-9 18-14 29-14 13 0 24 5 35 17l-16 2c7 6 12 14 15 24-10-5-20-7-28-5L43 84l-8-18L17 78l7-22L8 39Z"/>
-  <path fill="#f6f2e9" d="m27 41 25-16 15 7-14 13-11 20-6-11-15 9 6-22Z"/>
+  <path fill="#f6f2e9" stroke="#242424" stroke-width="2" stroke-linejoin="round" d="M8 39 24 28c8-9 18-14 29-14 13 0 24 5 35 17l-16 2c7 6 12 14 15 24-10-5-20-7-28-5L43 84l-8-18L17 78l7-22L8 39Z"/>
+  <path fill="#242424" d="m27 41 25-16 15 7-14 13-11 20-6-11-15 9 6-22Z"/>
   <path fill="#e5484d" d="m43 23 13 3-9 8-13-3 9-8Z"/>
   <circle cx="44" cy="27" r="2" fill="#171717"/>
   <path d="m20 67 13-7" fill="none" stroke="#e5484d" stroke-linecap="round" stroke-width="3"/>
-  <text x="118" y="63" fill="#242424" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="39" font-weight="700" letter-spacing="-1.7" textLength="246" lengthAdjust="spacingAndGlyphs">BirdHackBot</text>
+  <text x="118" y="63" fill="#f3f1ea" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="39" font-weight="700" letter-spacing="-1.7" textLength="246" lengthAdjust="spacingAndGlyphs">BirdHackBot</text>
   <text x="373" y="63" fill="#e5484d" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="45" font-weight="700">.</text>
 </svg>
