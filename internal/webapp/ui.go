@@ -23,7 +23,7 @@ func serveUI(w http.ResponseWriter, r *http.Request) bool {
 		kind = "text/javascript; charset=utf-8"
 	case "/analysis.css":
 		kind = "text/css; charset=utf-8"
-	case "/logo.svg", "/wordmark.svg":
+	case "/logo.svg", "/logo-small.svg", "/wordmark.svg":
 		kind = "image/svg+xml"
 	default:
 		return false

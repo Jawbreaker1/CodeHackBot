@@ -184,7 +184,7 @@ function renderTranscript() {
   if (!items.length) {
     const welcome = node('div', 'welcome');
     const mark = document.createElement('img');
-    mark.src = '/logo.svg'; mark.alt = ''; mark.className = 'welcome-icon brand-mark';
+    mark.src = '/logo-small.svg'; mark.alt = ''; mark.className = 'welcome-icon brand-mark';
     welcome.append(mark, node('h2', '', 'What are we investigating?'), node('p', '', 'Explore a question. Follow the evidence.\nWork with your coordinator.'));
     items.push(welcome);
   }

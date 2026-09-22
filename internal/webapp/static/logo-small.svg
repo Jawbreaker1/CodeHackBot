@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">BirdHackBot raven head</title>
+  <desc id="desc">A compact raven head mark with a red signal eye</desc>
+  <path fill="#f6f2e9" stroke="#242424" stroke-width="2" stroke-linejoin="round" d="M7 36c7-11 17-19 28-23 8-3 16-1 22 4l-7 4c6 2 10 7 13 13l-15 2c-4 0-8 2-12 6l-8 10-8-7-10 5 4-8-7-6Z"/>
+  <path fill="#242424" d="m39 31 21 3-15 7-10-5 4-5Z"/>
+  <path fill="#e5484d" d="M34 19c5-2 9-1 12 2-2 4-5 6-8 6-3-2-5-5-4-8Z"/>
+  <circle cx="38" cy="23" r="1.8" fill="#171717"/>
+</svg>

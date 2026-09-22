@@ -4,7 +4,9 @@ body { margin:0; min-height:100vh; color:var(--text); background:var(--bg); }
 a { color:inherit; }
 .topbar { height:64px; display:flex; align-items:center; gap:18px; padding:0 30px; border-bottom:1px solid var(--line); background:#191919; }
 .brand { display:flex; align-items:center; gap:9px; text-decoration:none; font-size:14px; }
-.brand img { width:142px; height:auto; display:block; }
+.brand img { width:28px; height:28px; display:block; }
+.brand strong { font-size:14px; font-weight:600; letter-spacing:-.3px; }
+.brand-period { color:#e5484d; }
 .eyebrow { color:var(--faint); font-size:11px; letter-spacing:.08em; text-transform:uppercase; }
 .back { margin-left:auto; color:var(--muted); font-size:12px; text-decoration:none; }
 .back:hover { color:var(--text); }

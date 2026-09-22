@@ -29,7 +29,8 @@ svg { flex-shrink: 0; }
 .sidebar { display: flex; flex-direction: column; min-height: 0; background: var(--rail); padding: 0 12px; }
 .brand { height: 62px; display: flex; gap: 9px; align-items: center; padding: 0 8px; letter-spacing: -.3px; }
 .brand-mark { width: 28px; height: 28px; flex: 0 0 auto; }
-.brand-wordmark { width: 142px; height: auto; display: block; }
+.brand strong { font-size: 14px; font-weight: 600; }
+.brand-period { color: #e5484d; }
 .new-session { display: flex; gap: 10px; align-items: center; text-align: left; padding: 10px 9px; font-size: 13px; }
 .nav-label { margin: 30px 9px 12px; color: var(--faint); font-size: 11px; }
 #sidebarSessions { flex: 1; min-height: 0; overflow: auto; }

@@ -41,6 +41,14 @@ func TestServerCreatesDraftAndServesUI(t *testing.T) {
 		t.Fatal("operator console stylesheet is missing")
 	}
 	_ = css.Body.Close()
+	smallMark, err := http.Get(httpServer.URL + "/logo-small.svg")
+	if err != nil || smallMark.StatusCode != http.StatusOK {
+		t.Fatal("compact logo is missing")
+	}
+	_ = smallMark.Body.Close()
+	if smallMark.Header.Get("Content-Type") != "image/svg+xml" {
+		t.Fatal("compact logo has an incorrect content type")
+	}
 	wordmark, err := http.Get(httpServer.URL + "/wordmark.svg")
 	if err != nil || wordmark.StatusCode != http.StatusOK {
 		t.Fatal("operator wordmark is missing")
