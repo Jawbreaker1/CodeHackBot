@@ -39,8 +39,9 @@
       <div class="compose-area">
         <button id="reviewProposal" class="review-notice hidden" type="button">Assessment ready for review <span>Open details ↗</span></button>
         <form id="composer" class="composer">
-          <textarea id="chatInput" aria-label="Message the coordinator" rows="2" placeholder="Ask, investigate, or plan an assessment…" required></textarea>
-          <div class="composer-footer"><span class="composer-identity">Coordinator <span class="divider">/</span> <button id="model" class="model-button" type="button" aria-haspopup="dialog" aria-label="Change language model">Connecting…</button></span><button id="send" class="submit-button" type="submit" aria-label="Send message" title="Send message · Enter"><svg class="icon"><use href="#icon-arrow"/></svg></button></div>
+          <textarea id="chatInput" aria-label="Message the coordinator" rows="2" placeholder="Ask, investigate, or plan an assessment…"></textarea>
+          <div id="attachmentList" class="attachment-list hidden" aria-live="polite"></div>
+          <div class="composer-footer"><span class="composer-identity"><button id="attach" class="text-button" type="button" aria-label="Attach screenshots or documents">Attach</button><input id="attachments" type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,application/pdf" hidden><span class="divider">/</span>Coordinator <span class="divider">/</span> <button id="model" class="model-button" type="button" aria-haspopup="dialog" aria-label="Change language model">Connecting…</button></span><button id="send" class="submit-button" type="submit" aria-label="Send message" title="Send message · Enter"><svg class="icon"><use href="#icon-arrow"/></svg></button></div>
         </form>
         <div class="compose-meta"><span id="conversationState">Ready when you are</span><span>Enter to send <span class="meta-separator">·</span> Shift + Enter for a new line</span></div>
       </div>

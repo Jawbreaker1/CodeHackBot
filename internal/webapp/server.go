@@ -8,7 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -62,9 +65,225 @@ type intakeRun struct {
 }
 
 type intakeMessage struct {
-	Role string    `json:"role"`
-	Text string    `json:"text"`
-	At   time.Time `json:"at"`
+	Role        string          `json:"role"`
+	Text        string          `json:"text"`
+	Attachments []attachmentRef `json:"attachments,omitempty"`
+	At          time.Time       `json:"at"`
+}
+
+type attachmentRef struct {
+	ID       string `json:"id"`
+	Filename string `json:"filename"`
+	MIMEType string `json:"mime_type"`
+	Bytes    int64  `json:"bytes"`
+	Path     string `json:"path"`
+}
+
+type attachmentView struct {
+	ID       string `json:"id"`
+	Filename string `json:"filename"`
+	MIMEType string `json:"mime_type"`
+	Bytes    int64  `json:"bytes"`
+	URL      string `json:"url"`
+}
+
+const (
+	maxAttachmentCount      = 4
+	maxAttachmentBytes      = 8 << 20
+	maxTotalAttachmentBytes = 16 << 20
+	maxMessageBodyBytes     = 24 << 20
+)
+
+var allowedAttachmentMIME = map[string]bool{
+	"image/png": true, "image/jpeg": true, "image/webp": true, "image/gif": true,
+	"application/pdf": true,
+}
+
+// decodeMessageInput accepts the JSON message shape used by the CLI and a
+// bounded multipart shape used by the browser composer. Files are stored in
+// the session directory before they are handed to a model; durable messages
+// contain references and metadata, never file bytes.
+func (s *Server) decodeMessageInput(w http.ResponseWriter, r *http.Request, root string) (string, []attachmentRef, error) {
+	contentType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if contentType != "multipart/form-data" {
+		var input messageRequest
+		if !decodeJSON(w, r, &input) {
+			return "", nil, fmt.Errorf("invalid message JSON")
+		}
+		return input.Text, nil, nil
+	}
+	if r.ContentLength > maxMessageBodyBytes {
+		return "", nil, fmt.Errorf("message upload is too large (maximum %d MiB)", maxMessageBodyBytes>>20)
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxMessageBodyBytes)
+	if err := r.ParseMultipartForm(maxMessageBodyBytes); err != nil {
+		return "", nil, fmt.Errorf("parse message upload: %w", err)
+	}
+	text := r.FormValue("text")
+	files := r.MultipartForm.File["attachment"]
+	if len(files) > maxAttachmentCount {
+		return "", nil, fmt.Errorf("attach at most %d files per message", maxAttachmentCount)
+	}
+	if len(files) == 0 {
+		return text, nil, nil
+	}
+	attachmentDir := filepath.Join(root, "attachments")
+	if err := os.MkdirAll(attachmentDir, 0700); err != nil {
+		return "", nil, fmt.Errorf("create attachment directory: %w", err)
+	}
+	refs := make([]attachmentRef, 0, len(files))
+	var total int64
+	for _, header := range files {
+		if header == nil || header.Size == 0 {
+			return "", refs, fmt.Errorf("attachments must not be empty")
+		}
+		if header.Size > maxAttachmentBytes {
+			return "", refs, fmt.Errorf("attachment %q is too large (maximum %d MiB)", header.Filename, maxAttachmentBytes>>20)
+		}
+		total += header.Size
+		if total > maxTotalAttachmentBytes {
+			return "", refs, fmt.Errorf("attachments are too large in total (maximum %d MiB)", maxTotalAttachmentBytes>>20)
+		}
+		file, err := header.Open()
+		if err != nil {
+			return "", refs, fmt.Errorf("open attachment %q: %w", header.Filename, err)
+		}
+		data, readErr := io.ReadAll(io.LimitReader(file, maxAttachmentBytes+1))
+		_ = file.Close()
+		if readErr != nil {
+			return "", refs, fmt.Errorf("read attachment %q: %w", header.Filename, readErr)
+		}
+		if len(data) == 0 || len(data) > maxAttachmentBytes {
+			return "", refs, fmt.Errorf("attachment %q exceeds the size limit", header.Filename)
+		}
+		contentType := http.DetectContentType(data)
+		if contentType == "application/octet-stream" && strings.EqualFold(filepath.Ext(header.Filename), ".pdf") {
+			contentType = "application/pdf"
+		}
+		if !allowedAttachmentMIME[contentType] {
+			return "", refs, fmt.Errorf("attachment %q has unsupported type %s; use PNG, JPEG, WebP, GIF, or PDF", header.Filename, contentType)
+		}
+		name := safeAttachmentFilename(header.Filename)
+		if len(name) > 160 {
+			name = name[:160]
+		}
+		id := fmt.Sprintf("attachment-%d", s.seq.Add(1))
+		relative := filepath.Join("attachments", id)
+		path := filepath.Join(root, relative)
+		if err := os.WriteFile(path, data, 0600); err != nil {
+			return "", refs, fmt.Errorf("store attachment %q: %w", name, err)
+		}
+		refs = append(refs, attachmentRef{ID: id, Filename: name, MIMEType: contentType, Bytes: int64(len(data)), Path: relative})
+	}
+	return text, refs, nil
+}
+
+func safeAttachmentFilename(value string) string {
+	name := filepath.Base(strings.TrimSpace(value))
+	if name == "." || name == string(filepath.Separator) || name == "" {
+		return "attachment"
+	}
+	name = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f || r == '\r' || r == '\n' {
+			return '_'
+		}
+		return r
+	}, name)
+	return name
+}
+
+func attachmentPath(root string, ref attachmentRef) (string, error) {
+	if ref.ID == "" || ref.Path == "" {
+		return "", fmt.Errorf("attachment reference is incomplete")
+	}
+	clean := filepath.Clean(ref.Path)
+	if clean != filepath.Join("attachments", ref.ID) || filepath.IsAbs(ref.Path) {
+		return "", fmt.Errorf("invalid attachment path")
+	}
+	return filepath.Join(root, clean), nil
+}
+
+func loadLLMAttachments(root string, refs []attachmentRef) ([]llmclient.Attachment, error) {
+	attachments := make([]llmclient.Attachment, 0, len(refs))
+	var total int64
+	for _, ref := range refs {
+		path, err := attachmentPath(root, ref)
+		if err != nil {
+			return nil, err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read attachment %q: %w", ref.Filename, err)
+		}
+		if len(data) == 0 || len(data) > maxAttachmentBytes {
+			return nil, fmt.Errorf("attachment %q exceeds the size limit", ref.Filename)
+		}
+		total += int64(len(data))
+		if total > maxTotalAttachmentBytes {
+			return nil, fmt.Errorf("attachments are too large in total")
+		}
+		attachments = append(attachments, llmclient.Attachment{Filename: ref.Filename, MIMEType: ref.MIMEType, Data: data, Detail: "auto"})
+	}
+	return attachments, nil
+}
+
+func messageViews(messages []intakeMessage, kind, id string) []messageView {
+	views := make([]messageView, 0, len(messages))
+	for _, message := range messages {
+		view := messageView{Role: message.Role, Text: message.Text, At: message.At}
+		for _, ref := range message.Attachments {
+			view.Attachments = append(view.Attachments, attachmentView{ID: ref.ID, Filename: ref.Filename, MIMEType: ref.MIMEType, Bytes: ref.Bytes, URL: "/api/v1/" + kind + "/" + url.PathEscape(id) + "/attachments/" + url.PathEscape(ref.ID)})
+		}
+		views = append(views, view)
+	}
+	return views
+}
+
+func removeAttachmentFiles(root string, refs []attachmentRef) {
+	for _, ref := range refs {
+		path, err := attachmentPath(root, ref)
+		if err == nil {
+			_ = os.Remove(path)
+		}
+	}
+}
+
+func (s *Server) cloneMessagesWithAttachments(messages []intakeMessage, sourceRoot, targetRoot string) ([]intakeMessage, error) {
+	cloned := make([]intakeMessage, len(messages))
+	copy(cloned, messages)
+	if err := os.MkdirAll(filepath.Join(targetRoot, "attachments"), 0700); err != nil {
+		return nil, err
+	}
+	for i := range cloned {
+		cloned[i].Attachments = append([]attachmentRef(nil), messages[i].Attachments...)
+		for j, ref := range messages[i].Attachments {
+			source, err := attachmentPath(sourceRoot, ref)
+			if err != nil {
+				return nil, err
+			}
+			data, err := os.ReadFile(source)
+			if err != nil {
+				return nil, fmt.Errorf("copy attachment %q: %w", ref.Filename, err)
+			}
+			if len(data) == 0 || len(data) > maxAttachmentBytes {
+				return nil, fmt.Errorf("attachment %q exceeds the size limit", ref.Filename)
+			}
+			id := fmt.Sprintf("attachment-%d", s.seq.Add(1))
+			relative := filepath.Join("attachments", id)
+			if err := os.WriteFile(filepath.Join(targetRoot, relative), data, 0600); err != nil {
+				return nil, fmt.Errorf("copy attachment %q: %w", ref.Filename, err)
+			}
+			cloned[i].Attachments[j] = attachmentRef{ID: id, Filename: ref.Filename, MIMEType: ref.MIMEType, Bytes: int64(len(data)), Path: relative}
+		}
+	}
+	return cloned, nil
+}
+
+type messageView struct {
+	Role        string           `json:"role"`
+	Text        string           `json:"text"`
+	Attachments []attachmentView `json:"attachments,omitempty"`
+	At          time.Time        `json:"at"`
 }
 
 type intakeView struct {
@@ -76,7 +295,7 @@ type intakeView struct {
 	ModelBusy       bool                `json:"model_busy"`
 	CanChangeModel  bool                `json:"can_change_model"`
 	Status          string              `json:"status"`
-	Messages        []intakeMessage     `json:"messages"`
+	Messages        []messageView       `json:"messages"`
 	Proposal        *intake.Draft       `json:"proposal,omitempty"`
 	PendingTool     *intakeApprovalView `json:"pending_tool,omitempty"`
 	Events          []eventRecord       `json:"events"`
@@ -209,7 +428,7 @@ type assessmentView struct {
 	PendingApprovals []approvalView       `json:"pending_approvals"`
 	PendingQuestions []questionView       `json:"pending_questions"`
 	PendingPlan      *planApprovalView    `json:"pending_plan,omitempty"`
-	Messages         []intakeMessage      `json:"messages"`
+	Messages         []messageView        `json:"messages"`
 	ReportURL        string               `json:"report_url,omitempty"`
 }
 
@@ -376,18 +595,21 @@ func (s *Server) intakeRoute(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if len(parts) == 3 && parts[1] != "approvals" {
-		http.NotFound(w, r)
-		return
-	}
 	current := s.getIntake(parts[0])
 	if current == nil {
 		writeError(w, http.StatusNotFound, "intake session not found")
 		return
 	}
+	if len(parts) == 3 && parts[1] == "attachments" {
+		current.mu.RLock()
+		root, messages := current.root, append([]intakeMessage(nil), current.messages...)
+		current.mu.RUnlock()
+		s.serveAttachment(w, r, root, messages, parts[2])
+		return
+	}
 	if len(parts) == 3 {
-		if r.Method != http.MethodPost {
-			methodNotAllowed(w, http.MethodPost)
+		if parts[1] != "approvals" || r.Method != http.MethodPost {
+			http.NotFound(w, r)
 			return
 		}
 		var input approvalRequest
@@ -425,11 +647,14 @@ func (s *Server) intakeRoute(w http.ResponseWriter, r *http.Request) {
 			methodNotAllowed(w, http.MethodPost)
 			return
 		}
-		var input intakeMessageRequest
-		if !decodeJSON(w, r, &input) {
+		text, refs, err := s.decodeMessageInput(w, r, current.root)
+		if err != nil {
+			removeAttachmentFiles(current.root, refs)
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if err := s.intakeMessage(r.Context(), current, input.Text); err != nil {
+		if err := s.intakeMessage(r.Context(), current, text, refs); err != nil {
+			removeAttachmentFiles(current.root, refs)
 			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
@@ -468,6 +693,45 @@ func (s *Server) intakeRoute(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) serveAttachment(w http.ResponseWriter, r *http.Request, root string, messages []intakeMessage, id string) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	var ref attachmentRef
+	found := false
+	for _, message := range messages {
+		for _, candidate := range message.Attachments {
+			if candidate.ID == id {
+				ref, found = candidate, true
+				break
+			}
+		}
+		if found {
+			break
+		}
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, "attachment not found")
+		return
+	}
+	path, err := attachmentPath(root, ref)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "attachment not found")
+		return
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "attachment not found")
+		return
+	}
+	defer file.Close()
+	w.Header().Set("Content-Type", ref.MIMEType)
+	w.Header().Set("Content-Disposition", `inline; filename="`+strings.ReplaceAll(safeAttachmentFilename(ref.Filename), `"`, "")+`"`)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	http.ServeContent(w, r, ref.Filename, time.Time{}, file)
+}
+
 func (s *Server) newIntake() (*intakeRun, error) {
 	id := fmt.Sprintf("intake-%s-%06d", time.Now().UTC().Format("20060102-150405.000000000"), s.seq.Add(1))
 	root := filepath.Join(s.config.SessionsRoot, "intake", id)
@@ -492,10 +756,17 @@ func (s *Server) getIntake(id string) *intakeRun {
 	return s.intakes[id]
 }
 
-func (s *Server) intakeMessage(ctx context.Context, current *intakeRun, text string) error {
+func (s *Server) intakeMessage(ctx context.Context, current *intakeRun, text string, refs []attachmentRef) error {
 	text = strings.TrimSpace(text)
+	if text == "" && len(refs) > 0 {
+		text = "Please inspect the attached artifact(s)."
+	}
 	if text == "" {
 		return fmt.Errorf("message is required")
+	}
+	attachments, err := loadLLMAttachments(current.root, refs)
+	if err != nil {
+		return err
 	}
 	current.mu.Lock()
 	if current.deleted {
@@ -511,7 +782,7 @@ func (s *Server) intakeMessage(ctx context.Context, current *intakeRun, text str
 		return fmt.Errorf("the coordinator is still answering the previous message")
 	}
 	current.busy = true
-	current.messages = append(current.messages, intakeMessage{Role: "user", Text: text, At: time.Now().UTC()})
+	current.messages = append(current.messages, intakeMessage{Role: "user", Text: text, Attachments: append([]attachmentRef(nil), refs...), At: time.Now().UTC()})
 	current.updatedAt = time.Now().UTC()
 	current.mu.Unlock()
 	if err := current.persist(); err != nil {
@@ -535,7 +806,7 @@ func (s *Server) intakeMessage(ctx context.Context, current *intakeRun, text str
 	}
 	current.conversation.SetBehaviorContext(s.config.Frame.PromptText())
 	current.conversationMu.Lock()
-	turn, err := current.conversation.Turn(ctx, current.client, text)
+	turn, err := current.conversation.Turn(ctx, current.client, text, attachments...)
 	current.conversationMu.Unlock()
 	if err != nil {
 		current.mu.Lock()
@@ -592,6 +863,10 @@ func (s *Server) startIntake(current *intakeRun, customer string) (assessmentVie
 	current.assessmentID = created.id
 	intakeMessages := append([]intakeMessage(nil), current.messages...)
 	current.mu.Unlock()
+	intakeMessages, err = s.cloneMessagesWithAttachments(intakeMessages, current.root, created.root)
+	if err != nil {
+		return assessmentView{}, err
+	}
 	created.mu.Lock()
 	created.client = client
 	created.messages = intakeMessages
@@ -656,7 +931,7 @@ func (r *intakeRun) view() intakeView {
 	} else if len(r.messages) > 0 && r.messages[0].Role == "user" {
 		title = compactTitle(r.messages[0].Text)
 	}
-	return intakeView{ID: r.id, Customer: r.customer, Title: title, Model: r.client.Model, ModelConfigured: strings.TrimSpace(r.client.BaseURL) != "" && strings.TrimSpace(r.client.Model) != "", ModelBusy: r.busy, CanChangeModel: !r.busy && r.assessmentID == "", Status: status, Messages: append([]intakeMessage(nil), r.messages...), Proposal: cloneDraft(r.proposal), PendingTool: pending, Events: append([]eventRecord(nil), r.events...), AssessmentID: r.assessmentID}
+	return intakeView{ID: r.id, Customer: r.customer, Title: title, Model: r.client.Model, ModelConfigured: strings.TrimSpace(r.client.BaseURL) != "" && strings.TrimSpace(r.client.Model) != "", ModelBusy: r.busy, CanChangeModel: !r.busy && r.assessmentID == "", Status: status, Messages: messageViews(r.messages, "intake", r.id), Proposal: cloneDraft(r.proposal), PendingTool: pending, Events: append([]eventRecord(nil), r.events...), AssessmentID: r.assessmentID}
 }
 
 func (r *intakeRun) recordObservation(event assessment.Event) {
@@ -903,6 +1178,13 @@ func (s *Server) assessmentRoute(w http.ResponseWriter, r *http.Request) {
 		current.writeView(w, r.URL.Query().Get("after"))
 		return
 	}
+	if len(parts) == 3 && parts[1] == "attachments" {
+		current.mu.RLock()
+		root, messages := current.root, append([]intakeMessage(nil), current.messages...)
+		current.mu.RUnlock()
+		s.serveAttachment(w, r, root, messages, parts[2])
+		return
+	}
 	switch parts[1] {
 	case "model":
 		if r.Method != http.MethodPost {
@@ -943,11 +1225,14 @@ func (s *Server) assessmentRoute(w http.ResponseWriter, r *http.Request) {
 			methodNotAllowed(w, http.MethodPost)
 			return
 		}
-		var input messageRequest
-		if !decodeJSON(w, r, &input) {
+		text, refs, err := s.decodeMessageInput(w, r, current.root)
+		if err != nil {
+			removeAttachmentFiles(current.root, refs)
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if err := s.message(r.Context(), current, input.Text); err != nil {
+		if err := s.message(r.Context(), current, text, refs); err != nil {
+			removeAttachmentFiles(current.root, refs)
 			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
@@ -1253,7 +1538,7 @@ func (r *run) conversation() []string {
 	defer r.mu.RUnlock()
 	values := make([]string, 0, len(r.messages))
 	for _, message := range r.messages {
-		values = append(values, message.Role+": "+message.Text)
+		values = append(values, message.Role+": "+message.Text+attachmentSummary(message.Attachments))
 	}
 	return values
 }
@@ -1293,10 +1578,17 @@ func (r *run) stop() error {
 	return nil
 }
 
-func (s *Server) message(ctx context.Context, r *run, text string) error {
+func (s *Server) message(ctx context.Context, r *run, text string, refs []attachmentRef) error {
 	text = strings.TrimSpace(text)
+	if text == "" && len(refs) > 0 {
+		text = "Please inspect the attached artifact(s)."
+	}
 	if text == "" {
 		return fmt.Errorf("message is required")
+	}
+	attachments, err := loadLLMAttachments(r.root, refs)
+	if err != nil {
+		return err
 	}
 	r.mu.Lock()
 	if r.deleted {
@@ -1309,7 +1601,7 @@ func (s *Server) message(ctx context.Context, r *run, text string) error {
 	}
 	for id, question := range r.questions {
 		delete(r.questions, id)
-		r.messages = append(r.messages, intakeMessage{Role: "user", Text: text, At: time.Now().UTC()})
+		r.messages = append(r.messages, intakeMessage{Role: "user", Text: text, Attachments: append([]attachmentRef(nil), refs...), At: time.Now().UTC()})
 		question.answer <- text
 		r.events = append(r.events, eventRecord{Sequence: r.nextSequenceLocked(), At: time.Now().UTC(), Event: assessment.Event{Kind: "operator_message", Message: text}})
 		r.updatedAt = time.Now().UTC()
@@ -1322,7 +1614,7 @@ func (s *Server) message(ctx context.Context, r *run, text string) error {
 		return fmt.Errorf("the coordinator is still answering the previous message")
 	}
 	r.chatBusy = true
-	r.messages = append(r.messages, intakeMessage{Role: "user", Text: text, At: time.Now().UTC()})
+	r.messages = append(r.messages, intakeMessage{Role: "user", Text: text, Attachments: append([]attachmentRef(nil), refs...), At: time.Now().UTC()})
 	r.events = append(r.events, eventRecord{Sequence: r.nextSequenceLocked(), At: time.Now().UTC(), Event: assessment.Event{Kind: "operator_message", Message: text}})
 	r.updatedAt = time.Now().UTC()
 	state := r.state
@@ -1338,7 +1630,7 @@ func (s *Server) message(ctx context.Context, r *run, text string) error {
 
 	prompt := []llmclient.Message{
 		{Role: "system", Content: behavior.CoordinatorConversationPrompt(s.config.Frame)},
-		{Role: "user", Content: "Current assessment state (untrusted evidence): " + compactRunState(state, pending) + "\nOperator message: " + text},
+		{Role: "user", Content: "Current assessment state (untrusted evidence): " + compactRunState(state, pending) + "\nOperator message: " + text + attachmentSummary(refs), Attachments: attachments},
 	}
 	r.mu.RLock()
 	client := r.client
@@ -1361,6 +1653,17 @@ func (s *Server) message(ctx context.Context, r *run, text string) error {
 	r.mu.Unlock()
 	_ = r.persist()
 	return nil
+}
+
+func attachmentSummary(refs []attachmentRef) string {
+	if len(refs) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		parts = append(parts, ref.Filename+" ("+ref.MIMEType+")")
+	}
+	return "\nAttached artifacts (untrusted visual/file evidence): " + strings.Join(parts, ", ")
 }
 
 func (r *run) removeLastMessage(role, text string) {
@@ -1545,7 +1848,7 @@ func (r *run) view(after string) assessmentView {
 	if strings.TrimSpace(model) == "" {
 		model = r.state.Model
 	}
-	view := assessmentView{Customer: r.customer, ID: r.id, Goal: r.goal, Scope: r.scope, Status: r.status, Model: model, ModelBusy: r.chatBusy || r.started, CanChangeModel: !r.chatBusy && !r.started, Resumable: !r.started && r.status != "draft" && r.status != "completed" && r.status != "completed_with_gaps", UpdatedAt: r.updatedAt, Error: r.state.Error, StartedAt: r.state.StartedAt, FinishedAt: r.state.FinishedAt, Usage: r.state.Usage, Plans: len(r.state.Plans), Results: append([]assessment.Result(nil), r.state.Results...), Messages: append([]intakeMessage(nil), r.messages...), ReportURL: "/api/v1/assessments/" + r.id + "/report"}
+	view := assessmentView{Customer: r.customer, ID: r.id, Goal: r.goal, Scope: r.scope, Status: r.status, Model: model, ModelBusy: r.chatBusy || r.started, CanChangeModel: !r.chatBusy && !r.started, Resumable: !r.started && r.status != "draft" && r.status != "completed" && r.status != "completed_with_gaps", UpdatedAt: r.updatedAt, Error: r.state.Error, StartedAt: r.state.StartedAt, FinishedAt: r.state.FinishedAt, Usage: r.state.Usage, Plans: len(r.state.Plans), Results: append([]assessment.Result(nil), r.state.Results...), Messages: messageViews(r.messages, "assessments", r.id), ReportURL: "/api/v1/assessments/" + r.id + "/report"}
 	view.Limits = r.state.Limits
 	for _, worker := range r.workers {
 		view.Workers = append(view.Workers, worker)

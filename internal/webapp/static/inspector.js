@@ -33,6 +33,103 @@ export function disclosure(title, content, key) {
   details.append(node('summary', '', title), content);
   return details;
 }
+
+// richText is a presentation renderer for model-authored prose. It treats all
+// input as text and only gives special treatment to explicit fenced code and
+// Mermaid flowchart blocks; it never executes markup or infers security facts.
+export function richText(value, key = '') {
+  const root = node('div', 'rich-text');
+  const lines = String(value || '').replaceAll('\r\n', '\n').split('\n');
+  let paragraph = [];
+  let index = 0;
+  const flush = () => {
+    const text = paragraph.join('\n').trim();
+    if (text) root.append(node('p', 'rich-paragraph', text));
+    paragraph = [];
+  };
+  while (index < lines.length) {
+    const line = lines[index];
+    const fence = line.trimStart();
+    if (fence.startsWith('```')) {
+      flush();
+      const language = fence.slice(3).trim().toLowerCase();
+      const content = [];
+      index++;
+      while (index < lines.length && !lines[index].trimStart().startsWith('```')) content.push(lines[index++]);
+      if (index < lines.length) index++;
+      root.append(language === 'mermaid' ? mermaidNode(content.join('\n'), key + '-' + index) : codeBlock(content.join('\n'), language));
+      continue;
+    }
+    if (!line.trim()) { flush(); index++; continue; }
+    if (line.startsWith('# ')) { flush(); root.append(node('h3', 'rich-heading', line.slice(2).trim())); index++; continue; }
+    if (line.startsWith('## ')) { flush(); root.append(node('h4', 'rich-heading', line.slice(3).trim())); index++; continue; }
+    if (line.startsWith('- ') || line.startsWith('* ')) {
+      flush();
+      const list = node('ul', 'rich-list');
+      while (index < lines.length && (lines[index].startsWith('- ') || lines[index].startsWith('* '))) {
+        list.append(node('li', '', lines[index].slice(2).trim())); index++;
+      }
+      root.append(list); continue;
+    }
+    paragraph.push(line);
+    index++;
+  }
+  flush();
+  if (!root.children.length) root.append(node('p', 'rich-paragraph', ''));
+  return root;
+}
+function codeBlock(value, language) {
+  const pre = node('pre', 'rich-code');
+  const code = node('code', '', value);
+  if (language) code.dataset.language = language;
+  pre.append(code);
+  return pre;
+}
+function mermaidNode(source, key) {
+  const lines = source.split('\n').map(line => line.trim()).filter(Boolean);
+  const direction = lines[0]?.startsWith('flowchart') || lines[0]?.startsWith('graph');
+  const edges = [];
+  const labels = new Map();
+  for (const line of (direction ? lines.slice(1) : lines)) {
+    const arrow = line.indexOf('-->') >= 0 ? '-->' : line.indexOf('-.->') >= 0 ? '-.->' : '';
+    if (!arrow) continue;
+    const parts = line.split(arrow);
+    if (parts.length !== 2) continue;
+    const left = mermaidEndpoint(parts[0]);
+    const right = mermaidEndpoint(parts[1]);
+    if (!left.id || !right.id) continue;
+    labels.set(left.id, left.label); labels.set(right.id, right.label);
+    edges.push([left.id, right.id]);
+  }
+  if (!edges.length) return disclosure('Flowchart source', codeBlock(source, 'mermaid'), 'mermaid-source-' + key);
+  const ids = [];
+  for (const [from, to] of edges) for (const id of [from, to]) if (!ids.includes(id)) ids.push(id);
+  const width = 500, rowHeight = 58, height = Math.max(74, ids.length * rowHeight + 16);
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', `0 0 ${width} ${height}`); svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', 'Coordinator flowchart'); svg.classList.add('flowchart');
+  const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+  const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker'); marker.id = 'arrow-' + key; marker.setAttribute('markerWidth', '8'); marker.setAttribute('markerHeight', '8'); marker.setAttribute('refX', '7'); marker.setAttribute('refY', '3'); marker.setAttribute('orient', 'auto');
+  const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'path'); arrow.setAttribute('d', 'M0,0 L0,6 L7,3 z'); arrow.classList.add('flowchart-arrow'); marker.append(arrow); defs.append(marker); svg.append(defs);
+  const y = id => 8 + ids.indexOf(id) * rowHeight;
+  for (let i = 0; i < edges.length; i++) {
+    const [from, to] = edges[i];
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line'); line.setAttribute('x1', String(width / 2)); line.setAttribute('x2', String(width / 2)); line.setAttribute('y1', String(y(from) + 42)); line.setAttribute('y2', String(y(to) - 5)); line.setAttribute('marker-end', `url(#arrow-${key})`); line.classList.add('flowchart-edge'); svg.append(line);
+  }
+  for (const id of ids) {
+    const group = document.createElementNS('http://www.w3.org/2000/svg', 'g'); group.classList.add('flowchart-node');
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect'); rect.setAttribute('x', '70'); rect.setAttribute('y', String(y(id))); rect.setAttribute('width', String(width - 140)); rect.setAttribute('height', '38'); rect.setAttribute('rx', '8');
+    const text = document.createElementNS('http://www.w3.org/2000/svg', 'text'); text.setAttribute('x', String(width / 2)); text.setAttribute('y', String(y(id) + 24)); text.setAttribute('text-anchor', 'middle'); text.textContent = labels.get(id) || id;
+    group.append(rect, text); svg.append(group);
+  }
+  const wrap = node('div', 'flowchart-wrap'); wrap.append(svg, disclosure('Flowchart source', codeBlock(source, 'mermaid'), 'mermaid-source-' + key)); return wrap;
+}
+function mermaidEndpoint(value) {
+  const clean = value.trim();
+  const bracket = clean.indexOf('['), close = clean.lastIndexOf(']');
+  if (bracket > 0 && close > bracket) return {id: clean.slice(0, bracket).trim(), label: clean.slice(bracket + 1, close).trim()};
+  const space = clean.indexOf(' ');
+  return {id: space < 0 ? clean : clean.slice(0, space), label: clean};
+}
 export function replacePreservingDetails(target, children) {
   const open = new Set([...target.querySelectorAll('details[open][data-disclosure]')].map(d => d.dataset.disclosure));
   target.replaceChildren(...children);
@@ -102,9 +199,9 @@ export function eventNode(record) {
   const entry = node('li', 'activity-item');
   const time = node('time', '', new Date(record.at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'}));
   entry.append(time, node('strong', '', (e.task_id ? e.task_id + ' · ' : '') + phaseLabel(e.kind)));
-  if (e.message) entry.append(node('p', 'pre-wrap', e.message));
+  if (e.message) entry.append(richText(e.message, 'event-' + record.sequence));
   if (e.action) entry.append(node('pre', 'command', e.action));
-  if (e.rationale) entry.append(disclosure('Model summary', node('p', 'pre-wrap', e.rationale), 'rationale-' + record.sequence));
+  if (e.rationale) entry.append(disclosure('Model summary', richText(e.rationale, 'rationale-' + record.sequence), 'rationale-' + record.sequence));
   if (e.evidence) entry.append(e.kind === 'execution_finished' ? observationResultNode(e.evidence, record.sequence) : evidenceNode(e.evidence));
   return entry;
 }

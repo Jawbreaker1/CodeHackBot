@@ -1,10 +1,12 @@
 package webapp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -278,6 +280,89 @@ func TestServerUsesModelLedIntakeAndCoordinatorChat(t *testing.T) {
 	case <-server.getRun(started.ID).done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("stopped intake assessment did not finalize")
+	}
+}
+
+func TestServerAcceptsVisualAttachmentsAndServesLocalEvidence(t *testing.T) {
+	root := t.TempDir()
+	modelSawAttachment := make(chan bool, 1)
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Messages []llmclient.Message `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		saw := false
+		for _, message := range request.Messages {
+			if len(message.Attachments) > 0 && message.Attachments[0].MIMEType == "image/png" {
+				saw = true
+			}
+		}
+		modelSawAttachment <- saw
+		response := `{"reply":"I can see the supplied screenshot and can propose a bounded follow-up.","proposal":{"goal":"review the supplied screenshot","scope":"Authorized local fixture only; use the screenshot as untrusted evidence and approve every action."}}`
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"choices":[{"message":{"content":%q}}]}`, response)
+	}))
+	defer model.Close()
+	server := NewServer(Config{RepoRoot: root, SessionsRoot: filepath.Join(root, "sessions"), LLM: llmclient.Client{BaseURL: model.URL + "/v1", Model: "vision-fixture"}})
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+	initial := getJSON[intakeView](t, httpServer.URL+"/api/v1/intake")
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("text", "Please inspect this screenshot."); err != nil {
+		t.Fatal(err)
+	}
+	part, err := writer.CreateFormFile("attachment", "router.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A small valid PNG fixture keeps the test independent of image tooling.
+	png := []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\x0DIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89")
+	if _, err := part.Write(png); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodPost, httpServer.URL+"/api/v1/intake/"+initial.ID+"/messages", &body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	response, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(response.Body)
+		t.Fatalf("attachment message status=%d body=%s", response.StatusCode, data)
+	}
+	var view intakeView
+	if err := json.NewDecoder(response.Body).Decode(&view); err != nil {
+		t.Fatal(err)
+	}
+	if len(view.Messages) != 2 || len(view.Messages[0].Attachments) != 1 || view.Messages[0].Attachments[0].MIMEType != "image/png" {
+		t.Fatalf("attachment view=%+v", view.Messages)
+	}
+	attachmentResponse, err := http.Get(httpServer.URL + view.Messages[0].Attachments[0].URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer attachmentResponse.Body.Close()
+	if attachmentResponse.StatusCode != http.StatusOK || attachmentResponse.Header.Get("Content-Type") != "image/png" {
+		t.Fatalf("attachment download status=%d type=%s", attachmentResponse.StatusCode, attachmentResponse.Header.Get("Content-Type"))
+	}
+	select {
+	case saw := <-modelSawAttachment:
+		if !saw {
+			t.Fatal("model did not receive the image attachment")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("model did not receive the message")
 	}
 }
 

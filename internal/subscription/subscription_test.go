@@ -77,6 +77,34 @@ func TestWorkerClientThroughBridge(t *testing.T) {
 	}
 }
 
+func TestProviderMapsVisualAttachmentsToResponsesInputParts(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		items, ok := payload["input"].([]any)
+		if !ok || len(items) != 1 {
+			t.Fatalf("input=%#v", payload["input"])
+		}
+		item := items[0].(map[string]any)
+		parts := item["content"].([]any)
+		if len(parts) != 3 || parts[0].(map[string]any)["type"] != "input_text" || parts[1].(map[string]any)["type"] != "input_image" || parts[2].(map[string]any)["type"] != "input_file" {
+			t.Fatalf("content parts=%#v", parts)
+		}
+		if !strings.HasPrefix(parts[1].(map[string]any)["image_url"].(string), "data:image/png;base64,") || !strings.HasPrefix(parts[2].(map[string]any)["file_data"].(string), "data:application/pdf;base64,") {
+			t.Fatalf("attachment data URLs=%#v", parts)
+		}
+		fmt.Fprint(w, completedEvent)
+	}))
+	defer upstream.Close()
+	provider := Provider{Auth: &testAuth{}, endpoint: upstream.URL}
+	_, err := provider.Complete(context.Background(), Request{Model: "vision-model", Messages: []llmclient.Message{{Role: "user", Content: "inspect", Attachments: []llmclient.Attachment{{Filename: "screen.png", MIMEType: "image/png", Detail: "high", Data: []byte("png")}, {Filename: "report.pdf", MIMEType: "application/pdf", Data: []byte("pdf")}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestOutputLimitFallbackForBackendWithoutOptionalField(t *testing.T) {
 	var calls atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

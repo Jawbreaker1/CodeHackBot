@@ -185,7 +185,12 @@ func validateDecision(d Decision, state State) error {
 			return fmt.Errorf("invalid or reused task identity, goal, or done condition")
 		}
 		seen[task.ID] = true
+		dependencies := map[string]bool{}
 		for _, id := range task.DependsOn {
+			if id == task.ID || dependencies[id] {
+				return fmt.Errorf("task %s has a duplicate or self dependency", task.ID)
+			}
+			dependencies[id] = true
 			if known[id].Status != "done" {
 				return fmt.Errorf("task %s depends on unfinished task %s", task.ID, id)
 			}

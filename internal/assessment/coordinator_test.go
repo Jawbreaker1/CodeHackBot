@@ -168,6 +168,44 @@ func TestCoordinatorDelegatesThenValidatesWithSharedBudgetAndEvidence(t *testing
 	}
 }
 
+func TestRecoverableWorkerFailureReachesNextPlanningRound(t *testing.T) {
+	var coordinatorCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Messages []llmclient.Message `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatal(err)
+		}
+		if len(req.Messages) > 1 && strings.Contains(req.Messages[1].Content, `"role":"assessment_coordinator"`) {
+			coordinatorCalls++
+			if coordinatorCalls == 1 {
+				reply(w, Decision{Summary: "try one bounded worker", Tasks: []Task{{ID: "first-attempt", Goal: "record a fixture observation", DoneWhen: "the observation is recorded"}}})
+			} else {
+				var payload struct {
+					Assessment struct {
+						Results []Result `json:"results"`
+					} `json:"assessment"`
+				}
+				if err := json.Unmarshal([]byte(req.Messages[1].Content), &payload); err != nil || len(payload.Assessment.Results) != 1 || payload.Assessment.Results[0].Status != "blocked" {
+					t.Errorf("next planner did not receive the blocked result: %s", req.Messages[1].Content)
+				}
+				reply(w, Decision{Summary: "recorded the limitation", Complete: true, Gaps: []string{"worker budget exhausted"}})
+			}
+			return
+		}
+		// An invalid worker decision is a recorded, recoverable worker outcome.
+		reply(w, map[string]string{"type": "not-a-worker-decision"})
+	}))
+	defer server.Close()
+	coordinator := testCoordinator(server.URL)
+	coordinator.Limits = Limits{Workers: 1, Rounds: 2, Tasks: 2, StepsPerTask: 1, ModelCalls: 8}
+	state, err := coordinator.Run(context.Background(), t.TempDir(), "record a fixture observation", "synthetic fixture only")
+	if err != nil || state.Status != "incomplete" || len(state.Results) != 1 || state.Results[0].Status != "blocked" || len(state.Plans) != 2 {
+		t.Fatalf("worker failure stopped adaptation: state=%+v err=%v", state, err)
+	}
+}
+
 func TestBudgetFailureStillProducesPartialReport(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reply(w, Decision{Summary: "one task", Tasks: []Task{{ID: "one", Goal: "print a value", DoneWhen: "evidence recorded"}}})

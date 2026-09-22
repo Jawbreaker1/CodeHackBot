@@ -174,6 +174,18 @@ func compactSessionText(value string, max int) string {
 	return value[:max-3] + "..."
 }
 
+func (a App) behaviorParameters(approvalMode, scope string) map[string]string {
+	researchMode := strings.TrimSpace(os.Getenv("BIRDHACKBOT_RESEARCH_MODE"))
+	if researchMode == "" {
+		researchMode = "connected"
+	}
+	parameters := map[string]string{"approval_mode": approvalMode, "research_mode": researchMode}
+	if strings.TrimSpace(scope) != "" {
+		parameters["scope"] = scope
+	}
+	return parameters
+}
+
 func (a App) Run(ctx context.Context) error {
 	if wantsGuidedTUI(a.Reader, a.Writer) {
 		return a.runTUI(ctx)
@@ -200,7 +212,7 @@ func (a App) runPlain(ctx context.Context) error {
 	defer func() { cleanup() }()
 
 	conversation := &intakeConversation{}
-	intakeFrame, err := behavior.Load(a.RepoRoot, "assessment_intake", map[string]string{"approval_mode": "per_action"})
+	intakeFrame, err := behavior.Load(a.RepoRoot, "assessment_intake", a.behaviorParameters("per_action", ""))
 	if err != nil {
 		return err
 	}
@@ -242,7 +254,7 @@ func (a App) runPlain(ctx context.Context) error {
 			c.Print("Assessment canceled before execution.\n")
 			return nil
 		}
-		frame, err := behavior.Load(a.RepoRoot, "assessment_coordinator", map[string]string{"approval_mode": "per_action", "scope": scope})
+		frame, err := behavior.Load(a.RepoRoot, "assessment_coordinator", a.behaviorParameters("per_action", scope))
 		if err != nil {
 			return err
 		}
@@ -327,7 +339,7 @@ func (a App) readGoalOrCommand(ctx context.Context, c *Console, path string, pre
 }
 
 func (a App) runAssessment(ctx context.Context, c *Console, prefs preferences, client llmclient.Client, root string, saved assessment.State) error {
-	frame, err := behavior.Load(a.RepoRoot, "assessment_coordinator", map[string]string{"approval_mode": "per_action", "scope": saved.Scope})
+	frame, err := behavior.Load(a.RepoRoot, "assessment_coordinator", a.behaviorParameters("per_action", saved.Scope))
 	if err != nil {
 		return err
 	}

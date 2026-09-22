@@ -7,9 +7,10 @@ import (
 )
 
 type PlanUpdate struct {
-	Summary    string   `json:"summary"`
-	Steps      []string `json:"steps"`
-	ActiveStep string   `json:"active_step"`
+	Summary          string   `json:"summary"`
+	Steps            []string `json:"steps"`
+	ActiveStep       string   `json:"active_step"`
+	ReplanConditions []string `json:"replan_conditions,omitempty"`
 }
 
 // A plan may accompany any decision. It never changes the original goal,
@@ -90,6 +91,14 @@ func validatePlan(p PlanUpdate) error {
 	}
 	if !active {
 		return fmt.Errorf("plan active_step must match a step")
+	}
+	if len(p.ReplanConditions) > 6 {
+		return fmt.Errorf("plan has too many replan conditions")
+	}
+	for _, condition := range p.ReplanConditions {
+		if strings.TrimSpace(condition) == "" {
+			return fmt.Errorf("replan conditions must be nonempty")
+		}
 	}
 	return nil
 }

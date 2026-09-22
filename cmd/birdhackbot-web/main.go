@@ -44,7 +44,14 @@ func main() {
 			fatal(err)
 		}
 	}
-	frame, err := behavior.Load(root, "assessment_coordinator", map[string]string{"approval_mode": "per_action"})
+	researchMode := strings.TrimSpace(os.Getenv("BIRDHACKBOT_RESEARCH_MODE"))
+	if researchMode == "" {
+		researchMode = "connected"
+	}
+	if researchMode != "connected" && researchMode != "air_gapped" && researchMode != "offline" {
+		fatal(fmt.Errorf("BIRDHACKBOT_RESEARCH_MODE must be connected or air_gapped"))
+	}
+	frame, err := behavior.Load(root, "assessment_coordinator", map[string]string{"approval_mode": "per_action", "research_mode": researchMode})
 	if err != nil {
 		fatal(err)
 	}

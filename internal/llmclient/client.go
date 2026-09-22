@@ -3,6 +3,7 @@ package llmclient
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -50,9 +51,138 @@ const SubscriptionMaxOutputTokens = 128000
 
 // Message is a chat message.
 type Message struct {
+	Role             string       `json:"role"`
+	Content          string       `json:"content"`
+	ReasoningContent string       `json:"reasoning_content,omitempty"`
+	Attachments      []Attachment `json:"-"`
+}
+
+// Attachment is a bounded local file supplied with the current user turn.
+// Data is held in memory only while the request is prepared; callers persist
+// the local source and references separately.
+type Attachment struct {
+	Filename string
+	MIMEType string
+	Detail   string
+	Data     []byte
+}
+
+type wireMessage struct {
 	Role             string `json:"role"`
-	Content          string `json:"content"`
+	Content          any    `json:"content"`
 	ReasoningContent string `json:"reasoning_content,omitempty"`
+}
+
+type wireContentPart struct {
+	Type     string         `json:"type"`
+	Text     string         `json:"text,omitempty"`
+	ImageURL *wireImageURL  `json:"image_url,omitempty"`
+	File     *wireFileInput `json:"file,omitempty"`
+}
+
+type wireImageURL struct {
+	URL    string `json:"url"`
+	Detail string `json:"detail,omitempty"`
+}
+
+type wireFileInput struct {
+	Filename string `json:"filename,omitempty"`
+	FileData string `json:"file_data"`
+	MIMEType string `json:"mime_type,omitempty"`
+}
+
+func (m Message) MarshalJSON() ([]byte, error) {
+	if len(m.Attachments) == 0 {
+		return json.Marshal(wireMessage{Role: m.Role, Content: m.Content, ReasoningContent: m.ReasoningContent})
+	}
+	parts := []wireContentPart{{Type: "text", Text: m.Content}}
+	for _, attachment := range m.Attachments {
+		encoded := "data:" + attachment.MIMEType + ";base64," + base64.StdEncoding.EncodeToString(attachment.Data)
+		if strings.HasPrefix(strings.ToLower(attachment.MIMEType), "image/") {
+			parts = append(parts, wireContentPart{Type: "image_url", ImageURL: &wireImageURL{URL: encoded, Detail: attachment.Detail}})
+			continue
+		}
+		parts = append(parts, wireContentPart{Type: "file", File: &wireFileInput{Filename: attachment.Filename, FileData: encoded, MIMEType: attachment.MIMEType}})
+	}
+	return json.Marshal(wireMessage{Role: m.Role, Content: parts, ReasoningContent: m.ReasoningContent})
+}
+
+func (m *Message) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Role             string          `json:"role"`
+		Content          json.RawMessage `json:"content"`
+		ReasoningContent string          `json:"reasoning_content,omitempty"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	m.Role, m.ReasoningContent = raw.Role, raw.ReasoningContent
+	m.Content, m.Attachments = "", nil
+	if len(raw.Content) == 0 || string(raw.Content) == "null" {
+		return nil
+	}
+	if err := json.Unmarshal(raw.Content, &m.Content); err == nil {
+		return nil
+	}
+	var parts []struct {
+		Type     string `json:"type"`
+		Text     string `json:"text"`
+		ImageURL *struct {
+			URL    string `json:"url"`
+			Detail string `json:"detail"`
+		} `json:"image_url"`
+		File *struct {
+			Filename string `json:"filename"`
+			FileData string `json:"file_data"`
+			MIMEType string `json:"mime_type"`
+		} `json:"file"`
+	}
+	if err := json.Unmarshal(raw.Content, &parts); err != nil {
+		return fmt.Errorf("decode message content: %w", err)
+	}
+	for _, part := range parts {
+		switch part.Type {
+		case "text", "input_text":
+			m.Content += part.Text
+		case "image_url", "input_image":
+			if part.ImageURL == nil {
+				continue
+			}
+			attachment, err := attachmentFromDataURL("image", part.ImageURL.URL, part.ImageURL.Detail)
+			if err != nil {
+				return err
+			}
+			m.Attachments = append(m.Attachments, attachment)
+		case "file", "input_file":
+			if part.File == nil {
+				continue
+			}
+			attachment, err := attachmentFromDataURL(part.File.Filename, part.File.FileData, "")
+			if err != nil {
+				return err
+			}
+			attachment.Filename, attachment.MIMEType = part.File.Filename, part.File.MIMEType
+			m.Attachments = append(m.Attachments, attachment)
+		}
+	}
+	return nil
+}
+
+func attachmentFromDataURL(filename, value, detail string) (Attachment, error) {
+	const prefix = "data:"
+	if !strings.HasPrefix(value, prefix) {
+		return Attachment{}, fmt.Errorf("attachment %s is not an inline data URL", filename)
+	}
+	meta, encoded, ok := strings.Cut(strings.TrimPrefix(value, prefix), ",")
+	if !ok {
+		return Attachment{}, fmt.Errorf("attachment %s has invalid data URL", filename)
+	}
+	mimeType := strings.TrimSuffix(strings.SplitN(meta, ";", 2)[0], ";base64")
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return Attachment{}, fmt.Errorf("decode attachment %s: %w", filename, err)
+	}
+	return Attachment{Filename: filename, MIMEType: mimeType, Detail: detail, Data: data}, nil
 }
 
 type chatRequest struct {
@@ -140,11 +270,18 @@ func (c Client) Complete(ctx context.Context, messages []Message, opts ChatOptio
 		return Completion{}, fmt.Errorf("messages are required")
 	}
 	inputBytes := 0
+	attachmentBytes := 0
 	for _, message := range messages {
 		inputBytes += len(message.Content)
+		for _, attachment := range message.Attachments {
+			attachmentBytes += len(attachment.Data)
+		}
 	}
 	if inputBytes > c.InputByteLimit() {
 		return Completion{}, fmt.Errorf("model input is %d bytes; limit is %d; reduce context before retrying", inputBytes, c.InputByteLimit())
+	}
+	if attachmentBytes > 16<<20 {
+		return Completion{}, fmt.Errorf("attachments are %d bytes; limit is %d; reduce attachments before retrying", attachmentBytes, 16<<20)
 	}
 
 	httpClient := c.HTTPClient
@@ -152,9 +289,15 @@ func (c Client) Complete(ctx context.Context, messages []Message, opts ChatOptio
 		httpClient = &http.Client{Timeout: 90 * time.Second}
 	}
 
-	body, err := json.Marshal(chatRequest{
+	body, err := json.Marshal(struct {
+		Model           string        `json:"model"`
+		Messages        []wireMessage `json:"messages"`
+		Temperature     float64       `json:"temperature"`
+		ReasoningEffort string        `json:"reasoning_effort,omitempty"`
+		MaxTokens       int           `json:"max_tokens,omitempty"`
+	}{
 		Model:           c.Model,
-		Messages:        messages,
+		Messages:        wireMessages(messages),
 		Temperature:     0.2,
 		ReasoningEffort: c.ReasoningEffort,
 		MaxTokens:       c.MaxOutputTokens,
@@ -239,6 +382,21 @@ func (c Client) Complete(ctx context.Context, messages []Message, opts ChatOptio
 		RawResponse:      strings.TrimSpace(string(respBody)),
 		Usage:            decoded.Usage,
 	}, nil
+}
+
+func wireMessages(messages []Message) []wireMessage {
+	result := make([]wireMessage, 0, len(messages))
+	for _, message := range messages {
+		if len(message.Attachments) == 0 {
+			result = append(result, wireMessage{Role: message.Role, Content: message.Content, ReasoningContent: message.ReasoningContent})
+			continue
+		}
+		data, _ := message.MarshalJSON()
+		var wire wireMessage
+		_ = json.Unmarshal(data, &wire)
+		result = append(result, wire)
+	}
+	return result
 }
 
 func (c Client) InputByteLimit() int {

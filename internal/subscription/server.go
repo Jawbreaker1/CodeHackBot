@@ -36,7 +36,7 @@ func Handler(provider *Provider, token string) http.Handler {
 			writeError(w, 405, "POST required")
 			return
 		}
-		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20))
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 24<<20))
 		decoder.DisallowUnknownFields()
 		var input Request
 		if decoder.Decode(&input) != nil {

@@ -1,6 +1,7 @@
 package llmclient
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -8,6 +9,34 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestMessageAttachmentsUseMultimodalWireContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Messages []struct {
+				Content []struct {
+					Type     string `json:"type"`
+					ImageURL *struct {
+						URL string `json:"url"`
+					} `json:"image_url"`
+				} `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if len(body.Messages) != 1 || len(body.Messages[0].Content) != 2 || body.Messages[0].Content[1].Type != "image_url" || !strings.HasPrefix(body.Messages[0].Content[1].ImageURL.URL, "data:image/png;base64,") {
+			t.Fatalf("unexpected multimodal request: %+v", body)
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"seen"}}]}`))
+	}))
+	defer server.Close()
+	client := Client{BaseURL: server.URL, Model: "vision", HTTPClient: server.Client()}
+	got, err := client.Chat(context.Background(), []Message{{Role: "user", Content: "inspect", Attachments: []Attachment{{Filename: "screen.png", MIMEType: "image/png", Data: bytes.Repeat([]byte{0x01}, 4)}}}})
+	if err != nil || got != "seen" {
+		t.Fatalf("Chat() = %q, %v", got, err)
+	}
+}
 
 func TestRequestLimitAndIncompleteControlOutput(t *testing.T) {
 	calls := 0

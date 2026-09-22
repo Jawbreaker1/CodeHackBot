@@ -47,6 +47,11 @@ func (c *Conversation) SetBehaviorContext(text string) {
 // restore cannot mutate the live model context behind the conversation.
 func (c *Conversation) RestoreMessages(messages []llmclient.Message) {
 	c.messages = append([]llmclient.Message(nil), messages...)
+	for i := range c.messages {
+		// Durable transcripts carry attachment names in the text; never
+		// resurrect raw bytes from an old session into a new request.
+		c.messages[i].Attachments = nil
+	}
 	if len(c.messages) > 24 {
 		c.messages = c.messages[len(c.messages)-24:]
 	}
@@ -63,7 +68,7 @@ For a target assessment set proposal to {"goal":"objective", "scope":"resolved t
 
 // Turn uses a bounded sequence of model-selected, approved local observations.
 // Target execution and delegation remain in the existing assessment runtime.
-func (c *Conversation) Turn(ctx context.Context, client llmclient.Client, input string) (Turn, error) {
+func (c *Conversation) Turn(ctx context.Context, client llmclient.Client, input string, attachments ...llmclient.Attachment) (Turn, error) {
 	input = strings.TrimSpace(input)
 	if input == "" {
 		return Turn{}, fmt.Errorf("intake message is required")
@@ -79,7 +84,7 @@ func (c *Conversation) Turn(ctx context.Context, client llmclient.Client, input 
 	}
 	// Work on a copy. A failed provider call must not commit duplicate prompts on retry.
 	messages := append([]llmclient.Message{{Role: "system", Content: prompt}}, c.messages...)
-	messages = append(messages, llmclient.Message{Role: "user", Content: input})
+	messages = append(messages, llmclient.Message{Role: "user", Content: input, Attachments: append([]llmclient.Attachment(nil), attachments...)})
 	for round := 0; round < 5; round++ {
 		if round == 4 {
 			messages[0].Content += "\nLocal observation budget is exhausted. Return an answer or proposal now; tool must be null."
@@ -94,7 +99,31 @@ func (c *Conversation) Turn(ctx context.Context, client llmclient.Client, input 
 		}
 		messages = append(messages, llmclient.Message{Role: "assistant", Content: raw})
 		if turn.Tool == nil {
-			c.messages = append([]llmclient.Message(nil), messages[1:]...)
+			// Attachment bytes are request-scoped evidence. Keep only a small
+			// filename marker in the durable transcript so restores cannot embed
+			// sensitive files into every future prompt.
+			committed := append([]llmclient.Message(nil), messages[1:]...)
+			if len(attachments) > 0 {
+				names := make([]string, 0, len(attachments))
+				for _, attachment := range attachments {
+					name := strings.TrimSpace(attachment.Filename)
+					if name != "" {
+						names = append(names, name)
+					}
+				}
+				if len(names) > 0 {
+					for i := range committed {
+						if committed[i].Role == "user" && committed[i].Content == input {
+							committed[i].Content += "\n[attached: " + strings.Join(names, ", ") + "]"
+							break
+						}
+					}
+				}
+			}
+			for i := range committed {
+				committed[i].Attachments = nil
+			}
+			c.messages = committed
 			if len(c.messages) > 24 {
 				c.messages = c.messages[len(c.messages)-24:]
 			}

@@ -1,8 +1,9 @@
-import {$, node, badge, disclosure, eventNode, replacePreservingDetails, renderWorkers, renderFindings} from './inspector.js';
+import {$, node, badge, disclosure, richText, eventNode, replacePreservingDetails, renderWorkers, renderFindings} from './inspector.js';
 
 let current = null;
 let selection = 0;
 let pendingMessage = null;
+let selectedFiles = [];
 let starting = false;
 let eventRecords = new Map();
 let signatures = {};
@@ -14,7 +15,8 @@ const activeStatuses = ['running', 'starting'];
 function isAssessmentView(view) { return !!view && typeof view.goal === 'string'; }
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {headers: {'Content-Type': 'application/json'}, ...options});
+  const headers = options.body instanceof FormData ? {} : {'Content-Type': 'application/json'};
+  const response = await fetch(path, {headers, ...options});
   const text = await response.text();
   const body = text ? JSON.parse(text) : {};
   if (!response.ok) throw new Error(body.error || response.statusText);
@@ -90,7 +92,24 @@ function selectTab(button) {
 }
 function messageNode(message) {
   const entry = node('article', 'transcript-entry ' + message.role);
-  entry.append(node('div', 'transcript-role', message.role === 'user' ? 'You' : message.role === 'assistant' ? 'Coordinator' : 'System'), node('div', 'transcript-text', message.text));
+  const rich = richText(message.text, 'message-' + (message.at || ''));
+  rich.classList.add('transcript-text');
+  entry.append(node('div', 'transcript-role', message.role === 'user' ? 'You' : message.role === 'assistant' ? 'Coordinator' : 'System'), rich);
+  if (message.attachments?.length) {
+    const files = node('div', 'message-attachments');
+    for (const attachment of message.attachments) {
+      if (attachment.mime_type?.startsWith('image/') && attachment.url) {
+        const image = document.createElement('img');
+        image.src = attachment.url; image.alt = attachment.filename || 'Attached image'; image.loading = 'lazy'; image.className = 'message-attachment-image';
+        files.append(image);
+      }
+      const link = document.createElement('a');
+      link.href = attachment.url; link.target = '_blank'; link.rel = 'noreferrer'; link.className = 'attachment-chip';
+      link.textContent = attachment.filename + ' · ' + formatBytes(attachment.bytes);
+      files.append(link);
+    }
+    entry.append(files);
+  }
   return entry;
 }
 function chatApprovalNode(item, kind) {
@@ -195,7 +214,7 @@ function updateComposer() {
   const assessment = isAssessmentView(current);
   const finalized = assessment && !activeStatuses.includes(current.status);
   $('chatInput').disabled = !current || !!finalized;
-  $('send').disabled = !current || !!finalized || !!pendingMessage || !$('chatInput').value.trim();
+  $('send').disabled = !current || !!finalized || !!pendingMessage || (!$('chatInput').value.trim() && !selectedFiles.length);
   $('newAssessment').disabled = starting;
   $('conversationState').textContent = current?.pending_plan ? 'Waiting for your test selection · No worker is running' : current?.pending_tool ? 'Waiting for your approval · No tool is running' : pendingMessage ? 'Coordinator is responding…' : current?.resumable ? 'Session paused · Open Workers to review and resume' : finalized ? 'Session ended · Start a new session to continue' : assessment ? 'Workers can run while you discuss the assessment' : 'Ready when you are';
   $('chatInput').placeholder = current?.resumable ? 'Resume this session to continue' : finalized ? 'This session has ended' : 'Ask, investigate, or plan an assessment…';
@@ -456,17 +475,24 @@ async function act(path, body, container) {
 $('composer').onsubmit = async event => {
   event.preventDefault();
   const text = $('chatInput').value.trim();
-  if (!text || pendingMessage || !current) return;
+  if ((!text && !selectedFiles.length) || pendingMessage || !current) return;
   const token = selection;
   const path = isAssessmentView(current) ? '/api/v1/assessments/' : '/api/v1/intake/';
   const url = path + encodeURIComponent(current.id) + '/messages';
-  pendingMessage = text;
+  const files = [...selectedFiles];
+  pendingMessage = text || 'Please inspect the attached artifact(s).';
   $('chatInput').value = '';
   $('chatInput').style.height = '';
+  selectedFiles = []; renderAttachmentList();
   clearError(); renderTranscript(); updateComposer();
   $('chat').scrollTop = $('chat').scrollHeight;
   try {
-    const view = await api(url, {method:'POST', body:JSON.stringify({text})});
+    let body;
+    if (files.length) {
+      body = new FormData(); body.append('text', text);
+      for (const file of files) body.append('attachment', file, file.name);
+    } else { body = JSON.stringify({text}); }
+    const view = await api(url, {method:'POST', body});
     if (token !== selection) return;
     pendingMessage = null;
     renderView(view);
@@ -475,10 +501,27 @@ $('composer').onsubmit = async event => {
   } catch (error) {
     if (token !== selection) return;
     pendingMessage = null;
+    selectedFiles = files; renderAttachmentList();
     showError(error); updateComposer(); renderTranscript();
     $('chatInput').value = text;
     updateComposer();
   }
+};
+function renderAttachmentList() {
+  const list = $('attachmentList');
+  list.replaceChildren(...selectedFiles.map((file, index) => {
+    const chip = node('span', 'attachment-chip');
+    chip.append(node('span', '', file.name));
+    const remove = node('button', 'attachment-remove', '×'); remove.type = 'button'; remove.title = 'Remove ' + file.name;
+    remove.onclick = () => { selectedFiles.splice(index, 1); renderAttachmentList(); updateComposer(); };
+    chip.append(remove); return chip;
+  }));
+  list.classList.toggle('hidden', !selectedFiles.length);
+}
+$('attach').onclick = () => $('attachments').click();
+$('attachments').onchange = () => {
+  selectedFiles = [...$('attachments').files].slice(0, 4);
+  $('attachments').value = ''; renderAttachmentList(); updateComposer();
 };
 $('chatInput').oninput = () => {
   $('chatInput').style.height = 'auto';

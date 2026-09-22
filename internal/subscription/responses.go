@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,13 +42,30 @@ type Provider struct {
 
 func (p *Provider) Complete(ctx context.Context, input Request) (map[string]any, error) {
 	instructions := []string{}
-	messages := []map[string]string{}
+	messages := []map[string]any{}
 	for _, m := range input.Messages {
 		switch m.Role {
 		case "system", "developer":
 			instructions = append(instructions, m.Content)
 		case "user", "assistant":
-			messages = append(messages, map[string]string{"role": m.Role, "content": m.Content})
+			if len(m.Attachments) == 0 {
+				messages = append(messages, map[string]any{"role": m.Role, "content": m.Content})
+				continue
+			}
+			parts := []map[string]any{{"type": "input_text", "text": m.Content}}
+			for _, attachment := range m.Attachments {
+				dataURL := "data:" + attachment.MIMEType + ";base64," + base64.StdEncoding.EncodeToString(attachment.Data)
+				if strings.HasPrefix(strings.ToLower(attachment.MIMEType), "image/") {
+					part := map[string]any{"type": "input_image", "image_url": dataURL}
+					if attachment.Detail != "" {
+						part["detail"] = attachment.Detail
+					}
+					parts = append(parts, part)
+				} else {
+					parts = append(parts, map[string]any{"type": "input_file", "filename": attachment.Filename, "file_data": dataURL})
+				}
+			}
+			messages = append(messages, map[string]any{"role": m.Role, "content": parts})
 		default:
 			return nil, &APIError{Status: 400, Message: "only system, developer, user, and assistant text messages are supported"}
 		}

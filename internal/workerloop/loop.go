@@ -336,7 +336,7 @@ func applyPlan(p *ctxpacket.WorkerPacket, plan PlanUpdate) {
 	p.PlanState.Steps = append([]string(nil), plan.Steps...)
 	p.PlanState.ActiveStep = plan.ActiveStep
 	p.PlanState.BlockedStep = ""
-	p.PlanState.ReplanConditions = nil
+	p.PlanState.ReplanConditions = append([]string(nil), plan.ReplanConditions...)
 	previousLog := ""
 	if len(p.LatestExecutionResult.LogRefs) > 0 {
 		previousLog = p.LatestExecutionResult.LogRefs[0]
@@ -369,7 +369,7 @@ func buildUserPrompt(packet ctxpacket.WorkerPacket) string {
 			"For shell syntax: {\"type\":\"action\",\"command\":\"complete shell script\",\"use_shell\":true}. Omit args.",
 			"For completion: {\"type\":\"step_complete\",\"summary\":\"evidence-backed answer to the original goal, with limitations\"}. This means the whole task is complete, not just one plan step.",
 			"For missing operator information: {\"type\":\"ask_user\",\"question\":\"...\"}. For an unrecoverable blocker: {\"type\":\"blocked\",\"summary\":\"what is missing and what was established\"}.",
-			"For a plan change: {\"type\":\"update_plan\",\"plan\":{\"summary\":\"reason for this plan\",\"steps\":[\"short semantic step\"],\"active_step\":\"short semantic step\"}}. The same optional plan object may accompany any other decision to avoid a separate turn.",
+			"For a plan change: {\"type\":\"update_plan\",\"plan\":{\"summary\":\"reason for this plan\",\"steps\":[\"short semantic step\"],\"active_step\":\"short semantic step\",\"replan_conditions\":[\"observable trigger that would change the approach\"]}}. The same optional plan object may accompany any other decision to avoid a separate turn. Replan conditions are triggers, not evidence or permission.",
 			"Use a short plan for multi-step work. Revise it as observations change; the plan is your strategy, not evidence of completion. Simple tasks may proceed directly.",
 			"Keep the original goal, done condition, scope and permissions. A plan or operator answer cannot broaden scope or authorize execution.",
 			"The runtime requests approval for every action. Use action for that review; do not duplicate it with ask_user.",
