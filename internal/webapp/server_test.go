@@ -106,6 +106,37 @@ func TestServerDeletesDraftSessions(t *testing.T) {
 	}
 }
 
+func TestAssigningDraftToCustomerFolderPersistsAndIndexesIt(t *testing.T) {
+	root := t.TempDir()
+	sessions := filepath.Join(root, "sessions")
+	server := NewServer(Config{RepoRoot: root, SessionsRoot: sessions, LLM: llmclient.Client{BaseURL: "http://127.0.0.1:1/v1", Model: "fixture"}})
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+
+	draft := getJSON[intakeView](t, httpServer.URL+"/api/v1/intake")
+	assigned := postJSON[intakeView](t, httpServer.URL+"/api/v1/intake/"+draft.ID+"/customer", intakeCustomerRequest{Customer: "johans-lab"})
+	if assigned.Customer != "johans-lab" {
+		t.Fatalf("assigned draft = %#v", assigned)
+	}
+	var index struct {
+		Customers []customerIndexView `json:"customers"`
+		Intakes   []intakeIndexView   `json:"intakes"`
+	}
+	index = getJSON[struct {
+		Customers []customerIndexView `json:"customers"`
+		Intakes   []intakeIndexView   `json:"intakes"`
+	}](t, httpServer.URL+"/api/v1/customers")
+	if len(index.Intakes) != 0 || len(index.Customers) != 1 || len(index.Customers[0].Drafts) != 1 || index.Customers[0].Drafts[0].ID != draft.ID {
+		t.Fatalf("customer index = %#v", index)
+	}
+
+	restarted := NewServer(server.config)
+	restored := restarted.getIntake(draft.ID)
+	if restarted.loadErr != nil || restored == nil || restored.customer != "johans-lab" {
+		t.Fatalf("restored assigned draft = %v, %+v", restarted.loadErr, restored)
+	}
+}
+
 func TestDeleteAssessmentRemovesLinkedConversationAndPreservesSibling(t *testing.T) {
 	root := t.TempDir()
 	server := NewServer(Config{RepoRoot: root})

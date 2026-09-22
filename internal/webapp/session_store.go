@@ -112,7 +112,7 @@ func (s *Server) restoreIntakes(root string) error {
 		conversation := intake.Conversation{}
 		conversation.SetBehaviorContext(s.config.Frame.PromptText())
 		conversation.RestoreMessages(record.Conversation)
-		current := &intakeRun{id: record.ID, root: sessionRoot, client: client, conversation: conversation, messages: append([]intakeMessage(nil), record.Messages...), proposal: cloneDraft(record.Proposal), assessmentID: record.AssessmentID, events: append([]eventRecord(nil), record.Events...), updatedAt: record.UpdatedAt}
+		current := &intakeRun{id: record.ID, root: sessionRoot, customer: record.Customer, client: client, conversation: conversation, messages: append([]intakeMessage(nil), record.Messages...), proposal: cloneDraft(record.Proposal), assessmentID: record.AssessmentID, events: append([]eventRecord(nil), record.Events...), updatedAt: record.UpdatedAt}
 		s.mu.Lock()
 		s.intakes[current.id] = current
 		s.mu.Unlock()
@@ -235,7 +235,7 @@ func (r *intakeRun) persist() error {
 	r.conversationMu.RLock()
 	conversation := r.conversation.Messages()
 	r.conversationMu.RUnlock()
-	record := sessionRecord{Version: sessionRecordVersion, Kind: "intake", ID: r.id, Model: r.client.Model, Messages: append([]intakeMessage(nil), r.messages...), Conversation: conversation, Proposal: cloneDraft(r.proposal), AssessmentID: r.assessmentID, Events: append([]eventRecord(nil), r.events...), UpdatedAt: r.updatedAt}
+	record := sessionRecord{Version: sessionRecordVersion, Kind: "intake", ID: r.id, Customer: r.customer, Model: r.client.Model, Messages: append([]intakeMessage(nil), r.messages...), Conversation: conversation, Proposal: cloneDraft(r.proposal), AssessmentID: r.assessmentID, Events: append([]eventRecord(nil), r.events...), UpdatedAt: r.updatedAt}
 	root := r.root
 	r.mu.RUnlock()
 	return atomicWriteJSON(filepath.Join(root, "session.json"), record)

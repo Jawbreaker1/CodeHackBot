@@ -11,6 +11,7 @@ let deletingSession = null;
 const narrow = matchMedia('(max-width: 1150px)');
 const mobile = matchMedia('(max-width: 680px)');
 const activeStatuses = ['running', 'starting'];
+function isAssessmentView(view) { return !!view && typeof view.goal === 'string'; }
 
 async function api(path, options = {}) {
   const response = await fetch(path, {headers: {'Content-Type': 'application/json'}, ...options});
@@ -20,10 +21,10 @@ async function api(path, options = {}) {
   return body;
 }
 function sessionModelPath() {
-  return current?.customer ? '/api/v1/assessments/' + encodeURIComponent(current.id) + '/model' : '/api/v1/intake/' + encodeURIComponent(current?.id || '') + '/model';
+  return isAssessmentView(current) ? '/api/v1/assessments/' + encodeURIComponent(current.id) + '/model' : '/api/v1/intake/' + encodeURIComponent(current?.id || '') + '/model';
 }
 function sessionPath(view) {
-  return view?.customer ? '/api/v1/assessments/' + encodeURIComponent(view.id) : '/api/v1/intake/' + encodeURIComponent(view?.id || '');
+  return isAssessmentView(view) ? '/api/v1/assessments/' + encodeURIComponent(view.id) : '/api/v1/intake/' + encodeURIComponent(view?.id || '');
 }
 function renderModelOptions(models, selected) {
   const target = $('modelOptions');
@@ -191,11 +192,12 @@ function renderTranscript() {
   pane.scrollTop = follow ? pane.scrollHeight : scrollTop;
 }
 function updateComposer() {
-  const finalized = current?.customer && !activeStatuses.includes(current.status);
+  const assessment = isAssessmentView(current);
+  const finalized = assessment && !activeStatuses.includes(current.status);
   $('chatInput').disabled = !current || !!finalized;
   $('send').disabled = !current || !!finalized || !!pendingMessage || !$('chatInput').value.trim();
   $('newAssessment').disabled = starting;
-  $('conversationState').textContent = current?.pending_plan ? 'Waiting for your test selection · No worker is running' : current?.pending_tool ? 'Waiting for your approval · No tool is running' : pendingMessage ? 'Coordinator is responding…' : current?.resumable ? 'Session paused · Open Workers to review and resume' : finalized ? 'Session ended · Start a new session to continue' : current?.customer ? 'Workers can run while you discuss the assessment' : 'Ready when you are';
+  $('conversationState').textContent = current?.pending_plan ? 'Waiting for your test selection · No worker is running' : current?.pending_tool ? 'Waiting for your approval · No tool is running' : pendingMessage ? 'Coordinator is responding…' : current?.resumable ? 'Session paused · Open Workers to review and resume' : finalized ? 'Session ended · Start a new session to continue' : assessment ? 'Workers can run while you discuss the assessment' : 'Ready when you are';
   $('chatInput').placeholder = current?.resumable ? 'Resume this session to continue' : finalized ? 'This session has ended' : 'Ask, investigate, or plan an assessment…';
 }
 function formatBytes(value) {
@@ -220,7 +222,7 @@ function renderWorkStatus(view) {
     label = 'Executing · ' + names.join(', ');
   } else if (workers.length) {
     label = 'Working · ' + workers.map(worker => worker.id).join(', ');
-  } else if (view.customer && ['running', 'starting'].includes(view.status)) {
+  } else if (isAssessmentView(view) && ['running', 'starting'].includes(view.status)) {
     const latest = [...eventRecords.values()].sort((a, b) => a.sequence - b.sequence).at(-1)?.event;
     if (latest?.kind === 'planning') label = 'Coordinator planning';
     else if (latest?.kind === 'execution_started') label = 'Executor running';
@@ -233,16 +235,17 @@ function renderWorkStatus(view) {
   $('workStatusText').textContent = label;
 }
 function renderOverview(view) {
+  const assessment = isAssessmentView(view);
   const running = activeStatuses.includes(view.status);
-  const status = view.customer ? (view.pending_plan ? 'Plan ready' : view.status) : view.pending_tool ? 'Needs approval' : view.status === 'thinking' ? 'Thinking' : view.proposal ? 'Ready for review' : 'Conversation';
+  const status = assessment ? (view.pending_plan ? 'Plan ready' : view.status) : view.pending_tool ? 'Needs approval' : view.status === 'thinking' ? 'Thinking' : view.proposal ? 'Ready for review' : 'Conversation';
   $('assessmentStatus').textContent = status;
   $('assessmentStatus').dataset.state = view.status;
   renderWorkStatus(view);
   $('assessmentGoal').textContent = view.goal || 'Workers appear here as the coordinator delegates work.';
-  $('assessmentMetrics').classList.toggle('hidden', !view.customer);
+  $('assessmentMetrics').classList.toggle('hidden', !assessment);
   $('assessmentMetrics').textContent = (view.usage?.calls || 0) + ' recorded calls · ' + (view.plans || 0) + ' plans';
   const context = view.context_window || {};
-  const hasContext = !!(view.customer && context.limit_bytes > 0);
+  const hasContext = !!(assessment && context.limit_bytes > 0);
   $('contextWindow').classList.toggle('hidden', !hasContext);
   if (hasContext) {
     const percent = Math.max(0, Math.min(100, Number(context.percent) || 0));
@@ -254,9 +257,9 @@ function renderOverview(view) {
   $('scopeDetails').classList.toggle('hidden', !view.scope);
   $('assessmentScope').textContent = view.scope || '';
   $('assessmentLimits').textContent = view.limits?.workers ? 'Up to ' + view.limits.workers + ' workers · ' + view.limits.tasks + ' tasks · ' + view.limits.model_calls + ' model calls' : '';
-  $('stop').classList.toggle('hidden', !view.customer || !running);
+  $('stop').classList.toggle('hidden', !assessment || !running);
   $('resume').classList.toggle('hidden', !view.resumable);
-  $('report').classList.toggle('hidden', !view.customer || running || view.status === 'draft');
+  $('report').classList.toggle('hidden', !assessment || running || view.status === 'draft');
   if (view.report_url) $('report').href = view.report_url;
   $('proposalReview').classList.toggle('hidden', !view.proposal);
   $('reviewProposal').classList.toggle('hidden', !view.proposal);
@@ -264,11 +267,12 @@ function renderOverview(view) {
   if (view.proposal) {
     $('proposalGoal').textContent = view.proposal.goal;
     $('proposalScope').textContent = view.proposal.scope;
+    if (!$('customer').value.trim() || view.customer) $('customer').value = view.customer || '';
   }
-  $('customerReport').classList.toggle('hidden', !view.customer);
-  if (view.customer) $('customerReport').href = '/api/v1/customers/' + encodeURIComponent(view.customer) + '/report';
-  $('analysisLink').classList.toggle('hidden', !view.customer);
-  if (view.customer) $('analysisLink').href = '/analysis?assessment=' + encodeURIComponent(view.id);
+  $('customerReport').classList.toggle('hidden', !assessment);
+  if (assessment) $('customerReport').href = '/api/v1/customers/' + encodeURIComponent(view.customer) + '/report';
+  $('analysisLink').classList.toggle('hidden', !assessment);
+  if (assessment) $('analysisLink').href = '/analysis?assessment=' + encodeURIComponent(view.id);
 }
 function renderView(view) {
   current = view;
@@ -306,6 +310,17 @@ function markSelection() {
 function sessionRow(session, isIntake) {
   const label = session.title || session.goal || 'Untitled session';
   const row = node('div', 'session-row');
+  if (isIntake) {
+    row.draggable = true;
+    row.classList.add('draft-session');
+    row.title = 'Drag this draft into a customer folder';
+    row.addEventListener('dragstart', event => {
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', session.id);
+      row.classList.add('dragging');
+    });
+    row.addEventListener('dragend', () => row.classList.remove('dragging'));
+  }
   const button = node('button', 'session-link');
   button.dataset.session = session.id;
   button.title = isIntake ? label : label + ' · ' + session.status;
@@ -327,6 +342,18 @@ function sessionRow(session, isIntake) {
   remove.onclick = () => deleteSession(session, isIntake);
   row.append(button, remove);
   return row;
+}
+let movingDraft = null;
+async function assignDraft(id, customer) {
+  if (movingDraft) return;
+  movingDraft = id;
+  try {
+    const view = await api('/api/v1/intake/' + encodeURIComponent(id) + '/customer', {method:'POST', body: JSON.stringify({customer})});
+    if (current?.id === id) renderView(view);
+    clearError();
+    await refreshSidebar();
+  } catch (error) { showError(error); }
+  finally { movingDraft = null; }
 }
 async function deleteSession(session, isIntake) {
   if (deletingSession) return;
@@ -350,7 +377,7 @@ async function deleteSession(session, isIntake) {
 async function refreshSidebar() {
   try {
     const data = await api('/api/v1/customers');
-    const groups = (data.customers || []).map(g => ({id:g.id, sessions:g.sessions.map(s => ({id:s.id, goal:s.goal, title:s.goal, status:s.status}))}));
+    const groups = (data.customers || []).map(g => ({id:g.id, sessions:g.sessions.map(s => ({id:s.id, goal:s.goal, title:s.goal, status:s.status})), drafts:(g.drafts || []).map(s => ({id:s.id, title:s.title || 'New session', status:s.status}))}));
     const intakes = (data.intakes || []).map(s => ({id:s.id, goal:s.title || 'New session', title:s.title || 'New session', status:s.status}));
     if (!changed('sidebar', [groups, intakes])) { markSelection(); return; }
     const collapsed = new Set([...$('sidebarSessions').querySelectorAll('[data-customer][aria-expanded="false"]')].map(e => e.dataset.customer));
@@ -367,12 +394,18 @@ async function refreshSidebar() {
     }
     for (const group of groups) {
       const section = node('section', 'customer-group');
+      section.dataset.customer = group.id;
+      section.title = 'Drop a draft conversation here to place it in ' + group.id;
+      section.addEventListener('dragover', event => { if (event.dataTransfer.types.includes('text/plain')) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; section.classList.add('drag-over'); } });
+      section.addEventListener('dragleave', event => { if (!section.contains(event.relatedTarget)) section.classList.remove('drag-over'); });
+      section.addEventListener('drop', event => { event.preventDefault(); section.classList.remove('drag-over'); const id = event.dataTransfer.getData('text/plain'); if (id) assignDraft(id, group.id); });
       const heading = node('button', 'customer-heading');
       heading.dataset.customer = group.id;
       heading.setAttribute('aria-expanded', String(!collapsed.has(group.id)));
-      heading.append(node('span', '', group.id), node('span', 'customer-count', group.sessions.length));
+      heading.append(node('span', '', group.id), node('span', 'customer-count', group.sessions.length + group.drafts.length));
       const list = node('div', collapsed.has(group.id) ? 'hidden' : '');
       heading.onclick = () => { const hide = !list.classList.contains('hidden'); list.classList.toggle('hidden', hide); heading.setAttribute('aria-expanded', String(!hide)); };
+      for (const draft of [...group.drafts].reverse()) list.append(sessionRow(draft, true));
       for (const session of [...group.sessions].reverse()) {
         list.append(sessionRow(session, false));
       }
@@ -398,7 +431,7 @@ async function navigate(path) {
     renderView(view);
     localStorage.setItem('birdhackbot.selectedSession', sessionPath(view));
     $('chat').scrollTop = $('chat').scrollHeight;
-    if (!view.customer) $('chatInput').focus();
+    if (!isAssessmentView(view)) $('chatInput').focus();
     $('shell').classList.remove('sidebar-open');
     $('drawerBackdrop').classList.add('hidden');
     refreshSidebar();
@@ -411,7 +444,7 @@ async function act(path, body, container) {
   const token = selection;
   for (const button of container.querySelectorAll('button')) button.disabled = true;
   try {
-    const prefix = current.customer ? '/api/v1/assessments/' : '/api/v1/intake/';
+    const prefix = isAssessmentView(current) ? '/api/v1/assessments/' : '/api/v1/intake/';
     const view = await api(prefix + encodeURIComponent(id) + '/' + path, {method:'POST', body: JSON.stringify(body)});
     if (token === selection) { clearError(); renderView(view); }
   } catch (error) {
@@ -425,7 +458,7 @@ $('composer').onsubmit = async event => {
   const text = $('chatInput').value.trim();
   if (!text || pendingMessage || !current) return;
   const token = selection;
-  const path = current.customer ? '/api/v1/assessments/' : '/api/v1/intake/';
+  const path = isAssessmentView(current) ? '/api/v1/assessments/' : '/api/v1/intake/';
   const url = path + encodeURIComponent(current.id) + '/messages';
   pendingMessage = text;
   $('chatInput').value = '';
@@ -523,7 +556,7 @@ async function poll() {
     setTimeout(poll, 1500);
     return;
   }
-  if (current?.customer) {
+  if (isAssessmentView(current)) {
     try {
       const after = Math.max(0, ...eventRecords.keys());
       const view = await api('/api/v1/assessments/' + encodeURIComponent(current.id) + '?after=' + after);

@@ -34,10 +34,13 @@ svg { flex-shrink: 0; }
 .nav-label { margin: 30px 9px 12px; color: var(--faint); font-size: 11px; }
 #sidebarSessions { flex: 1; min-height: 0; overflow: auto; }
 .customer-group { margin-bottom: 17px; }
+.customer-group.drag-over { outline: 1px dashed var(--attention); outline-offset: 4px; border-radius: 6px; background: #ffffff05; }
 .customer-heading { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 6px 9px; font-size: 12px; color: var(--muted); }
 .customer-heading span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .customer-count { color: var(--faint); font-size: 10px; }
 .session-row { display: flex; align-items: center; min-width: 0; }
+.draft-session { cursor: grab; }
+.draft-session.dragging { opacity: .45; }
 .session-link { min-width: 0; flex: 1; text-align: left; padding: 8px 4px 8px 21px; font-size: 12px; display: flex; align-items: center; gap: 8px; color: var(--muted); }
 .session-link.active { background: var(--surface); color: var(--text); }
 .session-link-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }

@@ -46,6 +46,7 @@ type intakeRun struct {
 	mu             sync.RWMutex
 	id             string
 	root           string
+	customer       string
 	client         llmclient.Client
 	conversation   intake.Conversation
 	conversationMu sync.RWMutex
@@ -68,6 +69,7 @@ type intakeMessage struct {
 
 type intakeView struct {
 	ID              string              `json:"id"`
+	Customer        string              `json:"customer,omitempty"`
 	Title           string              `json:"title"`
 	Model           string              `json:"model"`
 	ModelConfigured bool                `json:"model_configured"`
@@ -101,6 +103,10 @@ type modelRequest struct {
 }
 
 type intakeStartRequest struct {
+	Customer string `json:"customer"`
+}
+
+type intakeCustomerRequest struct {
 	Customer string `json:"customer"`
 }
 
@@ -443,6 +449,20 @@ func (s *Server) intakeRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusCreated, currentView)
+	case "customer":
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w, http.MethodPost)
+			return
+		}
+		var input intakeCustomerRequest
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+		if err := s.assignIntakeCustomer(current, input.Customer); err != nil {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, current.view())
 	default:
 		http.NotFound(w, r)
 	}
@@ -538,16 +558,25 @@ func (s *Server) intakeMessage(ctx context.Context, current *intakeRun, text str
 
 func (s *Server) startIntake(current *intakeRun, customer string) (assessmentView, error) {
 	customer = strings.TrimSpace(customer)
-	if !validCustomerID(customer) {
-		return assessmentView{}, fmt.Errorf("customer must contain only letters, numbers, hyphens, or underscores")
-	}
 	current.mu.Lock()
+	if customer == "" {
+		customer = current.customer
+	}
 	if current.deleted || current.busy || current.assessmentID != "" || current.proposal == nil {
 		current.mu.Unlock()
 		return assessmentView{}, fmt.Errorf("assessment requires an idle, undeleted conversation with a proposal")
 	}
+	if !validCustomerID(customer) {
+		current.mu.Unlock()
+		return assessmentView{}, fmt.Errorf("customer must contain only letters, numbers, hyphens, or underscores")
+	}
+	if strings.TrimSpace(current.client.BaseURL) == "" || strings.TrimSpace(current.client.Model) == "" {
+		current.mu.Unlock()
+		return assessmentView{}, fmt.Errorf("model endpoint and model are required; configure the web server first")
+	}
 	proposal := cloneDraft(current.proposal)
 	client := current.client
+	current.customer = customer
 	current.busy = true
 	current.mu.Unlock()
 	defer func() {
@@ -555,9 +584,6 @@ func (s *Server) startIntake(current *intakeRun, customer string) (assessmentVie
 		current.busy = false
 		current.mu.Unlock()
 	}()
-	if strings.TrimSpace(client.BaseURL) == "" || strings.TrimSpace(client.Model) == "" {
-		return assessmentView{}, fmt.Errorf("model endpoint and model are required; configure the web server first")
-	}
 	created, err := s.newRun(customer, proposal.Goal, proposal.Scope)
 	if err != nil {
 		return assessmentView{}, err
@@ -583,6 +609,30 @@ func (s *Server) startIntake(current *intakeRun, customer string) (assessmentVie
 	return created.view(""), nil
 }
 
+func (s *Server) assignIntakeCustomer(current *intakeRun, customer string) error {
+	customer = strings.TrimSpace(customer)
+	if !validCustomerID(customer) {
+		return fmt.Errorf("customer must contain only letters, numbers, hyphens, or underscores")
+	}
+	current.mu.Lock()
+	if current.deleted {
+		current.mu.Unlock()
+		return fmt.Errorf("session has been deleted")
+	}
+	if current.busy {
+		current.mu.Unlock()
+		return fmt.Errorf("wait for the conversation to finish before moving it")
+	}
+	if current.assessmentID != "" {
+		current.mu.Unlock()
+		return fmt.Errorf("started assessments cannot be moved; move the assessment session instead")
+	}
+	current.customer = customer
+	current.updatedAt = time.Now().UTC()
+	current.mu.Unlock()
+	return current.persist()
+}
+
 func (r *intakeRun) view() intakeView {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -606,7 +656,7 @@ func (r *intakeRun) view() intakeView {
 	} else if len(r.messages) > 0 && r.messages[0].Role == "user" {
 		title = compactTitle(r.messages[0].Text)
 	}
-	return intakeView{ID: r.id, Title: title, Model: r.client.Model, ModelConfigured: strings.TrimSpace(r.client.BaseURL) != "" && strings.TrimSpace(r.client.Model) != "", ModelBusy: r.busy, CanChangeModel: !r.busy && r.assessmentID == "", Status: status, Messages: append([]intakeMessage(nil), r.messages...), Proposal: cloneDraft(r.proposal), PendingTool: pending, Events: append([]eventRecord(nil), r.events...), AssessmentID: r.assessmentID}
+	return intakeView{ID: r.id, Customer: r.customer, Title: title, Model: r.client.Model, ModelConfigured: strings.TrimSpace(r.client.BaseURL) != "" && strings.TrimSpace(r.client.Model) != "", ModelBusy: r.busy, CanChangeModel: !r.busy && r.assessmentID == "", Status: status, Messages: append([]intakeMessage(nil), r.messages...), Proposal: cloneDraft(r.proposal), PendingTool: pending, Events: append([]eventRecord(nil), r.events...), AssessmentID: r.assessmentID}
 }
 
 func (r *intakeRun) recordObservation(event assessment.Event) {
@@ -737,13 +787,15 @@ func (s *Server) assessments(w http.ResponseWriter, r *http.Request) {
 }
 
 type customerIndexView struct {
-	ID       string           `json:"id"`
-	Status   string           `json:"status"`
-	Sessions []assessmentView `json:"sessions"`
+	ID       string            `json:"id"`
+	Status   string            `json:"status"`
+	Sessions []assessmentView  `json:"sessions"`
+	Drafts   []intakeIndexView `json:"drafts,omitempty"`
 }
 
 type intakeIndexView struct {
 	ID        string    `json:"id"`
+	Customer  string    `json:"customer,omitempty"`
 	Title     string    `json:"title"`
 	Status    string    `json:"status"`
 	Model     string    `json:"model"`
@@ -762,6 +814,18 @@ func (s *Server) customers(w http.ResponseWriter, r *http.Request) {
 		ids[current.customer] = struct{}{}
 		current.mu.RUnlock()
 	}
+	drafts := make([]intakeIndexView, 0, len(s.intakes))
+	for _, current := range s.intakes {
+		view := current.view()
+		if view.AssessmentID != "" {
+			continue
+		}
+		draft := intakeIndexView{ID: view.ID, Customer: view.Customer, Title: view.Title, Status: view.Status, Model: view.Model}
+		if view.Customer != "" {
+			ids[view.Customer] = struct{}{}
+		}
+		drafts = append(drafts, draft)
+	}
 	s.mu.RUnlock()
 	views := make([]customerIndexView, 0, len(ids))
 	for id := range ids {
@@ -769,17 +833,23 @@ func (s *Server) customers(w http.ResponseWriter, r *http.Request) {
 		views = append(views, customerIndexView{ID: view.ID, Status: view.Status, Sessions: view.Sessions})
 	}
 	sort.Slice(views, func(i, j int) bool { return views[i].ID < views[j].ID })
-	s.mu.RLock()
-	intakes := make([]intakeIndexView, 0, len(s.intakes))
-	for _, current := range s.intakes {
-		view := current.view()
-		if view.AssessmentID != "" {
+	intakes := make([]intakeIndexView, 0, len(drafts))
+	for _, draft := range drafts {
+		if draft.Customer == "" {
+			intakes = append(intakes, draft)
 			continue
 		}
-		intakes = append(intakes, intakeIndexView{ID: view.ID, Title: view.Title, Status: view.Status, Model: view.Model})
+		for i := range views {
+			if views[i].ID == draft.Customer {
+				views[i].Drafts = append(views[i].Drafts, draft)
+				break
+			}
+		}
 	}
-	s.mu.RUnlock()
 	sort.Slice(intakes, func(i, j int) bool { return intakes[i].ID < intakes[j].ID })
+	for i := range views {
+		sort.Slice(views[i].Drafts, func(a, b int) bool { return views[i].Drafts[a].ID < views[i].Drafts[b].ID })
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"customers": views, "intakes": intakes})
 }
 
