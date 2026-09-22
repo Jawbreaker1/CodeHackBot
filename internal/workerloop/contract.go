@@ -16,14 +16,15 @@ type PlanUpdate struct {
 // A plan may accompany any decision. It never changes the original goal,
 // done condition, scope, permissions or remaining budget.
 type Response struct {
-	Type     string      `json:"type"`
-	Command  string      `json:"command,omitempty"`
-	Args     []string    `json:"args,omitempty"`
-	UseShell bool        `json:"use_shell,omitempty"`
-	Impact   string      `json:"impact,omitempty"`
-	Summary  string      `json:"summary,omitempty"`
-	Question string      `json:"question,omitempty"`
-	Plan     *PlanUpdate `json:"plan,omitempty"`
+	Type      string      `json:"type"`
+	Command   string      `json:"command,omitempty"`
+	Args      []string    `json:"args,omitempty"`
+	UseShell  bool        `json:"use_shell,omitempty"`
+	Impact    string      `json:"impact,omitempty"`
+	Artifacts []string    `json:"artifacts,omitempty"`
+	Summary   string      `json:"summary,omitempty"`
+	Question  string      `json:"question,omitempty"`
+	Plan      *PlanUpdate `json:"plan,omitempty"`
 }
 
 func ParseResponse(text string) (Response, error) {
@@ -67,6 +68,17 @@ func ParseResponse(text string) (Response, error) {
 	}
 	if r.Type != "action" && (r.Command != "" || len(r.Args) != 0 || r.UseShell || r.Impact != "") {
 		return r, fmt.Errorf("only action may contain execution fields")
+	}
+	if r.Type != "action" && len(r.Artifacts) != 0 {
+		return r, fmt.Errorf("only action may declare artifacts")
+	}
+	if len(r.Artifacts) > 8 {
+		return r, fmt.Errorf("action declares too many artifacts")
+	}
+	for _, artifact := range r.Artifacts {
+		if strings.TrimSpace(artifact) == "" {
+			return r, fmt.Errorf("artifact paths must be nonempty")
+		}
 	}
 	if r.Plan != nil {
 		if err := validatePlan(*r.Plan); err != nil {

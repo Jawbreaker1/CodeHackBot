@@ -26,6 +26,8 @@ The [competitive assessment](docs/competitive-assessment-2026-09-19.md) recommen
 
 The primary product will expose this workflow through both a terminal client and a browser application. The terminal remains valuable for Kali, SSH, automation, and air-gapped operation; the browser becomes the main guided surface for assessment setup, approvals, live coordination, and report review. Both must use the same application service and persisted assessment state.
 
+The optional browser-worker foundation is now pinned in `tools/playwright-runner`: delegated workers can traverse an approved web flow with a preprovisioned system browser and register screenshots/traces as task-local evidence. Full source/server/browser correlation and broader artifact analysis remain validation work.
+
 ## 4. Source-assisted assessment
 
 Identify deployed software, acquire attributable matching source, investigate bounded questions, and validate candidate weaknesses. Distinguish local reproduction from proof that the deployed target is affected. Handle unavailable or mismatched source honestly.

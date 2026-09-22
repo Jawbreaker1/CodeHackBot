@@ -67,16 +67,26 @@ licensed according to the assessment image policy.
 ## Browser assessment tools
 
 For web-application screenshots and browser-flow work, the current host can
-use Chromium, Firefox, or CutyCapt when present. They are optional until the
-typed browser-artifact capability is enabled:
+use Chromium, Firefox, or CutyCapt. The Playwright worker helper is pinned in
+`tools/playwright-runner` and uses a preprovisioned system browser:
 
 ```sh
-sudo apt install -y chromium firefox-esr cutycapt xvfb
+sudo apt install -y nodejs npm chromium firefox-esr cutycapt xvfb
+cd tools/playwright-runner
+npm ci --ignore-scripts
+cd ../..
 ```
 
-Playwright is not a current runtime dependency. When the browser-worker slice
-is added, install and pin its package and browser versions in the assessment
-image rather than downloading them implicitly from a worker task.
+Set the approved browser executable before a browser assessment:
+
+```sh
+export BIRDHACKBOT_BROWSER_EXECUTABLE=/usr/bin/chromium
+```
+
+The helper does not download browser binaries at task time. Playwright
+scenarios run inside a delegated worker, remain subject to per-action approval,
+and must declare screenshots, traces, DOM snapshots, or network captures as
+workspace-local output artifacts.
 
 ## Build and validate
 

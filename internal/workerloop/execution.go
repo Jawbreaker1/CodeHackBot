@@ -54,9 +54,13 @@ func (l Loop) execute(ctx context.Context, current *ctxpacket.WorkerPacket, resp
 	if execErr != nil && result.LogPath == "" {
 		return false, fmt.Errorf("execution evidence unavailable: %w", execErr)
 	}
+	declaredArtifacts, artifactErr := registerArtifacts(current.OperatorState.WorkingDir, response.Artifacts)
 	current.OperatorState.PendingAction, current.OperatorState.PendingMode = "", ""
 	current.OperatorState.PendingExec, current.OperatorState.PendingLog = "", ""
 	evidence := combineSummaries(result.StdoutSummary, result.StderrSummary)
+	if artifactErr != nil {
+		evidence = combineSummaries(evidence, "Declared artifact was not registered: "+artifactErr.Error())
+	}
 	if current.LatestExecutionResult.Action != "" {
 		current.RelevantRecentResults = append([]ctxpacket.ExecutionResult{current.LatestExecutionResult}, current.RelevantRecentResults...)
 	}
@@ -64,7 +68,7 @@ func (l Loop) execute(ctx context.Context, current *ctxpacket.WorkerPacket, resp
 		Action: result.Action, ActualExec: result.ActualExec, ExecutionMode: result.ExecutionMode,
 		Cwd: result.Cwd, StartedAt: result.StartedAt, FinishedAt: result.FinishedAt,
 		ExitStatus: fmt.Sprint(result.ExitStatus), OutputSummary: compactOutputSummary(evidence),
-		OutputEvidence: evidence, LogRefs: []string{result.LogPath}, ArtifactRefs: result.ArtifactRefs,
+		OutputEvidence: evidence, LogRefs: []string{result.LogPath}, ArtifactRefs: append(append([]string(nil), result.ArtifactRefs...), declaredArtifacts...),
 		Assessment: result.Assessment, Signals: result.Signals, FailureClass: result.FailureClass,
 	}
 	current.RunningSummary = buildRunningSummary(current.SessionFoundation.Goal, current.LatestExecutionResult, nil)

@@ -155,7 +155,21 @@ export function evidenceNode(evidence) {
   item.append(node('div', 'muted', 'Exit: ' + (evidence.exit_status || 'Not reported')));
   if (evidence.command) item.append(node('pre', 'command', evidence.command));
   if (evidence.summary) item.append(node('p', 'pre-wrap', evidence.summary));
-  for (const ref of [...(evidence.log_refs || []), ...(evidence.artifact_refs || [])]) item.append(node('code', 'evidence-ref', ref));
+  for (const ref of (evidence.log_refs || [])) item.append(node('code', 'evidence-ref', ref));
+  const refs = evidence.artifact_refs || [];
+  const urls = evidence.artifact_urls || [];
+  for (let index = 0; index < refs.length; index++) {
+    const ref = refs[index];
+    const url = urls[index];
+    const extension = ref.slice(ref.lastIndexOf('.') + 1).toLowerCase();
+    if (url && ['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(extension)) {
+      const link = node('a', 'evidence-image-link'); link.href = url; link.target = '_blank'; link.rel = 'noreferrer';
+      const image = document.createElement('img'); image.src = url; image.alt = 'Browser evidence ' + ref; image.loading = 'lazy'; image.className = 'evidence-image'; link.append(image); item.append(link);
+    }
+    if (url) {
+      const link = node('a', 'evidence-ref', ref); link.href = url; link.target = '_blank'; link.rel = 'noreferrer'; item.append(link);
+    } else item.append(node('code', 'evidence-ref', ref));
+  }
   return item;
 }
 function observationResultNode(evidence, sequence) {

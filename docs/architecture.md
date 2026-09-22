@@ -147,6 +147,19 @@ the exact system and user message text sent by the application after projection;
 it is deliberately labelled an input-byte ceiling rather than a token count.
 Provider-reported cumulative token usage remains a separate assessment metric.
 
+### Browser assessment worker
+
+Web application assessment is an optional worker capability, not a second
+orchestrator. The pinned helper in `tools/playwright-runner` runs a
+preprovisioned Playwright package against an approved system browser. A worker
+may create a task-local scenario to traverse declared routes or role flows and
+capture screenshots, traces, DOM snapshots, or network evidence. The action
+must declare each expected output path; the shared worker engine registers only
+regular files that exist inside that task's workspace after the approved
+action completes. The coordinator receives those paths through the ordinary
+evidence catalog and can schedule a later validation task. Browser state and
+captures remain local task artifacts and are never implicitly uploaded.
+
 ### Visual and document inputs
 
 The web composer accepts up to four local PNG, JPEG, WebP, GIF, or PDF files per message, with bounded per-file and total sizes. The server writes them beneath the isolated session directory, keeps only attachment metadata in the session transcript, and serves them back through an ID-checked local route. The current user turn receives typed image/file parts; a failed or retried turn never copies file bytes into the long-lived intake transcript. The OpenAI-compatible client emits image parts for multimodal chat endpoints. The subscription bridge translates those parts to Responses `input_image` and `input_file` items, so Daybreak can inspect screenshots and PDFs; a local model must advertise compatible multimodal input for images, and PDF support through a local endpoint is provider-specific. Visual observations are untrusted evidence and never independently establish a vulnerability.

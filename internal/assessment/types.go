@@ -65,6 +65,7 @@ type EvidenceView struct {
 	Summary      string   `json:"summary"`
 	LogRefs      []string `json:"log_refs"`
 	ArtifactRefs []string `json:"artifact_refs"`
+	ArtifactURLs []string `json:"artifact_urls,omitempty"`
 }
 
 type Result struct {

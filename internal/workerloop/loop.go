@@ -365,7 +365,7 @@ func buildUserPrompt(packet ctxpacket.WorkerPacket) string {
 		"role": "worker",
 		"instructions": []string{
 			"Respond with one JSON object only. Choose action, update_plan, step_complete, ask_user, or blocked.",
-			"For direct execution: {\"type\":\"action\",\"command\":\"executable\",\"args\":[\"literal argument\"],\"use_shell\":false,\"impact\":\"short plain-language effect and risk\"}. Never add shell quotes to literal arguments.",
+			"For direct execution: {\"type\":\"action\",\"command\":\"executable\",\"args\":[\"literal argument\"],\"use_shell\":false,\"impact\":\"short plain-language effect and risk\",\"artifacts\":[\"relative/path-created-by-this-action\"]}. Never add shell quotes to literal arguments. Declare only bounded regular files the approved action is expected to create inside the worker workspace; declared artifacts are registered only after execution.",
 			"For shell syntax: {\"type\":\"action\",\"command\":\"complete shell script\",\"use_shell\":true}. Omit args.",
 			"For completion: {\"type\":\"step_complete\",\"summary\":\"evidence-backed answer to the original goal, with limitations\"}. This means the whole task is complete, not just one plan step.",
 			"For missing operator information: {\"type\":\"ask_user\",\"question\":\"...\"}. For an unrecoverable blocker: {\"type\":\"blocked\",\"summary\":\"what is missing and what was established\"}.",

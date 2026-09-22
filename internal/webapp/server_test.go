@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/assessment"
 	"github.com/Jawbreaker1/CodeHackBot/internal/behavior"
+	ctxpacket "github.com/Jawbreaker1/CodeHackBot/internal/context"
 	"github.com/Jawbreaker1/CodeHackBot/internal/llmclient"
 )
 
@@ -363,6 +365,43 @@ func TestServerAcceptsVisualAttachmentsAndServesLocalEvidence(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("model did not receive the message")
+	}
+}
+
+func TestServerServesOnlyRegisteredWorkerArtifacts(t *testing.T) {
+	root := t.TempDir()
+	sessions := filepath.Join(root, "sessions")
+	server := NewServer(Config{RepoRoot: root, SessionsRoot: sessions})
+	runRoot := filepath.Join(sessions, "fixture", "assessment")
+	artifact := filepath.Join(runRoot, "tasks", "browser", "work", "home.png")
+	if err := os.MkdirAll(filepath.Dir(artifact), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(artifact, []byte("PNG fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	current := &run{id: "assessment", customer: "fixture", root: runRoot, status: "completed", state: assessment.State{Version: 1, ID: "assessment", Goal: "browser fixture", Scope: "synthetic only", Status: "completed", Results: []assessment.Result{{Task: assessment.Task{ID: "browser"}, Status: "done", Evidence: []ctxpacket.ExecutionResult{{ArtifactRefs: []string{artifact}}}}}}, updatedAt: time.Now().UTC()}
+	server.runs[current.id] = current
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+	response, err := http.Get(httpServer.URL + "/api/v1/assessments/assessment/artifact?path=" + url.QueryEscape(artifact))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("registered artifact status=%d", response.StatusCode)
+	}
+	if body, _ := io.ReadAll(response.Body); string(body) != "PNG fixture" {
+		t.Fatalf("artifact body=%q", body)
+	}
+	response, err = http.Get(httpServer.URL + "/api/v1/assessments/assessment/artifact?path=" + url.QueryEscape(filepath.Join(runRoot, "tasks", "browser", "work", "missing.png")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf("unregistered artifact status=%d", response.StatusCode)
 	}
 }
 

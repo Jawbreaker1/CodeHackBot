@@ -92,6 +92,7 @@ const (
 	maxAttachmentBytes      = 8 << 20
 	maxTotalAttachmentBytes = 16 << 20
 	maxMessageBodyBytes     = 24 << 20
+	maxArtifactServeBytes   = 64 << 20
 )
 
 var allowedAttachmentMIME = map[string]bool{
@@ -732,6 +733,65 @@ func (s *Server) serveAttachment(w http.ResponseWriter, r *http.Request, root st
 	http.ServeContent(w, r, ref.Filename, time.Time{}, file)
 }
 
+func (s *Server) serveAssessmentArtifact(w http.ResponseWriter, r *http.Request, current *run) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	wanted := filepath.Clean(strings.TrimSpace(r.URL.Query().Get("path")))
+	if wanted == "." || !filepath.IsAbs(wanted) {
+		writeError(w, http.StatusNotFound, "artifact not found")
+		return
+	}
+	current.mu.RLock()
+	root := current.root
+	found := false
+	for _, result := range current.state.Results {
+		for _, evidence := range result.Evidence {
+			for _, ref := range evidence.ArtifactRefs {
+				if filepath.Clean(ref) == wanted {
+					found = true
+					break
+				}
+			}
+		}
+	}
+	current.mu.RUnlock()
+	if !found || !pathWithin(root, wanted) {
+		writeError(w, http.StatusNotFound, "artifact not found")
+		return
+	}
+	file, err := os.Open(wanted)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "artifact not found")
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxArtifactServeBytes {
+		writeError(w, http.StatusNotFound, "artifact not found")
+		return
+	}
+	contentType := mime.TypeByExtension(filepath.Ext(wanted))
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", `inline; filename="`+strings.ReplaceAll(filepath.Base(wanted), `"`, "")+`"`)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	http.ServeContent(w, r, filepath.Base(wanted), info.ModTime(), file)
+}
+
+func pathWithin(root, path string) bool {
+	root, rootErr := filepath.Abs(root)
+	path, pathErr := filepath.Abs(path)
+	if rootErr != nil || pathErr != nil {
+		return false
+	}
+	rel, err := filepath.Rel(root, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 func (s *Server) newIntake() (*intakeRun, error) {
 	id := fmt.Sprintf("intake-%s-%06d", time.Now().UTC().Format("20060102-150405.000000000"), s.seq.Add(1))
 	root := filepath.Join(s.config.SessionsRoot, "intake", id)
@@ -1183,6 +1243,10 @@ func (s *Server) assessmentRoute(w http.ResponseWriter, r *http.Request) {
 		root, messages := current.root, append([]intakeMessage(nil), current.messages...)
 		current.mu.RUnlock()
 		s.serveAttachment(w, r, root, messages, parts[2])
+		return
+	}
+	if len(parts) == 2 && parts[1] == "artifact" {
+		s.serveAssessmentArtifact(w, r, current)
 		return
 	}
 	switch parts[1] {
@@ -1855,6 +1919,11 @@ func (r *run) view(after string) assessmentView {
 	}
 	sort.Slice(view.Workers, func(i, j int) bool { return view.Workers[i].ID < view.Workers[j].ID })
 	view.ContextWindow = aggregateContextWindow(r.state, view.Workers)
+	for i := range view.Workers {
+		for j := range view.Workers[i].Evidence {
+			view.Workers[i].Evidence[j] = decorateEvidence(view.Workers[i].Evidence[j], r.id)
+		}
+	}
 	for _, plan := range r.state.Plans {
 		view.Findings = append(view.Findings, plan.Findings...)
 	}
@@ -1866,6 +1935,12 @@ func (r *run) view(after string) assessmentView {
 		}
 	} else {
 		view.Events = append([]eventRecord(nil), r.events...)
+	}
+	for i := range view.Events {
+		if view.Events[i].Event.Evidence != nil {
+			decorated := decorateEvidence(*view.Events[i].Event.Evidence, r.id)
+			view.Events[i].Event.Evidence = &decorated
+		}
 	}
 	for _, pending := range r.approvals {
 		view.PendingApprovals = append(view.PendingApprovals, approvalView{ID: pending.ID, TaskID: pending.taskID, Command: pending.request.Command, UseShell: pending.request.UseShell, Cwd: pending.request.Cwd, Impact: pending.request.Impact})
@@ -1879,6 +1954,14 @@ func (r *run) view(after string) assessmentView {
 	sort.Slice(view.PendingApprovals, func(i, j int) bool { return view.PendingApprovals[i].ID < view.PendingApprovals[j].ID })
 	sort.Slice(view.PendingQuestions, func(i, j int) bool { return view.PendingQuestions[i].ID < view.PendingQuestions[j].ID })
 	return view
+}
+
+func decorateEvidence(evidence assessment.EvidenceView, assessmentID string) assessment.EvidenceView {
+	evidence.ArtifactURLs = nil
+	for _, ref := range evidence.ArtifactRefs {
+		evidence.ArtifactURLs = append(evidence.ArtifactURLs, "/api/v1/assessments/"+url.PathEscape(assessmentID)+"/artifact?path="+url.QueryEscape(ref))
+	}
+	return evidence
 }
 
 func aggregateContextWindow(state assessment.State, workers []workerView) contextWindowView {

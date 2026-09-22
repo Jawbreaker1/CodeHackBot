@@ -138,6 +138,7 @@ The CLI and browser are presentation layers over the same orchestrator and evide
 - [ ] Keep Bubble Tea as the terminal adapter; test the CLI through the service boundary and evaluate the upstream v1-to-v2 migration separately.
 - [x] Add the initial Go HTTP API with assessment create/read/start/stop, approval decisions, live events, and report access. Keep loopback binding as the default until authentication and remote deployment controls exist.
 - [x] Build the first browser workflow against that API: customer/session scope review, provider visibility, approval, progress, stop, and report review. Verify it with the same deterministic assessment fixture used by the CLI, including two sessions aggregated into one customer report.
+- [x] Add the optional pinned Playwright worker helper, preprovisioned system-browser contract, task-local trace/screenshot capture, and workspace-bounded registered artifact route.
 - [x] Add durable web session discovery/resume with per-session transcript/model metadata and an explicit interrupted-run resume action.
 - [x] Add explicit confirmed deletion for draft and finalized web sessions, including their linked intake metadata and local evidence directories.
 - [ ] Add authentication, origin/CSRF protection, and streaming events before remote web deployment.

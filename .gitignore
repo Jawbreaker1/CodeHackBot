@@ -85,3 +85,6 @@
 
 # Python cache
 __pycache__/
+
+# Optional Playwright worker dependency install
+/tools/playwright-runner/node_modules/

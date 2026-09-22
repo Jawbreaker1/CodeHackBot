@@ -179,6 +179,8 @@ input:focus { border-color: #aaaa9e; }
 .proposal .primary-button { margin-top: 10px; width: 100%; }
 .evidence-item { padding: 10px 0; border-top: 1px solid var(--line); }
 .evidence-item p { max-height: 180px; overflow: auto; }
+.evidence-image-link { display: block; max-width: 100%; margin: 10px 0; }
+.evidence-image { display: block; width: 100%; max-height: 260px; object-fit: contain; object-position: left center; border: 1px solid var(--line); border-radius: 6px; background: #000; }
 .observation-result { margin-top: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 7px; background: #ffffff04; }
 .observation-result > strong { display: block; color: var(--text); font-size: 11px; font-weight: 550; }
 .observation-list { list-style: none; padding: 0; margin: 8px 0; display: grid; gap: 3px; max-height: 190px; overflow: auto; color: var(--muted); font-size: 11px; line-height: 1.45; }
