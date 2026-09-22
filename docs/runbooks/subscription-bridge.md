@@ -18,6 +18,11 @@ Inference goes directly to `https://chatgpt.com/backend-api/codex/responses`. Th
 
 ## Setup
 
+The supported host platform is Kali Linux Rolling. Install the baseline from
+the [Kali installation runbook](kali-installation.md) before building. The
+Codex CLI is additionally required for subscription sign-in and token refresh;
+local-model users do not need the subscription bridge or Codex credentials.
+
 For normal use, build `birdhackbot`, run it without flags from the checkout, and select **ChatGPT subscription**. With an existing file-based Codex sign-in, the application starts and stops its own loopback bridge and removes its temporary client credential on exit. No separate bridge command or manual local token is needed. First sign-in still uses Codex as described below. The remaining commands document standalone bridge/development use.
 
 Build from the repository root:

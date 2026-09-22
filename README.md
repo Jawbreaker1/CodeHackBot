@@ -1,6 +1,6 @@
 # BirdHackBot / CodeHackBot
 
-BirdHackBot is System Verification's security testing platform for authorized assessments. Its primary workflow is a model-led multi-agent orchestrator coordinating Kali-based investigation, source analysis, target validation, and reproducible reporting.
+BirdHackBot is System Verification's security testing platform for authorized assessments. Its supported deployment platform is Kali Linux Rolling, where the model-led multi-agent orchestrator coordinates investigation, source analysis, target validation, and reproducible reporting.
 
 <p align="center">
   <img src="docs/assets/birdhackbot-logo.svg" alt="BirdHackBot. full raven wordmark" width="420">
@@ -37,6 +37,9 @@ Required product capabilities include Kali tooling, adaptable playbooks, reusabl
 Astra is the development/review model. The intended OpenAI pentest runtime is Daybreak on GPT-5.6 Sol, alongside local models. The subscription bridge has called `gpt-daybreak-blue-latest` successfully; the backend reports `gpt-5.6-sol`. Access remains account-dependent.
 
 ## Build and run
+
+The supported host is Kali Linux Rolling. Install the platform baseline and
+optional assessment capability packs using the [Kali installation runbook](docs/runbooks/kali-installation.md).
 
 ```sh
 go build -buildvcs=false -o birdhackbot ./cmd/birdhackbot
@@ -110,6 +113,7 @@ Keep changes small and tied to demonstrated failures or agreed requirements. Def
 | [ROADMAP.md](ROADMAP.md) | Future product milestones |
 | [DISCOVERIES.md](DISCOVERIES.md) | Decisions, findings, and validation references |
 | [Subscription bridge](docs/runbooks/subscription-bridge.md) | Subscription setup, compatibility contract, and limits |
+| [Kali installation](docs/runbooks/kali-installation.md) | Supported platform baseline, model paths, and optional capability packs |
 | [Web application](docs/runbooks/web-application.md) | Local browser startup, customer/session workflow, and deterministic check |
 | [Acceptance gates](docs/runbooks/acceptance-gates.md) | What validation establishes |
 | [Baseline assessment](docs/code-assessment-2026-09-19.md) | Historical evidence behind the cleanup |

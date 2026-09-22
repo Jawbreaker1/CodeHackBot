@@ -4,6 +4,10 @@
 
 ## Start locally
 
+Use a Kali Linux Rolling host with the baseline from the [Kali installation
+runbook](kali-installation.md). The web binary itself is Go-only; the model
+endpoint and any assessment tools are separate provider/image dependencies.
+
 Build and run it from the checkout:
 
 ```sh
