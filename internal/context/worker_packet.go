@@ -57,6 +57,14 @@ type ExecutionResult struct {
 	FailureClass   string
 }
 
+// StrategyDocument is model-selected local guidance retained across worker
+// turns. It is supporting knowledge, never target evidence or authorization.
+type StrategyDocument struct {
+	Path    string
+	SHA256  string
+	Content string
+}
+
 // OperatorState is the visible operator/runtime state in the context packet.
 type OperatorState struct {
 	ScopeState    string
@@ -91,6 +99,7 @@ type WorkerPacket struct {
 	RunningSummary           string
 	RelevantRecentResults    []ExecutionResult
 	MemoryBankRetrievals     []string
+	StrategyGuidance         []StrategyDocument
 	CapabilityInputs         []string
 	OperatorState            OperatorState
 	Budget                   TurnBudget
@@ -191,6 +200,7 @@ func (p WorkerPacket) RenderSections() []RenderedSection {
 		{Name: "running_summary", Content: blankOrValue(p.RunningSummary)},
 		{Name: "relevant_recent_results", Content: renderExecutionResults(p.RelevantRecentResults)},
 		{Name: "memory_bank_retrievals", Content: renderList(p.MemoryBankRetrievals)},
+		{Name: "strategy_guidance", Content: renderStrategyGuidance(p.StrategyGuidance)},
 		{Name: "capability_inputs", Content: renderList(p.CapabilityInputs)},
 		{Name: "operator_state", Content: renderOperatorState(p.OperatorState)},
 		{Name: "context_notes", Content: renderList(p.ContextNotes)},
@@ -310,6 +320,17 @@ func renderList(items []string) string {
 		return "(none)"
 	}
 	return joinOrNone(items)
+}
+
+func renderStrategyGuidance(docs []StrategyDocument) string {
+	if len(docs) == 0 {
+		return "(none)"
+	}
+	var b strings.Builder
+	for _, doc := range docs {
+		fmt.Fprintf(&b, "source: %s\nsha256: %s\n%s\n\n", doc.Path, doc.SHA256, doc.Content)
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func renderConversation(items []string) string {

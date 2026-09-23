@@ -17,19 +17,36 @@ were used for the independent attempts below:
 | Context-derived local dictionary | 12,060 candidates plus `l33t`, year/special, and number/special John rules | No recovery |
 | John `--stdin` with packaged RockYou | All 14,344,392 source records; roughly one second of John runtime | No recovery |
 | `fcrackzip -b -c aA1 -l 1-4 -u` | One-to-four-character letters and digits; 48 seconds | No recovery |
+| John `--rules=AppendJustNumbers` with the first 500,000 RockYou entries | Standard numeric-suffix mutations; fresh isolated pot | **Recovered in 4.1 seconds** |
+| John `--rules=AppendJustNumbers` with the complete RockYou list | Same rule against all packaged entries; another fresh isolated pot | **Recovered in 100.0 seconds** |
+
+The successful command used John the Ripper's packaged `AppendJustNumbers`
+rule, without a custom wordlist or known password. The 500,000-entry fast pass
+is a useful staged workflow, but it was selected **after** inspecting the
+recovered credential's shape. It demonstrates that ordinary Kali tooling can
+recover this archive quickly; it does not prove an agent would have selected
+that strategy unaided. The complete-list run avoids the prefix choice and
+independently recovered the credential in under two minutes. The earlier
+conclusion that a fresh search had failed was incomplete because it omitted
+this common mutation rule. The fresh complete-list pot independently decrypted
+the current archive with Python's ZIP reader and produced the same 243-byte
+entry hash recorded below.
 
 An archived February 2026 assessment already contained a valid candidate in
 `sessions/run-20260223-172436-zipsecret5/orchestrator/artifact/t2/john_secret.pot`.
 Its saved task explicitly ran `john --show` against John's **default pot before**
 trying a dictionary, and its status recorded `source=default_pot`. That earlier
-success is evidence of credential reuse, not evidence that the run independently
-cracked the archive. The old pot hash does not match the current archive hash
+run is evidence of credential reuse, not evidence that the run independently
+cracked the archive. This does not establish how the credential originally
+entered the default pot or whether other older runs cracked it independently.
+The old pot hash does not match the current archive hash
 (`john --show` against today's conversion reports zero cracked), but the
 credential itself still decrypts the current archive. It is absent from the
-packaged `fasttrack.txt`, `password.lst`, and RockYou lists.
+packaged `fasttrack.txt`, `password.lst`, and unmodified RockYou lists; its
+base word does occur in RockYou.
 
-The valid cached credential was checked against the current archive with Python's
-ZIP reader, then used to extract into
+The valid credential was checked against the current archive with Python's ZIP
+reader, then used to extract into
 `/tmp/birdhackbot-codex-zip-baseline/extracted/`. The extraction code rejected
 absolute/traversal paths and links, limited member size, read through the ZIP
 reader's CRC check, and wrote a new file with mode `0600`. The resulting
@@ -40,10 +57,11 @@ The local manifest is `/tmp/birdhackbot-codex-zip-baseline/baseline-result.json`
 ## Framework comparison point
 
 The useful general behavior is to distinguish **recovery of an existing,
-provenanced credential** from a fresh candidate search. A worker should inspect
-the archive and available tools, check relevant authorized prior assessment
-evidence, independently validate any candidate against the current artifact,
-then extract safely. If no candidate exists, it should report the exact bounded
-search coverage and plan the next useful strategy. Neither a dictionary miss
-nor an old pot's success proves that a new model can discover an unknown
-password from the archive alone.
+provenanced credential** from a fresh candidate search, and to cover common
+mutations before declaring a wordlist miss. A worker should inspect the archive
+and available tools, check relevant authorized prior assessment evidence, run a
+bounded staged search with ordinary Kali rules where appropriate, independently
+validate any candidate against the current artifact, then extract safely. If
+no candidate exists, it should report exact coverage and plan the next useful
+strategy. The model and harness should choose and track this sequence without
+being prompted with a specific wordlist or rule.

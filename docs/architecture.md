@@ -53,7 +53,7 @@ Keep each change tied to a demonstrated failure or explicit requirement. Prefer 
 
 ## Shared worker control flow
 
-Every turn selects exactly one decision: `action`, `update_plan`, `step_complete`, `ask_user`, or `blocked`. `step_complete` proposes completion of the original task, not an individual plan step. Any decision may include a short `plan` with a summary, one to six semantic steps, an active step, and purpose text keyed by step. Plans guide the model; runtime code does not infer workflow phases from goal keywords or advance steps from tool output.
+Every turn selects exactly one decision: `action`, `load_strategy`, `update_plan`, `step_complete`, `ask_user`, or `blocked`. `step_complete` proposes completion of the original task, not an individual plan step. Any decision may include a short `plan` with a summary, one to six semantic steps, an active step, and purpose text keyed by step. Plans guide the model; runtime code does not infer workflow phases from goal keywords or advance steps from tool output.
 
 Plan revisions retain their turn and preceding execution-log reference. They are visible in the guided UI, saved context, and subsequent model requests. This records that planning happened; it does not prove the planned actions happened. Plans cannot replace the original goal, done condition, scope, approvals, or budget.
 
@@ -100,6 +100,8 @@ The default client input ceiling is 48 KiB of combined message text. The guided 
 The UI exposes concise model-authored summaries, plans, action impacts, evaluator results, and typed runtime events as expandable annotations. The inspector shows coordinator rounds and their task outcomes, and each worker's current plan with step purpose, progress, and earlier revisions. It does not display hidden chain-of-thought or treat provider reasoning traces as evidence. This keeps the operator informed about the model's decisions while preserving the distinction between a rationale summary and private reasoning tokens.
 
 Recent operator messages preserve line breaks and indentation. Older conversation notes are bounded excerpts, not authoritative semantic memory. Deep copies isolate UI snapshots and compact model views from mutable execution state. Long investigations still require evaluation of retrieval quality and model-specific context sizing.
+
+The loopback-only web context debugger reads the coordinator's recorded request and each worker's pre-decision packet. New worker turns record the exact ordered model messages plus structured packet sections; older captures can be split by the renderer's own section markers. The displayed sizes are bytes, not provider tokens. A debug override may omit selected optional worker sections from future model projections without deleting the authoritative packet or historical evidence. Behavior, scope, task foundation, active step, current plan, latest execution result, and operator state remain protected. This is an experimental diagnostic control, not a semantic memory editor or a substitute for model-specific context acceptance.
 
 ### Active-context strategy
 
@@ -266,7 +268,9 @@ Advisory research and source-assisted analysis complement assessment of configur
 
 The primary competitive measure is unique, independently verified vulnerabilities discovered, including the proportion of known defects found and false claims. Reproducibility, operator effort, target effects, time, and aggregate model usage constrain that result. Compare with capable matched baselines; agent count and tool availability alone do not establish improvement.
 
-## Kali tooling and reusable knowledge: required, not yet integrated
+## Kali tooling and reusable knowledge: first catalog slice integrated
+
+The coordinator now receives a small, versioned local strategy catalog in its behavior frame. When it lacks the knowledge needed for a credible test plan, it can propose a visible `research` round with bounded worker tasks; this is an optional model decision, not a mandatory intake gate. Research workers use the same approval, evidence, budget, and scope contracts as assessment workers. Each worker receives the catalog and may issue a model-selected `load_strategy` decision for one relevant guide. The runtime reads only a bounded Markdown file beneath the catalog directory, records source and checksum in that worker's durable context packet, and keeps selected guidance available across later turns. Full guides are not injected into every worker. Research may recur after discoveries. An advisory, playbook, or Metasploit reference is a lead until target-specific validation. This slice provides guidance access and visible planning state, not complete local CVE coverage or proof that strategy selection is reliable.
 
 - Discover available tools and record their versions and relevant dependencies. Let workers choose suitable tools from actual capabilities instead of assuming every Kali package is installed. Third-party tools use the same scope, approval, cancellation, and evidence contracts.
 - Retrieve relevant playbooks as investigation guidance with provenance and revision. The model adapts them to evidence; playbooks must not become hidden fixed workflows or override session permissions.

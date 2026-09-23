@@ -441,6 +441,7 @@ type assessmentView struct {
 
 type planApprovalView struct {
 	ID      string            `json:"id"`
+	Phase   string            `json:"phase"`
 	Summary string            `json:"summary"`
 	Tasks   []assessment.Task `json:"tasks"`
 }
@@ -520,6 +521,19 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write([]byte(analysisHTML))
+		return
+	}
+	if r.URL.Path == "/context" {
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w, http.MethodGet)
+			return
+		}
+		if !localDebugRequest(r) {
+			http.Error(w, "context debugger requires local loopback", http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(contextHTML))
 		return
 	}
 	if r.URL.Path == "/api/v1/healthz" {
@@ -1283,6 +1297,10 @@ func (s *Server) assessmentRoute(w http.ResponseWriter, r *http.Request) {
 		s.serveAssessmentArtifact(w, r, current)
 		return
 	}
+	if len(parts) == 3 && parts[1] == "context" {
+		s.contextDebug(w, r, current, parts[2])
+		return
+	}
 	switch parts[1] {
 	case "permissions":
 		s.changeRunPermissions(w, r, current)
@@ -1970,8 +1988,12 @@ func (r *run) view(after string) assessmentView {
 		view.PendingQuestions = append(view.PendingQuestions, questionView{ID: question.ID, TaskID: question.taskID, Text: question.text})
 	}
 	if r.plan != nil {
-		view.PendingPlan = &planApprovalView{ID: r.plan.ID, Summary: r.plan.plan.Summary, Tasks: append([]assessment.Task(nil), r.plan.plan.Tasks...)}
-		pending := coordinatorPlanView{Round: len(r.state.Plans) + 1, Summary: r.plan.plan.Summary, Status: "review"}
+		phase := r.plan.plan.Phase
+		if phase == "" {
+			phase = "assessment"
+		}
+		view.PendingPlan = &planApprovalView{ID: r.plan.ID, Phase: phase, Summary: r.plan.plan.Summary, Tasks: append([]assessment.Task(nil), r.plan.plan.Tasks...)}
+		pending := coordinatorPlanView{Round: len(r.state.Plans) + 1, Phase: phase, Summary: r.plan.plan.Summary, Status: "review"}
 		for _, task := range r.plan.plan.Tasks {
 			pending.Tasks = append(pending.Tasks, coordinatorTaskView{ID: task.ID, Goal: task.Goal, DoneWhen: task.DoneWhen, Status: "review"})
 		}

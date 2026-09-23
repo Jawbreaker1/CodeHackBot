@@ -286,7 +286,13 @@ func (c Client) Complete(ctx context.Context, messages []Message, opts ChatOptio
 
 	httpClient := c.HTTPClient
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 90 * time.Second}
+		timeout := 90 * time.Second
+		if c.AuthTokenFile != "" {
+			// The subscription adapter may spend up to three minutes waiting
+			// for a model response. Do not cancel its caller first.
+			timeout = 200 * time.Second
+		}
+		httpClient = &http.Client{Timeout: timeout}
 	}
 
 	body, err := json.Marshal(struct {

@@ -141,8 +141,9 @@ function chatApprovalNode(item, kind) {
 function planReviewNode(plan) {
   const box = node('article', 'chat-approval plan-review');
   box.setAttribute('aria-live', 'assertive');
-  box.append(node('div', 'chat-approval-title', 'Review proposed test sequence'));
-  box.append(node('p', 'worker-detail', 'The coordinator has proposed bounded tests. Select what should run; unselected tasks will not execute or become evidence.'));
+  const research = plan.phase === 'research';
+  box.append(node('div', 'chat-approval-title', research ? 'Review proposed research' : 'Review proposed test sequence'));
+  box.append(node('p', 'worker-detail', research ? 'The coordinator wants to gather relevant knowledge before testing. Select which bounded research tasks should run.' : 'The coordinator has proposed bounded tests. Select what should run; unselected tasks will not execute or become evidence.'));
   const choices = node('div', 'plan-choices');
   for (const task of plan.tasks || []) {
     const label = node('label', 'plan-choice');
@@ -220,7 +221,7 @@ function updateComposer() {
   $('chatInput').disabled = !current || !!finalized;
   $('send').disabled = !current || !!finalized || !!pendingMessage || (!$('chatInput').value.trim() && !selectedFiles.length);
   $('newAssessment').disabled = starting;
-  $('conversationState').textContent = current?.pending_plan ? 'Waiting for your test selection · No worker is running' : current?.pending_tool ? 'Waiting for your approval · No tool is running' : pendingMessage ? 'Coordinator is responding…' : current?.resumable ? 'Session paused · Open Workers to review and resume' : finalized ? 'Session ended · Start a new session to continue' : assessment ? 'Workers can run while you discuss the assessment' : 'Ready when you are';
+  $('conversationState').textContent = current?.pending_plan ? (current.pending_plan.phase === 'research' ? 'Waiting for your research selection · No worker is running' : 'Waiting for your test selection · No worker is running') : current?.pending_tool ? 'Waiting for your approval · No tool is running' : pendingMessage ? 'Coordinator is responding…' : current?.resumable ? 'Session paused · Open Workers to review and resume' : finalized ? 'Session ended · Start a new session to continue' : assessment ? 'Workers can run while you discuss the assessment' : 'Ready when you are';
   $('chatInput').placeholder = current?.resumable ? 'Resume this session to continue' : finalized ? 'This session has ended' : 'Ask, investigate, or plan an assessment…';
 }
 function formatBytes(value) {
@@ -236,7 +237,7 @@ function renderWorkStatus(view) {
   let state = 'working';
   if (view.pending_plan) {
     state = 'waiting';
-    label = 'Plan review · choose tests before execution';
+    label = view.pending_plan.phase === 'research' ? 'Research review · choose sources to inspect' : 'Plan review · choose tests before execution';
   } else if (view.pending_tool || approvals.length) {
     state = 'waiting';
     label = 'Approval needed · ' + (approvals.length ? approvals.map(item => item.task_id).join(', ') : 'local observation');
@@ -248,6 +249,7 @@ function renderWorkStatus(view) {
   } else if (isAssessmentView(view) && ['running', 'starting'].includes(view.status)) {
     const latest = [...eventRecords.values()].sort((a, b) => a.sequence - b.sequence).at(-1)?.event;
     if (latest?.kind === 'planning') label = 'Coordinator planning';
+    else if (latest?.kind === 'research') label = 'Coordinator researching';
     else if (latest?.kind === 'execution_started') label = 'Executor running';
     else label = 'Assessment running';
   } else if (pendingMessage) {
@@ -297,6 +299,8 @@ function renderOverview(view) {
   if (assessment) $('customerReport').href = '/api/v1/customers/' + encodeURIComponent(view.customer) + '/report';
   $('analysisLink').classList.toggle('hidden', !assessment);
   if (assessment) $('analysisLink').href = '/analysis?assessment=' + encodeURIComponent(view.id);
+  $('contextLink').classList.toggle('hidden', !assessment);
+  if (assessment) $('contextLink').href = '/context?assessment=' + encodeURIComponent(view.id);
 }
 function renderView(view) {
   current = view;

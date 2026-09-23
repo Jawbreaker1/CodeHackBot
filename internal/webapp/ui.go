@@ -11,6 +11,9 @@ var indexHTML string
 //go:embed static/analysis.html
 var analysisHTML string
 
+//go:embed static/context.html
+var contextHTML string
+
 //go:embed static/*.css static/*.js static/*.svg
 var uiAssets embed.FS
 
@@ -19,9 +22,9 @@ func serveUI(w http.ResponseWriter, r *http.Request) bool {
 	switch r.URL.Path {
 	case "/app.css":
 		kind = "text/css; charset=utf-8"
-	case "/app.js", "/inspector.js", "/analysis.js":
+	case "/app.js", "/inspector.js", "/analysis.js", "/context.js":
 		kind = "text/javascript; charset=utf-8"
-	case "/analysis.css":
+	case "/analysis.css", "/context.css":
 		kind = "text/css; charset=utf-8"
 	case "/logo.svg", "/logo-small.svg", "/wordmark.svg":
 		kind = "image/svg+xml"

@@ -27,6 +27,7 @@ type Response struct {
 	Artifacts []string    `json:"artifacts,omitempty"`
 	Summary   string      `json:"summary,omitempty"`
 	Question  string      `json:"question,omitempty"`
+	Strategy  string      `json:"strategy,omitempty"`
 	Plan      *PlanUpdate `json:"plan,omitempty"`
 }
 
@@ -65,6 +66,10 @@ func ParseResponse(text string) (Response, error) {
 		if strings.TrimSpace(r.Question) == "" {
 			return r, fmt.Errorf("ask_user question is required")
 		}
+	case "load_strategy":
+		if strings.TrimSpace(r.Strategy) == "" {
+			return r, fmt.Errorf("load_strategy strategy is required")
+		}
 	case "update_plan":
 		if r.Plan == nil {
 			return r, fmt.Errorf("update_plan requires plan")
@@ -77,6 +82,9 @@ func ParseResponse(text string) (Response, error) {
 	}
 	if r.Type != "action" && len(r.Artifacts) != 0 {
 		return r, fmt.Errorf("only action may declare artifacts")
+	}
+	if r.Type != "load_strategy" && r.Strategy != "" {
+		return r, fmt.Errorf("only load_strategy may name a strategy")
 	}
 	if len(r.Artifacts) > 8 {
 		return r, fmt.Errorf("action declares %d artifacts; maximum is 8, so keep the most useful references", len(r.Artifacts))

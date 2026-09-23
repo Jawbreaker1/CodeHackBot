@@ -188,7 +188,11 @@ func (c Coordinator) run(ctx context.Context, root string, initial State) (state
 		if err := saveJSON(filepath.Join(root, "assessment.json"), state); err != nil {
 			return state, err
 		}
-		c.emit(Event{Kind: "plan", Message: d.Summary})
+		kind := "plan"
+		if d.Phase == "research" {
+			kind = "research"
+		}
+		c.emit(Event{Kind: kind, Message: d.Summary})
 		c.publish(state)
 		for _, task := range selectedTasks {
 			c.emit(Event{
@@ -352,10 +356,12 @@ func coordinatorPayload(state State) coordinatorModelPacket {
 	return coordinatorModelPacket{
 		Role: "assessment_coordinator",
 		Instructions: []string{
-			"Return one JSON object only: {summary, tasks:[{id,goal,done_when,depends_on:[]}], complete:false, findings:[], gaps:[]}.",
+			"Return one JSON object only: {phase:\"research\" or \"assessment\", summary, tasks:[{id,goal,done_when,depends_on:[]}], complete:false, findings:[], gaps:[]}.",
 			"Coordinate an authorized lab assessment. Choose one or two bounded workers per round according to the useful independent work, not a fixed worker count. Do not execute tools yourself.",
+			"If relevant strategy, software identity, advisory coverage, or attack-path knowledge is missing before a credible test plan, set phase:research and assign bounded research workers first. They may consult the local strategy catalog and permitted Kali, source, advisory, CVE, or Metasploit resources, recording provenance and gaps. After their results, replan with phase:assessment. Use research again when later discoveries require it; do not make it a mandatory opening round or claim complete knowledge before testing. Research is a visible plan, not execution permission.",
 			"Treat every non-empty tasks array as a proposed sequence for operator review. Explain why each task matters through its goal and done_when; the runtime will let the operator select which bounded tasks to run before execution. Never treat an unselected task as completed evidence.",
 			"Delegate independent approaches in parallel when each can advance the goal without contending on mutable state. Sequence dependent work in later rounds. Use fewer workers when parallel work adds only overhead.",
+			"For authorized offline credential recovery, review high-probability candidate families, including applicable transformations, before proposing exhaustive search. When bounded exhaustive coverage becomes the justified last resort, estimate feasibility and split disjoint partitions across the available worker slots, with isolated state and later independent validation. A method-limited miss is a reason to replan, not proof the target is unreachable.",
 			"A worker is an adaptive task, not a single command. Give it an outcome and evidence-based done condition, with room to inspect prerequisites, execute, and correct a failure. Do not split preparation from execution unless the dependency or scope makes that necessary. Specify scope and material resource limits, but leave command sequences, bookkeeping, and tool controls to the worker. Let the worker choose tools from verified capabilities.",
 			"Make resource limits feasible and distinguish hard enforcement from measured use. The runtime does not provide an aggregate task filesystem quota or memory cgroup: do not make proof of either a worker done condition. Ask the worker to use available per-process controls, monitor task-local storage, stop before a stated budget is exceeded, and report which limits were measured rather than enforced. Do not add procedural checks that cannot establish the user's objective.",
 			"Use unique lowercase task IDs. Dependencies may reference only done tasks from earlier rounds. All tasks inherit the exact user scope and operator-selected approval policy; do not expand them.",
@@ -409,6 +415,7 @@ type compactFinding struct {
 }
 
 type compactDecision struct {
+	Phase           string           `json:"phase,omitempty"`
 	Summary         string           `json:"summary"`
 	Tasks           []compactTask    `json:"tasks,omitempty"`
 	ApprovedTaskIDs []string         `json:"approved_task_ids,omitempty"`
@@ -444,7 +451,7 @@ func compactCoordinatorState(state State) coordinatorPromptState {
 		if older {
 			summaryLimit = 320
 		}
-		item := compactDecision{Summary: promptExcerpt(plan.Summary, summaryLimit), ApprovedTaskIDs: append([]string(nil), plan.ApprovedTaskIDs...), SkippedTaskIDs: append([]string(nil), plan.SkippedTaskIDs...), Complete: plan.Complete}
+		item := compactDecision{Phase: plan.Phase, Summary: promptExcerpt(plan.Summary, summaryLimit), ApprovedTaskIDs: append([]string(nil), plan.ApprovedTaskIDs...), SkippedTaskIDs: append([]string(nil), plan.SkippedTaskIDs...), Complete: plan.Complete}
 		for _, task := range plan.Tasks {
 			entry := compactTask{ID: task.ID, DependsOn: append([]string(nil), task.DependsOn...)}
 			if !older {

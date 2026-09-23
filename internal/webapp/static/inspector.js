@@ -264,7 +264,7 @@ export function renderCoordinatorPlans(view) {
     const completed = (plan.tasks || []).filter(task => task.status === 'done').length;
     const total = (plan.tasks || []).filter(task => task.status !== 'skipped').length;
     const progress = plan.status === 'complete' ? 'assessment concluded' : plan.status === 'review' ? 'awaiting selection' : `${completed}/${total} tasks completed`;
-    const label = `Round ${plan.round}${plan.round > 1 ? ' · revised' : ''} · ${progress}`;
+    const label = `Round ${plan.round} · ${plan.phase === 'research' ? 'research' : 'assessment'}${plan.round > 1 ? ' · revised' : ''} · ${progress}`;
     const details = disclosure(label, content, view.id + '-coordinator-plan-' + plan.round);
     if (plan.round === plans.length) details.dataset.defaultOpen = 'true';
     items.push(details);

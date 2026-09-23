@@ -26,7 +26,7 @@ func (c Coordinator) runWorker(ctx context.Context, root string, state State, ta
 	if err := os.MkdirAll(workspace, 0700); err != nil {
 		return r, err
 	}
-	frame := behavior.Frame{SystemPrompt: c.Frame.SystemPrompt, AgentsPath: c.Frame.AgentsPath, AgentsText: c.Frame.AgentsText, RuntimeMode: "assessment_worker", Parameters: map[string]string{
+	frame := behavior.Frame{SystemPrompt: c.Frame.SystemPrompt, AgentsPath: c.Frame.AgentsPath, AgentsText: c.Frame.AgentsText, StrategyCatalogPath: c.Frame.StrategyCatalogPath, StrategyCatalogText: c.Frame.StrategyCatalogText, RuntimeMode: "assessment_worker", Parameters: map[string]string{
 		"scope": state.Scope, "approval_mode": "operator_selected_session_policy", "assessment_goal": state.Goal, "task_id": task.ID,
 	}}
 	foundation, err := session.NewFoundation(session.Input{Goal: task.Goal})

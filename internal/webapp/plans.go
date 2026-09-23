@@ -6,6 +6,7 @@ import "github.com/Jawbreaker1/CodeHackBot/internal/assessment"
 // decisions. It never infers or advances a plan from tool output.
 type coordinatorPlanView struct {
 	Round   int                   `json:"round"`
+	Phase   string                `json:"phase"`
 	Summary string                `json:"summary"`
 	Status  string                `json:"status"`
 	Tasks   []coordinatorTaskView `json:"tasks"`
@@ -25,7 +26,11 @@ func coordinatorPlans(state assessment.State, workers map[string]workerView) []c
 	}
 	plans := make([]coordinatorPlanView, 0, len(state.Plans))
 	for i, decision := range state.Plans {
-		plan := coordinatorPlanView{Round: i + 1, Summary: decision.Summary, Status: "finished"}
+		phase := decision.Phase
+		if phase == "" {
+			phase = "assessment"
+		}
+		plan := coordinatorPlanView{Round: i + 1, Phase: phase, Summary: decision.Summary, Status: "finished"}
 		if decision.Complete {
 			plan.Status = "complete"
 		}

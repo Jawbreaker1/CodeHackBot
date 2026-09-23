@@ -35,6 +35,17 @@ func TestRecorderCapture(t *testing.T) {
 	if !strings.Contains(text, "[session_foundation]") || !strings.Contains(text, "test goal") {
 		t.Fatalf("snapshot missing expected content:\n%s", text)
 	}
+	sections, err := os.ReadFile(filepath.Join(dir, "step-001-pre-llm-sections.json"))
+	if err != nil || !strings.Contains(string(sections), `"Name": "session_foundation"`) {
+		t.Fatalf("structured model sections missing: %v %s", err, sections)
+	}
+	if err := recorder.CaptureModelRequest(1, []map[string]string{{"role": "system", "content": "prompt"}}); err != nil {
+		t.Fatalf("CaptureModelRequest() error = %v", err)
+	}
+	request, err := os.ReadFile(filepath.Join(dir, "step-001-request.json"))
+	if err != nil || !strings.Contains(string(request), `"content": "prompt"`) {
+		t.Fatalf("exact model request missing: %v %s", err, request)
+	}
 
 	metaPath := filepath.Join(dir, "step-001-pre-llm-meta.txt")
 	meta, err := os.ReadFile(metaPath)

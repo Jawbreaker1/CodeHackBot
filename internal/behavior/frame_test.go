@@ -13,6 +13,7 @@ func TestLoadBehaviorFrame(t *testing.T) {
 	if err := os.WriteFile(agentsPath, []byte("# Agent Directives\n- Stay in scope."), 0o644); err != nil {
 		t.Fatalf("write AGENTS.md: %v", err)
 	}
+	writeCatalog(t, root)
 
 	frame, err := Load(root, "worker", map[string]string{
 		"approval_mode": "default",
@@ -31,6 +32,9 @@ func TestLoadBehaviorFrame(t *testing.T) {
 	if !strings.Contains(frame.AgentsText, "Stay in scope") {
 		t.Fatalf("AgentsText missing AGENTS content: %q", frame.AgentsText)
 	}
+	if !strings.Contains(frame.PromptText(), "Local strategy catalog") || !strings.Contains(frame.PromptText(), "investigation/SKILL.md") {
+		t.Fatalf("strategy catalog missing from prompt: %q", frame.PromptText())
+	}
 	if frame.Parameters["approval_mode"] != "default" {
 		t.Fatalf("approval_mode = %q", frame.Parameters["approval_mode"])
 	}
@@ -41,6 +45,7 @@ func TestLoadBehaviorFrameDefaultsRuntimeMode(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("rules"), 0o644); err != nil {
 		t.Fatalf("write AGENTS.md: %v", err)
 	}
+	writeCatalog(t, root)
 
 	frame, err := Load(root, "", nil)
 	if err != nil {
@@ -84,6 +89,7 @@ func TestDefaultPromptNamesAdaptiveKaliCapability(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("rules"), 0o644); err != nil {
 		t.Fatalf("write AGENTS.md: %v", err)
 	}
+	writeCatalog(t, root)
 	frame, err := Load(root, "worker", nil)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -92,6 +98,17 @@ func TestDefaultPromptNamesAdaptiveKaliCapability(t *testing.T) {
 		if !strings.Contains(frame.PromptText(), want) {
 			t.Fatalf("default prompt missing %q", want)
 		}
+	}
+}
+
+func writeCatalog(t *testing.T, root string) {
+	t.Helper()
+	dir := filepath.Join(root, "docs", "strategies")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "catalog.md"), []byte("# Local strategy catalog\n- investigation/SKILL.md"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

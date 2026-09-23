@@ -1,6 +1,7 @@
 package contextinspect
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -30,23 +31,64 @@ func (r Recorder) Capture(step int, stage string, packet ctxpacket.WorkerPacket)
 	if r.Dir == "" {
 		return fmt.Errorf("dir is required")
 	}
-	if err := os.MkdirAll(r.Dir, 0o755); err != nil {
+	if err := os.MkdirAll(r.Dir, 0o700); err != nil {
 		return fmt.Errorf("mkdir inspect dir: %w", err)
 	}
 	path := filepath.Join(r.Dir, fmt.Sprintf("step-%03d-%s.txt", step, stage))
 	rendered := packet.Render() + "\n"
-	if err := os.WriteFile(path, []byte(rendered), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(rendered), 0o600); err != nil {
 		return fmt.Errorf("write snapshot: %w", err)
 	}
+	if stage == "pre-llm" {
+		sections, err := json.MarshalIndent(packet.RenderSections(), "", "  ")
+		if err != nil {
+			return fmt.Errorf("encode context sections: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(r.Dir, fmt.Sprintf("step-%03d-pre-llm-sections.json", step)), sections, 0o600); err != nil {
+			return fmt.Errorf("write context sections: %w", err)
+		}
+	}
 	metaPath := filepath.Join(r.Dir, fmt.Sprintf("step-%03d-%s-meta.txt", step, stage))
-	if err := os.WriteFile(metaPath, []byte(renderMeta(path, rendered, packet.RenderSections())), 0o644); err != nil {
+	if err := os.WriteFile(metaPath, []byte(renderMeta(path, rendered, packet.RenderSections())), 0o600); err != nil {
 		return fmt.Errorf("write snapshot metadata: %w", err)
 	}
 	validationPath := filepath.Join(r.Dir, fmt.Sprintf("step-%03d-%s-validation.txt", step, stage))
-	if err := os.WriteFile(validationPath, []byte(renderValidation(validationPath, ctxpacket.ValidatePacket(packet))), 0o644); err != nil {
+	if err := os.WriteFile(validationPath, []byte(renderValidation(validationPath, ctxpacket.ValidatePacket(packet))), 0o600); err != nil {
 		return fmt.Errorf("write snapshot validation: %w", err)
 	}
 	return nil
+}
+
+// CaptureModelRequest records the exact ordered messages sent to the worker
+// model; the human-readable packet alone omits the worker decision contract.
+func (r Recorder) CaptureModelRequest(step int, messages any) error {
+	if step <= 0 || r.Dir == "" {
+		return fmt.Errorf("step and context directory are required")
+	}
+	data, err := json.MarshalIndent(messages, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(r.Dir, fmt.Sprintf("step-%03d-request.json", step)), data, 0o600)
+}
+
+// ReadOmissions is a debug-only projection override. The underlying packet,
+// evidence and historical snapshots are never edited.
+func (r Recorder) ReadOmissions() ([]string, error) {
+	data, err := os.ReadFile(filepath.Join(r.Dir, "debug-omissions.json"))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var value struct {
+		Sections []string `json:"sections"`
+	}
+	if err := json.Unmarshal(data, &value); err != nil {
+		return nil, fmt.Errorf("read debug omissions: %w", err)
+	}
+	return value.Sections, nil
 }
 
 func (r Recorder) CaptureGoalEvaluationAttempt(attempt workergoal.AttemptRecord) error {

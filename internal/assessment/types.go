@@ -99,6 +99,7 @@ type Finding struct {
 }
 
 type Decision struct {
+	Phase           string    `json:"phase,omitempty"` // research or assessment; empty means assessment
 	Summary         string    `json:"summary"`
 	Tasks           []Task    `json:"tasks"`
 	ApprovedTaskIDs []string  `json:"approved_task_ids,omitempty"`
@@ -172,6 +173,12 @@ func parseDecision(raw string) (Decision, error) {
 }
 
 func validateDecision(d Decision, state State) error {
+	if d.Phase != "" && d.Phase != "research" && d.Phase != "assessment" {
+		return fmt.Errorf("unknown coordinator phase %q", d.Phase)
+	}
+	if d.Phase == "research" && d.Complete {
+		return fmt.Errorf("research phase cannot complete the assessment")
+	}
 	if strings.TrimSpace(d.Summary) == "" {
 		return fmt.Errorf("coordinator summary is missing")
 	}

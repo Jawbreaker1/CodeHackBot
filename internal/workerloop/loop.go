@@ -113,10 +113,19 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 			return out, err
 		}
 		current.CurrentStep.RemainingBudget = fmt.Sprintf("%d steps", current.Budget.Limit-current.Budget.Used)
-		view, err := l.modelView(&current, buildUserPrompt)
+		input := current.Clone()
+		if reader, ok := l.Inspector.(interface{ ReadOmissions() ([]string, error) }); ok {
+			omissions, readErr := reader.ReadOmissions()
+			if readErr != nil {
+				return out, readErr
+			}
+			applyDebugOmissions(&input, omissions)
+		}
+		view, err := l.modelView(&input, buildUserPrompt)
 		if err != nil {
 			return out, err
 		}
+		current.OperatorState = view.OperatorState
 		current.Budget.Used++
 		current.CurrentStep.RemainingBudget = fmt.Sprintf("%d steps", current.Budget.Limit-current.Budget.Used)
 		step := current.Budget.Used
@@ -127,10 +136,16 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 		if err := l.capture(step, "pre-llm", view); err != nil {
 			return out, err
 		}
-		text, err := l.LLM.ChatStructured(ctx, []llmclient.Message{
+		messages := []llmclient.Message{
 			{Role: "system", Content: view.BehaviorFrame.PromptText()},
 			{Role: "user", Content: buildUserPrompt(view)},
-		})
+		}
+		if recorder, ok := l.Inspector.(interface{ CaptureModelRequest(int, any) error }); ok {
+			if err := recorder.CaptureModelRequest(step, messages); err != nil {
+				return out, fmt.Errorf("record model request: %w", err)
+			}
+		}
+		text, err := l.LLM.ChatStructured(ctx, messages)
 		if err != nil {
 			return out, fmt.Errorf("worker decision: %w", err)
 		}
@@ -150,6 +165,27 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 		}
 		switch response.Type {
 		case "update_plan":
+			continue
+		case "load_strategy":
+			loaded, lookupErr := loadStrategy(&current, response.Strategy)
+			if lookupErr != nil {
+				current.RunningSummary = "Strategy lookup failed: " + lookupErr.Error()
+				if err := l.emit(EventStrategyLookupFailed, current, current.RunningSummary); err != nil {
+					return out, err
+				}
+				continue
+			}
+			if loaded {
+				current.RunningSummary = "Loaded local strategy guidance: " + response.Strategy
+			} else {
+				current.RunningSummary = "Strategy guidance was already loaded: " + response.Strategy
+			}
+			if err := l.emit(EventStrategyLoaded, current, current.RunningSummary); err != nil {
+				return out, err
+			}
+			if err := l.capture(step, "strategy-loaded", current); err != nil {
+				return out, err
+			}
 			continue
 		case "blocked":
 			current.TaskRuntime.State = "blocked"
@@ -399,7 +435,8 @@ func buildUserPrompt(packet ctxpacket.WorkerPacket) string {
 	payload := map[string]any{
 		"role": "worker",
 		"instructions": []string{
-			"Respond with one JSON object only. Choose action, update_plan, step_complete, ask_user, or blocked.",
+			"Respond with one JSON object only. Choose action, load_strategy, update_plan, step_complete, ask_user, or blocked.",
+			"To keep one relevant local guide in this worker's context across later turns: {\"type\":\"load_strategy\",\"strategy\":\"relative/path/from/catalog.md\"}. Choose it from the local strategy catalog in the behavior frame when it can improve an unfamiliar or failed approach. The runtime reads only a bounded Markdown file within that catalog directory and records its path and SHA-256; it is supporting knowledge, not target evidence or permission. Do not use an action just to read a strategy guide, and do not load unrelated guides.",
 			"For direct execution: {\"type\":\"action\",\"command\":\"executable\",\"args\":[\"literal argument\"],\"use_shell\":false,\"impact\":\"short plain-language effect and risk\",\"artifacts\":[\"relative/path-created-by-this-action\"]}. Never add shell quotes to literal arguments. Declare at most eight bounded regular files the approved action is expected to create inside the worker workspace; declared artifacts are registered only after execution. A command may produce more files, but list the most useful eight and keep the others discoverable through the task-local log or workspace.",
 			"For shell syntax: {\"type\":\"action\",\"command\":\"complete shell script\",\"use_shell\":true}. Omit args.",
 			"For completion: {\"type\":\"step_complete\",\"summary\":\"evidence-backed answer to the original goal, with limitations\"}. This means the whole task is complete, not just one plan step.",

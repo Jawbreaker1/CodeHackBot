@@ -28,6 +28,27 @@ func testCoordinator(url string) Coordinator {
 	return Coordinator{LLM: llmclient.Client{BaseURL: url, Model: "fixture-model"}, Frame: behavior.Frame{SystemPrompt: "Authorized lab test", AgentsText: "Use synthetic fixtures only"}, Approver: func(Task) approval.Approver { return approval.StaticApprover{Decision: approval.DecisionApproveOnce} }}
 }
 
+func TestCoordinatorResearchPhaseIsAnOperatorVisiblePlan(t *testing.T) {
+	state := State{Version: 1, Goal: "investigate a scoped system", Scope: "fixture only", Limits: DefaultLimits()}
+	d := Decision{Phase: "research", Summary: "Establish software identity and relevant sources", Tasks: []Task{{ID: "identify", Goal: "Identify the software and research applicable advisories", DoneWhen: "identity and sources are recorded"}}}
+	if err := validateDecision(d, state); err != nil {
+		t.Fatalf("research plan rejected: %v", err)
+	}
+	if err := validateDecision(Decision{Phase: "research", Summary: "done", Complete: true}, state); err == nil {
+		t.Fatal("research phase cannot finalize assessment")
+	}
+	if err := validateDecision(Decision{Phase: "unknown", Summary: "work", Tasks: d.Tasks}, state); err == nil {
+		t.Fatal("unknown phase was accepted")
+	}
+	if !strings.Contains(coordinatorPrompt(state), "phase:research") {
+		t.Fatal("coordinator prompt does not offer a research plan")
+	}
+	state.Plans = []Decision{d}
+	if got := compactCoordinatorState(state).Plans[0].Phase; got != "research" {
+		t.Fatalf("research phase lost from coordinator history: %q", got)
+	}
+}
+
 func TestCoordinatorPromptCompactsPriorExecutionBodies(t *testing.T) {
 	large := strings.Repeat("full shell script and output ", 10000)
 	state := State{

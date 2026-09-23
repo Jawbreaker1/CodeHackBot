@@ -14,6 +14,8 @@ const (
 	EventUserAnswered         ProgressEventKind = "user_answered"
 	EventTaskStarted          ProgressEventKind = "task_started"
 	EventPlanFinished         ProgressEventKind = "plan_finished"
+	EventStrategyLoaded       ProgressEventKind = "strategy_loaded"
+	EventStrategyLookupFailed ProgressEventKind = "strategy_lookup_failed"
 	EventActionProposed       ProgressEventKind = "action_proposed"
 	EventExecutionStarted     ProgressEventKind = "execution_started"
 	EventExecutionFinished    ProgressEventKind = "execution_finished"

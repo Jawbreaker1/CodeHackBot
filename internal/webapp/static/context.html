@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BirdHackBot · Context debugger</title>
+  <link rel="icon" type="image/svg+xml" href="/logo-small.svg">
+  <link rel="stylesheet" href="/context.css"><script type="module" src="/context.js"></script>
+</head>
+<body>
+  <header class="topbar"><a class="brand" href="/"><img src="/logo-small.svg" alt="">BirdHackBot<span>.</span></a><div class="title"><small>Assessment diagnostics</small><h1>Context debugger</h1></div><div class="top-actions"><button id="refresh" type="button">Refresh turns</button><a href="/">← Coordinator</a></div></header>
+  <div id="error" role="alert" hidden></div>
+  <main class="workspace">
+    <aside class="rail"><h2>Model turns</h2><p>Choose a coordinator or worker decision to inspect what was sent.</p><nav id="turns" aria-label="Model turns"></nav></aside>
+    <section class="stack"><div class="section-head"><div><small id="source">Choose a turn</small><h2 id="turnTitle">Context stack</h2></div><strong id="total"></strong></div><p class="hint">Sections appear in model input order. Bars show relative size; select one to read its exact content.</p><div id="sections" class="sections"></div><details id="requestDetails" hidden><summary>Exact model request</summary><pre id="request"></pre></details></section>
+    <aside class="detail"><div class="section-head"><div><small>Selected section</small><h2 id="sectionTitle">—</h2></div><span id="sectionSize"></span></div><pre id="content">Select a section to inspect it.</pre><div id="omission" hidden><label><input id="omitToggle" type="checkbox"> Omit this optional section from future worker model turns</label><p>Debug override only. Recorded packets and evidence remain intact; toggle off to restore it. Safety, scope, current step, and latest execution evidence cannot be omitted.</p></div></aside>
+  </main>
+</body>
+</html>

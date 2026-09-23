@@ -20,6 +20,7 @@ Current active docs are intentionally minimal:
 - `docs/runbooks/acceptance-gates.md`
 - `docs/runbooks/subscription-bridge.md`
 - `docs/runbooks/web-application.md`
+- `docs/strategies/catalog.md` and its selectively read worker guides
 - `docs/architecture.md`
 
 `TASKS.md` owns status, `docs/architecture.md` owns contracts, and `ROADMAP.md` owns future direction. Update the relevant active docs with behavior changes; archive superseded designs instead of retaining conflicting instructions. Assessments are dated evidence, not implementation status.

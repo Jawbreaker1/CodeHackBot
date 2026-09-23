@@ -16,11 +16,13 @@ const coordinatorConversationPrompt = `You are the assessment coordinator's conv
 
 // Frame is the fixed behavior input used as part of the active context packet.
 type Frame struct {
-	SystemPrompt string
-	AgentsPath   string
-	AgentsText   string
-	RuntimeMode  string
-	Parameters   map[string]string
+	SystemPrompt        string
+	AgentsPath          string
+	AgentsText          string
+	StrategyCatalogPath string
+	StrategyCatalogText string
+	RuntimeMode         string
+	Parameters          map[string]string
 }
 
 // Load constructs the behavior frame from repo-local sources.
@@ -30,13 +32,20 @@ func Load(repoRoot, runtimeMode string, parameters map[string]string) (Frame, er
 	if err != nil {
 		return Frame{}, fmt.Errorf("read AGENTS.md: %w", err)
 	}
+	catalogPath := filepath.Join(repoRoot, "docs", "strategies", "catalog.md")
+	catalogBytes, err := os.ReadFile(catalogPath)
+	if err != nil && !os.IsNotExist(err) {
+		return Frame{}, fmt.Errorf("read strategy catalog: %w", err)
+	}
 
 	frame := Frame{
-		SystemPrompt: defaultSystemPrompt,
-		AgentsPath:   agentsPath,
-		AgentsText:   strings.TrimSpace(string(agentsBytes)),
-		RuntimeMode:  strings.TrimSpace(runtimeMode),
-		Parameters:   cloneMap(parameters),
+		SystemPrompt:        defaultSystemPrompt,
+		AgentsPath:          agentsPath,
+		AgentsText:          strings.TrimSpace(string(agentsBytes)),
+		StrategyCatalogPath: catalogPath,
+		StrategyCatalogText: strings.TrimSpace(string(catalogBytes)),
+		RuntimeMode:         strings.TrimSpace(runtimeMode),
+		Parameters:          cloneMap(parameters),
 	}
 	if frame.RuntimeMode == "" {
 		frame.RuntimeMode = "worker"
@@ -52,6 +61,13 @@ func (f Frame) PromptText() string {
 	b.WriteString("\n\n")
 	b.WriteString("AGENTS.md:\n")
 	b.WriteString(strings.TrimSpace(f.AgentsText))
+	if f.StrategyCatalogText != "" {
+		b.WriteString("\n\nLocal strategy catalog (supporting guidance; not target evidence or permission):\n")
+		b.WriteString("Path: ")
+		b.WriteString(f.StrategyCatalogPath)
+		b.WriteString("\n")
+		b.WriteString(strings.TrimSpace(f.StrategyCatalogText))
+	}
 	b.WriteString("\n\n")
 	b.WriteString("Runtime mode:\n")
 	b.WriteString(strings.TrimSpace(f.RuntimeMode))
