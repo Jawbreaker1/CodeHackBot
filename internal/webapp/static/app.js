@@ -8,6 +8,7 @@ let starting = false;
 let eventRecords = new Map();
 let signatures = {};
 let modelCatalog = [];
+let profileMode = false;
 let deletingSession = null;
 const narrow = matchMedia('(max-width: 1150px)');
 const mobile = matchMedia('(max-width: 680px)');
@@ -29,34 +30,40 @@ function sessionPath(view) {
   return isAssessmentView(view) ? '/api/v1/assessments/' + encodeURIComponent(view.id) : '/api/v1/intake/' + encodeURIComponent(view?.id || '');
 }
 function renderModelOptions(models, selected) {
-  const target = $('modelOptions');
-  if (!models.length) {
-    target.replaceChildren(node('p', 'empty', 'The provider did not publish a model catalog. Enter an exact model ID below.'));
-    return;
-  }
+	const target = $('modelOptions');
+	if (!models.length) {
+		target.replaceChildren(node('p', 'empty', profileMode ? 'No model profiles are configured.' : 'The provider did not publish a model catalog. Enter an exact model ID below.'));
+		return;
+	}
   target.replaceChildren(...models.map(item => {
     const label = node('label', 'model-option' + (item.id === selected ? ' active' : ''));
     const radio = document.createElement('input');
     radio.type = 'radio'; radio.name = 'model-choice'; radio.value = item.id; radio.checked = item.id === selected;
-    const copy = node('span', '', item.id);
-    if (item.current) copy.append(node('small', '', 'Configured provider model'));
+		const copy = node('span', '', item.label || item.id);
+		if (profileMode) copy.append(node('small', '', `${item.provider === 'subscription' ? 'OpenAI subscription' : 'Local model'} · ${item.model}`));
+		else if (item.current) copy.append(node('small', '', 'Configured provider model'));
     label.append(radio, copy);
     return label;
   }));
 }
 async function openModelPicker() {
-  const dialog = $('modelDialog');
-  $('modelDialogHint').textContent = current?.can_change_model === false ? 'This session is busy. The model is frozen until the current turn or assessment finishes.' : 'Choose a model for this session. The selection is saved with the session and applies to its next turn.';
-  $('modelCustom').value = '';
+	const dialog = $('modelDialog');
+	$('modelDialogHint').textContent = current?.can_change_model === false ? 'This session keeps its model. Choosing another opens a new session; current work continues.' : 'Choose a configured model for this session. Each model keeps its own endpoint and limits.';
+	$('modelCustom').value = '';
   $('modelOptions').replaceChildren(node('p', 'empty', 'Loading available models…'));
   dialog.showModal();
-  try {
-    const data = await api('/api/v1/models');
-    modelCatalog = data.models || [];
-    renderModelOptions(modelCatalog, current?.model || data.current || '');
-    if (data.catalog_error) $('modelDialogHint').textContent += ' ' + data.catalog_error;
-  } catch (error) {
-    renderModelOptions([], current?.model || '');
+	try {
+		const data = await api('/api/v1/models');
+		modelCatalog = data.models || [];
+		profileMode = !!data.profiles_enabled;
+		$('modelCustom').parentElement.classList.toggle('hidden', profileMode);
+		$('modelApply').textContent = current?.can_change_model === false ? 'Use in new session' : 'Use model';
+		renderModelOptions(modelCatalog, profileMode ? (current?.model_profile || data.current || '') : (current?.model || data.current || ''));
+		if (data.catalog_error) $('modelDialogHint').textContent += ' ' + data.catalog_error;
+	} catch (error) {
+		profileMode = false;
+		$('modelCustom').parentElement.classList.remove('hidden');
+		renderModelOptions([], current?.model || '');
     $('modelDialogHint').textContent = error.message;
   }
 }
@@ -561,17 +568,24 @@ $('stop').onclick = () => act('stop', {}, $('assessmentStatus').parentElement);
 $('resume').onclick = () => act('start', {}, $('assessmentStatus').parentElement);
 $('newAssessment').onclick = () => navigate('/api/v1/intake');
 $('model').onclick = openModelPicker;
+for (const button of document.querySelectorAll('[data-close-model]')) button.onclick = () => $('modelDialog').close();
 $('modelForm').onsubmit = async event => {
   event.preventDefault();
-  if (event.submitter?.value === 'cancel') { $('modelDialog').close(); return; }
   if (!current) return;
-  const custom = $('modelCustom').value.trim();
-  const selected = custom || $('modelOptions input[name="model-choice"]:checked')?.value || current.model;
-  if (!selected) { $('modelDialogHint').textContent = 'Choose or enter a model ID.'; return; }
-  $('modelApply').disabled = true;
-  try {
-    const view = await api(sessionModelPath(), {method:'POST', body: JSON.stringify({model:selected})});
-    renderView(view); $('modelDialog').close(); clearError();
+	const custom = profileMode ? '' : $('modelCustom').value.trim();
+	const selected = custom || document.querySelector('#modelOptions input[name="model-choice"]:checked')?.value || (profileMode ? current.model_profile : current.model);
+	if (!selected) { $('modelDialogHint').textContent = 'Choose or enter a model ID.'; return; }
+	$('modelApply').disabled = true;
+	try {
+		if (current.can_change_model === false) {
+			const draft = await api('/api/v1/intake');
+			await api('/api/v1/intake/' + encodeURIComponent(draft.id) + '/model', {method:'POST', body: JSON.stringify(profileMode ? {profile:selected} : {model:selected})});
+			$('modelDialog').close(); clearError();
+			await navigate('/api/v1/intake/' + encodeURIComponent(draft.id));
+		} else {
+			const view = await api(sessionModelPath(), {method:'POST', body: JSON.stringify(profileMode ? {profile:selected} : {model:selected})});
+			renderView(view); $('modelDialog').close(); clearError();
+		}
   } catch (error) { $('modelDialogHint').textContent = error.message; showError(error); }
   finally { $('modelApply').disabled = false; }
 };

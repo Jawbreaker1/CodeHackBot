@@ -29,11 +29,13 @@ import (
 )
 
 type Config struct {
-	RepoRoot     string
-	SessionsRoot string
-	LLM          llmclient.Client
-	Frame        behavior.Frame
-	Limits       assessment.Limits
+	RepoRoot       string
+	SessionsRoot   string
+	LLM            llmclient.Client
+	Profiles       []ModelProfile
+	DefaultProfile string
+	Frame          behavior.Frame
+	Limits         assessment.Limits
 }
 
 type Server struct {
@@ -52,6 +54,7 @@ type intakeRun struct {
 	root           string
 	customer       string
 	client         llmclient.Client
+	profileID      string
 	conversation   intake.Conversation
 	conversationMu sync.RWMutex
 	messages       []intakeMessage
@@ -294,6 +297,7 @@ type intakeView struct {
 	Customer        string              `json:"customer,omitempty"`
 	Title           string              `json:"title"`
 	Model           string              `json:"model"`
+	ModelProfile    string              `json:"model_profile,omitempty"`
 	ModelConfigured bool                `json:"model_configured"`
 	ModelBusy       bool                `json:"model_busy"`
 	CanChangeModel  bool                `json:"can_change_model"`
@@ -321,7 +325,8 @@ type intakeMessageRequest struct {
 }
 
 type modelRequest struct {
-	Model string `json:"model"`
+	Model   string `json:"model"`
+	Profile string `json:"profile,omitempty"`
 }
 
 type intakeStartRequest struct {
@@ -339,6 +344,7 @@ type run struct {
 	customer       string
 	root           string
 	client         llmclient.Client
+	profileID      string
 	goal           string
 	scope          string
 	status         string
@@ -416,6 +422,7 @@ type assessmentView struct {
 	Status           string                `json:"status"`
 	Conclusion       string                `json:"conclusion,omitempty"`
 	Model            string                `json:"model"`
+	ModelProfile     string                `json:"model_profile,omitempty"`
 	ModelBusy        bool                  `json:"model_busy"`
 	CanChangeModel   bool                  `json:"can_change_model"`
 	Resumable        bool                  `json:"resumable"`
@@ -490,6 +497,17 @@ type questionView struct {
 }
 
 func NewServer(config Config) *Server {
+	if len(config.Profiles) > 0 {
+		if config.DefaultProfile == "" {
+			config.DefaultProfile = config.Profiles[0].ID
+		}
+		for _, profile := range config.Profiles {
+			if profile.ID == config.DefaultProfile {
+				config.LLM = profile.client()
+				break
+			}
+		}
+	}
 	if config.SessionsRoot == "" {
 		config.SessionsRoot = filepath.Join(config.RepoRoot, "sessions", "web")
 	}
@@ -661,7 +679,13 @@ func (s *Server) intakeRoute(w http.ResponseWriter, r *http.Request) {
 		if !decodeJSON(w, r, &input) {
 			return
 		}
-		if err := s.changeIntakeModel(current, input.Model); err != nil {
+		var err error
+		if input.Profile != "" {
+			err = s.changeIntakeProfile(current, input.Profile)
+		} else {
+			err = s.changeIntakeModel(current, input.Model)
+		}
+		if err != nil {
 			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
@@ -841,7 +865,7 @@ func (s *Server) newIntake() (*intakeRun, error) {
 	}
 	conversation := intake.Conversation{}
 	conversation.SetBehaviorContext(s.config.Frame.PromptText())
-	current := &intakeRun{id: id, root: root, client: s.config.LLM, conversation: conversation, updatedAt: time.Now().UTC()}
+	current := &intakeRun{id: id, root: root, client: s.config.LLM, profileID: s.config.DefaultProfile, conversation: conversation, updatedAt: time.Now().UTC()}
 	s.mu.Lock()
 	s.intakes[current.id] = current
 	s.mu.Unlock()
@@ -971,6 +995,7 @@ func (s *Server) startIntake(current *intakeRun, customer string) (assessmentVie
 	created.mu.Lock()
 	created.permissionMode = current.permissionMode
 	created.client = client
+	created.profileID = current.profileID
 	created.messages = intakeMessages
 	created.updatedAt = time.Now().UTC()
 	created.mu.Unlock()
@@ -1033,7 +1058,7 @@ func (r *intakeRun) view() intakeView {
 	} else if len(r.messages) > 0 && r.messages[0].Role == "user" {
 		title = compactTitle(r.messages[0].Text)
 	}
-	return intakeView{PermissionMode: r.permissionMode.Normalized(), ID: r.id, Customer: r.customer, Title: title, Model: r.client.Model, ModelConfigured: strings.TrimSpace(r.client.BaseURL) != "" && strings.TrimSpace(r.client.Model) != "", ModelBusy: r.busy, CanChangeModel: !r.busy && r.assessmentID == "", Status: status, Messages: messageViews(r.messages, "intake", r.id), Proposal: cloneDraft(r.proposal), PendingTool: pending, Events: append([]eventRecord(nil), r.events...), AssessmentID: r.assessmentID}
+	return intakeView{PermissionMode: r.permissionMode.Normalized(), ID: r.id, Customer: r.customer, Title: title, Model: r.client.Model, ModelProfile: r.profileID, ModelConfigured: strings.TrimSpace(r.client.BaseURL) != "" && strings.TrimSpace(r.client.Model) != "", ModelBusy: r.busy, CanChangeModel: !r.busy && r.assessmentID == "" && (r.profileID == "" || len(r.messages) == 0), Status: status, Messages: messageViews(r.messages, "intake", r.id), Proposal: cloneDraft(r.proposal), PendingTool: pending, Events: append([]eventRecord(nil), r.events...), AssessmentID: r.assessmentID}
 }
 
 func (r *intakeRun) recordObservation(event assessment.Event) {
@@ -1248,7 +1273,7 @@ func (s *Server) newRun(customer, goal, scope string) (*run, error) {
 	if err := os.Mkdir(root, 0700); err != nil {
 		return nil, fmt.Errorf("create assessment directory: %w", err)
 	}
-	current := &run{id: id, customer: customer, root: root, client: s.config.LLM, goal: goal, scope: scope, status: "draft", done: make(chan struct{}), approvals: make(map[string]*pendingApproval), questions: make(map[string]*pendingQuestion), updatedAt: time.Now().UTC()}
+	current := &run{id: id, customer: customer, root: root, client: s.config.LLM, profileID: s.config.DefaultProfile, goal: goal, scope: scope, status: "draft", done: make(chan struct{}), approvals: make(map[string]*pendingApproval), questions: make(map[string]*pendingQuestion), updatedAt: time.Now().UTC()}
 	s.mu.Lock()
 	s.runs[id] = current
 	s.mu.Unlock()
@@ -1315,7 +1340,13 @@ func (s *Server) assessmentRoute(w http.ResponseWriter, r *http.Request) {
 		if !decodeJSON(w, r, &input) {
 			return
 		}
-		if err := s.changeRunModel(current, input.Model); err != nil {
+		var err error
+		if input.Profile != "" {
+			err = s.changeRunProfile(current, input.Profile)
+		} else {
+			err = s.changeRunModel(current, input.Model)
+		}
+		if err != nil {
 			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
@@ -1947,7 +1978,7 @@ func (r *run) view(after string) assessmentView {
 	if strings.TrimSpace(model) == "" {
 		model = r.state.Model
 	}
-	view := assessmentView{Customer: r.customer, ID: r.id, Goal: r.goal, Scope: r.scope, Status: r.status, Model: model, ModelBusy: r.chatBusy || r.started, CanChangeModel: !r.chatBusy && !r.started, Resumable: !r.started && r.status != "draft" && r.status != "completed" && r.status != "completed_with_gaps", UpdatedAt: r.updatedAt, Error: r.state.Error, StartedAt: r.state.StartedAt, FinishedAt: r.state.FinishedAt, Usage: r.state.Usage, Plans: len(r.state.Plans), Results: append([]assessment.Result(nil), r.state.Results...), Messages: messageViews(r.messages, "assessments", r.id), ReportURL: "/api/v1/assessments/" + r.id + "/report"}
+	view := assessmentView{Customer: r.customer, ID: r.id, Goal: r.goal, Scope: r.scope, Status: r.status, Model: model, ModelProfile: r.profileID, ModelBusy: r.chatBusy || r.started, CanChangeModel: !r.chatBusy && !r.started && r.status == "draft", Resumable: !r.started && r.status != "draft" && r.status != "completed" && r.status != "completed_with_gaps", UpdatedAt: r.updatedAt, Error: r.state.Error, StartedAt: r.state.StartedAt, FinishedAt: r.state.FinishedAt, Usage: r.state.Usage, Plans: len(r.state.Plans), Results: append([]assessment.Result(nil), r.state.Results...), Messages: messageViews(r.messages, "assessments", r.id), ReportURL: "/api/v1/assessments/" + r.id + "/report"}
 	view.Limits = r.state.Limits
 	view.PermissionMode = r.permissionMode.Normalized()
 	view.Conclusion = assessmentConclusion(r.state)

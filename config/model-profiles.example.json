@@ -1,0 +1,25 @@
+{
+  "default": "daybreak",
+  "profiles": [
+    {
+      "id": "daybreak",
+      "label": "Daybreak Blue",
+      "provider": "subscription",
+      "base_url": "http://127.0.0.1:8787/v1",
+      "model": "gpt-daybreak-blue-latest",
+      "token_file": "/home/you/.config/birdhackbot/bridge-token",
+      "max_input_bytes": 131072
+    },
+    {
+      "id": "qwen38",
+      "label": "Qwen 3.8 27B",
+      "provider": "local",
+      "base_url": "http://127.0.0.1:1234/v1",
+      "model": "qwen/qwen3.8-27b",
+      "reasoning_effort": "low",
+      "max_input_bytes": 49152,
+      "max_output_tokens": 32768,
+      "request_timeout_seconds": 600
+    }
+  ]
+}

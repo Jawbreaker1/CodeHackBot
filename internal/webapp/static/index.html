@@ -78,12 +78,12 @@
     <button id="drawerBackdrop" class="drawer-backdrop hidden" aria-label="Close panels" tabindex="-1"></button>
   </div>
   <dialog id="modelDialog" class="model-dialog" aria-labelledby="modelDialogTitle">
-    <form method="dialog" id="modelForm">
-      <div class="dialog-heading"><div><span class="eyebrow">Session setting</span><h2 id="modelDialogTitle">Language model</h2></div><button class="icon-button" value="cancel" aria-label="Close model picker"><svg class="icon"><use href="#icon-close"/></svg></button></div>
+    <form id="modelForm">
+      <div class="dialog-heading"><div><span class="eyebrow">Session setting</span><h2 id="modelDialogTitle">Language model</h2></div><button class="icon-button" type="button" data-close-model aria-label="Close model picker"><svg class="icon"><use href="#icon-close"/></svg></button></div>
       <p id="modelDialogHint" class="muted">Choose a model for this session. The current turn must finish before it can change.</p>
       <div id="modelOptions" class="model-options"><p class="empty">Loading available models…</p></div>
       <label class="model-custom" for="modelCustom">Use an exact model ID<input id="modelCustom" autocomplete="off" spellcheck="false" placeholder="provider/model-id"></label>
-      <div class="dialog-actions"><button class="text-button" value="cancel">Cancel</button><button id="modelApply" class="primary-button" value="default">Use model</button></div>
+      <div class="dialog-actions"><button class="text-button" type="button" data-close-model>Cancel</button><button id="modelApply" class="primary-button" type="submit">Use model</button></div>
     </form>
   </dialog>
   <dialog id="permissionsDialog" class="model-dialog" aria-labelledby="permissionsTitle">

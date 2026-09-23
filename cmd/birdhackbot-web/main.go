@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -30,6 +31,7 @@ func main() {
 	reasoning := flag.String("reasoning-effort", "", "provider reasoning effort, such as low")
 	maxOutput := flag.Int("max-output-tokens", 32768, "maximum output tokens per local-model request")
 	maxInput := flag.Int("max-input-bytes", 0, "maximum combined model input bytes (profile default when omitted)")
+	profilesFile := flag.String("model-profiles-file", "", "model profile JSON file; defaults to config/model-profiles.local.json when present")
 	flag.Parse()
 	if *version {
 		fmt.Println(buildinfo.Version)
@@ -68,7 +70,22 @@ func main() {
 		inputLimit = llmclient.DefaultInputByteLimit
 	}
 	client := llmclient.Client{BaseURL: *baseURL, Model: *model, AuthTokenFile: *tokenFile, ReasoningEffort: requestReasoning, MaxOutputTokens: requestMaxOutput, MaxInputBytes: inputLimit}
-	server := webapp.NewServer(webapp.Config{RepoRoot: root, SessionsRoot: *sessions, LLM: client, Frame: frame, Limits: assessment.DefaultLimits()})
+	profilesPath := *profilesFile
+	if profilesPath == "" {
+		candidate := filepath.Join(root, "config", "model-profiles.local.json")
+		if _, err := os.Stat(candidate); err == nil {
+			profilesPath = candidate
+		}
+	}
+	config := webapp.Config{RepoRoot: root, SessionsRoot: *sessions, LLM: client, Frame: frame, Limits: assessment.DefaultLimits()}
+	if profilesPath != "" {
+		profiles, err := webapp.LoadModelProfiles(profilesPath)
+		if err != nil {
+			fatal(fmt.Errorf("load model profiles %s: %w", profilesPath, err))
+		}
+		config.Profiles, config.DefaultProfile = profiles.Profiles, profiles.Default
+	}
+	server := webapp.NewServer(config)
 	// Conversation requests may wait for inference or human approval. A short
 	// write deadline can discard a completed response and cause a POST retry.
 	// Model requests and shutdown retain their own cancellation limits.

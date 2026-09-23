@@ -75,6 +75,8 @@ go build -buildvcs=false -o birdhackbot-web ./cmd/birdhackbot-web
 ./birdhackbot-web --llm-base-url http://127.0.0.1:1234/v1 --llm-model YOUR_LOCAL_MODEL_ID
 ```
 
+For one-click A/B sessions across providers, copy [the model profile example](config/model-profiles.example.json) to `config/model-profiles.local.json` and set your bridge token path and local model endpoint once. The web server loads that local file automatically. Click the model name beneath the composer to select Daybreak or Qwen; the choice includes its endpoint, reasoning setting, and context/output limits. Once a conversation begins, choosing another model opens a new session so A/B histories stay separate. The local profile file is ignored by Git.
+
 The web server defaults to `127.0.0.1:8080`. Keep it on loopback until authentication, origin protection, and deployment controls are added. The browser is a presentation and lifecycle adapter; it never executes a tool or calls the model directly.
 
 When an assessment finishes, open the analysis link from the coordinator header. The session report is available at `/api/v1/assessments/<session-id>/report`; the unified customer report is available at `/api/v1/customers/<customer-id>/report`. Reports include scope, selected and skipped tests, findings, advisory references, reproduction steps, remediation, execution logs, evidence references, and stated gaps. They remain model-authored drafts for professional review.
