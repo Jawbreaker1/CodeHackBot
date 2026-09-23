@@ -146,9 +146,16 @@ textarea::placeholder { color: #94938d; }
 .worker-approval-note { margin: 10px 0; padding: 7px 9px; border-left: 2px solid var(--attention); color: var(--attention); font-size: 10px; }
 .plan-timeline { border-top: 1px solid var(--line); padding: 12px 0 10px; }
 .plan-heading { margin: 0 0 9px; color: var(--faint); font-size: 10px; font-weight: 500; text-transform: uppercase; letter-spacing: .08em; }
+.plan-guide { margin: 0 0 11px; color: var(--faint); font-size: 10px; line-height: 1.5; }
 .plan-timeline > details { border-left: 2px solid var(--line); padding-left: 10px; }
 .plan-timeline > details[open] { border-color: #b7b6aa; }
+.plan-timeline > details[data-signal="candidate"] { border-color: var(--attention); }
+.plan-timeline > details[data-signal="verified"], .plan-timeline > details[data-signal="verified_final"] { border-color: #92bda8; }
 .plan-timeline summary { color: var(--text); font-size: 11px; }
+.plan-outcome { margin: 10px 0 14px; padding: 9px 10px; background: #ffffff06; border-radius: 6px; }
+.plan-outcome strong, .plan-kicker { color: var(--faint); font-size: 10px; font-weight: 500; letter-spacing: .03em; }
+.plan-outcome p { margin: 4px 0 0; color: var(--text); font-size: 11px; line-height: 1.5; }
+.plan-review { margin: -4px 0 15px; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .plan-summary { margin: 7px 0 10px; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .coordinator-tasks, .worker-plan { margin: 8px 0; padding-left: 18px; font-size: 11px; }
 .coordinator-task, .worker-plan-step { padding: 5px 0; color: var(--muted); }

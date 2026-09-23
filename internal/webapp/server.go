@@ -1993,7 +1993,7 @@ func (r *run) view(after string) assessmentView {
 			phase = "assessment"
 		}
 		view.PendingPlan = &planApprovalView{ID: r.plan.ID, Phase: phase, Summary: r.plan.plan.Summary, Tasks: append([]assessment.Task(nil), r.plan.plan.Tasks...)}
-		pending := coordinatorPlanView{Round: len(r.state.Plans) + 1, Phase: phase, Summary: r.plan.plan.Summary, Status: "review"}
+		pending := coordinatorPlanView{Round: len(r.state.Plans) + 1, Phase: phase, Summary: r.plan.plan.Summary, PlainSummary: r.plan.plan.PlainSummary, Signal: "review", Status: "review"}
 		for _, task := range r.plan.plan.Tasks {
 			pending.Tasks = append(pending.Tasks, coordinatorTaskView{ID: task.ID, Goal: task.Goal, DoneWhen: task.DoneWhen, Status: "review"})
 		}

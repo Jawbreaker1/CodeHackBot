@@ -101,6 +101,8 @@ type Finding struct {
 type Decision struct {
 	Phase           string    `json:"phase,omitempty"` // research or assessment; empty means assessment
 	Summary         string    `json:"summary"`
+	PlainSummary    string    `json:"plain_summary,omitempty"` // short operator-facing purpose of this round
+	Review          string    `json:"review,omitempty"`        // plain-language outcome of the previous round
 	Tasks           []Task    `json:"tasks"`
 	ApprovedTaskIDs []string  `json:"approved_task_ids,omitempty"`
 	SkippedTaskIDs  []string  `json:"skipped_task_ids,omitempty"`

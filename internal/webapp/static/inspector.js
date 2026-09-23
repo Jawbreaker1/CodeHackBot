@@ -14,7 +14,7 @@ const phases = {
   approval_required: 'Needs approval', execution_started: 'Running tool',
   execution_finished: 'Tool finished', post_exec_eval_started: 'Evaluating evidence',
   post_exec_eval_finished: 'Evidence reviewed', user_question: 'Needs your input',
-  user_answered: 'Continuing', task_completed: 'Completed', done: 'Completed',
+  user_answered: 'Continuing', task_completed: 'Finished task', done: 'Finished task',
   task_failed: 'Failed', failed: 'Failed', task_blocked: 'Blocked', blocked: 'Blocked',
   aborted: 'Stopped', waiting_user: 'Needs your input', planning: 'Planning',
   plan: 'Assessment plan', assessment_started: 'Assessment started',
@@ -245,27 +245,46 @@ export function renderCoordinatorPlans(view) {
   const plans = view.plan_timeline || [];
   target.classList.toggle('hidden', !plans.length);
   if (!plans.length) return;
-  const items = [node('h3', 'plan-heading', 'Coordinator plan')];
+  const signals = {
+    review: ['Choose work', 'The coordinator has proposed this work. You can choose which tasks to run.'],
+    in_progress: ['In progress', 'Workers are still running. The result of this round is not known yet.'],
+    needs_attention: ['Needs review', 'A worker stopped or failed. The coordinator needs to review what was established.'],
+    not_run: ['Not run', 'No worker ran in this round.'],
+    awaiting_review: ['Awaiting review', 'The workers finished. The coordinator has not reported what their results mean yet.'],
+    continued: ['Goal not yet confirmed', 'The workers finished, but the coordinator had not confirmed the assessment goal. It continued with a revised plan.'],
+    candidate: ['Possible finding', 'The coordinator reported a possible finding. Independent verification was still needed.'],
+    verified: ['Finding verified', 'A separate worker verified a finding from this round.'],
+    verified_final: ['Assessment complete', 'The assessment ended with an independently verified finding.'],
+    concluded: ['Assessment ended', 'The coordinator ended the assessment. Read its conclusion in the conversation.'],
+  };
+  const taskState = {done:'Finished', running:'Working', queued:'Queued', review:'Proposed', skipped:'Not run', failed:'Failed', blocked:'Blocked', aborted:'Stopped', waiting_user:'Needs input'};
+  const items = [node('h3', 'plan-heading', 'Coordinator plan'), node('p', 'plan-guide', 'Each round shows what was planned and what the evidence established. A finished worker is not automatically a successful result.')];
   for (const plan of [...plans].reverse()) {
+    const [signalLabel, signalText] = signals[plan.signal] || ['Work updated', 'Review the worker result and coordinator conclusion.'];
     const content = node('div', 'plan-content');
-    content.append(node('p', 'plan-summary', preview(plan.summary, 260)));
-    if (plan.summary?.length > 260) content.append(disclosure('Read full summary', node('p', 'worker-detail', plan.summary), view.id + '-coordinator-summary-' + plan.round));
+    const outcome = node('div', 'plan-outcome');
+    outcome.dataset.signal = plan.signal || '';
+    outcome.append(node('strong', '', 'Result so far'), node('p', '', signalText));
+    content.append(outcome);
+    if (plan.review) content.append(node('p', 'plan-review', plan.review));
+    const purpose = plan.plain_summary || (plan.tasks?.length ? `The coordinator assigned ${plan.tasks.length} worker${plan.tasks.length === 1 ? '' : 's'} to investigate this step.` : 'The coordinator reviewed the assessment evidence.');
+    content.append(node('div', 'plan-kicker', 'Why this round'), node('p', 'plan-summary', purpose));
+    if (plan.summary) content.append(disclosure('Detailed coordinator plan', node('p', 'worker-detail', plan.summary), view.id + '-coordinator-summary-' + plan.round));
     const tasks = node('ol', 'coordinator-tasks');
     for (const task of plan.tasks || []) {
       const item = node('li', 'coordinator-task');
       const row = node('div', 'plan-step-row');
-      row.append(node('span', '', task.id), node('span', 'plan-step-state', task.status));
-      item.append(row, node('p', 'worker-detail', preview(task.goal, 180)));
-      if (task.goal?.length > 180) item.append(disclosure('Full task scope', node('p', 'worker-detail', task.goal), view.id + '-coordinator-goal-' + plan.round + '-' + task.id));
-      if (task.done_when) item.append(disclosure('Completion criteria', node('p', 'worker-detail', task.done_when), view.id + '-coordinator-task-' + plan.round + '-' + task.id));
+      row.append(node('span', '', task.id), node('span', 'plan-step-state', taskState[task.status] || task.status));
+      item.append(row);
+      if (task.goal) item.append(disclosure('Assigned work', node('p', 'worker-detail', task.goal), view.id + '-coordinator-goal-' + plan.round + '-' + task.id));
+      if (task.done_when) item.append(disclosure('What the worker was asked to establish', node('p', 'worker-detail', task.done_when), view.id + '-coordinator-task-' + plan.round + '-' + task.id));
+      if (task.result_summary) item.append(disclosure('Worker report', richText(task.result_summary, 'worker-result-' + task.id), view.id + '-coordinator-result-' + plan.round + '-' + task.id));
       tasks.append(item);
     }
     if (tasks.children.length) content.append(tasks);
-    const completed = (plan.tasks || []).filter(task => task.status === 'done').length;
-    const total = (plan.tasks || []).filter(task => task.status !== 'skipped').length;
-    const progress = plan.status === 'complete' ? 'assessment concluded' : plan.status === 'review' ? 'awaiting selection' : `${completed}/${total} tasks completed`;
-    const label = `Round ${plan.round} · ${plan.phase === 'research' ? 'research' : 'assessment'}${plan.round > 1 ? ' · revised' : ''} · ${progress}`;
+    const label = `Round ${plan.round} · ${plan.phase === 'research' ? 'Research' : 'Testing'} · ${signalLabel}`;
     const details = disclosure(label, content, view.id + '-coordinator-plan-' + plan.round);
+    details.dataset.signal = plan.signal || '';
     if (plan.round === plans.length) details.dataset.defaultOpen = 'true';
     items.push(details);
   }
