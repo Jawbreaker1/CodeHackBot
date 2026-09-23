@@ -184,10 +184,26 @@ function traceNode(records) {
   trace.className = 'trace';
   return trace;
 }
+function reportNode(view) {
+  const card = node('article', 'chat-report');
+  card.append(node('div', 'chat-report-title', 'Assessment report ready'));
+  const links = node('div', 'chat-report-links');
+  const report = node('a', '', 'Open session report ↗');
+  report.href = view.report_url;
+  report.target = '_blank';
+  report.rel = 'noopener';
+  const analysis = node('a', '', 'Review findings ↗');
+  analysis.href = '/analysis?assessment=' + encodeURIComponent(view.id);
+  analysis.target = '_blank';
+  analysis.rel = 'noopener';
+  links.append(report, analysis);
+  card.append(links);
+  return card;
+}
 function renderTranscript() {
   const messages = [...(current?.messages || [])];
   const records = [...eventRecords.values()];
-  if (!changed('transcript', [messages, records, pendingMessage, current?.pending_tool, current?.pending_approvals, current?.pending_plan, current?.conclusion])) return;
+  if (!changed('transcript', [messages, records, pendingMessage, current?.pending_tool, current?.pending_approvals, current?.pending_plan, current?.conclusion, current?.report_ready, current?.report_url])) return;
   const pane = $('chat');
   const follow = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 100;
   const scrollTop = pane.scrollTop;
@@ -204,6 +220,7 @@ function renderTranscript() {
   }
   flushTrace();
   if (current?.conclusion) items.push(messageNode({role: 'assistant', text: current.conclusion, at: 'conclusion-' + current.id}));
+  if (isAssessmentView(current) && current.report_ready) items.push(reportNode(current));
   for (const approval of current?.pending_approvals || []) items.push(chatApprovalNode(approval, 'action'));
   if (current?.pending_tool) items.push(chatApprovalNode(current.pending_tool, 'observation'));
   if (current?.pending_plan) items.push(planReviewNode(current.pending_plan));
@@ -292,7 +309,7 @@ function renderOverview(view) {
   $('assessmentLimits').textContent = view.limits?.workers ? 'Up to ' + view.limits.workers + ' workers · ' + view.limits.tasks + ' tasks · ' + view.limits.model_calls + ' model calls' : '';
   $('stop').classList.toggle('hidden', !assessment || !running);
   $('resume').classList.toggle('hidden', !view.resumable);
-  $('report').classList.toggle('hidden', !assessment || running || view.status === 'draft');
+  $('report').classList.toggle('hidden', !assessment || !view.report_ready);
   if (view.report_url) $('report').href = view.report_url;
   $('proposalReview').classList.toggle('hidden', !view.proposal);
   $('reviewProposal').classList.toggle('hidden', !view.proposal);

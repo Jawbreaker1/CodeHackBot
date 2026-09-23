@@ -444,6 +444,7 @@ type assessmentView struct {
 	PendingPlan      *planApprovalView     `json:"pending_plan,omitempty"`
 	Messages         []messageView         `json:"messages"`
 	ReportURL        string                `json:"report_url,omitempty"`
+	ReportReady      bool                  `json:"report_ready,omitempty"`
 }
 
 type planApprovalView struct {
@@ -1979,6 +1980,11 @@ func (r *run) view(after string) assessmentView {
 		model = r.state.Model
 	}
 	view := assessmentView{Customer: r.customer, ID: r.id, Goal: r.goal, Scope: r.scope, Status: r.status, Model: model, ModelProfile: r.profileID, ModelBusy: r.chatBusy || r.started, CanChangeModel: !r.chatBusy && !r.started && r.status == "draft", Resumable: !r.started && r.status != "draft" && r.status != "completed" && r.status != "completed_with_gaps", UpdatedAt: r.updatedAt, Error: r.state.Error, StartedAt: r.state.StartedAt, FinishedAt: r.state.FinishedAt, Usage: r.state.Usage, Plans: len(r.state.Plans), Results: append([]assessment.Result(nil), r.state.Results...), Messages: messageViews(r.messages, "assessments", r.id), ReportURL: "/api/v1/assessments/" + r.id + "/report"}
+	if r.status != "draft" && r.status != "running" && r.status != "starting" {
+		if info, err := os.Stat(filepath.Join(r.root, "report.md")); err == nil && info.Mode().IsRegular() {
+			view.ReportReady = true
+		}
+	}
 	view.Limits = r.state.Limits
 	view.PermissionMode = r.permissionMode.Normalized()
 	view.Conclusion = assessmentConclusion(r.state)

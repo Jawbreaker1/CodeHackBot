@@ -498,7 +498,11 @@ func TestFindingListsFromLiveResponseRemainStructured(t *testing.T) {
 	if len(d.Findings) != 1 || len(d.Findings[0].Steps) != 2 || len(d.Findings[0].Remediation) != 2 {
 		t.Fatalf("lost reproduction/remediation lists: %+v", d)
 	}
-	state := State{Status: "completed", Plans: []Decision{d}}
+	state := State{Status: "completed", Plans: []Decision{
+		{Phase: "research", Tasks: []Task{{ID: "identify", Goal: "Identify the service", DoneWhen: "Version recorded"}}, ApprovedTaskIDs: []string{"identify"}},
+		{Phase: "assessment", Tasks: []Task{{ID: "test", Goal: "Check access", DoneWhen: "Access result recorded"}}, SkippedTaskIDs: []string{"test"}},
+		d,
+	}}
 	root := t.TempDir()
 	if err := writeReport(root, state); err != nil {
 		t.Fatal(err)
@@ -507,7 +511,7 @@ func TestFindingListsFromLiveResponseRemainStructured(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(report), "1. Request the administrative route") || !strings.Contains(string(report), "- Require authentication") {
+	if !strings.Contains(string(report), "1. Request the administrative route") || !strings.Contains(string(report), "- Require authentication") || !strings.Contains(string(report), "Round 1 — research") || !strings.Contains(string(report), "Round 2 — assessment") || !strings.Contains(string(report), "skipped by operator") || !strings.Contains(string(report), "## Executive summary") {
 		t.Fatalf("report lost structured steps: %s", report)
 	}
 }

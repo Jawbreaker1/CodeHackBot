@@ -81,7 +81,7 @@ The web server defaults to `127.0.0.1:8080`. Keep it on loopback until authentic
 
 The [tool capability guide](docs/runbooks/tool-capabilities.md) lists what the intake conversation, coordinator, and workers can actually invoke. Intake observations are read-only; scoped assessment workers use the general `bash` tool for approved Kali commands and file changes. A requested one-file-at-a-time cleanup uses a separate logged invocation and approval for each file.
 
-When an assessment finishes, open the analysis link from the coordinator header. The session report is available at `/api/v1/assessments/<session-id>/report`; the unified customer report is available at `/api/v1/customers/<customer-id>/report`. Reports include scope, selected and skipped tests, findings, advisory references, reproduction steps, remediation, execution logs, evidence references, and stated gaps. They remain model-authored drafts for professional review.
+When an assessment finishes, the coordinator conversation offers direct links to its saved Markdown report and the findings analysis view. The report also lives as `report.md` inside that assessment's session folder; the unified customer report is linked from the customer analysis view. Reports separate an executive summary, every planned test round, findings with reproduction and remediation, gaps, and the technical evidence trail. The [reporting guide](docs/strategies/evidence-reporting/SKILL.md) covers expected formal structure and use of OWASP WSTG, PTES, and CVSS references. Reports remain model-authored drafts for professional review.
 
 For a bounded headless task:
 

@@ -723,6 +723,9 @@ func TestServerRunsSharedCoordinatorAndApprovalThroughHTTP(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "sessions", created.Customer, created.ID, "report.md")); err != nil {
 		t.Fatalf("report missing: %v", err)
 	}
+	if !getJSON[assessmentView](t, httpServer.URL+"/api/v1/assessments/"+created.ID).ReportReady {
+		t.Fatal("completed assessment did not expose its report as ready")
+	}
 }
 
 func webModelFixture(w http.ResponseWriter, r *http.Request) {

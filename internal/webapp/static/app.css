@@ -215,6 +215,11 @@ input:focus { border-color: #aaaa9e; }
 .evidence-ref { display: block; font: 10px/1.6 ui-monospace, monospace; overflow-wrap: anywhere; color: var(--faint); }
 .report-link { display: inline-block; font-size: 11px; color: var(--muted); text-decoration: none; padding: 8px 0; }
 .report-link:hover { color: var(--text); text-decoration: underline; }
+.chat-report { margin: 1px 0 27px; padding: 14px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.chat-report-title { font-size: 12px; font-weight: 600; }
+.chat-report-links { display: flex; flex-wrap: wrap; gap: 17px; margin-top: 9px; }
+.chat-report-links a { color: var(--muted); font-size: 12px; text-decoration: none; }
+.chat-report-links a:hover { color: var(--text); text-decoration: underline; }
 .finding { border-bottom: 1px solid var(--line); padding: 18px 0; font-size: 12px; line-height: 1.6; }
 .finding h3 { font-size: 13px; font-weight: 500; margin: 7px 0; }
 .finding ul { padding-left: 17px; }
