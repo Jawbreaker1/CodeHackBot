@@ -309,7 +309,7 @@ func TestAnalysisAndRestoredChatUseLatestCoordinatorDecision(t *testing.T) {
 	}
 	current.state = assessment.State{Version: 1, ID: current.id, Goal: current.goal, Scope: current.scope, Status: "completed", Plans: []assessment.Decision{
 		{Summary: "Awaiting execution", Gaps: []string{"Interaction not executed yet"}},
-		{Summary: "Interaction verified with PNG and trace evidence", Complete: true},
+		{Summary: strings.Repeat("Technical evidence and references remain in the full report. ", 12), PlainSummary: "The browser interaction was verified.", Complete: true},
 	}}
 	current.status = "completed"
 	if err := atomicWriteJSON(filepath.Join(current.root, "assessment.json"), current.state); err != nil {
@@ -327,8 +327,8 @@ func TestAnalysisAndRestoredChatUseLatestCoordinatorDecision(t *testing.T) {
 	path := httpServer.URL + "/api/v1/assessments/" + current.id
 	view := getJSON[assessmentView](t, path)
 	analysis := getJSON[analysisView](t, path+"/analysis")
-	if view.Conclusion != current.state.Plans[1].Summary || analysis.Conclusion != view.Conclusion {
-		t.Fatalf("conclusion missing after restore: chat=%q analysis=%q", view.Conclusion, analysis.Conclusion)
+	if view.Conclusion != "The browser interaction was verified." || analysis.Conclusion != view.Conclusion || view.ConclusionDetail != current.state.Plans[1].Summary || analysis.ConclusionDetail != view.ConclusionDetail {
+		t.Fatalf("readable conclusion or complete detail missing after restore: chat=%q analysis=%q", view.Conclusion, analysis.Conclusion)
 	}
 	if len(analysis.Gaps) != 0 || len(analysis.NextActions) != 0 {
 		t.Fatalf("resolved gap leaked into current analysis: %+v", analysis)

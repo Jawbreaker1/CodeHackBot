@@ -436,6 +436,7 @@ type assessmentView struct {
 	Approach         *assessment.Approach  `json:"approach,omitempty"`
 	Status           string                `json:"status"`
 	Conclusion       string                `json:"conclusion,omitempty"`
+	ConclusionDetail string                `json:"conclusion_detail,omitempty"`
 	Model            string                `json:"model"`
 	ModelProfile     string                `json:"model_profile,omitempty"`
 	ModelBusy        bool                  `json:"model_busy"`
@@ -611,7 +612,7 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		"status":             "ok",
 		"model_configured":   strings.TrimSpace(s.config.LLM.BaseURL) != "" && strings.TrimSpace(s.config.LLM.Model) != "",
 		"session_load_error": errorText(s.loadErr),
-		"loopback_warning":   "This preview has no authentication; bind it to loopback and use only an authorized lab.",
+		"loopback_warning":   "This preview has no authentication; bind it to loopback until access controls are implemented.",
 	})
 }
 
@@ -2158,6 +2159,7 @@ func (r *run) view(after string) assessmentView {
 	view.Limits = r.state.Limits
 	view.PermissionMode = r.permissionMode.Normalized()
 	view.Conclusion = assessmentConclusion(r.state)
+	view.ConclusionDetail = assessmentConclusionDetail(r.state)
 	for _, worker := range r.workers {
 		worker.Evidence = append([]assessment.EvidenceView(nil), worker.Evidence...)
 		view.Workers = append(view.Workers, worker)

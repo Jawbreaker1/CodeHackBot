@@ -29,7 +29,6 @@
       <header class="main-header">
         <button id="toggleSidebar" class="icon-button" aria-label="Toggle sessions" aria-controls="sidebar" aria-expanded="true"><svg class="icon"><use href="#icon-panel"/></svg></button>
         <div class="heading"><span id="headerCustomer" class="breadcrumb">Workspace</span><h1 id="sessionTitle">New session</h1></div>
-        <div id="workStatus" class="work-status hidden" aria-live="polite"><span class="work-pulse" aria-hidden="true"></span><span id="workStatusText"></span></div>
         <a id="analysisLink" class="subtle-button analysis-link hidden" href="/analysis" aria-label="Open assessment analysis">Analysis</a>
         <a id="contextLink" class="subtle-button analysis-link hidden" href="/context" aria-label="Open context debugger">Context</a>
         <button id="toggleInspector" class="subtle-button" aria-controls="inspector" aria-expanded="true"><svg class="icon"><use href="#icon-panel"/></svg><span>Workers</span><span id="workerCount" class="count">0</span><span id="attentionDot" class="attention-dot hidden"></span></button>
@@ -38,6 +37,7 @@
       <section id="chat" aria-label="Coordinator conversation" aria-live="polite">
         <div class="welcome"><img class="welcome-icon brand-mark" src="/logo-small.svg" alt=""><h2>What are we investigating?</h2><p>Explore a question. Follow the evidence.<br>Work with your coordinator.</p></div>
       </section>
+      <div id="liveStatus" class="live-status hidden" role="status" aria-live="polite" aria-label="Current coordinator and worker activity"><span class="live-status-heading">In progress</span><div id="liveStatusItems" class="live-status-items"></div></div>
       <div class="compose-area">
         <button id="reviewProposal" class="review-notice hidden" type="button">Assessment ready for review <span>Open details ↗</span></button>
         <form id="composer" class="composer">
@@ -98,11 +98,11 @@
   <dialog id="permissionsDialog" class="model-dialog" aria-labelledby="permissionsTitle">
     <form id="permissionsForm">
       <div class="dialog-heading"><h2 id="permissionsTitle">Execution approvals</h2><button id="closePermissions" class="text-button" type="button" aria-label="Close approval settings">Close</button></div>
-      <p class="muted">Applies to this session. Scope and prohibited actions still apply. Switching to automatic approval also releases pending actions covered by the new setting.</p>
+      <p class="muted">Applies to this session. Keep targets and intended actions clear in the coordinator conversation. Switching to automatic approval also releases pending actions covered by the new setting.</p>
       <div class="model-options">
         <label class="model-option"><input type="radio" name="permission-mode" value="per_action"><span>Approve every execution<small>Review each command before it runs.</small></span></label>
         <label class="model-option"><input type="radio" name="permission-mode" value="dangerous_only"><span>Approve dangerous executions<small>Scoped plans and routine actions start automatically. Dangerous or uncertain commands ask first.</small></span></label>
-        <label class="model-option"><input type="radio" name="permission-mode" value="full_access"><span>Approve everything<small>Scoped plans and executions start automatically. Use only in your authorized VM environment.</small></span></label>
+        <label class="model-option"><input type="radio" name="permission-mode" value="full_access"><span>Approve everything<small>Plans and executions start automatically within the session. You remain responsible for target authorization.</small></span></label>
       </div>
       <label id="permissionAcknowledgement" class="permission-ack hidden"><input id="permissionAck" type="checkbox">I understand that this allows automatic executions in this session.</label>
       <p id="permissionError" class="danger" role="alert"></p>

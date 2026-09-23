@@ -31,7 +31,7 @@ func (c *Console) choosePermissions(ctx context.Context) error {
 		return nil
 	}
 	if mode != approval.EveryExecution {
-		answer, err := c.Ask(ctx, "Enable "+mode.Label()+" for this authorized VM session? Scope and prohibitions still apply. Any pending execution covered by this mode will proceed. Type confirm to apply.")
+		answer, err := c.Ask(ctx, "Enable "+mode.Label()+" for this session? Any pending execution covered by this mode will proceed. Type confirm to apply.")
 		if err != nil {
 			return err
 		}

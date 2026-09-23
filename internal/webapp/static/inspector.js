@@ -215,10 +215,13 @@ export function eventNode(record) {
   const entry = node('li', 'activity-item');
   const time = node('time', '', new Date(record.at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'}));
   entry.append(time, node('strong', '', (e.task_id ? e.task_id + ' · ' : '') + phaseLabel(e.kind)));
-  if (e.message) entry.append(richText(e.message, 'event-' + record.sequence));
-  if (e.action) entry.append(node('pre', 'command', e.action));
-  if (e.rationale) entry.append(disclosure('Model summary', richText(e.rationale, 'rationale-' + record.sequence), 'rationale-' + record.sequence));
-  if (e.evidence) entry.append(e.kind === 'execution_finished' ? observationResultNode(e.evidence, record.sequence) : evidenceNode(e.evidence));
+  if (e.message) entry.append(node('p', 'event-preview', preview(e.message, 160)));
+  const details = node('div', 'event-detail');
+  if (e.message && e.message.length > 160) details.append(richText(e.message, 'event-' + record.sequence));
+  if (e.action) details.append(node('pre', 'command', e.action));
+  if (e.rationale) details.append(richText(e.rationale, 'rationale-' + record.sequence));
+  if (e.evidence) details.append(e.kind === 'execution_finished' ? observationResultNode(e.evidence, record.sequence) : evidenceNode(e.evidence));
+  if (details.children.length) entry.append(disclosure('Details and evidence', details, 'event-details-' + record.sequence));
   return entry;
 }
 function questionNode(item, act) {
@@ -237,7 +240,7 @@ function questionNode(item, act) {
   box.onsubmit = event => { event.preventDefault(); act('questions/' + encodeURIComponent(item.id), {text: input.value}, row); };
   return box;
 }
-function preview(value, limit = 200) {
+export function preview(value, limit = 200) {
   const text = String(value || '').replaceAll('\n', ' ').trim();
   return text.length > limit ? text.slice(0, limit - 1).trimEnd() + '…' : text;
 }
@@ -259,32 +262,38 @@ export function renderCoordinatorPlans(view) {
     concluded: ['Assessment ended', 'The coordinator ended the assessment. Read its conclusion in the conversation.'],
   };
   const taskState = {done:'Finished', running:'Working', queued:'Queued', review:'Proposed', skipped:'Not run', failed:'Failed', blocked:'Blocked', aborted:'Stopped', waiting_user:'Needs input'};
-  const items = [node('h3', 'plan-heading', 'Coordinator plan'), node('p', 'plan-guide', 'Each round shows what was planned and what the evidence established. A finished worker is not automatically a successful result.')];
+  const items = [node('h3', 'plan-heading', 'Coordinator plan')];
   for (const plan of [...plans].reverse()) {
     const [signalLabel, signalText] = signals[plan.signal] || ['Work updated', 'Review the worker result and coordinator conclusion.'];
     const content = node('div', 'plan-content');
-    const outcome = node('div', 'plan-outcome');
-    outcome.dataset.signal = plan.signal || '';
-    outcome.append(node('strong', '', 'Result so far'), node('p', '', signalText));
-    content.append(outcome);
-    if (plan.review) content.append(node('p', 'plan-review', plan.review));
     const purpose = plan.plain_summary || (plan.tasks?.length ? `The coordinator assigned ${plan.tasks.length} worker${plan.tasks.length === 1 ? '' : 's'} to investigate this step.` : 'The coordinator reviewed the assessment evidence.');
-    content.append(node('div', 'plan-kicker', 'Why this round'), node('p', 'plan-summary', purpose));
-    if (plan.summary) content.append(disclosure('Detailed coordinator plan', node('p', 'worker-detail', plan.summary), view.id + '-coordinator-summary-' + plan.round));
+    content.append(node('p', 'plan-summary', preview(purpose, 220)));
+    if (plan.review) content.append(node('div', 'plan-kicker', 'What we learned'), node('p', 'plan-review', preview(plan.review, 220)));
+    else content.append(node('p', 'plan-status-note', signalText));
+    if (plan.summary || purpose.length > 220 || (plan.review || '').length > 220) {
+      const detail = node('div');
+      if (purpose.length > 220) detail.append(node('p', 'worker-detail', purpose));
+      if ((plan.review || '').length > 220) detail.append(node('p', 'worker-detail', plan.review));
+      if (plan.summary) detail.append(richText(plan.summary, view.id + '-coordinator-summary-' + plan.round));
+      content.append(disclosure('Full coordinator notes', detail, view.id + '-coordinator-summary-' + plan.round));
+    }
     const tasks = node('ol', 'coordinator-tasks');
     for (const task of plan.tasks || []) {
       const item = node('li', 'coordinator-task');
       const row = node('div', 'plan-step-row');
-      row.append(node('span', '', task.id), node('span', 'plan-step-state', taskState[task.status] || task.status));
+      row.append(node('span', '', preview(task.goal || task.id, 115)), node('span', 'plan-step-state', taskState[task.status] || task.status));
       item.append(row);
-      if (task.goal) item.append(disclosure('Assigned work', node('p', 'worker-detail', task.goal), view.id + '-coordinator-goal-' + plan.round + '-' + task.id));
-      if (task.done_when) item.append(disclosure('What the worker was asked to establish', node('p', 'worker-detail', task.done_when), view.id + '-coordinator-task-' + plan.round + '-' + task.id));
-      if (task.strategy_hints?.length) item.append(disclosure('Suggested guidance', node('p', 'worker-detail', task.strategy_hints.map(path => path.replace('/SKILL.md', '').replaceAll('-', ' ')).join(', ')), view.id + '-coordinator-guide-' + plan.round + '-' + task.id));
-      if (task.result_summary) item.append(disclosure('Worker report', richText(task.result_summary, 'worker-result-' + task.id), view.id + '-coordinator-result-' + plan.round + '-' + task.id));
+      const taskDetail = node('div');
+      taskDetail.append(node('p', 'worker-detail', 'Task ID: ' + task.id));
+      if (task.goal) taskDetail.append(node('p', 'worker-detail', task.goal));
+      if (task.done_when) taskDetail.append(node('p', 'worker-detail', 'Done when: ' + task.done_when));
+      if (task.strategy_hints?.length) taskDetail.append(node('p', 'worker-detail', 'Suggested guidance: ' + task.strategy_hints.join(', ')));
+      if (task.result_summary) taskDetail.append(richText(task.result_summary, 'worker-result-' + task.id));
+      item.append(disclosure('Task details', taskDetail, view.id + '-coordinator-task-' + plan.round + '-' + task.id));
       tasks.append(item);
     }
     if (tasks.children.length) content.append(tasks);
-    const label = `Round ${plan.round} · ${plan.phase === 'research' ? 'Research' : 'Testing'} · ${signalLabel}`;
+    const label = `Round ${plan.round} · ${signalLabel}`;
     const details = disclosure(label, content, view.id + '-coordinator-plan-' + plan.round);
     details.dataset.signal = plan.signal || '';
     if (plan.round === plans.length) details.dataset.defaultOpen = 'true';
@@ -302,7 +311,10 @@ function renderWorkerPlan(worker, phase, sessionID) {
   const header = node('div', 'plan-step-row');
   header.append(node('strong', '', 'Worker plan'), node('span', 'plan-step-state', `Step ${current + 1}/${steps.length} · revision ${worker.plan_revision || 1}`));
   section.append(header);
-  if (worker.plan_summary) section.append(node('p', 'plan-summary', worker.plan_summary));
+  if (worker.plan_summary) {
+    section.append(node('p', 'plan-summary', preview(worker.plan_summary, 155)));
+    if (worker.plan_summary.length > 155) section.append(disclosure('Full worker plan', node('p', 'worker-detail', worker.plan_summary), sessionID + '-worker-plan-summary-' + worker.id));
+  }
   const list = node('ol', 'worker-plan');
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
@@ -310,8 +322,7 @@ function renderWorkerPlan(worker, phase, sessionID) {
     const item = node('li', 'worker-plan-step ' + status);
     const body = node('div', 'plan-content');
     body.append(node('p', 'worker-detail', worker.step_purposes?.[step] || step));
-    const details = disclosure(`${step} · ${status}`, body, sessionID + '-worker-step-' + worker.id + '-' + (worker.plan_revision || 1) + '-' + i);
-    if (i === current && !finished) details.dataset.defaultOpen = 'true';
+    const details = disclosure(`${preview(step, 72)} · ${status}`, body, sessionID + '-worker-step-' + worker.id + '-' + (worker.plan_revision || 1) + '-' + i);
     item.append(details);
     list.append(item);
   }

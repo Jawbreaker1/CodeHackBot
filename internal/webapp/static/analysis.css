@@ -25,6 +25,7 @@ a { color:inherit; }
 .metric.critical strong { color:var(--critical); }.metric.high strong { color:var(--high); }.metric.medium strong { color:var(--medium); }
 .columns { display:grid; grid-template-columns:minmax(0,1.5fr) minmax(260px,.8fr); gap:28px; align-items:start; }
 .section { margin-bottom:28px; }.section h2 { margin:0 0 12px; font-size:15px; font-weight:500; }.section > p { color:var(--muted); }
+.section details p { color:var(--muted); white-space:pre-wrap; overflow-wrap:anywhere; max-height:380px; overflow:auto; }
 .finding { padding:18px; margin:0 0 10px; border:1px solid var(--line); border-left:3px solid var(--faint); border-radius:8px; background:var(--panel); }
 .finding[data-priority="critical"] { border-left-color:var(--critical); }.finding[data-priority="high"] { border-left-color:var(--high); }.finding[data-priority="medium"] { border-left-color:var(--medium); }.finding[data-priority="low"] { border-left-color:var(--low); }
 .finding-head { display:flex; gap:10px; align-items:flex-start; }.finding h3 { flex:1; margin:0; font-size:15px; font-weight:500; }.finding p { margin:9px 0; color:var(--muted); }

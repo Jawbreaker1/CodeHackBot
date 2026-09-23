@@ -17,6 +17,14 @@ func TestAnalysisPreservesLatestUnresolvedGap(t *testing.T) {
 	}
 }
 
+func TestAnalysisDoesNotRepeatEveryGapAsANextAction(t *testing.T) {
+	state := assessment.State{Status: "incomplete", Plans: []assessment.Decision{{Gaps: []string{"Service check not run", "Login behavior not tested", "Source unavailable"}}}}
+	view := buildAnalysis("fixture", "lab", state, nil)
+	if len(view.Gaps) != 3 || len(view.NextActions) != 1 {
+		t.Fatalf("analysis repeated the gap list as actions: %+v", view)
+	}
+}
+
 func TestCurrentFindingsAgreeAcrossAssessmentAndCustomerViews(t *testing.T) {
 	server := NewServer(Config{RepoRoot: t.TempDir()})
 	current, err := server.newRun("fixture-lab", "review fixture", "synthetic only")

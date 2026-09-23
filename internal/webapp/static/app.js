@@ -1,4 +1,4 @@
-import {$, node, badge, disclosure, richText, eventNode, replacePreservingDetails, renderWorkers, renderCoordinatorPlans, renderFindings} from './inspector.js';
+import {$, node, badge, disclosure, richText, eventNode, phaseLabel, preview, replacePreservingDetails, renderWorkers, renderCoordinatorPlans, renderFindings} from './inspector.js';
 
 let current = null;
 let selection = 0;
@@ -99,9 +99,12 @@ function selectTab(button) {
 }
 function messageNode(message) {
   const entry = node('article', 'transcript-entry ' + message.role);
-  const rich = richText(message.text, 'message-' + (message.at || ''));
+  const complete = String(message.text || '');
+  const compact = message.role === 'assistant' && complete.length > 600;
+  const rich = richText(compact ? preview(complete, 440) : complete, 'message-' + (message.at || ''));
   rich.classList.add('transcript-text');
   entry.append(node('div', 'transcript-role', message.role === 'user' ? 'You' : message.role === 'assistant' ? 'Coordinator' : 'System'), rich);
+  if (compact) entry.append(disclosure('Read full response', richText(complete, 'full-message-' + (message.at || '')), 'full-message-' + (message.at || '')));
   if (message.attachments?.length || message.images?.length) {
     const files = node('div', 'message-attachments');
     for (const attachment of [...(message.attachments || []), ...(message.images || [])]) {
@@ -119,6 +122,13 @@ function messageNode(message) {
       item.append(link); files.append(item);
     }
     entry.append(files);
+  }
+  return entry;
+}
+function conclusionNode(view) {
+  const entry = messageNode({role: 'assistant', text: view.conclusion, at: 'conclusion-' + view.id});
+  if (view.conclusion_detail && view.conclusion_detail !== view.conclusion) {
+    entry.append(disclosure('Full conclusion and evidence references', richText(view.conclusion_detail, 'conclusion-detail-' + view.id), 'conclusion-detail-' + view.id));
   }
   return entry;
 }
@@ -159,8 +169,9 @@ function planReviewNode(plan) {
     const label = node('label', 'plan-choice');
     const input = document.createElement('input');
     input.type = 'checkbox'; input.value = task.id; input.checked = true;
-    label.append(input, node('span', '', task.id + ' · ' + task.goal), node('small', '', 'Done when: ' + task.done_when));
+    label.append(input, node('span', '', preview(task.goal, 170)), node('small', '', task.id));
     choices.append(label);
+    if (task.done_when) choices.append(disclosure('What this task should establish', node('p', 'worker-detail', task.done_when), 'review-task-' + plan.id + '-' + task.id));
   }
   box.append(choices);
   const row = node('div', 'action-row');
@@ -183,7 +194,18 @@ function traceNode(records) {
   const label = ['Coordinator activity'];
   if (tasks.size) label.push(tasks.size + ' worker' + (tasks.size === 1 ? '' : 's'));
   if (tools) label.push(tools + ' tool result' + (tools === 1 ? '' : 's'));
-  const trace = disclosure(label.join(' · '), list, 'trace-' + records[0].sequence);
+  const brief = node('ol', 'trace-brief');
+  for (const record of records.slice(-4)) {
+    const event = record.event;
+    const item = node('li');
+    item.append(node('strong', '', (event.task_id ? event.task_id + ' · ' : '') + phaseLabel(event.kind)));
+    const description = event.message || event.rationale || event.action;
+    if (description) item.append(node('span', '', preview(description, 130)));
+    brief.append(item);
+  }
+  const content = node('div', 'trace-content');
+  content.append(brief, disclosure(`All ${records.length} recorded events`, list, 'trace-events-' + records[0].sequence));
+  const trace = disclosure(label.join(' · '), content, 'trace-' + records[0].sequence);
   trace.className = 'trace';
   return trace;
 }
@@ -206,7 +228,7 @@ function reportNode(view) {
 function renderTranscript() {
   const messages = [...(current?.messages || [])];
   const records = [...eventRecords.values()];
-  if (!changed('transcript', [messages, records, pendingMessage, current?.pending_tool, current?.pending_approvals, current?.pending_plan, current?.conclusion, current?.report_ready, current?.report_url])) return;
+  if (!changed('transcript', [messages, records, pendingMessage, current?.pending_tool, current?.pending_approvals, current?.pending_plan, current?.conclusion, current?.conclusion_detail, current?.report_ready, current?.report_url])) return;
   const pane = $('chat');
   const follow = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 100;
   const scrollTop = pane.scrollTop;
@@ -216,7 +238,7 @@ function renderTranscript() {
     ...records.filter(r => !['operator_message', 'coordinator_message'].includes(r.event.kind)).map(record => ({at: record.at, record})),
   ];
   const finishAt = current?.finished_at || records.find(r => r.event.kind === 'assessment_finished')?.at || '9999-12-31';
-  if (current?.conclusion) timeline.push({at: finishAt, conclusion: current.conclusion});
+  if (current?.conclusion) timeline.push({at: finishAt, conclusion: current});
   if (isAssessmentView(current) && current.report_ready) timeline.push({at: finishAt, report: current});
   timeline.sort((a, b) => new Date(a.at) - new Date(b.at));
   let trace = [];
@@ -224,7 +246,7 @@ function renderTranscript() {
   for (const item of timeline) {
     if (item.record?.event.kind === 'round_update') { flushTrace(); items.push(messageNode({role:'assistant', text:item.record.event.message, at:'round-' + item.record.sequence})); }
     else if (item.record) trace.push(item.record);
-    else if (item.conclusion) { flushTrace(); items.push(messageNode({role: 'assistant', text: item.conclusion, at: 'conclusion-' + current.id})); }
+    else if (item.conclusion) { flushTrace(); items.push(conclusionNode(item.conclusion)); }
     else if (item.report) { flushTrace(); items.push(reportNode(item.report)); }
     else { flushTrace(); items.push(messageNode(item.message)); }
   }
@@ -263,34 +285,42 @@ function formatBytes(value) {
   return (bytes / 1024).toFixed(1) + ' KiB';
 }
 function renderWorkStatus(view) {
-  const active = new Set(['task_started', 'decision_started', 'plan_finished', 'execution_started', 'execution_finished', 'post_exec_eval_started', 'post_exec_eval_finished', 'user_answered']);
-  const workers = (view.workers || []).filter(worker => active.has(worker.phase));
+  const assessmentRunning = isAssessmentView(view) && activeStatuses.includes(view.status);
+  const workers = assessmentRunning ? (view.workers || []).filter(worker => !['task_completed', 'done', 'task_failed', 'failed', 'task_blocked', 'blocked', 'aborted'].includes(worker.phase)) : [];
   const approvals = view.pending_approvals || [];
-  let label = '';
-  let state = 'working';
+  const questions = view.pending_questions || [];
+  let coordinator = '';
+  let coordinatorState = 'working';
   if (view.pending_plan) {
-    state = 'waiting';
-    label = view.pending_plan.phase === 'research' ? 'Research review · choose sources to inspect' : 'Plan review · choose tests before execution';
-  } else if (view.pending_tool || approvals.length) {
-    state = 'waiting';
-    label = 'Approval needed · ' + (approvals.length ? approvals.map(item => item.task_id).join(', ') : 'local observation');
-  } else if (workers.some(worker => worker.phase === 'execution_started')) {
-    const names = workers.filter(worker => worker.phase === 'execution_started').map(worker => worker.id);
-    label = 'Executing · ' + names.join(', ');
+    coordinatorState = 'waiting';
+    coordinator = view.pending_plan.phase === 'research' ? 'Waiting for research selection' : 'Waiting for plan review';
+  } else if (view.pending_tool) {
+    coordinatorState = 'waiting';
+    coordinator = 'Waiting for tool approval';
+  } else if (pendingMessage || view.status === 'thinking') {
+    coordinator = 'Responding';
   } else if (workers.length) {
-    label = 'Working · ' + workers.map(worker => worker.id).join(', ');
-  } else if (isAssessmentView(view) && ['running', 'starting'].includes(view.status)) {
+    coordinator = 'Overseeing ' + workers.length + (workers.length === 1 ? ' worker' : ' workers');
+  } else if (assessmentRunning) {
     const latest = [...eventRecords.values()].sort((a, b) => a.sequence - b.sequence).at(-1)?.event;
-    if (latest?.kind === 'planning') label = 'Coordinator planning';
-    else if (latest?.kind === 'research') label = 'Coordinator researching';
-    else if (latest?.kind === 'execution_started') label = 'Executor running';
-    else label = 'Assessment running';
-  } else if (pendingMessage) {
-    label = 'Coordinator working';
+    coordinator = latest?.kind === 'planning' ? 'Planning next steps' : latest?.kind === 'research' ? 'Researching' : 'Working on assessment';
   }
-  $('workStatus').classList.toggle('hidden', !label);
-  $('workStatus').dataset.state = state;
-  $('workStatusText').textContent = label;
+  const items = [];
+  const item = (name, description, state) => {
+    const chip = node('div', 'live-status-item');
+    chip.dataset.state = state;
+    chip.append(node('strong', '', name), node('span', '', description));
+    return chip;
+  };
+  if (coordinator) items.push(item('Coordinator', coordinator, coordinatorState));
+  for (const worker of workers) {
+    const waiting = approvals.some(approval => approval.task_id === worker.id) || questions.some(question => question.task_id === worker.id);
+    const phase = waiting ? approvals.some(approval => approval.task_id === worker.id) ? 'Needs approval' : 'Needs your input' : phaseLabel(worker.phase);
+    const description = worker.active_step && !waiting ? phase + ' · ' + preview(worker.active_step, 58) : phase;
+    items.push(item(worker.id, description, waiting ? 'waiting' : worker.phase === 'task_queued' ? 'queued' : 'working'));
+  }
+  $('liveStatus').classList.toggle('hidden', !items.length);
+  if (changed('live-status', [view.id, items.map(item => [item.textContent, item.dataset.state])])) $('liveStatusItems').replaceChildren(...items);
 }
 function renderOverview(view) {
   const assessment = isAssessmentView(view);
@@ -544,7 +574,7 @@ $('composer').onsubmit = async event => {
   $('chatInput').value = '';
   $('chatInput').style.height = '';
   selectedFiles = []; renderAttachmentList();
-  clearError(); renderTranscript(); updateComposer();
+  clearError(); renderTranscript(); updateComposer(); renderWorkStatus(current);
   $('chat').scrollTop = $('chat').scrollHeight;
   try {
     let body;
@@ -562,7 +592,7 @@ $('composer').onsubmit = async event => {
     if (token !== selection) return;
     pendingMessage = null;
     selectedFiles = files; renderAttachmentList();
-    showError(error); updateComposer(); renderTranscript();
+    showError(error); updateComposer(); renderTranscript(); renderWorkStatus(current);
     $('chatInput').value = text;
     updateComposer();
   }
@@ -687,7 +717,7 @@ $('permissionsForm').onsubmit = async event => {
   const token = selection;
   try {
     const view = await api(sessionPath(current) + '/permissions', {method:'POST', body:JSON.stringify({mode, acknowledge:$('permissionAck').checked})});
-    if (token === selection) renderView(view);
+    if (token === selection) { clearError(); renderView(view); }
     $('permissionsDialog').close();
   } catch (error) { $('permissionError').textContent = error.message; }
 };
@@ -734,12 +764,12 @@ async function poll() {
     try {
       const after = Math.max(0, ...eventRecords.keys());
       const view = await api('/api/v1/assessments/' + encodeURIComponent(current.id) + '?after=' + after);
-      if (token === selection) { clearError(); renderView(view); }
+      if (token === selection) renderView(view);
     } catch (error) { if (token === selection && current?.id !== deletingSession) showError(error); }
   } else if (current) {
     try {
       const view = await api('/api/v1/intake/' + encodeURIComponent(current.id));
-      if (token === selection) { clearError(); renderView(view); }
+      if (token === selection) renderView(view);
     } catch (error) { if (token === selection && current?.id !== deletingSession) showError(error); }
   }
   await refreshSidebar();

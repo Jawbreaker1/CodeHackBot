@@ -37,7 +37,7 @@ func TestServerCreatesDraftAndServesUI(t *testing.T) {
 		t.Fatalf("GET / status = %d", response.StatusCode)
 	}
 	body, err := io.ReadAll(response.Body)
-	if err != nil || !strings.Contains(string(body), "What are we investigating?") || !strings.Contains(string(body), "Customers & sessions") || !strings.Contains(string(body), "workStatus") || !strings.Contains(string(body), "collapseWorkers") || !strings.Contains(string(body), "icon-trash") {
+	if err != nil || !strings.Contains(string(body), "What are we investigating?") || !strings.Contains(string(body), "Customers & sessions") || !strings.Contains(string(body), "liveStatus") || !strings.Contains(string(body), "collapseWorkers") || !strings.Contains(string(body), "icon-trash") {
 		t.Fatal("embedded operator console UI is missing")
 	}
 	css, err := http.Get(httpServer.URL + "/app.css")

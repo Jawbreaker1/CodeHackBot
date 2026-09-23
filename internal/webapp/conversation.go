@@ -147,8 +147,8 @@ func postRunFindingsContext(state assessment.State) string {
 	return string(data)
 }
 
-// Project the final model-authored conclusion without manufacturing a new chat
-// turn or relying on the bounded event feed retaining the final plan event.
+// Project a readable final statement without losing the complete model-authored
+// conclusion retained in the plan and report.
 func assessmentConclusion(state assessment.State) string {
 	if len(state.Plans) == 0 {
 		return ""
@@ -157,5 +157,21 @@ func assessmentConclusion(state assessment.State) string {
 	if !last.Complete {
 		return ""
 	}
-	return last.Summary
+	text := strings.TrimSpace(last.PlainSummary)
+	if text == "" {
+		text = last.Summary
+	}
+	text = strings.Join(strings.Fields(text), " ")
+	characters := []rune(text)
+	if len(characters) > 360 {
+		return string(characters[:359]) + "…"
+	}
+	return text
+}
+
+func assessmentConclusionDetail(state assessment.State) string {
+	if len(state.Plans) == 0 || !state.Plans[len(state.Plans)-1].Complete {
+		return ""
+	}
+	return state.Plans[len(state.Plans)-1].Summary
 }

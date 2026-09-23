@@ -13,23 +13,24 @@ import (
 // derived from persisted assessment state and never becomes a second source of
 // truth for findings or execution evidence.
 type analysisView struct {
-	Kind         string                   `json:"kind"`
-	ID           string                   `json:"id"`
-	Customer     string                   `json:"customer,omitempty"`
-	Goal         string                   `json:"goal,omitempty"`
-	Scope        string                   `json:"scope,omitempty"`
-	Model        string                   `json:"model,omitempty"`
-	ReportURL    string                   `json:"report_url,omitempty"`
-	Status       string                   `json:"status"`
-	Summary      string                   `json:"summary,omitempty"`
-	Conclusion   string                   `json:"conclusion,omitempty"`
-	SessionCount int                      `json:"session_count"`
-	Risk         analysisRisk             `json:"risk"`
-	Findings     []analysisFinding        `json:"findings"`
-	NextActions  []string                 `json:"next_actions"`
-	Gaps         []string                 `json:"gaps"`
-	Sessions     []analysisSessionSummary `json:"sessions,omitempty"`
-	GeneratedAt  time.Time                `json:"generated_at"`
+	Kind             string                   `json:"kind"`
+	ID               string                   `json:"id"`
+	Customer         string                   `json:"customer,omitempty"`
+	Goal             string                   `json:"goal,omitempty"`
+	Scope            string                   `json:"scope,omitempty"`
+	Model            string                   `json:"model,omitempty"`
+	ReportURL        string                   `json:"report_url,omitempty"`
+	Status           string                   `json:"status"`
+	Summary          string                   `json:"summary,omitempty"`
+	Conclusion       string                   `json:"conclusion,omitempty"`
+	ConclusionDetail string                   `json:"conclusion_detail,omitempty"`
+	SessionCount     int                      `json:"session_count"`
+	Risk             analysisRisk             `json:"risk"`
+	Findings         []analysisFinding        `json:"findings"`
+	NextActions      []string                 `json:"next_actions"`
+	Gaps             []string                 `json:"gaps"`
+	Sessions         []analysisSessionSummary `json:"sessions,omitempty"`
+	GeneratedAt      time.Time                `json:"generated_at"`
 }
 
 type analysisRisk struct {
@@ -98,6 +99,7 @@ func buildAnalysis(id, customer string, state assessment.State, inputs []analysi
 	view.Risk = summarizeRisk(view.Findings)
 	view.Gaps = latestGaps(state.Plans)
 	view.Conclusion = assessmentConclusion(state)
+	view.ConclusionDetail = assessmentConclusionDetail(state)
 	view.Summary = analysisSummary(view.Status, view.Risk, len(view.Findings), len(view.Gaps))
 	view.NextActions = nextActions(view.Findings, view.Gaps)
 	return view
@@ -285,8 +287,8 @@ func nextActions(findings []analysisFinding, gaps []string) []string {
 		}
 		actions = append(actions, action)
 	}
-	for _, gap := range gaps {
-		actions = append(actions, "Close assessment gap: "+gap)
+	if len(gaps) > 0 {
+		actions = append(actions, fmt.Sprintf("Review %d untested or unresolved areas before deciding on follow-up work.", len(gaps)))
 	}
 	return uniqueStrings(actions)
 }

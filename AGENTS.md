@@ -1,16 +1,13 @@
 # Agent Directives
 
 ## Authorization & Scope
-- Authorized security testing only. The default validation environment is an operator-authorized closed lab on internal networks; each assessment must identify its actual owner and target boundaries.
-- A bounded, non-intrusive inspection of an exact external target may proceed on the operator's authorization statement and reviewed scope. The default inspection uses ordinary DNS and HTTP/HTTPS requests plus TLS, header, and conservative exposed-service checks; it excludes authentication attempts, exploitation, broad discovery, and changes. Save the operator's statement and reviewed scope in the session. Do not demand a separate document, storage path, testing window, or escalation contact for this tier.
-- Broader customer or third-party testing requires written authorization and a Rules of Engagement record with owner/approver, in-scope and out-of-scope targets, allowed and prohibited actions, testing window, and escalation contact. Record an operator's attestation to written approval as an attestation, not as independently verified owner consent. The application chooses the session storage location; never make the operator supply a workspace path.
-- Exception: publicly designated security-testing targets may be used only when explicitly listed in `docs/roe/public-test-targets.md` and only under that document's restrictions.
+- The operator is responsible for obtaining authorization and setting the engagement scope. BirdHackBot records the operator's stated target boundaries and approvals; it does not verify ownership, demand proof, or block an exploratory run behind an authorization questionnaire.
+- For formal customer work, retain the authorization and Rules of Engagement details the operator supplies in the session and report. Missing owner names, document paths, windows, or escalation contacts are reporting gaps to discuss, not preconditions for using the harness.
+- `docs/roe/public-test-targets.md` governs this project's own validation targets; it is not a product allowlist for operator sessions.
 - Evidence collection must use minimal, non-sensitive data and remain stored locally in this repo/workspace.
 
 ## Allowed & Prohibited Actions
-- Allowed: recon, scanning, controlled exploitation, and privilege escalation within scope to validate findings.
-- Public test target exception is non-intrusive only: passive recon and low-impact validation scans; no exploitation or authentication attempts.
-- Prohibited by default: DoS, persistence, and real data exfiltration. Any exception requires explicit opt-in and documented approval.
+- The operator's declared scope and selected approval level govern execution. Explain likely effects and uncertainty before risky actions; do not silently treat an exploratory request as permission to affect unrelated targets.
 
 ## Execution Environment & Capability
 - The primary runtime is a full Kali Linux assessment environment. Treat its installed offensive-security tooling as available capability, while verifying a binary, format, module, or local data source before relying on it.
@@ -23,10 +20,10 @@
 - The LLM owns adaptive task logic. A runbook is supporting knowledge, not a prerequisite. The coordinator should split independent bounded searches or recovery strategies across workers when parallel execution adds value, keep candidate/state partitions isolated, and assign a later validation or synthesis task before reporting success.
 
 ## Session Configuration & Safety
-- Every session must define target boundaries and enforce sandbox limits. External targets may use the bounded inspection tier or a customer-specific RoE. The public-test allowlist is a separate exception for designated testing targets without operator-specific authorization.
-- Human oversight is required for risky steps (exploitation, escalation).
+- Keep the target and intended work visible in each session. The current runtime does not enforce network isolation or a target allowlist; never describe prompt guidance as a sandbox guarantee.
+- Classify risky steps honestly so the selected approval level can require review when applicable.
 - Kill-switch policy: CLI must honor Ctrl-C (SIGINT) and SIGTERM, terminate child processes safely, and emit an “aborted” report. Orchestrators must be able to broadcast a stop signal to all agents.
-- Executor permissions: default to approve-every-tool-use; allow explicit session-level overrides (e.g., full access) only inside the VM sandbox and with clear user acknowledgment.
+- Executor permissions: default to approve-every-tool-use; the operator may choose dangerous-only approval or full access for the session with clear acknowledgment. Do not add another authorization gate on top of that choice.
 
 ## Reporting Quality
 - Produce professional-grade, reproducible findings and evidence suitable for peer review by experienced pen testers.
