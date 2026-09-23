@@ -37,6 +37,8 @@ A fresh high-level Daybreak Blue browser run after generic planning guidance and
 
 Completed web assessments now accept post-run coordinator questions and can generate OWASP WSTG- or PTES-aligned Markdown drafts from deterministic templates, saved and linked as separate artifacts. The report structures are implemented; formatting and evidence meaning still require professional review, and PDF/DOCX export remains a later slice.
 
+A 2026-09-23 Daybreak browser smoke of an operator-authorized public site exposed excessive intake demands: the coordinator asked for a formal RoE, window, escalation contact, and record path before a low-impact inspection. Intake now accepts the operator's authorization statement and reviewed exact-target scope for that tier; the CLI uses the same rule. The live run produced bounded DNS, HTTP/HTTPS, and TLS evidence plus a cautious incomplete report. It also exposed a worker proposing an unselected sibling service check; that action was denied, and skipped task IDs/goals now enter the selected worker's context with a focused fixture regression. Repeat live validation on the updated worker build remains open. The runtime still lacks structural network-scope and deadline enforcement, so the smoke does not establish customer deployment readiness.
+
 ## Completed: core cleanup
 
 Checkpoint: `checkpoint/pre-core-rebuild-2026-09-19` (`95edae1`). Implementation branch: `codex/core-foundation`.

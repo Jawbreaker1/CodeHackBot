@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -403,6 +404,55 @@ func TestRecoverableWorkerFailureReachesNextPlanningRound(t *testing.T) {
 	state, err := coordinator.Run(context.Background(), t.TempDir(), "record a fixture observation", "synthetic fixture only")
 	if err != nil || state.Status != "incomplete" || len(state.Results) != 1 || state.Results[0].Status != "blocked" || len(state.Plans) != 2 {
 		t.Fatalf("worker failure stopped adaptation: state=%+v err=%v", state, err)
+	}
+}
+
+func TestOperatorSkippedTaskIsExplicitlyExcludedFromWorkerContext(t *testing.T) {
+	var sawBoundary atomic.Bool
+	var coordinatorCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Messages []llmclient.Message `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Error(err)
+			return
+		}
+		var payload struct {
+			Role          string `json:"role"`
+			ContextPacket string `json:"context_packet"`
+		}
+		if err := json.Unmarshal([]byte(req.Messages[1].Content), &payload); err != nil {
+			t.Error(err)
+			return
+		}
+		if strings.Contains(req.Messages[1].Content, `"role":"assessment_coordinator"`) {
+			coordinatorCalls++
+			if coordinatorCalls == 1 {
+				reply(w, Decision{Summary: "Two independent fixture checks", Tasks: []Task{
+					{ID: "selected", Goal: "Inspect fixture metadata", DoneWhen: "metadata recorded"},
+					{ID: "skipped", Goal: "Inspect fixture services", DoneWhen: "services recorded"},
+				}})
+			} else {
+				reply(w, Decision{Summary: "Fixture check ended", Complete: true})
+			}
+			return
+		}
+		if strings.Contains(payload.ContextPacket, "Inspect fixture services") && strings.Contains(payload.ContextPacket, "did not select sibling task") {
+			sawBoundary.Store(true)
+		}
+		// The invalid fixture decision ends this worker without executing a tool.
+		reply(w, map[string]string{"type": "invalid-fixture-decision"})
+	}))
+	defer server.Close()
+	coordinator := testCoordinator(server.URL)
+	coordinator.Limits = Limits{Workers: 2, Rounds: 2, Tasks: 2, StepsPerTask: 1, ModelCalls: 8}
+	coordinator.PlanApproval = func(context.Context, Decision) (PlanReview, error) {
+		return PlanReview{TaskIDs: []string{"selected"}}, nil
+	}
+	state, err := coordinator.Run(context.Background(), t.TempDir(), "Inspect fixture", "synthetic fixture only")
+	if err != nil || len(state.Results) != 1 || !sawBoundary.Load() {
+		t.Fatalf("skipped task was not excluded from selected worker: state=%+v err=%v boundary=%v", state, err, sawBoundary.Load())
 	}
 }
 

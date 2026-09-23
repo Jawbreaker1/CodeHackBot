@@ -221,7 +221,7 @@ func (a App) runPlain(ctx context.Context) error {
 	conversation.conversation.Inspection = &intakepkg.Inspection{
 		Workspace:   a.RepoRoot,
 		EvidenceDir: filepath.Join(a.RepoRoot, ".birdhackbot", "intake-evidence"),
-		Policy:      "Authorized lab only. Keep observations minimal and local; do not access credentials or mutate files.",
+		Policy:      "Local observation only. Keep evidence minimal; do not access credentials, contact targets, or mutate files.",
 		Approver:    observationApprover{console: c},
 		Emit:        c.Progress,
 	}
@@ -267,8 +267,8 @@ func (a App) runPlain(ctx context.Context) error {
 		if prefs.Provider == "subscription" {
 			c.Print("Selected task context and evidence will be sent to OpenAI (input ceiling: %d bytes; requested output ceiling: %d tokens, provider limit may be lower).\n", prefs.MaxInputBytes, client.MaxOutputTokens)
 		}
-		c.Print("This lab preview does not enforce a network allowlist or filesystem sandbox. Use only your authorized isolated lab. Reports are drafts for review.\n")
-		answer, err := c.Ask(ctx, "Type start to confirm this is an authorized isolated lab and begin, or press Enter to cancel")
+		c.Print("This runtime does not enforce a network allowlist or filesystem sandbox. Use only the reviewed, authorized scope. Reports are drafts for review.\n")
+		answer, err := c.Ask(ctx, "Type start to begin the reviewed assessment, or press Enter to cancel")
 		if err != nil {
 			return err
 		}

@@ -43,6 +43,18 @@ func (c Coordinator) runWorker(ctx context.Context, root string, state State, ta
 		packet.CapabilityInputs = append(packet.CapabilityInputs, "Coordinator-suggested local guides: "+strings.Join(task.StrategyHints, ", ")+". These are optional leads, not loaded instructions. Select only a useful guide through load_strategy; you may choose a different catalog entry as evidence changes.")
 	}
 	packet.CapabilityInputs = append(packet.CapabilityInputs, "Verify installed tools before use; no implicit installs or host changes. The declared scope is in behavior_frame.parameters.scope.")
+	packet.CapabilityInputs = append(packet.CapabilityInputs, "Your assigned task goal and done condition are your execution boundary. The assessment goal and scope provide context, not permission to perform a sibling task the operator did not select. Return useful leads outside this assignment to the coordinator for a new plan and operator review.")
+	if len(state.Plans) > 0 {
+		plan := state.Plans[len(state.Plans)-1]
+		for _, skippedID := range plan.SkippedTaskIDs {
+			for _, sibling := range plan.Tasks {
+				if sibling.ID == skippedID {
+					packet.CapabilityInputs = append(packet.CapabilityInputs, fmt.Sprintf("The operator did not select sibling task %q (%q) in this round. Do not perform its work as part of your task.", sibling.ID, sibling.Goal))
+					break
+				}
+			}
+		}
+	}
 	packet.CapabilityInputs = append(packet.CapabilityInputs, "For scoped web work, read tools/playwright-runner/README.md before using the preprovisioned helper. Name browser steps, declare task-local captures as artifacts, and use browser-artifacts/browser-live.png for operator preview. No implicit downloads or installs.")
 	researchMode := c.Frame.Parameters["research_mode"]
 	if researchMode == "air_gapped" || researchMode == "offline" {

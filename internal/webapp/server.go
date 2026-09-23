@@ -942,7 +942,7 @@ func (s *Server) intakeMessage(ctx context.Context, current *intakeRun, text str
 	current.conversation.Inspection = &intake.Inspection{
 		Workspace:   s.config.RepoRoot,
 		EvidenceDir: filepath.Join(s.config.SessionsRoot, "intake", current.id),
-		Policy:      "Authorized lab only. Keep observations minimal and local; do not access credentials or mutate files.",
+		Policy:      "These intake observations inspect only this local host and workspace. Keep them minimal; do not access credentials, contact the assessment target, or mutate files.",
 		Approver:    &intakeToolApprover{run: current},
 		Emit:        current.recordObservation,
 	}

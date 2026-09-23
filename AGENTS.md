@@ -2,7 +2,8 @@
 
 ## Authorization & Scope
 - Authorized security testing only. The default validation environment is an operator-authorized closed lab on internal networks; each assessment must identify its actual owner and target boundaries.
-- No customer or third-party testing until written authorization and RoE exist (owner/approver, storage location, in-scope/out-of-scope targets, allowed/prohibited actions, testing windows, escalation contacts).
+- A bounded, non-intrusive inspection of an exact external target may proceed on the operator's authorization statement and reviewed scope. The default inspection uses ordinary DNS and HTTP/HTTPS requests plus TLS, header, and conservative exposed-service checks; it excludes authentication attempts, exploitation, broad discovery, and changes. Save the operator's statement and reviewed scope in the session. Do not demand a separate document, storage path, testing window, or escalation contact for this tier.
+- Broader customer or third-party testing requires written authorization and a Rules of Engagement record with owner/approver, in-scope and out-of-scope targets, allowed and prohibited actions, testing window, and escalation contact. Record an operator's attestation to written approval as an attestation, not as independently verified owner consent. The application chooses the session storage location; never make the operator supply a workspace path.
 - Exception: publicly designated security-testing targets may be used only when explicitly listed in `docs/roe/public-test-targets.md` and only under that document's restrictions.
 - Evidence collection must use minimal, non-sensitive data and remain stored locally in this repo/workspace.
 
@@ -22,7 +23,7 @@
 - The LLM owns adaptive task logic. A runbook is supporting knowledge, not a prerequisite. The coordinator should split independent bounded searches or recovery strategies across workers when parallel execution adds value, keep candidate/state partitions isolated, and assign a later validation or synthesis task before reporting success.
 
 ## Session Configuration & Safety
-- Every session must define target boundaries and enforce sandbox limits (internal networks by default; external targets only from the approved public-test allowlist).
+- Every session must define target boundaries and enforce sandbox limits. External targets may use the bounded inspection tier or a customer-specific RoE. The public-test allowlist is a separate exception for designated testing targets without operator-specific authorization.
 - Human oversight is required for risky steps (exploitation, escalation).
 - Kill-switch policy: CLI must honor Ctrl-C (SIGINT) and SIGTERM, terminate child processes safely, and emit an “aborted” report. Orchestrators must be able to broadcast a stop signal to all agents.
 - Executor permissions: default to approve-every-tool-use; allow explicit session-level overrides (e.g., full access) only inside the VM sandbox and with clear user acknowledgment.
