@@ -31,6 +31,8 @@ The dated [worker audit](docs/worker-foundation-audit-2026-09-20.md) records rem
 
 The [2026-09-23 code assessment](docs/code-assessment-2026-09-23.md) found five reproducible defects in model-call accounting, live conversation context, worker-question routing, finding revisions, and web-session persistence. All five are repaired with permanent regressions. Full deterministic CI, affected-package race tests, and a focused live browser path passed after the repairs. This closes those defects, not the broader foundation or customer deployment gates. Next, extract web lifecycle/model-request ownership along actual boundaries and reconcile the previously tracked final-status mismatch after a failed worker is recovered in a later round.
 
+The 2026-09-23 Daybreak Blue browser assessment of the authorized router at `192.168.50.1` is an **incomplete baseline**, not a platform acceptance pass. From a high-level brief, the coordinator delegated eight tasks across four rounds, identified the ASUS GT-BE98, and preserved scan and research evidence. Three research workers hit the ten-decision limit, including both final advisory/CVE workers. The resulting report recorded only informational fingerprint disclosure; independent evidence from the same LAN vantage also supports HTTP-only administration and a UPnP description service that BirdHackBot missed. Investigate generic worker budget sizing, service-coverage recovery, and evidence-backed finding prioritization, then repeat the same brief and compare claims and omissions. Do not add router-specific workflow logic.
+
 ## Completed: core cleanup
 
 Checkpoint: `checkpoint/pre-core-rebuild-2026-09-19` (`95edae1`). Implementation branch: `codex/core-foundation`.
@@ -173,6 +175,7 @@ Earlier phase checklists are archived in `docs/archive/pre-core-cleanup-2026-09-
 ## Current slice: approvals and observable browser execution
 
 - [x] Three explicit session approval modes shared by web and terminal: every execution, dangerous/uncertain executions, and all executions allowed. Model-authored action descriptions drive risk presentation; command-text parsing does not classify risk.
+- [x] Make either automatic web approval mode start the coordinator's scoped plans without a separate “Run selected” gate. Keep task selection in the default mode and retain dangerous/uncertain command prompts in dangerous-only mode. Built-app lifecycle checks and the GUI setting text were verified.
 - [x] Compact main-chat approval cards with expandable invocation details, session permission picker, and CLI `/permissions`.
 - [x] Optional worker watch view showing live output and declared browser preview; named Playwright steps and local trace evidence.
 - [x] Project live worker observations into coordinator chat before task completion; show final conclusions in chat and analysis; remove historical resolved gaps from current analysis.
