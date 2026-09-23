@@ -35,6 +35,8 @@ The 2026-09-23 Daybreak Blue browser assessment of the authorized router at `192
 
 A fresh high-level Daybreak Blue browser run after generic planning guidance and a 16-decision worker default completed eight worker tasks in four rounds without blocked workers. It independently recorded a medium-severity HTTP-only administration finding, corroborated by closed TCP/8443 and disabled HTTPS redirect, and separated firmware, DNS, and TCP/7788 hypotheses from confirmed target behavior. The prior UPnP listener was absent in this point-in-time full TCP scan, so this run cannot establish whether the harness would now detect it when exposed. The completed session took 61 minutes and 105 model calls (about 1.67 million reported tokens), which is too slow for the intended interactive workflow. Further acceptance needs repeated runs and independently reviewed precision/recall on more targets, plus lower latency and cost without narrowing the generic assessment capability.
 
+Completed web assessments now accept post-run coordinator questions and can generate OWASP WSTG- or PTES-aligned Markdown drafts from deterministic templates, saved and linked as separate artifacts. The report structures are implemented; formatting and evidence meaning still require professional review, and PDF/DOCX export remains a later slice.
+
 ## Completed: core cleanup
 
 Checkpoint: `checkpoint/pre-core-rebuild-2026-09-19` (`95edae1`). Implementation branch: `codex/core-foundation`.

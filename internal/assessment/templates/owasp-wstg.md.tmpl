@@ -1,0 +1,70 @@
+# Security assessment — OWASP WSTG-aligned report
+
+**Assessment:** {{inline .ID}}  
+**Status:** {{inline .Status}}  
+**Draft:** Model-authored; professional review required.
+
+## 1. Introduction
+
+**Objective:** {{inline .Goal}}  
+**Scope:** {{inline .Scope}}  
+**Started:** {{if .Started}}{{.Started}}{{else}}Not recorded{{end}}  
+**Finished:** {{if .Finished}}{{.Finished}}{{else}}Not recorded{{end}}
+
+This is a point-in-time report of the recorded work. The OWASP WSTG provides reporting guidance, not certification. No WSTG test ID or CVSS score is asserted unless the assessment evidence explicitly supports one.
+
+## 2. Executive summary
+
+{{.Summary}}
+
+{{if .Findings}}Current findings: {{len .Findings}}. Technical details and remediation follow.{{else}}No findings were recorded; this does not establish that the scoped system is free of vulnerabilities.{{end}}
+
+## 3. Findings
+
+### 3.1 Findings summary
+
+{{if .Findings}}{{range $i, $f := .Findings}}- **F-{{inc $i}} · {{inline $f.Title}}** — {{inline $f.Severity}} severity; {{inline $f.Status}}; {{inline $f.Confidence}} confidence.
+{{end}}{{else}}No current findings were recorded.
+{{end}}
+### 3.2 Findings details
+
+{{if .Findings}}{{range $i, $f := .Findings}}#### F-{{inc $i}} · {{inline $f.Title}}
+
+**Status:** {{inline $f.Status}}  
+**Severity:** {{if $f.Severity}}{{inline $f.Severity}}{{else}}Not rated{{end}}  
+**Confidence:** {{if $f.Confidence}}{{inline $f.Confidence}}{{else}}Not rated{{end}}  
+**Affected software:** {{if $f.AffectedSoftware}}{{join $f.AffectedSoftware ", "}}{{else}}Not established{{end}}  
+**Validation task:** {{if $f.ValidationTask}}{{inline $f.ValidationTask}}{{else}}Not recorded{{end}}
+
+**Impact:** {{inline $f.Impact}}
+
+**Reproduction:**
+{{range $j, $step := $f.Steps}}{{inc $j}}. {{inline $step}}
+{{end}}
+**Evidence:**
+{{range $f.Evidence}}- {{inline .}}
+{{end}}
+**Remediation:**
+{{range $f.Remediation}}- {{inline .}}
+{{end}}{{if $f.CVEIDs}}
+**CVE references:** {{join $f.CVEIDs ", "}}{{end}}{{if $f.References}}
+**Research references:**
+{{range $f.References}}- {{inline .}}
+{{end}}{{end}}
+{{end}}{{else}}No findings to detail.
+{{end}}
+## 4. Method and coverage
+
+The table of work below records assigned objectives and outcomes. Consult the canonical session report and evidence for exact commands and observations. A proposed, skipped, blocked, or failed task does not establish coverage.
+
+{{if .Results}}{{range .Results}}- **{{inline .Task.ID}} — {{inline .Status}}:** {{inline .Task.Goal}}
+{{end}}{{else}}No worker results were recorded.
+{{end}}
+## 5. Limitations and unresolved gaps
+
+{{if .Gaps}}{{range .Gaps}}- {{inline .}}
+{{end}}{{else}}No additional gaps were stated; this is not a coverage guarantee.
+{{end}}
+## 6. Reporting basis
+
+Format guidance: [OWASP Web Security Testing Guide v4.2 — Reporting](https://wstg.owasp.org/v4.2/5-Reporting/). Refer to the canonical session report and recorded evidence for the full command trail. Standards mappings and risk scores require separate substantiation.

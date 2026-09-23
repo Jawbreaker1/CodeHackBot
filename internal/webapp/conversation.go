@@ -23,9 +23,12 @@ type workerProgress struct {
 
 const webCoordinatorDisplayPrompt = `Return one JSON object with "text" (your plain-language reply) and optional "display_artifact_refs" (up to three exact paths from available_images in the current assessment state). Select images only when they help answer the operator; never invent a path. The application validates each reference and displays accepted images beneath your reply. If no image helps, omit display_artifact_refs. Do not put Markdown image syntax in text.`
 
+const webPostRunReportPrompt = `The assessment has ended. You can still discuss its recorded results, but no workers or commands are active. When the operator asks you to generate a report in OWASP WSTG or PTES format, set "report_format" to exactly "owasp-wstg" or "ptes" in your JSON reply. The application renders that template from saved assessment findings and links the new Markdown artifact in chat. Do not claim to have generated a report unless you set this field. For any other question, omit it. These are reporting structures, not a certification or proof that every standard test was performed. Do not invent a WSTG test ID, CVSS score, finding, or validation.`
+
 type coordinatorChatReply struct {
-	Text                string   `json:"text"`
-	DisplayArtifactRefs []string `json:"display_artifact_refs,omitempty"`
+	Text                string                  `json:"text"`
+	DisplayArtifactRefs []string                `json:"display_artifact_refs,omitempty"`
+	ReportFormat        assessment.ReportFormat `json:"report_format,omitempty"`
 }
 
 func parseCoordinatorChatReply(raw string) (coordinatorChatReply, error) {
@@ -130,6 +133,18 @@ func conversationExcerpt(text string, limit int) string {
 		return text[:limit-3] + "..."
 	}
 	return text
+}
+
+func postRunFindingsContext(state assessment.State) string {
+	var gaps []string
+	if len(state.Plans) > 0 {
+		gaps = state.Plans[len(state.Plans)-1].Gaps
+	}
+	data, _ := json.Marshal(struct {
+		Findings []assessment.Finding `json:"current_findings"`
+		Gaps     []string             `json:"unresolved_gaps"`
+	}{Findings: assessment.CurrentFindings(state.Plans), Gaps: gaps})
+	return string(data)
 }
 
 // Project the final model-authored conclusion without manufacturing a new chat

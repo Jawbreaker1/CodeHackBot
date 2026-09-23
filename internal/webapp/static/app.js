@@ -214,16 +214,20 @@ function renderTranscript() {
   const timeline = [
     ...messages.map((message, index) => ({at: message.at, message, index})),
     ...records.filter(r => !['operator_message', 'coordinator_message'].includes(r.event.kind)).map(record => ({at: record.at, record})),
-  ].sort((a, b) => new Date(a.at) - new Date(b.at));
+  ];
+  const finishAt = current?.finished_at || records.find(r => r.event.kind === 'assessment_finished')?.at || '9999-12-31';
+  if (current?.conclusion) timeline.push({at: finishAt, conclusion: current.conclusion});
+  if (isAssessmentView(current) && current.report_ready) timeline.push({at: finishAt, report: current});
+  timeline.sort((a, b) => new Date(a.at) - new Date(b.at));
   let trace = [];
   const flushTrace = () => { if (trace.length) items.push(traceNode(trace)); trace = []; };
   for (const item of timeline) {
     if (item.record) trace.push(item.record);
+    else if (item.conclusion) { flushTrace(); items.push(messageNode({role: 'assistant', text: item.conclusion, at: 'conclusion-' + current.id})); }
+    else if (item.report) { flushTrace(); items.push(reportNode(item.report)); }
     else { flushTrace(); items.push(messageNode(item.message)); }
   }
   flushTrace();
-  if (current?.conclusion) items.push(messageNode({role: 'assistant', text: current.conclusion, at: 'conclusion-' + current.id}));
-  if (isAssessmentView(current) && current.report_ready) items.push(reportNode(current));
   for (const approval of current?.pending_approvals || []) items.push(chatApprovalNode(approval, 'action'));
   if (current?.pending_tool) items.push(chatApprovalNode(current.pending_tool, 'observation'));
   if (current?.pending_plan) items.push(planReviewNode(current.pending_plan));
@@ -244,12 +248,13 @@ function renderTranscript() {
 }
 function updateComposer() {
   const assessment = isAssessmentView(current);
-  const finalized = assessment && !activeStatuses.includes(current.status);
-  $('chatInput').disabled = !current || !!finalized;
-  $('send').disabled = !current || !!finalized || !!pendingMessage || (!$('chatInput').value.trim() && !selectedFiles.length);
+  const finished = assessment && ['completed', 'completed_with_gaps', 'incomplete', 'aborted'].includes(current.status);
+  const canChat = !assessment || activeStatuses.includes(current.status) || finished;
+  $('chatInput').disabled = !current || !canChat;
+  $('send').disabled = !current || !canChat || !!pendingMessage || (!$('chatInput').value.trim() && !selectedFiles.length);
   $('newAssessment').disabled = starting;
-  $('conversationState').textContent = current?.pending_plan ? (current.pending_plan.phase === 'research' ? 'Waiting for your research selection · No worker is running' : 'Waiting for your test selection · No worker is running') : current?.pending_tool ? 'Waiting for your approval · No tool is running' : pendingMessage ? 'Coordinator is responding…' : current?.resumable ? 'Session paused · Open Workers to review and resume' : finalized ? 'Session ended · Start a new session to continue' : assessment ? 'Workers can run while you discuss the assessment' : 'Ready when you are';
-  $('chatInput').placeholder = current?.resumable ? 'Resume this session to continue' : finalized ? 'This session has ended' : 'Ask, investigate, or plan an assessment…';
+  $('conversationState').textContent = current?.pending_plan ? (current.pending_plan.phase === 'research' ? 'Waiting for your research selection · No worker is running' : 'Waiting for your test selection · No worker is running') : current?.pending_tool ? 'Waiting for your approval · No tool is running' : pendingMessage ? 'Coordinator is responding…' : finished ? 'Assessment finished · Discuss results or request a report' : current?.resumable ? 'Session paused · Open Workers to review and resume' : assessment ? 'Workers can run while you discuss the assessment' : 'Ready when you are';
+  $('chatInput').placeholder = finished ? 'Discuss results or ask for an OWASP or PTES report…' : current?.resumable ? 'Resume this session to continue' : 'Ask, investigate, or plan an assessment…';
 }
 function formatBytes(value) {
   const bytes = Number(value) || 0;
@@ -295,7 +300,7 @@ function renderOverview(view) {
   renderWorkStatus(view);
   $('assessmentGoal').textContent = view.goal || 'Workers appear here as the coordinator delegates work.';
   $('assessmentMetrics').classList.toggle('hidden', !assessment);
-  $('assessmentMetrics').textContent = (view.usage?.calls || 0) + ' recorded calls · ' + (view.plans || 0) + ' plans';
+  $('assessmentMetrics').textContent = (view.usage?.calls || 0) + ' assessment calls · ' + (view.post_run_usage?.calls || 0) + ' follow-up calls · ' + (view.plans || 0) + ' plans';
   const context = view.context_window || {};
   const hasContext = !!(assessment && context.limit_bytes > 0);
   $('contextWindow').classList.toggle('hidden', !hasContext);

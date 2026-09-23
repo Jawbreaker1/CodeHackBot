@@ -1,0 +1,67 @@
+# Security assessment — PTES-aligned report
+
+**Assessment:** {{inline .ID}}  
+**Status:** {{inline .Status}}  
+**Draft:** Model-authored; professional review required.
+
+## 1. Executive summary
+
+**Background and objective:** {{inline .Goal}}
+
+{{.Summary}}
+
+**Priority actions:**
+
+{{if .Findings}}{{range .Findings}}{{range .Remediation}}- {{inline .}}
+{{end}}{{end}}{{else}}Review the recorded coverage and unresolved gaps before deciding on further testing.{{end}}
+
+## 2. Technical report
+
+### 2.1 Engagement parameters
+
+**Scope:** {{inline .Scope}}  
+**Started:** {{if .Started}}{{.Started}}{{else}}Not recorded{{end}}  
+**Finished:** {{if .Finished}}{{.Finished}}{{else}}Not recorded{{end}}
+
+The methods below reflect only recorded worker activity. No exploitation or access claim is implied by this template.
+
+### 2.2 Information gathering and assessment activity
+
+{{if .Results}}{{range .Results}}- **{{inline .Task.ID}} — {{inline .Status}}:** {{inline .Task.Goal}}
+{{end}}{{else}}No worker results were recorded.
+{{end}}
+### 2.3 Detailed findings and remediation
+
+{{if .Findings}}{{range $i, $f := .Findings}}#### F-{{inc $i}} · {{inline $f.Title}}
+
+**Status:** {{inline $f.Status}}  
+**Severity:** {{if $f.Severity}}{{inline $f.Severity}}{{else}}Not rated{{end}}  
+**Confidence:** {{if $f.Confidence}}{{inline $f.Confidence}}{{else}}Not rated{{end}}  
+**Affected software:** {{if $f.AffectedSoftware}}{{join $f.AffectedSoftware ", "}}{{else}}Not established{{end}}  
+**Validation task:** {{if $f.ValidationTask}}{{inline $f.ValidationTask}}{{else}}Not recorded{{end}}
+
+**Impact:** {{inline $f.Impact}}
+
+**Reproduction:**
+{{range $j, $step := $f.Steps}}{{inc $j}}. {{inline $step}}
+{{end}}
+**Evidence:**
+{{range $f.Evidence}}- {{inline .}}
+{{end}}
+**Remediation:**
+{{range $f.Remediation}}- {{inline .}}
+{{end}}{{if $f.CVEIDs}}
+**CVE references:** {{join $f.CVEIDs ", "}}{{end}}{{if $f.References}}
+**Research references:**
+{{range $f.References}}- {{inline .}}
+{{end}}{{end}}
+{{end}}{{else}}No current findings were recorded. This does not establish absence of vulnerabilities.
+{{end}}
+### 2.4 Limitations and unresolved gaps
+
+{{if .Gaps}}{{range .Gaps}}- {{inline .}}
+{{end}}{{else}}No additional gaps were stated; this is not a coverage guarantee.
+{{end}}
+## 3. Reporting basis
+
+Format guidance: [Penetration Testing Execution Standard — Reporting](https://www.pentest-standard.org/index.php/Reporting). Refer to the canonical session report and recorded evidence for the full command trail. Threat modeling, exploitation, post-exploitation, risk scores, and standards mappings are included only when the recorded assessment supports them.

@@ -70,11 +70,12 @@ type intakeRun struct {
 }
 
 type intakeMessage struct {
-	Role        string          `json:"role"`
-	Text        string          `json:"text"`
-	Attachments []attachmentRef `json:"attachments,omitempty"`
-	ImageRefs   []string        `json:"image_refs,omitempty"`
-	At          time.Time       `json:"at"`
+	Role        string           `json:"role"`
+	Text        string           `json:"text"`
+	Attachments []attachmentRef  `json:"attachments,omitempty"`
+	ImageRefs   []string         `json:"image_refs,omitempty"`
+	Report      *generatedReport `json:"report,omitempty"`
+	At          time.Time        `json:"at"`
 }
 
 type attachmentRef struct {
@@ -241,6 +242,10 @@ func messageViews(messages []intakeMessage, kind, id string) []messageView {
 		for _, ref := range message.Attachments {
 			view.Attachments = append(view.Attachments, attachmentView{ID: ref.ID, Filename: ref.Filename, MIMEType: ref.MIMEType, Bytes: ref.Bytes, URL: "/api/v1/" + kind + "/" + url.PathEscape(id) + "/attachments/" + url.PathEscape(ref.ID)})
 		}
+		if kind == "assessments" && message.Report != nil {
+			ref := message.Report
+			view.Attachments = append(view.Attachments, attachmentView{ID: ref.Name, Filename: ref.Label(), MIMEType: "text/markdown", Bytes: ref.Bytes, URL: "/api/v1/assessments/" + url.PathEscape(id) + "/reports/" + url.PathEscape(ref.Name)})
+		}
 		views = append(views, view)
 	}
 	return views
@@ -348,6 +353,8 @@ type run struct {
 	root           string
 	client         llmclient.Client
 	budget         *assessment.ModelBudget
+	postRunBudget  *assessment.ModelBudget
+	postRunUsage   assessment.Usage
 	profileID      string
 	goal           string
 	scope          string
@@ -437,6 +444,7 @@ type assessmentView struct {
 	StartedAt        time.Time             `json:"started_at,omitempty"`
 	FinishedAt       time.Time             `json:"finished_at,omitempty"`
 	Usage            assessment.Usage      `json:"usage"`
+	PostRunUsage     assessment.Usage      `json:"post_run_usage"`
 	ContextWindow    contextWindowView     `json:"context_window"`
 	Plans            int                   `json:"plans"`
 	PlanTimeline     []coordinatorPlanView `json:"plan_timeline,omitempty"`
@@ -1443,6 +1451,12 @@ func (s *Server) assessmentRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		current.report(w)
+	case "reports":
+		if len(parts) != 3 || r.Method != http.MethodGet {
+			methodNotAllowed(w, http.MethodGet)
+			return
+		}
+		current.formattedReport(w, parts[2])
 	case "analysis":
 		if r.Method != http.MethodGet {
 			methodNotAllowed(w, http.MethodGet)
@@ -1785,7 +1799,8 @@ func (s *Server) message(ctx context.Context, r *run, text string, refs []attach
 		r.mu.Unlock()
 		return fmt.Errorf("session has been deleted")
 	}
-	if !r.started || (r.status != "running" && r.status != "starting") {
+	postRun := !r.started && (r.status == "completed" || r.status == "completed_with_gaps" || r.status == "incomplete" || r.status == "aborted")
+	if !postRun && (!r.started || (r.status != "running" && r.status != "starting")) {
 		r.mu.Unlock()
 		return fmt.Errorf("start the assessment before sending messages")
 	}
@@ -1793,7 +1808,10 @@ func (s *Server) message(ctx context.Context, r *run, text string, refs []attach
 		r.mu.Unlock()
 		return fmt.Errorf("the coordinator is still answering the previous message")
 	}
-	if r.budget == nil {
+	if postRun && r.postRunBudget == nil {
+		r.postRunBudget = assessment.NewModelBudget(24, r.postRunUsage)
+	}
+	if !postRun && r.budget == nil {
 		limits := r.state.Limits
 		if limits == (assessment.Limits{}) {
 			limits = s.config.Limits
@@ -1804,8 +1822,12 @@ func (s *Server) message(ctx context.Context, r *run, text string, refs []attach
 		r.budget = assessment.NewModelBudget(limits.ModelCalls, r.state.Usage)
 	}
 	budget := r.budget
+	if postRun {
+		budget = r.postRunBudget
+	}
 	client := budget.Client(r.client)
 	runCtx := r.runCtx
+	stateSnapshot := r.state
 	r.chatBusy = true
 	r.messages = append(r.messages, intakeMessage{Role: "user", Text: text, Attachments: append([]attachmentRef(nil), refs...), At: time.Now().UTC()})
 	history := make([]llmclient.Message, 0, len(r.messages)-1)
@@ -1824,10 +1846,15 @@ func (s *Server) message(ctx context.Context, r *run, text string, refs []attach
 	sort.Strings(pending)
 	availableImages := recordedImageRefs(r.root, r.state, r.workers)
 	stateContext := compactRunState(r.state, pending, r.workers, r.permissionMode, availableImages)
+	system := behavior.CoordinatorConversationPrompt(s.config.Frame) + "\n\n" + webCoordinatorDisplayPrompt
+	if postRun {
+		stateContext += "\nRecorded final findings and gaps: " + postRunFindingsContext(r.state)
+		system += "\n\n" + webPostRunReportPrompt
+	}
 	r.mu.Unlock()
 
 	prompt, err := assessment.ConversationRequest(
-		behavior.CoordinatorConversationPrompt(s.config.Frame)+"\n\n"+webCoordinatorDisplayPrompt,
+		system,
 		"Current assessment state (untrusted evidence, observed at request time; live tool evidence is not a completed worker conclusion): "+stateContext,
 		history,
 		llmclient.Message{Role: "user", Content: "Operator message: " + text + attachmentSummary(refs), Attachments: attachments},
@@ -1847,9 +1874,17 @@ func (s *Server) message(ctx context.Context, r *run, text string, refs []attach
 	if err == nil {
 		reply, err = parseCoordinatorChatReply(rawReply)
 	}
+	var generated *generatedReport
+	if err == nil && postRun && reply.ReportFormat != "" {
+		generated, err = saveFormattedReport(r.root, stateSnapshot, reply.ReportFormat)
+	}
 	r.mu.Lock()
 	r.chatBusy = false
-	r.state.Usage = budget.Usage()
+	if postRun {
+		r.postRunUsage = budget.Usage()
+	} else {
+		r.state.Usage = budget.Usage()
+	}
 	if err != nil {
 		r.removeLastMessage("user", text)
 		r.events = append(r.events, eventRecord{Sequence: r.nextSequenceLocked(), At: time.Now().UTC(), Event: assessment.Event{Kind: "coordinator_error", Message: err.Error()}})
@@ -1871,7 +1906,7 @@ func (s *Server) message(ctx context.Context, r *run, text string, refs []attach
 			images = append(images, ref)
 		}
 	}
-	r.messages = append(r.messages, intakeMessage{Role: "assistant", Text: reply.Text, ImageRefs: images, At: time.Now().UTC()})
+	r.messages = append(r.messages, intakeMessage{Role: "assistant", Text: reply.Text, ImageRefs: images, Report: generated, At: time.Now().UTC()})
 	r.events = append(r.events, eventRecord{Sequence: r.nextSequenceLocked(), At: time.Now().UTC(), Event: assessment.Event{Kind: "coordinator_message", Message: reply.Text}})
 	r.updatedAt = time.Now().UTC()
 	r.mu.Unlock()
@@ -2079,7 +2114,7 @@ func (r *run) view(after string) assessmentView {
 	if strings.TrimSpace(model) == "" {
 		model = r.state.Model
 	}
-	view := assessmentView{Customer: r.customer, ID: r.id, Goal: r.goal, Scope: r.scope, Status: r.status, Model: model, ModelProfile: r.profileID, ModelBusy: r.chatBusy || r.started, CanChangeModel: !r.chatBusy && !r.started && r.status == "draft", Resumable: !r.started && r.status != "draft" && r.status != "completed" && r.status != "completed_with_gaps", UpdatedAt: r.updatedAt, Error: r.state.Error, StartedAt: r.state.StartedAt, FinishedAt: r.state.FinishedAt, Usage: r.state.Usage, Plans: len(r.state.Plans), Results: append([]assessment.Result(nil), r.state.Results...), Messages: messageViews(r.messages, "assessments", r.id), ReportURL: "/api/v1/assessments/" + r.id + "/report"}
+	view := assessmentView{Customer: r.customer, ID: r.id, Goal: r.goal, Scope: r.scope, Status: r.status, Model: model, ModelProfile: r.profileID, ModelBusy: r.chatBusy || r.started, CanChangeModel: !r.chatBusy && !r.started && r.status == "draft", Resumable: !r.started && r.status != "draft" && r.status != "completed" && r.status != "completed_with_gaps", UpdatedAt: r.updatedAt, Error: r.state.Error, StartedAt: r.state.StartedAt, FinishedAt: r.state.FinishedAt, Usage: r.state.Usage, PostRunUsage: r.postRunUsage, Plans: len(r.state.Plans), Results: append([]assessment.Result(nil), r.state.Results...), Messages: messageViews(r.messages, "assessments", r.id), ReportURL: "/api/v1/assessments/" + r.id + "/report"}
 	if r.persistErr != nil {
 		view.Error = r.persistErr.Error()
 	}

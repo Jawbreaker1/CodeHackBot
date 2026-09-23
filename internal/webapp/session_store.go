@@ -55,6 +55,7 @@ type sessionRecord struct {
 	ModelProfile   string              `json:"model_profile,omitempty"`
 	Status         string              `json:"status,omitempty"`
 	Usage          *assessment.Usage   `json:"usage,omitempty"`
+	PostRunUsage   *assessment.Usage   `json:"post_run_usage,omitempty"`
 	AssessmentID   string              `json:"assessment_id,omitempty"`
 	Messages       []intakeMessage     `json:"messages,omitempty"`
 	Conversation   []llmclient.Message `json:"conversation,omitempty"`
@@ -195,6 +196,9 @@ func (s *Server) restoreRun(customer, root string) error {
 		updated = state.FinishedAt
 	}
 	current := &run{permissionMode: record.PermissionMode.Normalized(), id: id, customer: customer, root: root, client: client, profileID: record.ModelProfile, goal: state.Goal, scope: state.Scope, status: status, state: state, resume: true, done: make(chan struct{}), approvals: make(map[string]*pendingApproval), questions: make(map[string]*pendingQuestion), sequence: record.Sequence, events: events, workers: workers, messages: append([]intakeMessage(nil), record.Messages...), updatedAt: updated}
+	if record.PostRunUsage != nil {
+		current.postRunUsage = *record.PostRunUsage
+	}
 	s.mu.Lock()
 	s.runs[id] = current
 	s.mu.Unlock()
@@ -293,7 +297,11 @@ func (r *run) persist() error {
 	if r.budget != nil {
 		usage = r.budget.Usage()
 	}
-	record := sessionRecord{PermissionMode: r.permissionMode.Normalized(), Version: sessionRecordVersion, Kind: "assessment", ID: r.id, Customer: r.customer, Goal: r.goal, Scope: r.scope, Model: r.client.Model, ModelProfile: r.profileID, Status: r.status, Usage: &usage, Messages: append([]intakeMessage(nil), r.messages...), Events: append([]eventRecord(nil), r.events...), Workers: workers, Sequence: r.sequence, UpdatedAt: r.updatedAt}
+	postRunUsage := r.postRunUsage
+	if r.postRunBudget != nil {
+		postRunUsage = r.postRunBudget.Usage()
+	}
+	record := sessionRecord{PermissionMode: r.permissionMode.Normalized(), Version: sessionRecordVersion, Kind: "assessment", ID: r.id, Customer: r.customer, Goal: r.goal, Scope: r.scope, Model: r.client.Model, ModelProfile: r.profileID, Status: r.status, Usage: &usage, PostRunUsage: &postRunUsage, Messages: append([]intakeMessage(nil), r.messages...), Events: append([]eventRecord(nil), r.events...), Workers: workers, Sequence: r.sequence, UpdatedAt: r.updatedAt}
 	root := r.root
 	r.mu.RUnlock()
 	return atomicWriteJSON(filepath.Join(root, "session.json"), record)
