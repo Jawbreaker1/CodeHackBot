@@ -1,6 +1,7 @@
 package webapp
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -9,10 +10,50 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/assessment"
 	"github.com/Jawbreaker1/CodeHackBot/internal/llmclient"
 )
+
+func TestStoppingAssessmentCancelsLiveCoordinatorChat(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	model := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		close(started)
+		<-release
+	}))
+	defer model.Close()
+	defer close(release)
+	runCtx, cancelRun := context.WithCancelCause(context.Background())
+	defer cancelRun(context.Canceled)
+	server := NewServer(Config{RepoRoot: t.TempDir(), LLM: llmclient.Client{BaseURL: model.URL + "/v1", Model: "fixture"}})
+	current, err := server.newRun("fixture", "inspect fixture", "synthetic only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.started, current.status, current.runCtx = true, "running", runCtx
+	current.state = assessment.State{Version: 1, ID: current.id, Goal: current.goal, Scope: current.scope, Status: "running"}
+	result := make(chan error, 1)
+	go func() { result <- server.message(context.Background(), current, "Explain the current status", nil) }()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("live chat request did not reach the provider")
+	}
+	cancelRun(context.Canceled)
+	select {
+	case err := <-result:
+		if err == nil || !strings.Contains(err.Error(), "context canceled") {
+			t.Fatalf("live chat cancellation = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("stopped assessment left live chat running")
+	}
+	if got := current.budget.Usage(); got.Calls != 1 || got.FailedCalls != 1 {
+		t.Fatalf("canceled chat usage = %+v", got)
+	}
+}
 
 func TestCoordinatorCanPresentRecordedImageInChat(t *testing.T) {
 	var imagePath, unregisteredPath string
@@ -25,7 +66,11 @@ func TestCoordinatorCanPresentRecordedImageInChat(t *testing.T) {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		if !strings.Contains(request.Messages[len(request.Messages)-1].Content, imagePath) {
+		var input strings.Builder
+		for _, message := range request.Messages {
+			input.WriteString(message.Content)
+		}
+		if !strings.Contains(input.String(), imagePath) {
 			t.Error("recorded image was not offered to the coordinator")
 		}
 		answer, _ := json.Marshal(map[string]any{"text": "Here is the recorded screenshot.", "display_artifact_refs": []string{imagePath, unregisteredPath, "/etc/passwd"}})
@@ -84,6 +129,126 @@ func TestCoordinatorCanPresentRecordedImageInChat(t *testing.T) {
 	}
 }
 
+func TestCoordinatorChatSharesBudgetAcrossSnapshotAndResume(t *testing.T) {
+	requests := 0
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		writeJSON(w, http.StatusOK, map[string]any{"choices": []any{map[string]any{"message": map[string]string{"role": "assistant", "content": "Acknowledged."}}}, "usage": map[string]int{"total_tokens": 7}})
+	}))
+	defer model.Close()
+	root := t.TempDir()
+	config := Config{RepoRoot: root, LLM: llmclient.Client{BaseURL: model.URL + "/v1", Model: "fixture"}}
+	server := NewServer(config)
+	current, err := server.newRun("fixture", "inspect fixture", "synthetic only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits := assessment.DefaultLimits()
+	limits.ModelCalls = 2
+	current.started, current.status = true, "running"
+	current.state = assessment.State{Version: 1, ID: current.id, Goal: current.goal, Scope: current.scope, Status: "running", Limits: limits, Usage: assessment.Usage{Calls: 1}}
+	if err := server.message(t.Context(), current, "First discussion turn", nil); err != nil {
+		t.Fatal(err)
+	}
+	current.snapshot(assessment.State{Version: 1, ID: current.id, Goal: current.goal, Scope: current.scope, Status: "running", Limits: limits, Usage: assessment.Usage{Calls: 1}})
+	if got := current.view("").Usage; got.Calls != 2 || got.ReportedTokens != 7 {
+		t.Fatalf("coordinator snapshot lost chat usage: %+v", got)
+	}
+	if err := server.message(t.Context(), current, "Second discussion turn", nil); err == nil || !strings.Contains(err.Error(), "budget exhausted") {
+		t.Fatalf("unbudgeted chat request was allowed: %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("provider received %d requests, want one", requests)
+	}
+	if err := atomicWriteJSON(filepath.Join(current.root, "assessment.json"), assessment.State{Version: 1, ID: current.id, Goal: current.goal, Scope: current.scope, Status: "running", Limits: limits, Usage: assessment.Usage{Calls: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	restored := NewServer(config)
+	if restored.loadErr != nil {
+		t.Fatal(restored.loadErr)
+	}
+	if got := restored.getRun(current.id).view("").Usage; got.Calls != 2 || got.ReportedTokens != 7 {
+		t.Fatalf("resumed budget lost the chat call: %+v", got)
+	}
+}
+
+func TestCoordinatorChatFollowupReceivesPriorTurn(t *testing.T) {
+	var second []llmclient.Message
+	requests := 0
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var request struct {
+			Messages []llmclient.Message `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		if requests == 2 {
+			second = request.Messages
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"choices": []any{map[string]any{"message": map[string]string{"role": "assistant", "content": "Acknowledged."}}}})
+	}))
+	defer model.Close()
+	server := NewServer(Config{RepoRoot: t.TempDir(), LLM: llmclient.Client{BaseURL: model.URL + "/v1", Model: "fixture"}})
+	current, err := server.newRun("fixture", "inspect fixture", "synthetic only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.started, current.status = true, "running"
+	current.state = assessment.State{Version: 1, ID: current.id, Goal: current.goal, Scope: current.scope, Status: "running"}
+	if err := server.message(t.Context(), current, "The marker is violet-otter", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.message(t.Context(), current, "What was the marker?", nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(second) != 5 || second[2].Role != "user" || !strings.Contains(second[2].Content, "violet-otter") || second[3].Role != "assistant" || second[4].Role != "user" {
+		t.Fatalf("follow-up lost ordered dialogue: %+v", second)
+	}
+}
+
+func TestCoordinatorChatDoesNotAnswerPendingWorkerQuestions(t *testing.T) {
+	requests := 0
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		writeJSON(w, http.StatusOK, map[string]any{"choices": []any{map[string]any{"message": map[string]string{"role": "assistant", "content": "The workers are waiting for your answers."}}}})
+	}))
+	defer model.Close()
+	server := NewServer(Config{RepoRoot: t.TempDir(), LLM: llmclient.Client{BaseURL: model.URL + "/v1", Model: "fixture"}})
+	current, err := server.newRun("fixture", "inspect fixture", "synthetic only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.started, current.status = true, "running"
+	current.state = assessment.State{Version: 1, ID: current.id, Goal: current.goal, Scope: current.scope, Status: "running"}
+	for _, id := range []string{"question-one", "question-two"} {
+		current.questions[id] = &pendingQuestion{ID: id, taskID: id, text: "Which file?", answer: make(chan string, 1)}
+	}
+	if err := server.message(t.Context(), current, "Coordinator, explain the worker status", nil); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 || len(current.questions) != 2 {
+		t.Fatalf("main chat did not reach the coordinator: requests=%d pending=%d", requests, len(current.questions))
+	}
+	for _, question := range current.questions {
+		select {
+		case answer := <-question.answer:
+			t.Fatalf("main chat became a worker answer: %q", answer)
+		default:
+		}
+	}
+	second := current.questions["question-two"]
+	if err := current.answer("question-two", "the second fixture"); err != nil {
+		t.Fatal(err)
+	}
+	if answer := <-second.answer; answer != "the second fixture" {
+		t.Fatalf("selected worker received %q", answer)
+	}
+	if len(current.questions) != 1 || current.questions["question-one"] == nil {
+		t.Fatal("explicit reply changed another worker's question")
+	}
+}
+
 func TestCoordinatorChatReceivesEvidenceBeforeWorkerCompletes(t *testing.T) {
 	modelInput := make(chan string, 1)
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -95,7 +260,11 @@ func TestCoordinatorChatReceivesEvidenceBeforeWorkerCompletes(t *testing.T) {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		modelInput <- request.Messages[len(request.Messages)-1].Content
+		var input strings.Builder
+		for _, message := range request.Messages {
+			input.WriteString(message.Content)
+		}
+		modelInput <- input.String()
 		writeJSON(w, http.StatusOK, map[string]any{"choices": []any{map[string]any{"message": map[string]string{"role": "assistant", "content": "The worker has captured evidence and is still evaluating it."}}}})
 	}))
 	defer model.Close()

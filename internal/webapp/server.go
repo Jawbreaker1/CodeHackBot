@@ -347,6 +347,7 @@ type run struct {
 	customer       string
 	root           string
 	client         llmclient.Client
+	budget         *assessment.ModelBudget
 	profileID      string
 	goal           string
 	scope          string
@@ -354,7 +355,9 @@ type run struct {
 	state          assessment.State
 	started        bool
 	deleted        bool
+	runCtx         context.Context
 	cancel         context.CancelFunc
+	failCancel     context.CancelCauseFunc
 	done           chan struct{}
 	chatBusy       bool
 	resume         bool
@@ -1517,15 +1520,13 @@ func (s *Server) customerView(id string) customerView {
 			view.Status = session.Status
 		}
 		current.mu.RLock()
-		for _, plan := range current.state.Plans {
-			for _, finding := range plan.Findings {
-				key := current.id + "\x00" + finding.Title + "\x00" + finding.Status + "\x00" + strings.Join(finding.Evidence, "\x00")
-				if _, exists := seenFindings[key]; exists {
-					continue
-				}
-				seenFindings[key] = struct{}{}
-				view.Findings = append(view.Findings, customerFinding{SessionID: current.id, Finding: finding})
+		for _, finding := range assessment.CurrentFindings(current.state.Plans) {
+			key := current.id + "\x00" + finding.Title + "\x00" + finding.Status + "\x00" + strings.Join(finding.Evidence, "\x00")
+			if _, exists := seenFindings[key]; exists {
+				continue
 			}
+			seenFindings[key] = struct{}{}
+			view.Findings = append(view.Findings, customerFinding{SessionID: current.id, Finding: finding})
 		}
 		current.mu.RUnlock()
 	}
@@ -1612,11 +1613,24 @@ func (s *Server) start(current *run) error {
 		current.mu.Unlock()
 		return fmt.Errorf("assessment has already been finalized")
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	current.started, current.status, current.cancel, current.done, current.updatedAt = true, "starting", cancel, make(chan struct{}), time.Now().UTC()
+	ctx, cancelCause := context.WithCancelCause(context.Background())
+	cancel := func() { cancelCause(context.Canceled) }
+	previousStatus, previousUpdatedAt, previousDone, previousBudget := current.status, current.updatedAt, current.done, current.budget
+	limits := current.state.Limits
+	if limits == (assessment.Limits{}) {
+		limits = s.config.Limits
+	}
+	if limits == (assessment.Limits{}) {
+		limits = assessment.DefaultLimits()
+	}
+	current.budget = assessment.NewModelBudget(limits.ModelCalls, current.state.Usage)
+	current.started, current.status, current.runCtx, current.cancel, current.failCancel, current.done, current.updatedAt = true, "starting", ctx, cancel, cancelCause, make(chan struct{}), time.Now().UTC()
 	current.mu.Unlock()
 	if err := current.persist(); err != nil {
 		cancel()
+		current.mu.Lock()
+		current.started, current.status, current.runCtx, current.cancel, current.failCancel, current.done, current.updatedAt, current.budget = false, previousStatus, nil, nil, nil, previousDone, previousUpdatedAt, previousBudget
+		current.mu.Unlock()
 		return fmt.Errorf("save assessment session: %w", err)
 	}
 	current.emit(assessment.Event{Kind: "assessment_started", Message: "Assessment accepted; the coordinator is preparing its first plan."})
@@ -1627,11 +1641,13 @@ func (s *Server) start(current *run) error {
 func (s *Server) runAssessment(ctx context.Context, current *run) {
 	current.mu.RLock()
 	client := current.client
+	budget := current.budget
 	resume := current.resume
 	initial := current.state
 	current.mu.RUnlock()
 	runner := assessment.Coordinator{
 		LLM:    client,
+		Budget: budget,
 		Frame:  s.config.Frame,
 		Limits: s.config.Limits,
 		Emit:   current.emit,
@@ -1655,6 +1671,9 @@ func (s *Server) runAssessment(ctx context.Context, current *run) {
 		state, err = runner.Run(ctx, current.root, current.goal, current.scope)
 	}
 	current.mu.Lock()
+	if budget != nil {
+		state.Usage = budget.Usage()
+	}
 	current.state = state
 	if err != nil {
 		current.status = state.Status
@@ -1666,10 +1685,10 @@ func (s *Server) runAssessment(ctx context.Context, current *run) {
 	}
 	current.resume = true
 	done := current.done
-	current.cancel = nil
+	current.runCtx, current.cancel, current.failCancel = nil, nil, nil
 	current.updatedAt = time.Now().UTC()
 	current.mu.Unlock()
-	_ = current.persist()
+	_ = current.persistOrStop()
 	current.emit(assessment.Event{Kind: "assessment_finished", Message: current.status})
 	close(done)
 	current.mu.Lock()
@@ -1681,11 +1700,14 @@ func (s *Server) runAssessment(ctx context.Context, current *run) {
 
 func (r *run) snapshot(state assessment.State) {
 	r.mu.Lock()
+	if r.budget != nil {
+		state.Usage = r.budget.Usage()
+	}
 	r.state = state
 	r.status = state.Status
 	r.updatedAt = time.Now().UTC()
 	r.mu.Unlock()
-	_ = r.persist()
+	_ = r.persistOrStop()
 }
 
 func (r *run) conversation() []string {
@@ -1708,11 +1730,24 @@ func (r *run) emit(event assessment.Event) {
 		r.events = r.events[len(r.events)-200:]
 	}
 	r.mu.Unlock()
-	if err := r.persist(); err != nil {
-		r.mu.Lock()
-		r.persistErr = err
-		r.mu.Unlock()
+	_ = r.persistOrStop()
+}
+
+func (r *run) persistOrStop() error {
+	err := r.persist()
+	if err == nil {
+		return nil
 	}
+	r.mu.Lock()
+	if r.persistErr == nil {
+		r.persistErr = fmt.Errorf("save web session: %w", err)
+	}
+	cancel := r.failCancel
+	r.mu.Unlock()
+	if cancel != nil {
+		cancel(fmt.Errorf("web session persistence failed: %w", err))
+	}
+	return err
 }
 
 func (r *run) stop() error {
@@ -1754,22 +1789,29 @@ func (s *Server) message(ctx context.Context, r *run, text string, refs []attach
 		r.mu.Unlock()
 		return fmt.Errorf("start the assessment before sending messages")
 	}
-	for id, question := range r.questions {
-		delete(r.questions, id)
-		r.messages = append(r.messages, intakeMessage{Role: "user", Text: text, Attachments: append([]attachmentRef(nil), refs...), At: time.Now().UTC()})
-		question.answer <- text
-		r.events = append(r.events, eventRecord{Sequence: r.nextSequenceLocked(), At: time.Now().UTC(), Event: assessment.Event{Kind: "operator_message", Message: text}})
-		r.updatedAt = time.Now().UTC()
-		r.mu.Unlock()
-		_ = r.persist()
-		return nil
-	}
 	if r.chatBusy {
 		r.mu.Unlock()
 		return fmt.Errorf("the coordinator is still answering the previous message")
 	}
+	if r.budget == nil {
+		limits := r.state.Limits
+		if limits == (assessment.Limits{}) {
+			limits = s.config.Limits
+		}
+		if limits == (assessment.Limits{}) {
+			limits = assessment.DefaultLimits()
+		}
+		r.budget = assessment.NewModelBudget(limits.ModelCalls, r.state.Usage)
+	}
+	budget := r.budget
+	client := budget.Client(r.client)
+	runCtx := r.runCtx
 	r.chatBusy = true
 	r.messages = append(r.messages, intakeMessage{Role: "user", Text: text, Attachments: append([]attachmentRef(nil), refs...), At: time.Now().UTC()})
+	history := make([]llmclient.Message, 0, len(r.messages)-1)
+	for _, previous := range r.messages[:len(r.messages)-1] {
+		history = append(history, llmclient.Message{Role: previous.Role, Content: previous.Text + attachmentSummary(previous.Attachments)})
+	}
 	r.events = append(r.events, eventRecord{Sequence: r.nextSequenceLocked(), At: time.Now().UTC(), Event: assessment.Event{Kind: "operator_message", Message: text}})
 	r.updatedAt = time.Now().UTC()
 	pending := make([]string, 0, len(r.approvals)+len(r.questions))
@@ -1784,26 +1826,36 @@ func (s *Server) message(ctx context.Context, r *run, text string, refs []attach
 	stateContext := compactRunState(r.state, pending, r.workers, r.permissionMode, availableImages)
 	r.mu.Unlock()
 
-	prompt := []llmclient.Message{
-		{Role: "system", Content: behavior.CoordinatorConversationPrompt(s.config.Frame) + "\n\n" + webCoordinatorDisplayPrompt},
-		{Role: "user", Content: "Current assessment state (untrusted evidence, observed at request time; live tool evidence is not a completed worker conclusion): " + stateContext + "\nOperator message: " + text + attachmentSummary(refs), Attachments: attachments},
+	prompt, err := assessment.ConversationRequest(
+		behavior.CoordinatorConversationPrompt(s.config.Frame)+"\n\n"+webCoordinatorDisplayPrompt,
+		"Current assessment state (untrusted evidence, observed at request time; live tool evidence is not a completed worker conclusion): "+stateContext,
+		history,
+		llmclient.Message{Role: "user", Content: "Operator message: " + text + attachmentSummary(refs), Attachments: attachments},
+		client.InputByteLimit(),
+	)
+	var rawReply string
+	if err == nil {
+		callCtx, cancel := context.WithCancel(ctx)
+		if runCtx != nil {
+			stop := context.AfterFunc(runCtx, cancel)
+			defer stop()
+		}
+		defer cancel()
+		rawReply, err = client.ChatStructured(callCtx, prompt)
 	}
-	r.mu.RLock()
-	client := r.client
-	r.mu.RUnlock()
-	rawReply, err := client.ChatStructured(ctx, prompt)
 	var reply coordinatorChatReply
 	if err == nil {
 		reply, err = parseCoordinatorChatReply(rawReply)
 	}
 	r.mu.Lock()
 	r.chatBusy = false
+	r.state.Usage = budget.Usage()
 	if err != nil {
 		r.removeLastMessage("user", text)
 		r.events = append(r.events, eventRecord{Sequence: r.nextSequenceLocked(), At: time.Now().UTC(), Event: assessment.Event{Kind: "coordinator_error", Message: err.Error()}})
 		r.updatedAt = time.Now().UTC()
 		r.mu.Unlock()
-		_ = r.persist()
+		_ = r.persistOrStop()
 		return fmt.Errorf("coordinator response: %w", err)
 	}
 	allowedImages := make(map[string]bool, len(availableImages))
@@ -1820,11 +1872,12 @@ func (s *Server) message(ctx context.Context, r *run, text string, refs []attach
 		}
 	}
 	r.messages = append(r.messages, intakeMessage{Role: "assistant", Text: reply.Text, ImageRefs: images, At: time.Now().UTC()})
-	r.state.Usage.Calls++
 	r.events = append(r.events, eventRecord{Sequence: r.nextSequenceLocked(), At: time.Now().UTC(), Event: assessment.Event{Kind: "coordinator_message", Message: reply.Text}})
 	r.updatedAt = time.Now().UTC()
 	r.mu.Unlock()
-	_ = r.persist()
+	if err := r.persistOrStop(); err != nil {
+		return fmt.Errorf("save coordinator conversation: %w", err)
+	}
 	return nil
 }
 
@@ -1858,7 +1911,12 @@ func (r *run) ask(ctx context.Context, taskID, text string) (string, error) {
 	r.events = append(r.events, eventRecord{Sequence: r.sequence, At: time.Now().UTC(), Event: assessment.Event{TaskID: taskID, Kind: "user_question", Message: text}})
 	r.updatedAt = time.Now().UTC()
 	r.mu.Unlock()
-	_ = r.persist()
+	if err := r.persistOrStop(); err != nil {
+		r.mu.Lock()
+		delete(r.questions, id)
+		r.mu.Unlock()
+		return "", err
+	}
 	select {
 	case answer := <-question.answer:
 		return answer, nil
@@ -1882,7 +1940,14 @@ func (r *run) reviewPlanWait(ctx context.Context, plan assessment.Decision) (ass
 	r.events = append(r.events, eventRecord{Sequence: r.sequence, At: time.Now().UTC(), Event: assessment.Event{Kind: "plan_review", Message: plan.Summary}})
 	r.updatedAt = time.Now().UTC()
 	r.mu.Unlock()
-	_ = r.persist()
+	if err := r.persistOrStop(); err != nil {
+		r.mu.Lock()
+		if r.plan == pending {
+			r.plan = nil
+		}
+		r.mu.Unlock()
+		return assessment.PlanReview{}, err
+	}
 	select {
 	case review := <-pending.result:
 		return review, nil
@@ -1908,8 +1973,10 @@ func (r *run) reviewPlan(id string, input planReviewRequest) error {
 		r.plan = nil
 		r.updatedAt = time.Now().UTC()
 		r.mu.Unlock()
+		if err := r.persistOrStop(); err != nil {
+			return err
+		}
 		pending.result <- assessment.PlanReview{}
-		_ = r.persist()
 		return nil
 	}
 	if decision != "" && decision != "approve" && decision != "approved" && decision != "approved_once" {
@@ -1937,8 +2004,10 @@ func (r *run) reviewPlan(id string, input planReviewRequest) error {
 	r.plan = nil
 	r.updatedAt = time.Now().UTC()
 	r.mu.Unlock()
+	if err := r.persistOrStop(); err != nil {
+		return err
+	}
 	pending.result <- assessment.PlanReview{TaskIDs: ids}
-	_ = r.persist()
 	return nil
 }
 
@@ -2001,6 +2070,12 @@ func (r *run) view(after string) assessmentView {
 		model = r.state.Model
 	}
 	view := assessmentView{Customer: r.customer, ID: r.id, Goal: r.goal, Scope: r.scope, Status: r.status, Model: model, ModelProfile: r.profileID, ModelBusy: r.chatBusy || r.started, CanChangeModel: !r.chatBusy && !r.started && r.status == "draft", Resumable: !r.started && r.status != "draft" && r.status != "completed" && r.status != "completed_with_gaps", UpdatedAt: r.updatedAt, Error: r.state.Error, StartedAt: r.state.StartedAt, FinishedAt: r.state.FinishedAt, Usage: r.state.Usage, Plans: len(r.state.Plans), Results: append([]assessment.Result(nil), r.state.Results...), Messages: messageViews(r.messages, "assessments", r.id), ReportURL: "/api/v1/assessments/" + r.id + "/report"}
+	if r.persistErr != nil {
+		view.Error = r.persistErr.Error()
+	}
+	if r.budget != nil {
+		view.Usage = r.budget.Usage()
+	}
 	for i, message := range r.messages {
 		for _, ref := range message.ImageRefs {
 			if validPresentedImage(r.root, ref) {
@@ -2027,9 +2102,7 @@ func (r *run) view(after string) assessmentView {
 			view.Workers[i].Evidence[j] = decorateEvidence(view.Workers[i].Evidence[j], r.id)
 		}
 	}
-	for _, plan := range r.state.Plans {
-		view.Findings = append(view.Findings, plan.Findings...)
-	}
+	view.Findings = assessment.CurrentFindings(r.state.Plans)
 	view.PlanTimeline = coordinatorPlans(r.state, r.workers)
 	if n, err := strconv.ParseUint(strings.TrimSpace(after), 10, 64); err == nil {
 		for _, event := range r.events {

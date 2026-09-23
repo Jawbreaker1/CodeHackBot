@@ -90,10 +90,8 @@ func buildAnalysis(id, customer string, state assessment.State, inputs []analysi
 	}
 	view.ReportURL = "/api/v1/assessments/" + id + "/report"
 	if len(inputs) == 0 {
-		for _, plan := range state.Plans {
-			for _, finding := range plan.Findings {
-				inputs = append(inputs, analysisFindingInput{SessionID: id, Finding: finding})
-			}
+		for _, finding := range assessment.CurrentFindings(state.Plans) {
+			inputs = append(inputs, analysisFindingInput{SessionID: id, Finding: finding})
 		}
 	}
 	view.Findings = prioritizeFindings(inputs)

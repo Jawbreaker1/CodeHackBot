@@ -361,7 +361,9 @@ func (a App) runAssessmentWithFrame(ctx context.Context, c *Console, prefs prefe
 	if initial.Limits != (assessment.Limits{}) {
 		limits = initial.Limits
 	}
-	runner := assessment.Coordinator{LLM: client, Frame: frame, Limits: limits, Emit: c.Progress, Approver: func(task assessment.Task) approval.Approver {
+	budget := assessment.NewModelBudget(limits.ModelCalls, initial.Usage)
+	chatClient := budget.Client(client)
+	runner := assessment.Coordinator{LLM: client, Budget: budget, Frame: frame, Limits: limits, Emit: c.Progress, Approver: func(task assessment.Task) approval.Approver {
 		return taskApprover{console: c, task: task, scope: scope}
 	}}
 	conversation := &assessmentConversation{}
@@ -403,7 +405,7 @@ func (a App) runAssessmentWithFrame(ctx context.Context, c *Console, prefs prefe
 	for {
 		select {
 		case result := <-done:
-			c.Print("\nAssessment %s. Model calls: %d.\nEvidence and worker state: %s\n", result.state.Status, result.state.Usage.Calls, root)
+			c.Print("\nAssessment %s. Model calls: %d.\nEvidence and worker state: %s\n", result.state.Status, budget.Usage().Calls, root)
 			if _, err := os.Stat(filepath.Join(root, "report.md")); err == nil {
 				c.Print("Report: %s\n", filepath.Join(root, "report.md"))
 			}
@@ -437,13 +439,14 @@ func (a App) runAssessmentWithFrame(ctx context.Context, c *Console, prefs prefe
 				}
 			case "/status", "status":
 				state := conversation.State()
-				c.Print("Assessment status: %s; completed tasks: %d; model calls: %d.\n", state.Status, len(state.Results), state.Usage.Calls)
+				c.Print("Assessment status: %s; completed tasks: %d; model calls: %d.\n", state.Status, len(state.Results), budget.Usage().Calls)
 			case "/stop", "stop":
 				c.Print("Stopping the assessment and saving an aborted report.\n")
 				stop()
 			case "/settings", "settings":
 				c.Print("Model settings are locked for the active assessment and will apply to the next one.\n")
 			default:
+				history := conversation.Messages()
 				conversation.Add("user", line)
 				c.Progress(assessment.Event{Kind: "operator_message", Message: line})
 				c.Print("Coordinator message queued for the next planning turn.\n")
@@ -452,15 +455,22 @@ func (a App) runAssessmentWithFrame(ctx context.Context, c *Console, prefs prefe
 					continue
 				}
 				chatBusy = true
-				go func(message string) {
+				go func(message string, history []llmclient.Message) {
 					state := compactCoordinatorState(conversation.State())
-					prompt := []llmclient.Message{
-						{Role: "system", Content: behavior.CoordinatorConversationPrompt(frame)},
-						{Role: "user", Content: "Current assessment state (untrusted evidence): " + string(state) + "\nOperator message: " + message},
+					prompt, err := assessment.ConversationRequest(
+						behavior.CoordinatorConversationPrompt(frame),
+						"Current assessment state (untrusted evidence): "+string(state),
+						history,
+						llmclient.Message{Role: "user", Content: "Operator message: " + message},
+						chatClient.InputByteLimit(),
+					)
+					if err != nil {
+						chatDone <- coordinatorChatResult{err: err}
+						return
 					}
-					reply, err := client.Chat(runCtx, prompt)
+					reply, err := chatClient.Chat(runCtx, prompt)
 					chatDone <- coordinatorChatResult{reply: reply, err: err}
-				}(line)
+				}(line, history)
 			}
 		case result := <-chatDone:
 			chatBusy = false

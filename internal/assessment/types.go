@@ -138,6 +138,16 @@ type State struct {
 	Error            string     `json:"error,omitempty"`
 }
 
+// CurrentFindings is the coordinator's latest assessment of the evidence.
+// Earlier plans remain in history, but their provisional findings are not
+// presented as current risk after a revision.
+func CurrentFindings(plans []Decision) []Finding {
+	if len(plans) == 0 {
+		return nil
+	}
+	return append([]Finding(nil), plans[len(plans)-1].Findings...)
+}
+
 func saveJSON(path string, value any) error {
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {

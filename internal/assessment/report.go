@@ -52,11 +52,12 @@ func writeReport(root string, s State) error {
 		b.WriteString("\n")
 	}
 	b.WriteString("## Findings\n\n")
-	if len(s.Plans) == 0 || len(s.Plans[len(s.Plans)-1].Findings) == 0 {
+	findings := CurrentFindings(s.Plans)
+	if len(findings) == 0 {
 		b.WriteString("No findings were recorded. This is not a claim that the scoped system has no vulnerabilities.\n\n")
 	}
 	if len(s.Plans) > 0 {
-		for _, f := range s.Plans[len(s.Plans)-1].Findings {
+		for _, f := range findings {
 			fmt.Fprintf(&b, "### %s\n\nStatus: %s (model assessment; operator review required)\n\n", f.Title, f.Status)
 			if f.Severity != "" {
 				fmt.Fprintf(&b, "Severity: **%s**\n\n", f.Severity)

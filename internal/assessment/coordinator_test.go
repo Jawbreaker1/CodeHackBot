@@ -28,6 +28,16 @@ func testCoordinator(url string) Coordinator {
 	return Coordinator{LLM: llmclient.Client{BaseURL: url, Model: "fixture-model"}, Frame: behavior.Frame{SystemPrompt: "Authorized lab test", AgentsText: "Use synthetic fixtures only"}, Approver: func(Task) approval.Approver { return approval.StaticApprover{Decision: approval.DecisionApproveOnce} }}
 }
 
+func TestStorageCancellationProducesIncompleteAssessment(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(fmt.Errorf("web session persistence failed: fixture storage error"))
+	coordinator := testCoordinator("http://127.0.0.1:1/v1")
+	state, err := coordinator.Run(ctx, filepath.Join(t.TempDir(), "assessment"), "inspect fixture", "synthetic only")
+	if err == nil || state.Status != "incomplete" || !strings.Contains(state.Error, "fixture storage error") {
+		t.Fatalf("storage cancellation was reported as successful/operator-aborted: status=%s err=%v state=%+v", state.Status, err, state)
+	}
+}
+
 func TestCoordinatorResearchPhaseIsAnOperatorVisiblePlan(t *testing.T) {
 	state := State{Version: 1, Goal: "investigate a scoped system", Scope: "fixture only", Limits: DefaultLimits()}
 	d := Decision{Phase: "research", Summary: "Establish software identity and relevant sources", Tasks: []Task{{ID: "identify", Goal: "Identify the software and research applicable advisories", DoneWhen: "identity and sources are recorded", StrategyHints: []string{"software-research/SKILL.md"}}}}

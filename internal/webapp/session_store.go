@@ -54,6 +54,7 @@ type sessionRecord struct {
 	Model          string              `json:"model,omitempty"`
 	ModelProfile   string              `json:"model_profile,omitempty"`
 	Status         string              `json:"status,omitempty"`
+	Usage          *assessment.Usage   `json:"usage,omitempty"`
 	AssessmentID   string              `json:"assessment_id,omitempty"`
 	Messages       []intakeMessage     `json:"messages,omitempty"`
 	Conversation   []llmclient.Message `json:"conversation,omitempty"`
@@ -160,6 +161,9 @@ func (s *Server) restoreRun(customer, root string) error {
 			return fmt.Errorf("restore assessment %s: %w", filepath.Base(root), err)
 		}
 	}
+	if record.Usage != nil {
+		state.Usage = newerUsage(state.Usage, *record.Usage)
+	}
 	id := filepath.Base(root)
 	if recordErr == nil && record.ID != "" {
 		id = record.ID
@@ -195,6 +199,18 @@ func (s *Server) restoreRun(customer, root string) error {
 	s.runs[id] = current
 	s.mu.Unlock()
 	return nil
+}
+
+// Both files contain snapshots of the same monotonic meter. The browser
+// metadata may be newer than assessment.json when the operator chats during a
+// plan review; the assessment snapshot may be newer after worker execution.
+func newerUsage(a, b assessment.Usage) assessment.Usage {
+	return assessment.Usage{
+		Calls:             max(a.Calls, b.Calls),
+		FailedCalls:       max(a.FailedCalls, b.FailedCalls),
+		ReportedTokens:    max(a.ReportedTokens, b.ReportedTokens),
+		CallsWithoutUsage: max(a.CallsWithoutUsage, b.CallsWithoutUsage),
+	}
 }
 
 func readSessionRecord(root string) (sessionRecord, error) {
@@ -273,7 +289,11 @@ func (r *run) persist() error {
 	for _, worker := range r.workers {
 		workers = append(workers, worker)
 	}
-	record := sessionRecord{PermissionMode: r.permissionMode.Normalized(), Version: sessionRecordVersion, Kind: "assessment", ID: r.id, Customer: r.customer, Goal: r.goal, Scope: r.scope, Model: r.client.Model, ModelProfile: r.profileID, Status: r.status, Messages: append([]intakeMessage(nil), r.messages...), Events: append([]eventRecord(nil), r.events...), Workers: workers, Sequence: r.sequence, UpdatedAt: r.updatedAt}
+	usage := r.state.Usage
+	if r.budget != nil {
+		usage = r.budget.Usage()
+	}
+	record := sessionRecord{PermissionMode: r.permissionMode.Normalized(), Version: sessionRecordVersion, Kind: "assessment", ID: r.id, Customer: r.customer, Goal: r.goal, Scope: r.scope, Model: r.client.Model, ModelProfile: r.profileID, Status: r.status, Usage: &usage, Messages: append([]intakeMessage(nil), r.messages...), Events: append([]eventRecord(nil), r.events...), Workers: workers, Sequence: r.sequence, UpdatedAt: r.updatedAt}
 	root := r.root
 	r.mu.RUnlock()
 	return atomicWriteJSON(filepath.Join(root, "session.json"), record)

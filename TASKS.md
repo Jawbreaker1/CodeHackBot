@@ -29,7 +29,7 @@ Done means the worker and then the coordinator pass their explicit foundation ga
 
 The dated [worker audit](docs/worker-foundation-audit-2026-09-20.md) records removed logic, replacement contracts and live-validation limits. The Qwen guided diagnostic split a requested single-worker task and omitted a line from its final content summary; it does not pass worker acceptance despite completing its assignments.
 
-The [2026-09-23 code assessment](docs/code-assessment-2026-09-23.md) found five reproducible defects to repair before treating the foundation as sound: coordinator chat bypasses and loses shared model-call accounting, live chat replies lack prior conversation, main-chat text can be routed to an arbitrary pending worker question, analysis retains superseded findings as current risk, and failed/ignored web-session writes can leave state inconsistent. The full deterministic CI and affected-package race tests pass, but they do not cover these cases yet. Add permanent regressions with the repairs; preserve the working shared worker/coordinator architecture.
+The [2026-09-23 code assessment](docs/code-assessment-2026-09-23.md) found five reproducible defects in model-call accounting, live conversation context, worker-question routing, finding revisions, and web-session persistence. All five are repaired with permanent regressions. Full deterministic CI, affected-package race tests, and a focused live browser path passed after the repairs. This closes those defects, not the broader foundation or customer deployment gates. Next, extract web lifecycle/model-request ownership along actual boundaries and reconcile the previously tracked final-status mismatch after a failed worker is recovered in a later round.
 
 ## Completed: core cleanup
 

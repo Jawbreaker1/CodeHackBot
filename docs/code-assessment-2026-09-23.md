@@ -6,13 +6,32 @@ on the coordinator/worker boundary, model context and budget, session durability
 findings, and the built CLI and HTTP paths. It is a focused code and behavior
 review, not a claim that every function or a live target has been audited.
 
-## Verdict
+## Repair update — 2026-09-23
+
+All five confirmed defects below were repaired in order. The browser and CLI
+now share each assessment's model-call meter with the coordinator; live replies
+receive a bounded recent dialogue; main-chat text stays with the coordinator;
+the GUI, customer analysis, and report use the latest finding revision; and
+web metadata write failures roll back a failed start or stop an active run with
+a visible error. Permanent regressions cover each failure, including concurrent
+model calls, budget accounting across resume, two pending worker questions, a
+withdrawn finding, start/active-run storage failures, and cancellation of live
+chat when an assessment stops.
+
+After the repairs, `./scripts/ci.sh`, the affected-package race tests, and
+`git diff --check` passed. A fresh browser session on the built web server
+confirmed live Daybreak conversation continuity while the coordinator planned,
+two visible delegated workers, reviewed read-only approvals, and an aborted
+report after Stop all. This is a focused repair validation; the separate
+foundation and deployment gates below remain open.
+
+## Verdict at audit time
 
 Keep the present architecture and codebase. There is a real shared worker loop,
 a working two-worker coordinator with dependencies, evidence capture, an inference
 bridge, and two UI adapters. The deterministic application checks and affected
-package race tests pass. Five reproducible defects, mainly in the browser path, still
-prevent calling the foundation fully sound. Scope isolation, air-gapped
+package race tests passed. Five reproducible defects, mainly in the browser path,
+prevented calling the foundation fully sound at audit time. Scope isolation, air-gapped
 deployment, independent finding verification, and comparative effectiveness
 remain separate unpassed product gates.
 
@@ -98,9 +117,8 @@ production code and the normal test suite were left unchanged by this review.
 
 ## Remaining architecture work, prioritized
 
-1. Repair the five confirmed defects. Keep the shared runtime contracts; add
-   permanent user-path regressions for the exact behaviors above. While doing
-   so, move lifecycle/model-request ownership out of the 2,218-line
+1. The five confirmed defects and their regressions are repaired. Next, move
+   lifecycle/model-request ownership out of the growing
    `internal/webapp/server.go` into the application service already called for
    in `TASKS.md`. Extract along actual ownership boundaries, without a broad
    rewrite. Reconcile the already tracked final-status mismatch after a failed

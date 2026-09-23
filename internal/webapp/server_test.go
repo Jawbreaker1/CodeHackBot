@@ -81,6 +81,56 @@ func TestServerCreatesDraftAndServesUI(t *testing.T) {
 	}
 }
 
+func TestFailedStartRestoresDraftState(t *testing.T) {
+	root := t.TempDir()
+	server := NewServer(Config{RepoRoot: root, LLM: llmclient.Client{BaseURL: "http://127.0.0.1:1/v1", Model: "fixture"}})
+	current, err := server.newRun("fixture", "inspect fixture", "synthetic only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	actualRoot := current.root
+	blocked := filepath.Join(t.TempDir(), "blocked")
+	if err := os.WriteFile(blocked, []byte("not a directory"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	current.root = blocked
+	if err := server.start(current); err == nil {
+		t.Fatal("expected metadata write failure")
+	}
+	if current.started || current.status != "draft" || current.cancel != nil || current.failCancel != nil || current.budget != nil {
+		t.Fatalf("failed start was not rolled back: started=%v status=%s", current.started, current.status)
+	}
+	current.root = actualRoot
+	if err := server.start(current); err != nil {
+		t.Fatalf("draft could not be retried after storage recovered: %v", err)
+	}
+	<-current.done
+}
+
+func TestWebMetadataFailureStopsActiveAssessment(t *testing.T) {
+	server := NewServer(Config{RepoRoot: t.TempDir()})
+	current, err := server.newRun("fixture", "inspect fixture", "synthetic only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancelCause(context.Background())
+	current.started, current.status = true, "running"
+	current.failCancel = cancel
+	current.cancel = func() { cancel(context.Canceled) }
+	current.state = assessment.State{Version: 1, ID: current.id, Goal: current.goal, Scope: current.scope, Status: "running"}
+	metadata := filepath.Join(current.root, "session.json")
+	if err := os.Remove(metadata); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(metadata, 0700); err != nil {
+		t.Fatal(err)
+	}
+	current.emit(assessment.Event{Kind: "planning", Message: "reviewing fixture"})
+	if ctx.Err() == nil || !strings.Contains(context.Cause(ctx).Error(), "web session persistence failed") || !strings.Contains(current.view("").Error, "save web session") {
+		t.Fatalf("metadata failure was not surfaced and stopped: cause=%v view=%+v", context.Cause(ctx), current.view(""))
+	}
+}
+
 func TestServerDeletesDraftSessions(t *testing.T) {
 	root := t.TempDir()
 	sessions := filepath.Join(root, "sessions")

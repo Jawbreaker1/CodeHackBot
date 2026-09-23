@@ -3,6 +3,7 @@ package assessment
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,6 +24,7 @@ type Coordinator struct {
 	PlanApproval func(context.Context, Decision) (PlanReview, error)
 	Emit         func(Event) // May be called concurrently by workers.
 	Limits       Limits
+	Budget       *ModelBudget    // Shared with live operator chat when supplied.
 	Conversation func() []string // Durable operator conversation excerpts.
 	Snapshot     func(State)     // Read-only snapshot; called by the coordinator goroutine.
 }
@@ -87,30 +89,27 @@ func (c Coordinator) run(ctx context.Context, root string, initial State) (state
 	state.ReasoningEffort = c.LLM.ReasoningEffort
 	state.MaxOutputTokens = c.LLM.MaxOutputTokens
 	state.MaxInputBytes = c.LLM.InputByteLimit()
-	budget := &meter{limit: limits.ModelCalls, usage: state.Usage}
-	before, after := c.LLM.BeforeRequest, c.LLM.OnCompletion
-	c.LLM.BeforeRequest = func(ctx context.Context) error {
-		if err := budget.reserve(ctx); err != nil {
-			return err
-		}
-		if before != nil {
-			return before(ctx)
-		}
-		return nil
+	budget := c.Budget
+	if budget == nil {
+		budget = NewModelBudget(limits.ModelCalls, state.Usage)
+	} else if budget.Limit() != limits.ModelCalls {
+		return state, fmt.Errorf("shared model budget limit does not match assessment limits")
 	}
-	c.LLM.OnCompletion = func(done llmclient.Completion, err error) {
-		budget.record(done, err)
-		if after != nil {
-			after(done, err)
-		}
-	}
+	c.LLM = budget.Client(c.LLM)
 	defer func() {
+		budget.CloseAndWait()
 		c.syncConversation(&state)
-		state.Usage = budget.snapshot()
+		state.Usage = budget.Usage()
 		state.FinishedAt = time.Now().UTC()
 		if ctx.Err() != nil {
-			state.Status = "aborted"
-			runErr = ctx.Err()
+			cause := context.Cause(ctx)
+			if cause != nil && !errors.Is(cause, context.Canceled) && !errors.Is(cause, context.DeadlineExceeded) {
+				state.Status = "incomplete"
+				runErr = cause
+			} else {
+				state.Status = "aborted"
+				runErr = ctx.Err()
+			}
 		} else if runErr != nil {
 			state.Status = "incomplete"
 		}
@@ -135,7 +134,7 @@ func (c Coordinator) run(ctx context.Context, root string, initial State) (state
 		if err := ctx.Err(); err != nil {
 			return state, err
 		}
-		state.Usage = budget.snapshot()
+		state.Usage = budget.Usage()
 		c.emit(Event{Kind: "planning", Message: fmt.Sprintf("Reviewing evidence and planning next work (round %d/%d)", round, limits.Rounds)})
 		d, err := c.decide(ctx, root, round, state)
 		if err != nil {
@@ -250,7 +249,7 @@ func (c Coordinator) run(ctx context.Context, root string, initial State) (state
 		if persistenceErr != nil {
 			return state, persistenceErr
 		}
-		state.Usage = budget.snapshot()
+		state.Usage = budget.Usage()
 		c.syncConversation(&state)
 		if err := saveJSON(filepath.Join(root, "assessment.json"), state); err != nil {
 			return state, err
