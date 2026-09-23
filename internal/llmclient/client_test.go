@@ -77,6 +77,42 @@ func TestReasoningEffortIsExplicitAndOptional(t *testing.T) {
 	}
 }
 
+func TestStructuredJSONAppliesOnlyToControlCalls(t *testing.T) {
+	seen := make([]string, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			ResponseFormat struct {
+				Type       string `json:"type"`
+				JSONSchema struct {
+					Name   string `json:"name"`
+					Schema struct {
+						Type string `json:"type"`
+					} `json:"schema"`
+				} `json:"json_schema"`
+			} `json:"response_format"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		seen = append(seen, body.ResponseFormat.Type)
+		if body.ResponseFormat.Type != "" && (body.ResponseFormat.JSONSchema.Name != "birdhackbot_control" || body.ResponseFormat.JSONSchema.Schema.Type != "object") {
+			t.Errorf("incomplete JSON schema request: %+v", body.ResponseFormat)
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"reply\":\"ready\"}"}}]}`))
+	}))
+	defer server.Close()
+	client := Client{BaseURL: server.URL, Model: "local", StructuredJSON: true}
+	if _, err := client.ChatStructured(context.Background(), []Message{{Role: "user", Content: "decide"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Chat(context.Background(), []Message{{Role: "user", Content: "talk"}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 2 || seen[0] != "json_schema" || seen[1] != "" {
+		t.Fatalf("response formats = %v", seen)
+	}
+}
+
 func TestClientChat(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/chat/completions" {

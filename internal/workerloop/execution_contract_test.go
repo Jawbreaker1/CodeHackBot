@@ -3,6 +3,7 @@ package workerloop
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -64,6 +65,46 @@ func TestLoopApprovesActualInvocationAndWorkingDirectory(t *testing.T) {
 	}
 	if !strings.Contains(string(log), "actual_invocation: "+approver.request.Command+"\n") || !strings.Contains(string(log), "cwd: "+dir+"\n") {
 		t.Fatalf("executed invocation differs from approval: %s", log)
+	}
+}
+
+func TestDeleteFileApprovesAndRemovesOnlyOneExactFile(t *testing.T) {
+	dir := t.TempDir()
+	first, second := filepath.Join(dir, "first.txt"), filepath.Join(dir, "second.txt")
+	for _, path := range []string{first, second} {
+		if err := os.WriteFile(path, []byte("fixture"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	decision := fmt.Sprintf(`{"type":"delete_file","path":%q,"summary":"Remove the reviewed first file","impact":"Only the first file will be deleted"}`, first)
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		content := decision
+		if calls > 0 {
+			content = `{"status":"satisfied","reason":"one file removal was logged","summary":"first file removed"}`
+		}
+		calls++
+		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"content": content}}}})
+	}))
+	defer server.Close()
+	approver := &recordingApprover{}
+	loop := Loop{LLM: llmclient.Client{BaseURL: server.URL, Model: "test"}, Executor: execx.Executor{LogDir: t.TempDir()}, Approver: approver}
+	packet := ctxpacket.NewInitialWorkerPacket(behavior.Frame{SystemPrompt: "test", AgentsText: "test"}, session.Foundation{Goal: "Remove only the first reviewed file"}, dir, "test", "per_action", 1)
+	outcome, err := loop.Run(context.Background(), packet, 1)
+	if err != nil || calls != 2 {
+		t.Fatalf("delete decision failed: err=%v calls=%d", err, calls)
+	}
+	if approver.request.Target != first || approver.request.Risk != "dangerous" || approver.request.UseShell || !strings.Contains(approver.request.Command, first) || strings.Contains(approver.request.Command, second) {
+		t.Fatalf("approval was not for one exact file: %+v", approver.request)
+	}
+	if _, err := os.Stat(first); !os.IsNotExist(err) {
+		t.Fatalf("approved file still exists: %v", err)
+	}
+	if _, err := os.Stat(second); err != nil {
+		t.Fatalf("second file was touched: %v", err)
+	}
+	if outcome.Packet.LatestExecutionResult.ExitStatus != "0" || len(outcome.Packet.LatestExecutionResult.LogRefs) == 0 {
+		t.Fatal("file removal has no successful execution evidence")
 	}
 }
 

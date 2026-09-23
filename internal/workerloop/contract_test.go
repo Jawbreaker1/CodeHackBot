@@ -7,6 +7,7 @@ func TestDecisionContract(t *testing.T) {
 		`{"type":"action","command":"printf","args":["%s","literal; text"]}`,
 		`{"type":"action","command":"node","args":["runner.mjs"],"artifacts":["screenshots/home.png","traces/run.zip"]}`,
 		`{"type":"action","command":"printf '%s' text","use_shell":true}`,
+		`{"type":"delete_file","path":"/tmp/one.txt","summary":"Remove one reviewed file","impact":"Deletes exactly that file"}`,
 		`{"type":"step_complete","summary":"supported answer"}`,
 		`{"type":"ask_user","question":"Which file?"}`,
 		`{"type":"blocked","summary":"Need missing input"}`,
@@ -27,6 +28,10 @@ func TestDecisionContract(t *testing.T) {
 		`{"type":"step_complete","summary":"done","artifacts":["report.md"]}`,
 		`{"type":"action","command":"pwd","artifacts":[""]}`,
 		`{"type":"action","command":"pwd"} {"type":"step_complete","summary":"done"}`,
+		`{"type":"delete_file","path":"/tmp/one.txt","command":"rm","summary":"Remove file","impact":"Deletes file"}`,
+		`{"type":"delete_file","path":"/tmp/one.txt","args":["/tmp/two.txt"],"summary":"Remove files","impact":"Deletes files"}`,
+		`{"type":"delete_file","path":"relative.txt","summary":"Remove file","impact":"Deletes file"}`,
+		`{"type":"delete_file","path":"/tmp/one.txt","risk":"low","summary":"Remove file","impact":"Deletes file"}`,
 		`{"type":"step_complete"}`,
 	} {
 		if _, err := ParseResponse(text); err == nil {

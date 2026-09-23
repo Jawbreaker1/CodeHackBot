@@ -32,6 +32,7 @@ type ModelProfile struct {
 	Model                 string `json:"model"`
 	TokenFile             string `json:"token_file,omitempty"`
 	ReasoningEffort       string `json:"reasoning_effort,omitempty"`
+	StructuredJSON        bool   `json:"structured_json,omitempty"`
 	MaxOutputTokens       int    `json:"max_output_tokens,omitempty"`
 	MaxInputBytes         int    `json:"max_input_bytes,omitempty"`
 	RequestTimeoutSeconds int    `json:"request_timeout_seconds,omitempty"`
@@ -84,7 +85,7 @@ func LoadModelProfiles(path string) (ModelProfilesFile, error) {
 }
 
 func (p ModelProfile) client() llmclient.Client {
-	client := llmclient.Client{BaseURL: p.BaseURL, Model: p.Model, AuthTokenFile: p.TokenFile, ReasoningEffort: p.ReasoningEffort, MaxOutputTokens: p.MaxOutputTokens, MaxInputBytes: p.MaxInputBytes}
+	client := llmclient.Client{BaseURL: p.BaseURL, Model: p.Model, AuthTokenFile: p.TokenFile, ReasoningEffort: p.ReasoningEffort, StructuredJSON: p.StructuredJSON, MaxOutputTokens: p.MaxOutputTokens, MaxInputBytes: p.MaxInputBytes}
 	if p.Provider == "subscription" {
 		client.ReasoningEffort = ""
 		if client.MaxInputBytes == 0 {

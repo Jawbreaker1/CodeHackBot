@@ -20,6 +20,7 @@ Current active docs are intentionally minimal:
 - `docs/runbooks/acceptance-gates.md`
 - `docs/runbooks/subscription-bridge.md`
 - `docs/runbooks/web-application.md`
+- `docs/runbooks/tool-capabilities.md`
 - `docs/strategies/catalog.md` and its selectively read worker guides
 - `docs/architecture.md`
 

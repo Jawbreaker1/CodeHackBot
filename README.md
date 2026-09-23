@@ -79,6 +79,8 @@ For one-click A/B sessions across providers, copy [the model profile example](co
 
 The web server defaults to `127.0.0.1:8080`. Keep it on loopback until authentication, origin protection, and deployment controls are added. The browser is a presentation and lifecycle adapter; it never executes a tool or calls the model directly.
 
+The [tool capability guide](docs/runbooks/tool-capabilities.md) lists what the intake conversation, coordinator, and workers can actually invoke. Intake observations are read-only; scoped assessment workers can execute approved Kali commands and make approved file changes. A requested one-file-at-a-time cleanup uses a separate logged approval for each file.
+
 When an assessment finishes, open the analysis link from the coordinator header. The session report is available at `/api/v1/assessments/<session-id>/report`; the unified customer report is available at `/api/v1/customers/<customer-id>/report`. Reports include scope, selected and skipped tests, findings, advisory references, reproduction steps, remediation, execution logs, evidence references, and stated gaps. They remain model-authored drafts for professional review.
 
 For a bounded headless task:

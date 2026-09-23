@@ -3,6 +3,7 @@ package workerloop
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -19,6 +20,7 @@ type PlanUpdate struct {
 type Response struct {
 	Type      string      `json:"type"`
 	Command   string      `json:"command,omitempty"`
+	Path      string      `json:"path,omitempty"`
 	Args      []string    `json:"args,omitempty"`
 	UseShell  bool        `json:"use_shell,omitempty"`
 	Impact    string      `json:"impact,omitempty"`
@@ -58,6 +60,19 @@ func ParseResponse(text string) (Response, error) {
 		if r.UseShell && len(r.Args) != 0 {
 			return r, fmt.Errorf("shell action must omit args")
 		}
+	case "delete_file":
+		if !filepath.IsAbs(r.Path) || filepath.Clean(r.Path) != r.Path {
+			return r, fmt.Errorf("delete_file requires one clean absolute path")
+		}
+		if strings.TrimSpace(r.Summary) == "" || strings.TrimSpace(r.Impact) == "" {
+			return r, fmt.Errorf("delete_file requires a plain-language summary and impact")
+		}
+		if r.Risk != "" && r.Risk != "dangerous" {
+			return r, fmt.Errorf("delete_file risk must be dangerous")
+		}
+		if r.Target != "" && r.Target != r.Path {
+			return r, fmt.Errorf("delete_file target must match path")
+		}
 	case "step_complete", "blocked":
 		if strings.TrimSpace(r.Summary) == "" {
 			return r, fmt.Errorf("%s summary is required", r.Type)
@@ -77,8 +92,14 @@ func ParseResponse(text string) (Response, error) {
 	default:
 		return r, fmt.Errorf("unsupported response type %q", r.Type)
 	}
-	if r.Type != "action" && (r.Command != "" || len(r.Args) != 0 || r.UseShell || r.Impact != "" || r.Target != "" || r.Risk != "") {
+	if r.Type != "action" && r.Type != "delete_file" && (r.Command != "" || len(r.Args) != 0 || r.UseShell || r.Impact != "" || r.Target != "" || r.Risk != "") {
 		return r, fmt.Errorf("only action may contain execution fields")
+	}
+	if r.Type != "delete_file" && r.Path != "" {
+		return r, fmt.Errorf("only delete_file may name a path")
+	}
+	if r.Type == "delete_file" && (r.Command != "" || len(r.Args) != 0 || r.UseShell || len(r.Artifacts) != 0) {
+		return r, fmt.Errorf("delete_file accepts one path, not a command or artifacts")
 	}
 	if r.Type != "action" && len(r.Artifacts) != 0 {
 		return r, fmt.Errorf("only action may declare artifacts")

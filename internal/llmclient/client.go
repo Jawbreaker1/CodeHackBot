@@ -23,6 +23,9 @@ type Client struct {
 	// Empty preserves the provider default; local reasoning models can opt in.
 	ReasoningEffort string
 	MaxOutputTokens int
+	// StructuredJSON requests a JSON object for control decisions from local
+	// providers that support OpenAI-compatible json_schema response_format.
+	StructuredJSON bool
 	// MaxInputBytes bounds the combined message text before contacting a provider.
 	// It is an inspectable memory limit, not an exact provider token count.
 	MaxInputBytes int
@@ -295,18 +298,24 @@ func (c Client) Complete(ctx context.Context, messages []Message, opts ChatOptio
 		httpClient = &http.Client{Timeout: timeout}
 	}
 
+	var responseFormat any
+	if opts.Profile == ProfileStructuredControl && c.StructuredJSON {
+		responseFormat = map[string]any{"type": "json_schema", "json_schema": map[string]any{"name": "birdhackbot_control", "schema": map[string]any{"type": "object"}}}
+	}
 	body, err := json.Marshal(struct {
 		Model           string        `json:"model"`
 		Messages        []wireMessage `json:"messages"`
 		Temperature     float64       `json:"temperature"`
 		ReasoningEffort string        `json:"reasoning_effort,omitempty"`
 		MaxTokens       int           `json:"max_tokens,omitempty"`
+		ResponseFormat  any           `json:"response_format,omitempty"`
 	}{
 		Model:           c.Model,
 		Messages:        wireMessages(messages),
 		Temperature:     0.2,
 		ReasoningEffort: c.ReasoningEffort,
 		MaxTokens:       c.MaxOutputTokens,
+		ResponseFormat:  responseFormat,
 	})
 	if err != nil {
 		return Completion{}, fmt.Errorf("marshal request: %w", err)

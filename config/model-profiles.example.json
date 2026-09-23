@@ -17,6 +17,7 @@
       "base_url": "http://127.0.0.1:1234/v1",
       "model": "qwen/qwen3.8-27b",
       "reasoning_effort": "low",
+      "structured_json": true,
       "max_input_bytes": 49152,
       "max_output_tokens": 32768,
       "request_timeout_seconds": 600
