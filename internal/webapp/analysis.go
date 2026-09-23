@@ -24,6 +24,8 @@ type analysisView struct {
 	Summary          string                   `json:"summary,omitempty"`
 	Conclusion       string                   `json:"conclusion,omitempty"`
 	ConclusionDetail string                   `json:"conclusion_detail,omitempty"`
+	LatestResult     string                   `json:"latest_result,omitempty"`
+	ReviewPending    bool                     `json:"review_pending,omitempty"`
 	SessionCount     int                      `json:"session_count"`
 	Risk             analysisRisk             `json:"risk"`
 	Findings         []analysisFinding        `json:"findings"`
@@ -100,7 +102,14 @@ func buildAnalysis(id, customer string, state assessment.State, inputs []analysi
 	view.Gaps = latestGaps(state.Plans)
 	view.Conclusion = assessmentConclusion(state)
 	view.ConclusionDetail = assessmentConclusionDetail(state)
-	view.Summary = analysisSummary(view.Status, view.Risk, len(view.Findings), len(view.Gaps))
+	lastResult, reviewPending := assessment.LatestUnreviewedResult(state)
+	view.ReviewPending = reviewPending
+	if view.ReviewPending {
+		view.LatestResult = fmt.Sprintf("%s — %s: %s", lastResult.Task.ID, lastResult.Status, lastResult.Summary)
+		view.Summary = "Assessment ended before the coordinator reviewed its latest worker result. Findings and gaps are from the preceding plan and need review."
+	} else {
+		view.Summary = analysisSummary(view.Status, view.Risk, len(view.Findings), len(view.Gaps))
+	}
 	view.NextActions = nextActions(view.Findings, view.Gaps)
 	return view
 }
@@ -186,6 +195,8 @@ func findingPriority(f assessment.Finding) (int, string, string) {
 	score := severity + status + confidence
 	label := "review"
 	switch {
+	case f.Status != "reproduced":
+		label = "review"
 	case f.Severity == "critical":
 		label = "critical"
 	case f.Severity == "high":
@@ -215,6 +226,13 @@ func findingPriority(f assessment.Finding) (int, string, string) {
 func summarizeRisk(findings []analysisFinding) analysisRisk {
 	var risk analysisRisk
 	for _, finding := range findings {
+		if finding.Status == "candidate" {
+			risk.Candidates++
+			continue
+		}
+		if finding.Status == "reproduced" {
+			risk.Reproduced++
+		}
 		switch finding.Severity {
 		case "critical":
 			risk.Critical++
@@ -228,12 +246,6 @@ func summarizeRisk(findings []analysisFinding) analysisRisk {
 			risk.Info++
 		default:
 			risk.Unrated++
-		}
-		if finding.Status == "candidate" {
-			risk.Candidates++
-		}
-		if finding.Status == "reproduced" {
-			risk.Reproduced++
 		}
 	}
 	return risk

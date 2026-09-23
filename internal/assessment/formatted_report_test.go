@@ -34,3 +34,17 @@ func TestFormattedReportsPreserveRecordedFindingsWithoutInventingMappings(t *tes
 		t.Fatal("unknown report format was accepted")
 	}
 }
+
+func TestIncompleteReportDoesNotPresentAnUnreviewedPlanAsConclusion(t *testing.T) {
+	state := State{ID: "fixture", Status: "incomplete", Error: "coordinator context limit", Plans: []Decision{{Summary: "A worker will retry the check", Gaps: []string{"Retry in progress"}, Tasks: []Task{{ID: "retry"}}}}, Results: []Result{{Task: Task{ID: "retry"}, Status: "done", Summary: "The retry completed but could not inspect the application."}}}
+	for _, format := range []ReportFormat{OWASPReport, PTESReport} {
+		output, err := RenderFormattedReport(state, format)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(output)
+		if strings.Contains(text, "A worker will retry the check") || strings.Contains(text, "Retry in progress") || !strings.Contains(text, "The retry completed but could not inspect the application") || !strings.Contains(text, "did not reconcile") || !strings.Contains(text, "coordinator context limit") {
+			t.Fatalf("%s presented stale planning as a conclusion: %s", format, text)
+		}
+	}
+}

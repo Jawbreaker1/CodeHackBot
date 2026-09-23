@@ -29,16 +29,17 @@ var reportTemplates = template.Must(template.New("").Funcs(template.FuncMap{
 }).ParseFS(reportTemplateFiles, "templates/*.md.tmpl"))
 
 type formattedReport struct {
-	ID       string
-	Status   string
-	Goal     string
-	Scope    string
-	Started  string
-	Finished string
-	Summary  string
-	Findings []Finding
-	Gaps     []string
-	Results  []Result
+	ID                string
+	Status            string
+	Goal              string
+	Scope             string
+	Started           string
+	Finished          string
+	Summary           string
+	UnreviewedResults bool
+	Findings          []Finding
+	Gaps              []string
+	Results           []Result
 }
 
 // RenderFormattedReport applies a fixed report structure to the saved
@@ -50,7 +51,6 @@ func RenderFormattedReport(state State, format ReportFormat) ([]byte, error) {
 	data := formattedReport{
 		ID: state.ID, Status: state.Status, Goal: state.Goal, Scope: state.Scope,
 		Findings: CurrentFindings(state.Plans), Results: state.Results,
-		Summary: "No coordinator conclusion was recorded; review the evidence before drawing conclusions.",
 	}
 	if !state.StartedAt.IsZero() {
 		data.Started = state.StartedAt.UTC().Format("2006-01-02 15:04 UTC")
@@ -58,12 +58,12 @@ func RenderFormattedReport(state State, format ReportFormat) ([]byte, error) {
 	if !state.FinishedAt.IsZero() {
 		data.Finished = state.FinishedAt.UTC().Format("2006-01-02 15:04 UTC")
 	}
+	data.Summary, data.UnreviewedResults = reportOutcome(state)
 	if len(state.Plans) > 0 {
 		last := state.Plans[len(state.Plans)-1]
-		if strings.TrimSpace(last.Summary) != "" {
-			data.Summary = reportSummary(last.Summary)
+		if !data.UnreviewedResults {
+			data.Gaps = last.Gaps
 		}
-		data.Gaps = last.Gaps
 	}
 	if state.Error != "" {
 		data.Gaps = append(append([]string(nil), data.Gaps...), "Run limitation: "+state.Error)

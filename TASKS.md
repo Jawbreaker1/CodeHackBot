@@ -1,6 +1,6 @@
 # Tasks
 
-Updated 2026-09-23. This file owns immediate implementation order and status.
+Updated 2026-09-24. This file owns immediate implementation order and status.
 
 ## Agreed sequence
 
@@ -36,6 +36,8 @@ The 2026-09-23 Daybreak Blue browser assessment of the authorized router at `192
 A fresh high-level Daybreak Blue browser run after generic planning guidance and a 16-decision worker default completed eight worker tasks in four rounds without blocked workers. It independently recorded a medium-severity HTTP-only administration finding, corroborated by closed TCP/8443 and disabled HTTPS redirect, and separated firmware, DNS, and TCP/7788 hypotheses from confirmed target behavior. The prior UPnP listener was absent in this point-in-time full TCP scan, so this run cannot establish whether the harness would now detect it when exposed. The completed session took 61 minutes and 105 model calls (about 1.67 million reported tokens), which is too slow for the intended interactive workflow. Further acceptance needs repeated runs and independently reviewed precision/recall on more targets, plus lower latency and cost without narrowing the generic assessment capability.
 
 Completed web assessments now accept post-run coordinator questions and can generate OWASP WSTG- or PTES-aligned Markdown drafts from deterministic templates, saved and linked as separate artifacts. The report structures are implemented; formatting and evidence meaning still require professional review, and PDF/DOCX export remains a later slice.
+
+A 2026-09-23 Qwen browser assessment of an operator-named public site finished its last worker but exhausted coordinator context while correcting a rejected final finding. The saved report had incorrectly used the preceding plan as its executive summary. Coordinator compaction now shortens superseded result and finding revisions enough for the recorded correction packet, and incomplete reports and Analysis explicitly show the unreviewed worker outcome. Candidate leads no longer inflate validated risk totals. An offline replay initially repeated the invalid "reproduced" claim; generic finding-status guidance then produced a valid report-only final decision with a candidate and explicit gaps when the operator directed no further tests. The saved run remains incomplete; this is a reporting/context regression fix and focused offline replay, not proof of a validated site finding or a completed platform assessment.
 
 A 2026-09-23 Daybreak browser smoke of an operator-authorized public site exposed excessive intake demands: the coordinator asked for a formal RoE, window, escalation contact, and record path before a low-impact inspection. Intake now accepts the operator's authorization statement and reviewed exact-target scope for that tier; the CLI uses the same rule. The live run produced bounded DNS, HTTP/HTTPS, and TLS evidence plus a cautious incomplete report. It also exposed a worker proposing an unselected sibling service check; that action was denied, and skipped task IDs/goals now enter the selected worker's context with a focused fixture regression. Repeat live validation on the updated worker build remains open. The runtime still lacks structural network-scope and deadline enforcement, so the smoke does not establish customer deployment readiness.
 

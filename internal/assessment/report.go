@@ -17,13 +17,10 @@ func writeReport(root string, s State) error {
 	if !s.FinishedAt.IsZero() {
 		fmt.Fprintf(&b, "**Finished:** %s  \n", s.FinishedAt.UTC().Format("2006-01-02 15:04 UTC"))
 	}
-	b.WriteString("\nThis is a model-authored draft for professional review. The operator is responsible for authorization and target boundaries; the runtime does not enforce network scope isolation. Completion does not establish absence of vulnerabilities.\n\n")
+	b.WriteString("\nThis draft is compiled from model-authored findings and recorded evidence for professional review. The operator is responsible for authorization and target boundaries; the runtime does not enforce network scope isolation. Completion does not establish absence of vulnerabilities.\n\n")
 	b.WriteString("## Executive summary\n\n")
-	if len(s.Plans) > 0 && s.Plans[len(s.Plans)-1].Summary != "" {
-		fmt.Fprintf(&b, "%s\n\n", s.Plans[len(s.Plans)-1].Summary)
-	} else {
-		b.WriteString("No coordinator summary was recorded. Review the work and evidence below before drawing a conclusion.\n\n")
-	}
+	summary, unreviewed := reportOutcome(s)
+	fmt.Fprintf(&b, "%s\n\n", summary)
 	b.WriteString("## Method and coverage\n\n")
 	b.WriteString("The sequence records each coordinator round and the tasks proposed, approved, or skipped. A proposed task does not establish coverage; completed work is detailed in the evidence trail.\n\n")
 	for i, d := range s.Plans {
@@ -96,6 +93,9 @@ func writeReport(root string, s State) error {
 		}
 	}
 	b.WriteString("## Limitations and unresolved gaps\n\n")
+	if unreviewed {
+		b.WriteString("The gaps below are from the last coordinator plan and were not reconciled with subsequent worker results.\n\n")
+	}
 	if s.Error != "" {
 		fmt.Fprintf(&b, "- Run limitation: %s\n", s.Error)
 	}

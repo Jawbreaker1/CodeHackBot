@@ -95,10 +95,13 @@ func coordinatorPromptBounded(state State, maxBytes int) (string, error) {
 	packet.ContextNotes = append(packet.ContextNotes, "Recent worker previews were shortened for this request; exact outcomes and registered evidence remain in saved task records.")
 	prompt = encode()
 	if len(prompt) > maxBytes {
-		for i := 0; i < oldCount-2; i++ {
+		for i := 0; i < oldCount; i++ {
 			packet.Assessment.Results[i].Summary = promptExcerptEnds(packet.Assessment.Results[i].Summary, 512)
 		}
-		packet.ContextNotes = append(packet.ContextNotes, "Distant worker conclusions are now short navigation excerpts; use a focused worker read of the saved result before relying on omitted details.")
+		for i := 0; i < len(packet.Assessment.Plans)-1; i++ {
+			packet.Assessment.Plans[i].Findings = nil
+		}
+		packet.ContextNotes = append(packet.ContextNotes, "Distant worker conclusions and superseded finding revisions are short navigation entries; use saved results and plans for omitted details.")
 		prompt = encode()
 	}
 	if len(prompt) > maxBytes {

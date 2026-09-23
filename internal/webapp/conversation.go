@@ -23,7 +23,7 @@ type workerProgress struct {
 
 const webCoordinatorDisplayPrompt = `Return one JSON object with "text" (your plain-language reply) and optional "display_artifact_refs" (up to three exact paths from available_images in the current assessment state). Select images only when they help answer the operator; never invent a path. The application validates each reference and displays accepted images beneath your reply. If no image helps, omit display_artifact_refs. Do not put Markdown image syntax in text.`
 
-const webPostRunReportPrompt = `The assessment has ended. You can still discuss its recorded results, but no workers or commands are active. When the operator asks you to generate a report in OWASP WSTG or PTES format, set "report_format" to exactly "owasp-wstg" or "ptes" in your JSON reply. The application renders that template from saved assessment findings and links the new Markdown artifact in chat. Do not claim to have generated a report unless you set this field. For any other question, omit it. These are reporting structures, not a certification or proof that every standard test was performed. Do not invent a WSTG test ID, CVSS score, finding, or validation.`
+const webPostRunReportPrompt = `The assessment has ended. You can still discuss its recorded results, but no workers or commands are active. When the operator asks you to generate a report in OWASP WSTG or PTES format, set "report_format" to exactly "owasp-wstg" or "ptes" in your JSON reply. The application renders that template from saved assessment findings and links the new Markdown artifact in chat. Do not claim to have generated a report unless you set this field. For any other question, omit it. The template contains an introduction, executive summary, recorded findings, task coverage, limitations, and reporting basis; it does not automatically map each OWASP or PTES test category. Describe only sections and tests actually present. These are reporting structures, not certification or proof that every standard test was performed. Do not invent a WSTG test ID, CVSS score, finding, or validation. If final_review_pending is true, say clearly that the assessment ended before the coordinator reviewed its last worker result.`
 
 type coordinatorChatReply struct {
 	Text                string                  `json:"text"`
@@ -137,13 +137,20 @@ func conversationExcerpt(text string, limit int) string {
 
 func postRunFindingsContext(state assessment.State) string {
 	var gaps []string
-	if len(state.Plans) > 0 {
+	lastResult, finalReviewPending := assessment.LatestUnreviewedResult(state)
+	if len(state.Plans) > 0 && !finalReviewPending {
 		gaps = state.Plans[len(state.Plans)-1].Gaps
 	}
+	latestResult := ""
+	if finalReviewPending {
+		latestResult = lastResult.Task.ID + " — " + lastResult.Status + ": " + conversationExcerpt(lastResult.Summary, 1200)
+	}
 	data, _ := json.Marshal(struct {
-		Findings []assessment.Finding `json:"current_findings"`
-		Gaps     []string             `json:"unresolved_gaps"`
-	}{Findings: assessment.CurrentFindings(state.Plans), Gaps: gaps})
+		Findings           []assessment.Finding `json:"current_findings"`
+		Gaps               []string             `json:"unresolved_gaps"`
+		FinalReviewPending bool                 `json:"final_review_pending"`
+		LatestResult       string               `json:"latest_worker_result,omitempty"`
+	}{Findings: assessment.CurrentFindings(state.Plans), Gaps: gaps, FinalReviewPending: finalReviewPending, LatestResult: latestResult})
 	return string(data)
 }
 

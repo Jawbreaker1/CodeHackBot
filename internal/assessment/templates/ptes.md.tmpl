@@ -2,7 +2,7 @@
 
 **Assessment:** {{inline .ID}}  
 **Status:** {{inline .Status}}  
-**Draft:** Model-authored; professional review required.
+**Draft:** Compiled from model-authored findings and recorded evidence; professional review required.
 
 ## 1. Executive summary
 
@@ -59,8 +59,12 @@ The methods below reflect only recorded worker activity. No exploitation or acce
 {{end}}
 ### 2.4 Limitations and unresolved gaps
 
+{{if .UnreviewedResults}}The coordinator did not reconcile the last worker results with its findings and gaps. Review the saved evidence and prior plan before publishing this report.
+
+{{end}}
 {{if .Gaps}}{{range .Gaps}}- {{inline .}}
-{{end}}{{else}}No additional gaps were stated; this is not a coverage guarantee.
+{{end}}{{else}}{{if not .UnreviewedResults}}No additional gaps were stated; this is not a coverage guarantee.
+{{end}}
 {{end}}
 ## 3. Reporting basis
 

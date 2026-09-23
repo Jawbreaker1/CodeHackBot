@@ -25,6 +25,14 @@ func TestAnalysisDoesNotRepeatEveryGapAsANextAction(t *testing.T) {
 	}
 }
 
+func TestAnalysisSeparatesUnreviewedWorkerResultFromCandidateRisk(t *testing.T) {
+	state := assessment.State{Status: "incomplete", Plans: []assessment.Decision{{Summary: "The worker will retry", Gaps: []string{"Retry in progress"}, Tasks: []assessment.Task{{ID: "retry"}}, Findings: []assessment.Finding{{Title: "Possible issue", Status: "candidate", Severity: "medium", Confidence: "low"}}}}, Results: []assessment.Result{{Task: assessment.Task{ID: "retry"}, Status: "done", Summary: "The retry ended without application access."}}}
+	view := buildAnalysis("fixture", "lab", state, nil)
+	if !view.ReviewPending || view.Conclusion != "" || view.LatestResult == "" || view.Risk.Medium != 0 || view.Risk.Candidates != 1 || view.Findings[0].Priority != "review" {
+		t.Fatalf("analysis overstated an incomplete result: %+v", view)
+	}
+}
+
 func TestCurrentFindingsAgreeAcrossAssessmentAndCustomerViews(t *testing.T) {
 	server := NewServer(Config{RepoRoot: t.TempDir()})
 	current, err := server.newRun("fixture-lab", "review fixture", "synthetic only")

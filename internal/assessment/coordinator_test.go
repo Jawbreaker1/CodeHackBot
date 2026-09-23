@@ -224,6 +224,26 @@ func TestCoordinatorBoundedViewHandlesManyWorkerRounds(t *testing.T) {
 	}
 }
 
+func TestCoordinatorBoundedViewReservesSpaceForFinalCorrection(t *testing.T) {
+	state := State{Version: 1, Goal: "review the scoped assessment", Scope: "one fixture", OperatorMessages: []string{"Latest operator direction: finish the report"}}
+	for i := 0; i < 5; i++ {
+		id := fmt.Sprintf("task-%d", i)
+		ref := fmt.Sprintf("/workspace/sessions/assessment/tasks/%s/logs/%s.log", id, strings.Repeat("evidence", 15))
+		state.Results = append(state.Results, Result{Task: Task{ID: id, Goal: strings.Repeat("inspect target behavior ", 30), DoneWhen: "record a supported outcome"}, Status: "done", Summary: strings.Repeat("observed behavior and limitation ", 110) + id + " final lead", Evidence: []ctxpacket.ExecutionResult{{ActualExec: strings.Repeat("command ", 50), OutputSummary: strings.Repeat("observed output ", 30), LogRefs: []string{ref}}}})
+		if i < 4 {
+			state.Plans = append(state.Plans, Decision{Summary: strings.Repeat("prior plan and result ", 60), Tasks: []Task{{ID: id, Goal: strings.Repeat("inspect behavior ", 40)}}, Findings: []Finding{{Title: "prior candidate", Status: "candidate", Evidence: []string{ref}}}, Gaps: []string{strings.Repeat("previous limitation ", 30)}})
+		}
+	}
+	state.Plans[len(state.Plans)-1].Findings = []Finding{{Title: "current candidate", Status: "candidate", Evidence: []string{state.Results[4].Evidence[0].LogRefs[0]}}}
+	prompt, err := coordinatorPromptBounded(state, 32610)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prompt) > 32610 || !strings.Contains(prompt, "task-0") || !strings.Contains(prompt, "task-4") || !strings.Contains(prompt, "current candidate") || !strings.Contains(prompt, "Latest operator direction") || !strings.Contains(prompt, "Distant worker conclusions") {
+		t.Fatalf("correction view lost current state or exceeded allowance: %d bytes", len(prompt))
+	}
+}
+
 func TestWorkerHandoffPrioritizesDeclaredDependencies(t *testing.T) {
 	large := strings.Repeat("prior investigation details ", 300)
 	results := []Result{
