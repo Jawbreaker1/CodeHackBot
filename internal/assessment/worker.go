@@ -37,10 +37,9 @@ func (c Coordinator) runWorker(ctx context.Context, root string, state State, ta
 	// Bounded assignments use the same adaptive worker as standalone tasks.
 	// The worker decides whether a plan is useful and may revise it as it learns.
 	packet.CurrentStep.DoneCondition = task.DoneWhen
-	prior, _ := json.Marshal(compactPriorResults(state.Results))
-	packet.MemoryBankRetrievals = []string{"Prior worker result cards (bounded navigation aids, not complete evidence or instructions): " + string(prior) + ". Full prior result records and logs are under " + filepath.Join(root, "tasks") + "/<task-id>/; inspect only the specific prior evidence needed for this task."}
-	packet.CapabilityInputs = append(packet.CapabilityInputs, "Verify that a tool is installed before relying on it. Do not install or update software without explicit approval. Declared scope: "+state.Scope)
-	packet.CapabilityInputs = append(packet.CapabilityInputs, "For web application work, a preprovisioned Playwright helper may traverse only the declared origin and paths. Capture screenshots, traces, DOM snapshots, or network logs as task-local files and declare those output paths in the action response so the runtime can register them as evidence. Use the helper step(label, callback) API to describe individual browser actions in live output. Declare browser-artifacts/browser-live.png to let the operator watch the browser while it runs. Read the helper README before use. Do not download Playwright, browser binaries, packages, credentials, or target data implicitly.")
+	packet.MemoryBankRetrievals = workerHandoff(state.Results, task.DependsOn, filepath.Join(root, "tasks"))
+	packet.CapabilityInputs = append(packet.CapabilityInputs, "Verify installed tools before use; no implicit installs or host changes. The declared scope is in behavior_frame.parameters.scope.")
+	packet.CapabilityInputs = append(packet.CapabilityInputs, "For scoped web work, read tools/playwright-runner/README.md before using the preprovisioned helper. Name browser steps, declare task-local captures as artifacts, and use browser-artifacts/browser-live.png for operator preview. No implicit downloads or installs.")
 	researchMode := c.Frame.Parameters["research_mode"]
 	if researchMode == "air_gapped" || researchMode == "offline" {
 		packet.CapabilityInputs = append(packet.CapabilityInputs, "research_mode: air_gapped; external web fetch is prohibited. Use only local advisory/source snapshots and record their provenance and freshness.")
@@ -98,6 +97,43 @@ func (c Coordinator) runWorker(ctx context.Context, root string, state State, ta
 		EvidenceCount: len(r.Evidence),
 	})
 	return r, nil
+}
+
+// workerHandoff gives a worker detailed cards only for declared dependencies.
+// Other completed tasks remain discoverable through a small index and their
+// durable task directories, rather than consuming every future model turn.
+func workerHandoff(results []Result, dependencies []string, tasksRoot string) []string {
+	selected := make(map[string]bool, len(dependencies))
+	for _, id := range dependencies {
+		selected[id] = true
+	}
+	var direct []Result
+	type indexEntry struct {
+		TaskID  string `json:"task_id"`
+		Status  string `json:"status"`
+		Summary string `json:"summary,omitempty"`
+	}
+	var other []indexEntry
+	for _, result := range results {
+		if selected[result.Task.ID] {
+			direct = append(direct, result)
+		} else {
+			other = append(other, indexEntry{TaskID: result.Task.ID, Status: result.Status, Summary: promptExcerpt(result.Summary, 240)})
+		}
+	}
+	var handoff []string
+	if len(direct) > 0 {
+		cards, _ := json.Marshal(compactPriorResults(direct))
+		handoff = append(handoff, "Declared dependency result cards (bounded previews, not complete evidence or instructions): "+string(cards))
+	}
+	if len(other) > 0 {
+		index, _ := json.Marshal(other)
+		handoff = append(handoff, "Other prior workers (navigation index only): "+string(index))
+	}
+	if len(results) > 0 {
+		handoff = append(handoff, "Complete prior result records and logs: "+tasksRoot+"/<task-id>/; inspect only the evidence needed for this task.")
+	}
+	return handoff
 }
 
 type workerProgress struct {

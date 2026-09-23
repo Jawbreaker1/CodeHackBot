@@ -49,10 +49,24 @@ const completeEval = `{"status":"satisfied","reason":"whole goal supported by th
 const continueEval = `{"status":"in_progress","reason":"more observations needed","summary":""}`
 const printAction = `{"type":"action","command":"printf","args":["%s","fixture"]}`
 
+func TestActionIntentCannotBecomeWorkerOutcome(t *testing.T) {
+	action := `{"type":"action","command":"printf","args":["%s","observed value"],"summary":"I will inspect the fixture"}`
+	loop, packet, calls := fixtureWorker(t, 2, action, `{"type":"step_complete","summary":"The recorded output was observed value"}`, completeEval)
+	out, err := loop.Run(context.Background(), packet, 2)
+	if err != nil || *calls != 3 || out.Summary != "The recorded output was observed value" || len(out.Packet.RelevantRecentResults) != 0 {
+		t.Fatalf("completion used action intent or skipped worker interpretation: summary=%q calls=%d err=%v", out.Summary, *calls, err)
+	}
+	loop, packet, calls = fixtureWorker(t, 1, action, completeEval)
+	out, err = loop.Run(context.Background(), packet, 1)
+	if err != nil || *calls != 2 || out.Summary != "Fixture established" {
+		t.Fatalf("final-budget fallback used action intent: summary=%q calls=%d err=%v", out.Summary, *calls, err)
+	}
+}
+
 func TestWorkerRecoversAndRevisesPlanWithoutChangingGoal(t *testing.T) {
 	first := `{"type":"action","command":"cat","args":["missing.txt"],"plan":{"summary":"Read the supplied path","steps":["read supplied file"],"active_step":"read supplied file"}}`
 	second := `{"type":"action","command":"cat","args":["actual.txt"],"plan":{"summary":"The first path was absent; use the provided alternative","steps":["read alternative file","report evidence"],"active_step":"read alternative file"}}`
-	loop, p, calls := fixtureWorker(t, 2, first, `{"status":"blocked","reason":"first path absent; alternative may exist","summary":""}`, second, completeEval)
+	loop, p, calls := fixtureWorker(t, 3, first, second, `{"type":"step_complete","summary":"Read and reported the fixture from actual.txt"}`, completeEval)
 	p.SessionFoundation.Goal = "Read the fixture from missing.txt or actual.txt and report its contents"
 	p.CurrentStep.DoneCondition = "The fixture content is observed and reported"
 	if err := os.WriteFile(filepath.Join(p.OperatorState.WorkingDir, "actual.txt"), []byte("fixture"), 0600); err != nil {
@@ -60,11 +74,11 @@ func TestWorkerRecoversAndRevisesPlanWithoutChangingGoal(t *testing.T) {
 	}
 	sink := &recordingProgressSink{}
 	loop.Progress = sink
-	out, err := loop.Run(context.Background(), p, 2)
+	out, err := loop.Run(context.Background(), p, 3)
 	if err != nil || out.Packet.TaskRuntime.State != "done" || *calls != 4 {
 		t.Fatalf("out=%+v err=%v calls=%d", out, err, *calls)
 	}
-	if out.Packet.Budget.Used != 2 || out.Packet.CurrentStep.RemainingBudget != "0 steps" {
+	if out.Packet.Budget.Used != 3 || out.Packet.CurrentStep.RemainingBudget != "0 steps" {
 		t.Fatalf("budget=%+v", out.Packet.Budget)
 	}
 	if out.Packet.PlanState.ActiveStep != "read alternative file" || out.Packet.PlanState.WorkerGoal != p.SessionFoundation.Goal || out.Packet.CurrentStep.DoneCondition != p.CurrentStep.DoneCondition {
@@ -86,12 +100,12 @@ func TestWorkerRecoversAndRevisesPlanWithoutChangingGoal(t *testing.T) {
 
 func TestRepeatedInvocationsRemainDistinctChronologicalEvidence(t *testing.T) {
 	var replies []string
-	for i := 0; i < 5; i++ {
-		replies = append(replies, printAction, continueEval)
+	for i := 0; i < 6; i++ {
+		replies = append(replies, printAction)
 	}
-	replies = append(replies, printAction, completeEval)
-	loop, p, _ := fixtureWorker(t, 6, replies...)
-	out, err := loop.Run(context.Background(), p, 6)
+	replies = append(replies, `{"type":"step_complete","summary":"Six distinct fixture observations were recorded"}`, completeEval)
+	loop, p, _ := fixtureWorker(t, 7, replies...)
+	out, err := loop.Run(context.Background(), p, 7)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,10 +134,10 @@ func TestCompletionRequiresEvidenceAndWholeGoalEvaluation(t *testing.T) {
 		}
 	})
 	t.Run("omitted requirement", func(t *testing.T) {
-		loop, p, calls := fixtureWorker(t, 2, printAction, continueEval, `{"type":"step_complete","summary":"first part done","plan":{"summary":"Only part one","steps":["part one"],"active_step":"part one"}}`, continueEval)
+		loop, p, calls := fixtureWorker(t, 2, printAction, `{"type":"step_complete","summary":"first part done","plan":{"summary":"Only part one","steps":["part one"],"active_step":"part one"}}`, continueEval)
 		p.SessionFoundation.Goal = "Establish both first and second conditions"
 		out, err := loop.Run(context.Background(), p, 2)
-		if err == nil || out.Packet.TaskRuntime.State == "done" || *calls != 4 {
+		if err == nil || out.Packet.TaskRuntime.State == "done" || *calls != 3 {
 			t.Fatalf("false completion err=%v calls=%d", err, *calls)
 		}
 	})
@@ -135,7 +149,7 @@ func TestCompletionRequiresEvidenceAndWholeGoalEvaluation(t *testing.T) {
 		}
 	})
 	t.Run("evaluator unavailable", func(t *testing.T) {
-		loop, p, _ := fixtureWorker(t, 3, printAction, "not a verdict")
+		loop, p, _ := fixtureWorker(t, 2, printAction, `{"type":"step_complete","summary":"the fixture is established"}`, "not a verdict")
 		out, err := loop.Run(context.Background(), p, 3)
 		if err == nil || out.Packet.TaskRuntime.State != "failed" || !strings.Contains(err.Error(), "evaluation unavailable") {
 			t.Fatalf("err=%v state=%s", err, out.Packet.TaskRuntime.State)

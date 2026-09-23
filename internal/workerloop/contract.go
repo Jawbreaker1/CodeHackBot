@@ -79,7 +79,7 @@ func ParseResponse(text string) (Response, error) {
 		return r, fmt.Errorf("only action may declare artifacts")
 	}
 	if len(r.Artifacts) > 8 {
-		return r, fmt.Errorf("action declares too many artifacts")
+		return r, fmt.Errorf("action declares %d artifacts; maximum is 8, so keep the most useful references", len(r.Artifacts))
 	}
 	for _, artifact := range r.Artifacts {
 		if strings.TrimSpace(artifact) == "" {

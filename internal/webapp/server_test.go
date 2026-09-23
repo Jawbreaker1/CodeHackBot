@@ -746,14 +746,19 @@ func webModelFixture(w http.ResponseWriter, r *http.Request) {
 		response = `{"status":"satisfied","reason":"the fixture output is recorded","summary":"web fixture recorded"}`
 	} else {
 		var payload struct {
-			Role       string           `json:"role"`
-			Assessment assessment.State `json:"assessment"`
+			Role          string           `json:"role"`
+			ContextPacket string           `json:"context_packet"`
+			Assessment    assessment.State `json:"assessment"`
 		}
-		if err := json.Unmarshal([]byte(latest), &payload); err == nil && payload.Role == "assessment_coordinator" {
-			if len(payload.Assessment.Results) == 0 {
-				response = `{"summary":"web fixture plan","tasks":[{"id":"observe","goal":"record the web fixture","done_when":"fixture output is recorded","depends_on":[]}],"complete":false,"findings":[],"gaps":[]}`
-			} else if len(payload.Assessment.Results) == 1 {
-				response = `{"summary":"web fixture complete","tasks":[],"complete":true,"findings":[],"gaps":["synthetic fixture"]}`
+		if err := json.Unmarshal([]byte(latest), &payload); err == nil {
+			if payload.Role == "assessment_coordinator" {
+				if len(payload.Assessment.Results) == 0 {
+					response = `{"summary":"web fixture plan","tasks":[{"id":"observe","goal":"record the web fixture","done_when":"fixture output is recorded","depends_on":[]}],"complete":false,"findings":[],"gaps":[]}`
+				} else if len(payload.Assessment.Results) == 1 {
+					response = `{"summary":"web fixture complete","tasks":[],"complete":true,"findings":[],"gaps":["synthetic fixture"]}`
+				}
+			} else if payload.Role == "worker" && strings.Contains(payload.ContextPacket, "[latest_execution_result]\naction: printf") {
+				response = `{"type":"step_complete","summary":"web fixture recorded"}`
 			}
 		}
 	}

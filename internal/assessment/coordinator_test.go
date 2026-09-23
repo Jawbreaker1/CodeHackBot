@@ -71,6 +71,73 @@ func TestCoordinatorRetainsEvidenceCatalogWhileBoundingResultCards(t *testing.T)
 	}
 }
 
+func TestCoordinatorModelCatalogIndexesLogsAndDistinctArtifacts(t *testing.T) {
+	log := "/tmp/tasks/inspect/logs/action.log"
+	image := "/tmp/tasks/inspect/work/capture.png"
+	state := State{Version: 1, ID: "artifact-fixture", Goal: "review evidence", Scope: "fixture only", Results: []Result{{
+		Task: Task{ID: "inspect", Goal: "inspect"}, Status: "done", Evidence: []ctxpacket.ExecutionResult{{
+			LogRefs: []string{log}, ArtifactRefs: []string{log + ".stdout", log + ".stderr", log + ".approval.json", image},
+		}},
+	}}}
+	var payload struct {
+		Assessment struct {
+			Results []struct {
+				Evidence []struct {
+					ArtifactRefs []string `json:"artifact_refs"`
+				} `json:"evidence"`
+			} `json:"results"`
+		} `json:"assessment"`
+		RecordedEvidence map[string][]string `json:"recorded_evidence"`
+	}
+	if err := json.Unmarshal([]byte(coordinatorPrompt(state)), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if got := payload.RecordedEvidence["inspect"]; len(got) != 2 || got[0] != log || got[1] != image {
+		t.Fatalf("model catalog did not retain log and distinct artifact: %v", got)
+	}
+	if got := payload.Assessment.Results[0].Evidence[0].ArtifactRefs; len(got) != 1 || got[0] != image {
+		t.Fatalf("result card did not prioritize declared artifact: %v", got)
+	}
+	if got := state.Results[0].Evidence[0].ArtifactRefs; len(got) != 4 {
+		t.Fatal("model projection changed durable evidence")
+	}
+}
+
+func TestCoordinatorOlderPlansKeepTaskIndexAndRecentDetails(t *testing.T) {
+	state := State{Version: 1, Goal: "long assessment", Scope: "fixture only"}
+	for i := 0; i < 4; i++ {
+		state.Plans = append(state.Plans, Decision{Summary: strings.Repeat("round notes ", 100), Tasks: []Task{{ID: fmt.Sprintf("task-%d", i), Goal: strings.Repeat("specific task goal ", 40), DoneWhen: "evidence recorded"}}})
+	}
+	view := compactCoordinatorState(state)
+	if len(view.Plans) != 4 || view.Plans[0].Tasks[0].ID != "task-0" || view.Plans[0].Tasks[0].Goal != "" || view.Plans[0].Summary == state.Plans[0].Summary {
+		t.Fatalf("older plan was not projected to a short task index: %+v", view.Plans[0])
+	}
+	if view.Plans[3].Tasks[0].Goal == "" || view.Plans[3].Tasks[0].DoneWhen == "" || state.Plans[0].Tasks[0].Goal == "" {
+		t.Fatal("recent plan detail or durable historical plan was lost")
+	}
+}
+
+func TestCoordinatorRetainsObservedLeadAfterLongResultPreamble(t *testing.T) {
+	lead := "Observed available local resource: /opt/lab/candidates.txt"
+	state := State{Results: []Result{{Task: Task{ID: "triage"}, Status: "done", Summary: strings.Repeat("recorded observation ", 115) + lead}}}
+	view := compactCoordinatorState(state)
+	if !strings.Contains(view.Results[0].Summary, lead) {
+		t.Fatal("coordinator lost an observed lead before planning the next step")
+	}
+}
+
+func TestWorkerHandoffPrioritizesDeclaredDependencies(t *testing.T) {
+	large := strings.Repeat("prior investigation details ", 300)
+	results := []Result{
+		{Task: Task{ID: "independent"}, Status: "done", Summary: large, Evidence: []ctxpacket.ExecutionResult{{LogRefs: []string{"/tasks/independent/log"}}}},
+		{Task: Task{ID: "required"}, Status: "done", Summary: "validated prerequisite", Evidence: []ctxpacket.ExecutionResult{{LogRefs: []string{"/tasks/required/log"}}}},
+	}
+	handoff := strings.Join(workerHandoff(results, []string{"required"}, "/tasks"), "\n")
+	if !strings.Contains(handoff, "/tasks/required/log") || strings.Contains(handoff, "/tasks/independent/log") || strings.Contains(handoff, large) || !strings.Contains(handoff, "independent") || !strings.Contains(handoff, "/tasks/<task-id>/") {
+		t.Fatalf("worker handoff lost prerequisite or overincluded unrelated evidence: %s", handoff)
+	}
+}
+
 func TestFindingAdvisoryFieldsRemainStructuredAndValidated(t *testing.T) {
 	state := State{Limits: DefaultLimits(), Results: []Result{{Task: Task{ID: "research"}, Status: "done", Evidence: []ctxpacket.ExecutionResult{{LogRefs: []string{"research.log"}}}}}}
 	finding := Finding{Title: "Known issue", Status: "candidate", Severity: "high", Confidence: "medium", CVEIDs: []string{"CVE-2026-1234"}, AffectedSoftware: []string{"fixture 1.2"}, References: []string{"https://example.invalid/advisory"}, Impact: "fixture", Steps: []string{"repeat the check"}, Evidence: []string{"research.log"}, Remediation: []string{"upgrade"}}
@@ -96,8 +163,9 @@ func TestCoordinatorDelegatesThenValidatesWithSharedBudgetAndEvidence(t *testing
 			return
 		}
 		var payload struct {
-			Role       string `json:"role"`
-			Assessment struct {
+			Role          string `json:"role"`
+			ContextPacket string `json:"context_packet"`
+			Assessment    struct {
 				Results []struct {
 					Evidence []struct {
 						LogRefs []string `json:"log_refs"`
@@ -125,6 +193,10 @@ func TestCoordinatorDelegatesThenValidatesWithSharedBudgetAndEvidence(t *testing
 		}
 		if strings.Contains(req.Messages[1].Content, "Evaluate whether the original worker goal") {
 			reply(w, map[string]string{"status": "satisfied", "reason": "literal execution evidence exists", "summary": "observed fixture output"})
+			return
+		}
+		if strings.Contains(payload.ContextPacket, "[latest_execution_result]\naction: printf") {
+			reply(w, map[string]string{"type": "step_complete", "summary": "observed fixture output"})
 			return
 		}
 		mu.Lock()
@@ -155,7 +227,7 @@ func TestCoordinatorDelegatesThenValidatesWithSharedBudgetAndEvidence(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Status != "completed" || len(s.Results) != 3 || s.Usage.Calls != 9 || s.Usage.ReportedTokens != 90 {
+	if s.Status != "completed" || len(s.Results) != 3 || s.Usage.Calls != 12 || s.Usage.ReportedTokens != 120 {
 		t.Fatalf("unexpected result: %+v", s)
 	}
 	mu.Lock()

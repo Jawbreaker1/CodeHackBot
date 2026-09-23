@@ -24,6 +24,23 @@ func (p WorkerPacket) ModelView(maxBytes int) (WorkerPacket, error) {
 	v := p.Clone()
 	v.TaskRuntime.CurrentTarget, v.TaskRuntime.MissingFact = "", ""
 	v.ContextNotes = nil
+	// The authoritative packet retains every copy of the task contract. The
+	// model needs one canonical goal, not the same long assignment repeated in
+	// the current step, plan and first conversation entry on every turn.
+	if v.CurrentStep.Objective == v.SessionFoundation.Goal {
+		v.CurrentStep.Objective = "(see session_foundation.goal)"
+	}
+	if v.PlanState.WorkerGoal == v.SessionFoundation.Goal {
+		v.PlanState.WorkerGoal = "(see session_foundation.goal)"
+	}
+	if len(v.RecentConversation) > 0 && v.RecentConversation[0] == "User: "+v.SessionFoundation.Goal {
+		v.RecentConversation = v.RecentConversation[1:]
+	}
+	for i := range v.PlanHistory {
+		if v.PlanHistory[i].Plan.WorkerGoal == v.SessionFoundation.Goal {
+			v.PlanHistory[i].Plan.WorkerGoal = "(see session_foundation.goal)"
+		}
+	}
 	// Keep the current plan and newest observations readable. Older full command
 	// bodies and output live in the durable session/log files, so do not resend
 	// them merely because the provider's hard ceiling has not been reached yet.
@@ -48,15 +65,18 @@ func (p WorkerPacket) ModelView(maxBytes int) (WorkerPacket, error) {
 	}
 	for i := 1; i < len(v.RelevantRecentResults); i++ {
 		r := &v.RelevantRecentResults[i]
-		if len(r.Action) > 512 || len(r.ActualExec) > 512 || len(r.OutputEvidence) > 0 || len(r.OutputSummary) > 512 {
+		if len(r.Action) > 256 || len(r.ActualExec) > 256 || len(r.OutputEvidence) > 0 || len(r.OutputSummary) > 384 || len(r.ArtifactRefs) > 2 {
 			shortened = true
 		}
-		r.Action = excerpt(r.Action, 512)
-		r.ActualExec = excerpt(r.ActualExec, 512)
+		r.Action = excerpt(r.Action, 256)
+		r.ActualExec = excerpt(r.ActualExec, 256)
 		if r.OutputEvidence != "" {
 			r.OutputEvidence = "(omitted from model view; consult log_refs)"
 		}
-		r.OutputSummary = excerpt(r.OutputSummary, 512)
+		r.OutputSummary = excerpt(r.OutputSummary, 384)
+		if len(r.ArtifactRefs) > 2 {
+			r.ArtifactRefs = r.ArtifactRefs[:2]
+		}
 	}
 	for i := 0; i < len(v.PlanHistory)-2; i++ {
 		revision := &v.PlanHistory[i]
@@ -69,7 +89,7 @@ func (p WorkerPacket) ModelView(maxBytes int) (WorkerPacket, error) {
 		revision.Plan.ReplanConditions = nil
 	}
 	if shortened {
-		v.ContextNotes = []string{"Oversized execution bodies and older plan details were excerpted or omitted from this model view. Their identities and log references remain here; complete records remain in the local session."}
+		v.ContextNotes = []string{"Oversized execution bodies, artifact lists and older plan details were excerpted or omitted from this model view. Their identities and log references remain here; complete records remain in the local session."}
 	}
 	size := func() int { return len(v.Render()) }
 	if size() <= maxBytes {

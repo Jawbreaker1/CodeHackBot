@@ -184,9 +184,18 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 			if !executed {
 				continue
 			}
+			// Let the worker interpret this observation and decide whether its
+			// goal is met. Evaluating every action with a second model call can
+			// end a multi-step task on an action's intended outcome before the
+			// worker has seen the actual result. Only the final-budget action
+			// needs an automatic evidence check because no decision turn remains.
+			if current.Budget.Used < current.Budget.Limit {
+				continue
+			}
 		}
-		// Both a completed action and a completion proposal use the same whole-goal
-		// evaluator. Nonzero exits and recoverable tool failures remain evidence.
+		// An explicit completion proposal, or the final-budget action, uses the
+		// same whole-goal evaluator. Nonzero exits and recoverable tool failures
+		// remain evidence rather than automatic blockers.
 		if err := ctx.Err(); err != nil {
 			return out, err
 		}
@@ -197,13 +206,17 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 		if err := l.emit(EventPostExecEvalStarted, current, "evaluating original goal against evidence"); err != nil {
 			return out, err
 		}
+		proposedAnswer := ""
+		if response.Type == "step_complete" {
+			proposedAnswer = response.Summary
+		}
 		view, err = l.modelView(&current, func(packet ctxpacket.WorkerPacket) string {
-			return buildGoalEvaluationPrompt(packet, response.Summary)
+			return buildGoalEvaluationPrompt(packet, proposedAnswer)
 		})
 		if err != nil {
 			return out, err
 		}
-		evaluation, err := judgeGoalCompletion(ctx, l.LLM, l.Inspector, view, response.Summary)
+		evaluation, err := judgeGoalCompletion(ctx, l.LLM, l.Inspector, view, proposedAnswer)
 		if err != nil {
 			return out, fmt.Errorf("goal evaluation unavailable: %w", err)
 		}
@@ -213,7 +226,11 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 		if evaluation.Status == workergoal.StatusSatisfied {
 			current.TaskRuntime.State = "done"
 			current.TaskRuntime.MissingFact = "(none)"
-			out.Summary = blank(response.Summary, blank(evaluation.Summary, evaluation.Reason))
+			if response.Type == "step_complete" {
+				out.Summary = blank(response.Summary, blank(evaluation.Summary, evaluation.Reason))
+			} else {
+				out.Summary = blank(evaluation.Summary, evaluation.Reason)
+			}
 			current.RunningSummary = "Status: done. " + out.Summary
 			if err := l.capture(step, "step-complete", current); err != nil {
 				return out, err
@@ -372,9 +389,11 @@ func buildUserPrompt(packet ctxpacket.WorkerPacket) string {
 		"role": "worker",
 		"instructions": []string{
 			"Respond with one JSON object only. Choose action, update_plan, step_complete, ask_user, or blocked.",
-			"For direct execution: {\"type\":\"action\",\"command\":\"executable\",\"args\":[\"literal argument\"],\"use_shell\":false,\"impact\":\"short plain-language effect and risk\",\"artifacts\":[\"relative/path-created-by-this-action\"]}. Never add shell quotes to literal arguments. Declare only bounded regular files the approved action is expected to create inside the worker workspace; declared artifacts are registered only after execution.",
+			"For direct execution: {\"type\":\"action\",\"command\":\"executable\",\"args\":[\"literal argument\"],\"use_shell\":false,\"impact\":\"short plain-language effect and risk\",\"artifacts\":[\"relative/path-created-by-this-action\"]}. Never add shell quotes to literal arguments. Declare at most eight bounded regular files the approved action is expected to create inside the worker workspace; declared artifacts are registered only after execution. A command may produce more files, but list the most useful eight and keep the others discoverable through the task-local log or workspace.",
 			"For shell syntax: {\"type\":\"action\",\"command\":\"complete shell script\",\"use_shell\":true}. Omit args.",
 			"For completion: {\"type\":\"step_complete\",\"summary\":\"evidence-backed answer to the original goal, with limitations\"}. This means the whole task is complete, not just one plan step.",
+			"After an action, inspect its observed result in the next decision. When the task's done condition is met, explicitly return step_complete with the actual outcome and evidence references; an action summary describes intent and is not a completion answer. The runtime checks completion claims against recorded evidence. If the final decision executes an action, the runtime evaluates its evidence as a fallback, but it may have no answer to validate.",
+			"If a completion claim is rejected, use the evaluator's specific missing fact to choose one concrete corrective action. Do not resubmit a completion claim against unchanged evidence; if the remaining condition cannot be established within this task, return an honest blocked or partial result so the coordinator can revise the assignment.",
 			"For missing operator information: {\"type\":\"ask_user\",\"question\":\"...\"}. For an unrecoverable blocker: {\"type\":\"blocked\",\"summary\":\"what is missing and what was established\"}.",
 			"For a plan change: {\"type\":\"update_plan\",\"plan\":{\"summary\":\"reason for this plan or revision\",\"steps\":[\"short semantic step\"],\"step_purposes\":{\"short semantic step\":\"what this step is meant to establish\"},\"active_step\":\"short semantic step\",\"replan_conditions\":[\"observable trigger that would change the approach\"]}}. Give each step a concise purpose for the operator. The same optional plan object may accompany any other decision to avoid a separate turn. Replan conditions are triggers, not evidence or permission.",
 			"Use a short plan for multi-step work. Revise it as observations change; the plan is your strategy, not evidence of completion. Simple tasks may proceed directly.",

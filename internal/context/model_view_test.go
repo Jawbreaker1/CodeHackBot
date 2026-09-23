@@ -107,6 +107,27 @@ func TestModelViewOffloadsOlderEvidenceBeforeHardLimit(t *testing.T) {
 	}
 }
 
+func TestModelViewKeepsOneCanonicalGoalAndRecentEvidenceIndex(t *testing.T) {
+	goal := strings.Repeat("long authorized task description ", 80)
+	p := NewInitialWorkerPacket(behavior.Frame{SystemPrompt: "policy", AgentsText: "rules"}, session.Foundation{Goal: goal}, "/tmp", "fixture", "per_action", 10)
+	p.PlanState.WorkerGoal = goal
+	p.PlanHistory = []PlanRevision{{Turn: 1, Plan: PlanState{WorkerGoal: goal, Summary: "first plan"}}}
+	p.RelevantRecentResults = []ExecutionResult{
+		{Action: "recent check", LogRefs: []string{"/logs/recent"}},
+		{Action: "older check", LogRefs: []string{"/logs/older"}, ArtifactRefs: []string{"/artifacts/a", "/artifacts/b", "/artifacts/c"}},
+	}
+	v, err := p.ModelView(100000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count := strings.Count(v.RenderWithoutBehaviorFrame(), goal); count != 1 {
+		t.Fatalf("goal repeated %d times in model view", count)
+	}
+	if v.RelevantRecentResults[1].LogRefs[0] != "/logs/older" || len(v.RelevantRecentResults[1].ArtifactRefs) != 2 || len(p.RelevantRecentResults[1].ArtifactRefs) != 3 {
+		t.Fatal("older evidence index lost its log or changed persisted artifacts")
+	}
+}
+
 func TestConversationPreservesStructureAndNewestOversizedAnswer(t *testing.T) {
 	entry := "Operator answer:\n  field: value\n    child: text | keep this"
 	recent, _ := AppendConversation(nil, "", entry)

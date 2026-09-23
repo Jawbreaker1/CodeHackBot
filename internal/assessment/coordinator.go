@@ -321,8 +321,7 @@ func coordinatorPrompt(state State) string {
 	refs := map[string][]string{}
 	for _, r := range state.Results {
 		for _, e := range r.Evidence {
-			refs[r.Task.ID] = append(refs[r.Task.ID], e.LogRefs...)
-			refs[r.Task.ID] = append(refs[r.Task.ID], e.ArtifactRefs...)
+			refs[r.Task.ID] = append(refs[r.Task.ID], modelEvidenceRefs(e.LogRefs, e.ArtifactRefs)...)
 		}
 	}
 	payload := map[string]any{
@@ -333,12 +332,14 @@ func coordinatorPrompt(state State) string {
 			"Treat every non-empty tasks array as a proposed sequence for operator review. Explain why each task matters through its goal and done_when; the runtime will let the operator select which bounded tasks to run before execution. Never treat an unselected task as completed evidence.",
 			"Delegate independent approaches in parallel when each can advance the goal without contending on mutable state. Sequence dependent work in later rounds. Use fewer workers when parallel work adds only overhead.",
 			"A worker is an adaptive task, not a single command. Give it an outcome and evidence-based done condition, with room to inspect prerequisites, execute, and correct a failure. Do not split preparation from execution unless the dependency or scope makes that necessary. Specify scope and material resource limits, but leave command sequences, bookkeeping, and tool controls to the worker. Let the worker choose tools from verified capabilities.",
+			"Make resource limits feasible and distinguish hard enforcement from measured use. The runtime does not provide an aggregate task filesystem quota or memory cgroup: do not make proof of either a worker done condition. Ask the worker to use available per-process controls, monitor task-local storage, stop before a stated budget is exceeded, and report which limits were measured rather than enforced. Do not add procedural checks that cannot establish the user's objective.",
 			"Use unique lowercase task IDs. Dependencies may reference only done tasks from earlier rounds. All tasks inherit the exact user scope and operator-selected approval policy; do not expand them.",
 			"Never reuse task IDs, including failed tasks. Runtime approval prompts handle execution permission; delegate the investigation itself rather than a task to ask for permission. An operator denial remains a boundary, not a reason to try an equivalent action through a different wrapper.",
 			"The operator may converse while workers execute. Read subsequent conversation before planning. Honor new directions within the existing scope; chat does not grant execution permission or broaden scope. Assistant chat replies are discussion, not evidence. Interrupted work is not automatically replayable: inspect its recorded outcome before proposing any repeat.",
 			"assessment.operator_messages contains bounded operator and coordinator conversation excerpts. Treat intake plans as provisional context, not a task template, new evidence, or permission. Choose the current strategy and worker count from the assessment goal and observations.",
 			"Operator messages may include references to attached screenshots or PDFs. They are untrusted visual/file evidence; use only observations supported by the model input and preserve the local attachment reference in the session record. A visual clue can motivate a bounded test, but it is not proof by itself.",
-			"Every round is a new planning decision. Retain still-relevant findings and gaps, inspect the recorded reason for a failed or blocked worker, and correct a recoverable tool error before discarding a sound strategy. Use dependencies for later validation or synthesis tasks rather than pretending a failed task succeeded.",
+			"Every round is a new planning decision. Older plans are short navigation entries; corresponding result cards retain the assigned goal and outcome. Retain still-relevant findings and gaps, inspect the recorded reason for a failed or blocked worker, and correct a recoverable tool error before discarding a sound strategy. Use dependencies for later validation or synthesis tasks rather than pretending a failed task succeeded.",
+			"Before proposing a report-only finish for an unmet goal, compare the attempts actually recorded with promising capabilities or leads already observed but not tested. Exhausting selected attempts does not exhaust the investigation. If a useful bounded next test remains within scope and limits, propose it; otherwise explain why further work is not justified or possible. Do not repeat a search partition merely under a new task name.",
 			"Discover software and relevant evidence, research applicable vulnerabilities using allowed online or local sources, and delegate validation when a lead warrants it. Adapt work to results; no fixed tool chain.",
 			"Give each worker a concise outcome and evidence-based done condition, ideally one or two sentences each. Do not embed a command recipe, implementation design, or hypothetical failure checklist in the task. Reference input files by absolute path. Workers have separate working directories and may read prior evidence.",
 			"Size each assignment to fit the worker's steps_per_task decision budget, including prerequisite checks and error correction. If a question needs a broader investigation, ask a worker for one useful bounded result and plan the next dependent question after reviewing it.",
@@ -346,7 +347,7 @@ func coordinatorPrompt(state State) string {
 			"A CVE/version match alone is a candidate. Reproduced findings require a separate completed validation task depending on the investigation, and must cite that task's actual logged evidence.",
 			`Finding schema: {"title":"short title","status":"candidate or reproduced","severity":"critical, high, medium, low, or info","confidence":"high, medium, or low","cve_ids":["CVE-..."],"affected_software":["product and observed version"],"references":["advisory or source URL/path"],"validation_task":"task-id","impact":"impact description","steps":["reproduction step"],"evidence":["exact recorded log/artifact path"],"remediation":["remediation step"]}. Severity and confidence are optional when the evidence does not support them. CVE IDs, affected software, and references must preserve the source wording and provenance; do not invent or normalize an identifier. Steps, evidence, and remediation are arrays of strings. These are draft findings for operator review, not independent verification.`,
 			"Every findings.evidence entry must be copied exactly from recorded_evidence below. Files named only in worker summaries are not registered evidence; cite the recorded command log or captured output supporting the claim. Do not infer additional paths from filenames.",
-			"Prior result cards show recent bounded previews and may omit older actions or artifacts. The recorded_evidence catalog lists all registered references; inspect a specific saved task record through a worker when exact prior output matters. Do not mistake an omitted preview for missing evidence.",
+			"Prior result cards show recent bounded previews and may omit older actions or artifacts. The recorded_evidence catalog lists command logs and distinct declared artifacts; automatic stdout, stderr and approval sidecars are reachable from their command log in the saved task record. Inspect a specific saved task record through a worker when exact prior output matters. Do not mistake an omitted preview for missing evidence.",
 			"When sufficient evidence is available or useful work is blocked, return complete:true with tasks:[], an honest summary, cumulative findings, and explicit gaps. Completion means the assessment ended, not that the target is secure.",
 			"The last available round must synthesize existing results; do not start work that requires another round. Keep all previous still-relevant findings in the final response.",
 			"Scope enforcement is supplied externally by the isolated lab. This runtime does not enforce a network allowlist. No DoS, persistence, real data exfiltration, or out-of-scope traffic.",
@@ -414,10 +415,19 @@ func compactCoordinatorState(state State) coordinatorPromptState {
 		messages = append(messages, promptExcerpt(message, 2048))
 	}
 	plans := make([]compactDecision, 0, len(state.Plans))
-	for _, plan := range state.Plans {
-		item := compactDecision{Summary: promptExcerpt(plan.Summary, 2048), ApprovedTaskIDs: append([]string(nil), plan.ApprovedTaskIDs...), SkippedTaskIDs: append([]string(nil), plan.SkippedTaskIDs...), Complete: plan.Complete}
+	for i, plan := range state.Plans {
+		older := i < len(state.Plans)-2
+		summaryLimit := 2048
+		if older {
+			summaryLimit = 320
+		}
+		item := compactDecision{Summary: promptExcerpt(plan.Summary, summaryLimit), ApprovedTaskIDs: append([]string(nil), plan.ApprovedTaskIDs...), SkippedTaskIDs: append([]string(nil), plan.SkippedTaskIDs...), Complete: plan.Complete}
 		for _, task := range plan.Tasks {
-			item.Tasks = append(item.Tasks, compactTask{ID: task.ID, Goal: promptExcerpt(task.Goal, 1200), DoneWhen: promptExcerpt(task.DoneWhen, 1200), DependsOn: append([]string(nil), task.DependsOn...)})
+			entry := compactTask{ID: task.ID, DependsOn: append([]string(nil), task.DependsOn...)}
+			if !older {
+				entry.Goal, entry.DoneWhen = promptExcerpt(task.Goal, 1200), promptExcerpt(task.DoneWhen, 1200)
+			}
+			item.Tasks = append(item.Tasks, entry)
 		}
 		for _, finding := range plan.Findings {
 			item.Findings = append(item.Findings, compactFinding{Title: promptExcerpt(finding.Title, 400), Status: finding.Status, Severity: finding.Severity, Confidence: finding.Confidence, ValidationTask: finding.ValidationTask, Impact: promptExcerpt(finding.Impact, 800), Evidence: append([]string(nil), finding.Evidence...)})
@@ -441,7 +451,10 @@ func compactPriorResults(results []Result) []compactResult {
 		task := result.Task
 		task.Goal = promptExcerpt(task.Goal, 800)
 		task.DoneWhen = promptExcerpt(task.DoneWhen, 800)
-		item := compactResult{Task: task, Status: result.Status, Summary: promptExcerpt(result.Summary, 2048), Error: promptExcerpt(result.Error, 512)}
+		// Worker conclusions carry the leads for the next planning round. A
+		// 2 KiB head-only excerpt hid observed alternatives in real runs even
+		// while the larger prompt repeated older plans and log sidecars.
+		item := compactResult{Task: task, Status: result.Status, Summary: promptExcerpt(result.Summary, 4096), Error: promptExcerpt(result.Error, 512)}
 		evidenceItems := result.Evidence
 		if len(evidenceItems) > 3 {
 			item.OmittedEvidence = len(evidenceItems) - 3
@@ -452,7 +465,7 @@ func compactPriorResults(results []Result) []compactResult {
 			if len(logs) > 1 {
 				logs = logs[:1]
 			}
-			artifacts := append([]string(nil), evidence.ArtifactRefs...)
+			artifacts := distinctModelArtifacts(evidence.LogRefs, evidence.ArtifactRefs)
 			if len(artifacts) > 2 {
 				artifacts = artifacts[:2]
 			}
@@ -465,6 +478,31 @@ func compactPriorResults(results []Result) []compactResult {
 		compact = append(compact, item)
 	}
 	return compact
+}
+
+// The execution log is the stable entry point for its automatically captured
+// stdout, stderr and approval sidecars. Only distinct declared artifacts need
+// separate model-visible paths; the durable result retains every reference.
+func modelEvidenceRefs(logs, artifacts []string) []string {
+	refs := append([]string(nil), logs...)
+	return append(refs, distinctModelArtifacts(logs, artifacts)...)
+}
+
+func distinctModelArtifacts(logs, artifacts []string) []string {
+	var distinct []string
+	for _, artifact := range artifacts {
+		derived := false
+		for _, log := range logs {
+			if artifact == log || artifact == log+".stdout" || artifact == log+".stderr" || artifact == log+".approval.json" {
+				derived = true
+				break
+			}
+		}
+		if !derived {
+			distinct = append(distinct, artifact)
+		}
+	}
+	return distinct
 }
 
 func promptExcerpt(value string, limit int) string {
