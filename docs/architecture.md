@@ -139,6 +139,18 @@ At each inference boundary the packet builder follows the same order: retain pro
 
 This design makes context usage inspectable without pretending that byte counts are token counts. The coordinator and each worker measure their own exact rendered request, while provider-reported usage is retained as a separate metric. A future relevance index, cross-run knowledge catalog, or semantic run summary must preserve the same provenance and rehydration rules and must ship with a fixture proving which loss it prevents.
 
+The coordinator currently rebuilds a separate planning request from durable
+assessment state for each round; each worker has its own persisted `WorkerPacket`
+and task-local context snapshots. The coordinator does not yet have a persisted
+packet of the same type. Its model-facing projection keeps the latest two
+worker result cards and finding-cited evidence, reduces older workers to a
+navigation index, and enforces the configured input-byte ceiling before the
+provider call. Full older results and logs remain in the assessment directory.
+This is bounded projection, not a semantic long-run summary or an exact token
+budget. The local Qwen profile currently caps input text at 48 KiB and requests
+up to 32,768 output tokens; the configured 50k server window still needs live
+validation because input, output, reasoning, and provider overhead share it.
+
 The browser assessment inspector exposes the latest worker request as a typed
 context meter: bytes used, the configured application ceiling, remaining bytes,
 and percentage used. The assessment overview reports the largest current

@@ -259,7 +259,12 @@ func (c Coordinator) run(ctx context.Context, root string, initial State) (state
 // An invalid proposal gets one correction from the same model under the same
 // budget. Nothing from the rejected proposal executes or becomes evidence.
 func (c Coordinator) decide(ctx context.Context, root string, round int, state State) (Decision, error) {
-	messages := []llmclient.Message{{Role: "system", Content: c.Frame.PromptText()}, {Role: "user", Content: coordinatorPrompt(state)}}
+	systemPrompt := c.Frame.PromptText()
+	prompt, err := coordinatorPromptBounded(state, c.LLM.InputByteLimit()-len(systemPrompt))
+	if err != nil {
+		return Decision{}, err
+	}
+	messages := []llmclient.Message{{Role: "system", Content: systemPrompt}, {Role: "user", Content: prompt}}
 	for attempt := 0; attempt < 2; attempt++ {
 		stem := filepath.Join(root, fmt.Sprintf("coordinator-%02d", round))
 		if attempt == 1 {
@@ -289,7 +294,13 @@ func (c Coordinator) decide(ctx context.Context, root string, round int, state S
 			return Decision{}, fmt.Errorf("coordinator response remained invalid after one correction: %w", err)
 		}
 		c.emit(Event{Kind: "planning", Message: "The proposed plan/report failed validation; requesting one correction: " + err.Error()})
-		messages = append(messages, llmclient.Message{Role: "assistant", Content: text}, llmclient.Message{Role: "user", Content: "Correct the rejected JSON response using the original assessment state and recorded evidence only. Nothing from the rejected response was executed or accepted. For every finding, replace ALL unregistered evidence paths using the original recorded_evidence catalog, not just the first invalid path reported here. Workspace files mentioned only in summaries are not registered evidence. Validation error: " + err.Error()})
+		correction := "Correct the rejected JSON response using the original assessment state and recorded evidence only. Nothing from the rejected response was executed or accepted. For every finding, replace ALL unregistered evidence paths using the original recorded_evidence catalog, not just the first invalid path reported here. Workspace files mentioned only in summaries are not registered evidence. Validation error: " + err.Error()
+		previous := promptExcerpt(text, 4096)
+		prompt, promptErr := coordinatorPromptBounded(state, c.LLM.InputByteLimit()-len(systemPrompt)-len(previous)-len(correction))
+		if promptErr != nil {
+			return Decision{}, promptErr
+		}
+		messages = []llmclient.Message{{Role: "system", Content: systemPrompt}, {Role: "user", Content: prompt}, {Role: "assistant", Content: previous}, {Role: "user", Content: correction}}
 	}
 	panic("unreachable")
 }
@@ -318,15 +329,29 @@ func (c Coordinator) emit(e Event) {
 }
 
 func coordinatorPrompt(state State) string {
+	payload := coordinatorPayload(state)
+	data, _ := json.Marshal(payload)
+	return string(data)
+}
+
+type coordinatorModelPacket struct {
+	Role             string                 `json:"role"`
+	Instructions     []string               `json:"instructions"`
+	Assessment       coordinatorPromptState `json:"assessment"`
+	RecordedEvidence map[string][]string    `json:"recorded_evidence"`
+	ContextNotes     []string               `json:"context_notes,omitempty"`
+}
+
+func coordinatorPayload(state State) coordinatorModelPacket {
 	refs := map[string][]string{}
 	for _, r := range state.Results {
 		for _, e := range r.Evidence {
 			refs[r.Task.ID] = append(refs[r.Task.ID], modelEvidenceRefs(e.LogRefs, e.ArtifactRefs)...)
 		}
 	}
-	payload := map[string]any{
-		"role": "assessment_coordinator",
-		"instructions": []string{
+	return coordinatorModelPacket{
+		Role: "assessment_coordinator",
+		Instructions: []string{
 			"Return one JSON object only: {summary, tasks:[{id,goal,done_when,depends_on:[]}], complete:false, findings:[], gaps:[]}.",
 			"Coordinate an authorized lab assessment. Choose one or two bounded workers per round according to the useful independent work, not a fixed worker count. Do not execute tools yourself.",
 			"Treat every non-empty tasks array as a proposed sequence for operator review. Explain why each task matters through its goal and done_when; the runtime will let the operator select which bounded tasks to run before execution. Never treat an unselected task as completed evidence.",
@@ -352,11 +377,9 @@ func coordinatorPrompt(state State) string {
 			"The last available round must synthesize existing results; do not start work that requires another round. Keep all previous still-relevant findings in the final response.",
 			"Scope enforcement is supplied externally by the isolated lab. This runtime does not enforce a network allowlist. No DoS, persistence, real data exfiltration, or out-of-scope traffic.",
 		},
-		"assessment":        compactCoordinatorState(state),
-		"recorded_evidence": refs,
+		Assessment:       compactCoordinatorState(state),
+		RecordedEvidence: refs,
 	}
-	data, _ := json.Marshal(payload)
-	return string(data)
 }
 
 type compactResult struct {

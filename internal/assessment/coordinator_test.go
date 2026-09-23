@@ -126,6 +126,46 @@ func TestCoordinatorRetainsObservedLeadAfterLongResultPreamble(t *testing.T) {
 	}
 }
 
+func TestCoordinatorBoundedViewKeepsRecentLeadAndFindingEvidence(t *testing.T) {
+	state := State{Version: 1, ID: "long-run", Goal: "investigate the scoped fixture", Scope: "fixture only"}
+	for i := 0; i < 12; i++ {
+		id := fmt.Sprintf("task-%d", i)
+		log := fmt.Sprintf("/tmp/tasks/%s/action.log", id)
+		state.Results = append(state.Results, Result{Task: Task{ID: id, Goal: "inspect a distinct bounded lead", DoneWhen: "record the observed result"}, Status: "done", Summary: strings.Repeat("recorded finding and limits ", 120), Evidence: []ctxpacket.ExecutionResult{{ActualExec: strings.Repeat("long command ", 200), LogRefs: []string{log}}}})
+		state.Plans = append(state.Plans, Decision{Summary: strings.Repeat("planning history ", 80), Tasks: []Task{{ID: id, Goal: "inspect a distinct bounded lead"}}})
+	}
+	state.Results[0].Summary = strings.Repeat("older preamble ", 220) + "Older observed lead: inspect the authenticated route"
+	state.Results[len(state.Results)-1].Summary = "Latest observed lead: inspect the local source tree"
+	state.Plans[0].Findings = []Finding{{Title: "previous finding", Evidence: []string{"/tmp/tasks/task-0/action.log"}}}
+	state.OperatorMessages = []string{strings.Repeat("older operator discussion ", 1000), "Latest operator direction: stay local"}
+	prompt, err := coordinatorPromptBounded(state, 48000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prompt) > 48000 || !strings.Contains(prompt, "Latest observed lead") || !strings.Contains(prompt, "Older observed lead") || !strings.Contains(prompt, "Latest operator direction") || !strings.Contains(prompt, "/tmp/tasks/task-0/action.log") || strings.Contains(prompt, "/tmp/tasks/task-1/action.log") {
+		t.Fatalf("bounded coordinator view lost priorities or retained old logs: %d bytes", len(prompt))
+	}
+	if len(state.Results[0].Evidence) != 1 || len(state.OperatorMessages[0]) < 1000 {
+		t.Fatal("model projection mutated durable assessment state")
+	}
+}
+
+func TestCoordinatorBoundedViewHandlesManyWorkerRounds(t *testing.T) {
+	state := State{Version: 1, Goal: "review a long assessment", Scope: "fixture only"}
+	for i := 0; i < 24; i++ {
+		id := fmt.Sprintf("worker-%02d", i)
+		state.Results = append(state.Results, Result{Task: Task{ID: id, Goal: "investigate a bounded lead", DoneWhen: "record outcome"}, Status: "done", Summary: strings.Repeat("distinct observation and uncertainty ", 90), Evidence: []ctxpacket.ExecutionResult{{LogRefs: []string{fmt.Sprintf("/tmp/%s.log", id)}}}})
+		state.Plans = append(state.Plans, Decision{Summary: strings.Repeat("round outcome ", 50), Tasks: []Task{{ID: id}}})
+	}
+	view, err := coordinatorPromptBounded(state, llmclient.DefaultInputByteLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(view) > llmclient.DefaultInputByteLimit || !strings.Contains(view, "worker-00") || !strings.Contains(view, "worker-23") || !strings.Contains(view, "Distant worker conclusions") {
+		t.Fatalf("long-run coordinator projection = %d bytes", len(view))
+	}
+}
+
 func TestWorkerHandoffPrioritizesDeclaredDependencies(t *testing.T) {
 	large := strings.Repeat("prior investigation details ", 300)
 	results := []Result{
