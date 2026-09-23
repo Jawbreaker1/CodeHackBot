@@ -80,13 +80,13 @@ class Model(BaseHTTPRequestHandler):
         elif "recovery fixture" in prompt:
             retry = "[latest_execution_result]\naction: cat" in payload.get("context_packet", "")
             step = "Use the alternative" if retry else "Read initial path"
-            result = {"type": "action", "command": "printf" if retry else "cat", "args": ["%s", "terminal fixture"] if retry else ["missing-fixture.txt"], "plan": {"summary": step, "steps": [step], "active_step": step}}
+            result = {"type": "bash", "command": "printf" if retry else "cat", "args": ["%s", "terminal fixture"] if retry else ["missing-fixture.txt"], "plan": {"summary": step, "steps": [step], "active_step": step}}
         elif "question fixture" in prompt and "Operator answer: fixture answer" not in prompt:
             result = {"type": "ask_user", "question": "Which fixture value should I use?"}
         elif "cancellation fixture" in prompt:
-            result = {"type": "action", "command": "sh", "args": ["-c", "printf ready > ready; sleep 30"]}
+            result = {"type": "bash", "command": "sh", "args": ["-c", "printf ready > ready; sleep 30"]}
         else:
-            result = {"type": "action", "command": "printf", "args": ["%s", "terminal fixture"]}
+            result = {"type": "bash", "command": "printf", "args": ["%s", "terminal fixture"]}
         self.send_json({"choices": [{"message": {"content": json.dumps(result)}}], "usage": {"total_tokens": 10}})
 
 

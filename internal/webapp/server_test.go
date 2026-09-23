@@ -737,7 +737,7 @@ func webModelFixture(w http.ResponseWriter, r *http.Request) {
 	if len(request.Messages) > 0 {
 		latest = request.Messages[len(request.Messages)-1].Content
 	}
-	response := `{"type":"action","command":"printf","args":["%s","web fixture"],"summary":"recorded web fixture"}`
+	response := `{"type":"bash","command":"printf","args":["%s","web fixture"],"summary":"recorded web fixture"}`
 	if len(request.Messages) > 0 && strings.Contains(request.Messages[0].Content, "conversational assessment orchestrator") {
 		response = `{"reply":"I can coordinate that authorized synthetic check. I have enough detail to propose one bounded observation.","proposal":{"goal":"record the web fixture","scope":"Authorized synthetic fixture only; run one printf command and approve each action."}}`
 	} else if len(request.Messages) > 0 && strings.Contains(request.Messages[0].Content, "conversational interface") {

@@ -13,7 +13,7 @@ import (
 func prepareAction(resp Response, cwd string) (execx.Action, *ctxpacket.ExecutionResult) {
 	command := strings.TrimSpace(resp.Command)
 	if command == "" {
-		return execx.Action{}, validationFailure("(none)", "action command is required", "invalid_action", "invalid_action")
+		return execx.Action{}, validationFailure("(none)", "bash command is required", "invalid_action", "invalid_action")
 	}
 	resolvedCwd, err := filepath.Abs(cwd)
 	if err != nil {
@@ -23,9 +23,9 @@ func prepareAction(resp Response, cwd string) (execx.Action, *ctxpacket.Executio
 
 	if resp.UseShell {
 		if len(resp.Args) != 0 {
-			return execx.Action{}, validationFailure(command, "shell actions must put the entire script in command and omit args", "invalid_action", "invalid_action")
+			return execx.Action{}, validationFailure(command, "shell mode must put the entire Bash script in command and omit args", "invalid_action", "invalid_action")
 		}
-		if _, err := exec.LookPath("/bin/sh"); err != nil {
+		if _, err := exec.LookPath("/bin/bash"); err != nil {
 			return execx.Action{}, validationFailure(command, "shell runtime is unavailable", "not_executable", "not_executable")
 		}
 		return execx.Action{Command: command, Cwd: cwd, UseShell: true}, nil

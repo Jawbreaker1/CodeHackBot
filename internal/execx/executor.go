@@ -191,7 +191,7 @@ func interruptionSignal(ctx context.Context, err error) string {
 func buildCommand(ctx context.Context, action Action) *exec.Cmd {
 	var cmd *exec.Cmd
 	if action.UseShell {
-		cmd = exec.CommandContext(ctx, "/bin/sh", "-c", action.Command)
+		cmd = exec.CommandContext(ctx, "/bin/bash", "-c", action.Command)
 	} else {
 		cmd = exec.CommandContext(ctx, action.Command, action.Args...)
 	}
@@ -225,7 +225,7 @@ func renderAction(action Action) string {
 
 func actualInvocation(action Action) string {
 	if action.UseShell {
-		return renderAction(Action{Command: "/bin/sh", Args: []string{"-c", action.Command}})
+		return renderAction(Action{Command: "/bin/bash", Args: []string{"-c", action.Command}})
 	}
 	return renderAction(action)
 }

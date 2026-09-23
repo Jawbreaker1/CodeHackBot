@@ -49,7 +49,7 @@ func TestExecutorRunShell(t *testing.T) {
 	exec := Executor{LogDir: logDir}
 
 	result, err := exec.Run(context.Background(), Action{
-		Command:  "printf shell-test > shell.txt",
+		Command:  "[[ -d . ]] && printf shell-test > shell.txt",
 		Cwd:      logDir,
 		UseShell: true,
 	})
@@ -59,7 +59,7 @@ func TestExecutorRunShell(t *testing.T) {
 	if result.ExecutionMode != "shell" {
 		t.Fatalf("ExecutionMode = %q", result.ExecutionMode)
 	}
-	if !strings.Contains(result.ActualExec, `/bin/sh -c 'printf shell-test > shell.txt'`) {
+	if !strings.Contains(result.ActualExec, `/bin/bash -c '[[ -d . ]] && printf shell-test > shell.txt'`) {
 		t.Fatalf("ActualExec = %q", result.ActualExec)
 	}
 	content, err := os.ReadFile(filepath.Join(logDir, "shell.txt"))
@@ -118,7 +118,7 @@ func TestExecutorPlanAndInitialLog(t *testing.T) {
 	text := string(data)
 	for _, want := range []string{
 		"action: printf hello > out.txt",
-		"actual_invocation: /bin/sh -c",
+		"actual_invocation: /bin/bash -c",
 		"status: running",
 	} {
 		if !strings.Contains(text, want) {

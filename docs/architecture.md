@@ -53,27 +53,27 @@ Keep each change tied to a demonstrated failure or explicit requirement. Prefer 
 
 ## Shared worker control flow
 
-Every turn selects exactly one decision: `action`, `load_strategy`, `update_plan`, `step_complete`, `ask_user`, or `blocked`. `step_complete` proposes completion of the original task, not an individual plan step. Any decision may include a short `plan` with a summary, one to six semantic steps, an active step, and purpose text keyed by step. Plans guide the model; runtime code does not infer workflow phases from goal keywords or advance steps from tool output.
+Every turn selects exactly one decision: `bash`, `load_strategy`, `update_plan`, `step_complete`, `ask_user`, or `blocked`. `bash` is the one general command-execution tool; the runtime does not add a model tool for each file or security operation. `step_complete` proposes completion of the original task, not an individual plan step. Any decision may include a short `plan` with a summary, one to six semantic steps, an active step, and purpose text keyed by step. Plans guide the model; runtime code does not infer workflow phases from goal keywords or advance steps from tool output.
 
 Plan revisions retain their turn and preceding execution-log reference. They are visible in the guided UI, saved context, and subsequent model requests. This records that planning happened; it does not prove the planned actions happened. Plans cannot replace the original goal, done condition, scope, approvals, or budget.
 
 After an executed action, the worker sees the observation in its next decision and can adapt, run another bounded action, or propose `step_complete`. The whole-goal evaluator checks explicit completion proposals against the original goal, done condition, and recorded observations. If an action uses the last decision turn, the evaluator checks its evidence as a fallback; its observed summary, never the action's intended effect, becomes the result. `in_progress` and evaluator `blocked` feedback return to the deciding model when a turn remains. Tool failures and negative test results remain observations. Unavailable or malformed evaluation stops with a visible failure; it cannot establish success. Invalid decisions consume a turn and return schema feedback without executing anything.
 
-## Action and execution contract
+## Bash execution contract
 
 An action has exactly one execution form:
 
 ```json
-{"type":"action","command":"printf","args":["%s","hello world; literal text"],"use_shell":false}
+{"type":"bash","command":"printf","args":["%s","hello world; literal text"],"use_shell":false}
 ```
 
 ```json
-{"type":"action","command":"printf '%s' 'hello world' > result.txt","use_shell":true}
+{"type":"bash","command":"printf '%s' 'hello world' > result.txt","use_shell":true}
 ```
 
 In direct mode, `command` names an executable and `args` contains literal arguments. The runtime does not split a command string or interpret argument metacharacters. A malformed direct command is returned as a validation failure for the model to correct.
 
-In shell mode, `command` is the entire script and `args` must be absent. Execution uses `/bin/sh -c`; a login shell must not silently change the prepared working directory or environment.
+In shell mode, `command` is the entire script and `args` must be absent. Execution uses `/bin/bash -c` without a login shell, preserving the prepared working directory and environment.
 
 The executor prepares an invocation before approval, snapshots caller-owned arguments/environment overrides, and resolves the working directory. Approval displays that invocation and directory. Execution is permitted by an explicit action decision or an operator-selected session policy. The same prepared plan is then executed and recorded.
 

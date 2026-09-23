@@ -3,7 +3,6 @@ package workerloop
 import (
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"strings"
 )
 
@@ -20,7 +19,6 @@ type PlanUpdate struct {
 type Response struct {
 	Type      string      `json:"type"`
 	Command   string      `json:"command,omitempty"`
-	Path      string      `json:"path,omitempty"`
 	Args      []string    `json:"args,omitempty"`
 	UseShell  bool        `json:"use_shell,omitempty"`
 	Impact    string      `json:"impact,omitempty"`
@@ -50,28 +48,15 @@ func ParseResponse(text string) (Response, error) {
 		return r, fmt.Errorf("parse worker decision: %w", err)
 	}
 	switch r.Type {
-	case "action":
+	case "bash":
 		if r.Risk != "" && r.Risk != "low" && r.Risk != "dangerous" && r.Risk != "unknown" {
-			return r, fmt.Errorf("action risk must be low, dangerous, or unknown")
+			return r, fmt.Errorf("bash risk must be low, dangerous, or unknown")
 		}
 		if strings.TrimSpace(r.Command) == "" {
-			return r, fmt.Errorf("action command is required")
+			return r, fmt.Errorf("bash command is required")
 		}
 		if r.UseShell && len(r.Args) != 0 {
-			return r, fmt.Errorf("shell action must omit args")
-		}
-	case "delete_file":
-		if !filepath.IsAbs(r.Path) || filepath.Clean(r.Path) != r.Path {
-			return r, fmt.Errorf("delete_file requires one clean absolute path")
-		}
-		if strings.TrimSpace(r.Summary) == "" || strings.TrimSpace(r.Impact) == "" {
-			return r, fmt.Errorf("delete_file requires a plain-language summary and impact")
-		}
-		if r.Risk != "" && r.Risk != "dangerous" {
-			return r, fmt.Errorf("delete_file risk must be dangerous")
-		}
-		if r.Target != "" && r.Target != r.Path {
-			return r, fmt.Errorf("delete_file target must match path")
+			return r, fmt.Errorf("bash shell mode must omit args")
 		}
 	case "step_complete", "blocked":
 		if strings.TrimSpace(r.Summary) == "" {
@@ -92,23 +77,17 @@ func ParseResponse(text string) (Response, error) {
 	default:
 		return r, fmt.Errorf("unsupported response type %q", r.Type)
 	}
-	if r.Type != "action" && r.Type != "delete_file" && (r.Command != "" || len(r.Args) != 0 || r.UseShell || r.Impact != "" || r.Target != "" || r.Risk != "") {
-		return r, fmt.Errorf("only action may contain execution fields")
+	if r.Type != "bash" && (r.Command != "" || len(r.Args) != 0 || r.UseShell || r.Impact != "" || r.Target != "" || r.Risk != "") {
+		return r, fmt.Errorf("only bash may contain execution fields")
 	}
-	if r.Type != "delete_file" && r.Path != "" {
-		return r, fmt.Errorf("only delete_file may name a path")
-	}
-	if r.Type == "delete_file" && (r.Command != "" || len(r.Args) != 0 || r.UseShell || len(r.Artifacts) != 0) {
-		return r, fmt.Errorf("delete_file accepts one path, not a command or artifacts")
-	}
-	if r.Type != "action" && len(r.Artifacts) != 0 {
-		return r, fmt.Errorf("only action may declare artifacts")
+	if r.Type != "bash" && len(r.Artifacts) != 0 {
+		return r, fmt.Errorf("only bash may declare artifacts")
 	}
 	if r.Type != "load_strategy" && r.Strategy != "" {
 		return r, fmt.Errorf("only load_strategy may name a strategy")
 	}
 	if len(r.Artifacts) > 8 {
-		return r, fmt.Errorf("action declares %d artifacts; maximum is 8, so keep the most useful references", len(r.Artifacts))
+		return r, fmt.Errorf("bash declares %d artifacts; maximum is 8, so keep the most useful references", len(r.Artifacts))
 	}
 	for _, artifact := range r.Artifacts {
 		if strings.TrimSpace(artifact) == "" {

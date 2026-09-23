@@ -47,10 +47,10 @@ func fixtureWorker(t *testing.T, turns int, replies ...string) (Loop, ctxpacket.
 
 const completeEval = `{"status":"satisfied","reason":"whole goal supported by the log","summary":"Fixture established"}`
 const continueEval = `{"status":"in_progress","reason":"more observations needed","summary":""}`
-const printAction = `{"type":"action","command":"printf","args":["%s","fixture"]}`
+const printAction = `{"type":"bash","command":"printf","args":["%s","fixture"]}`
 
 func TestActionIntentCannotBecomeWorkerOutcome(t *testing.T) {
-	action := `{"type":"action","command":"printf","args":["%s","observed value"],"summary":"I will inspect the fixture"}`
+	action := `{"type":"bash","command":"printf","args":["%s","observed value"],"summary":"I will inspect the fixture"}`
 	loop, packet, calls := fixtureWorker(t, 2, action, `{"type":"step_complete","summary":"The recorded output was observed value"}`, completeEval)
 	out, err := loop.Run(context.Background(), packet, 2)
 	if err != nil || *calls != 3 || out.Summary != "The recorded output was observed value" || len(out.Packet.RelevantRecentResults) != 0 {
@@ -73,8 +73,8 @@ func TestRepeatedUnsupportedCompletionWithoutNewEvidenceStops(t *testing.T) {
 }
 
 func TestWorkerRecoversAndRevisesPlanWithoutChangingGoal(t *testing.T) {
-	first := `{"type":"action","command":"cat","args":["missing.txt"],"plan":{"summary":"Read the supplied path","steps":["read supplied file"],"active_step":"read supplied file"}}`
-	second := `{"type":"action","command":"cat","args":["actual.txt"],"plan":{"summary":"The first path was absent; use the provided alternative","steps":["read alternative file","report evidence"],"active_step":"read alternative file"}}`
+	first := `{"type":"bash","command":"cat","args":["missing.txt"],"plan":{"summary":"Read the supplied path","steps":["read supplied file"],"active_step":"read supplied file"}}`
+	second := `{"type":"bash","command":"cat","args":["actual.txt"],"plan":{"summary":"The first path was absent; use the provided alternative","steps":["read alternative file","report evidence"],"active_step":"read alternative file"}}`
 	loop, p, calls := fixtureWorker(t, 3, first, second, `{"type":"step_complete","summary":"Read and reported the fixture from actual.txt"}`, completeEval)
 	p.SessionFoundation.Goal = "Read the fixture from missing.txt or actual.txt and report its contents"
 	p.CurrentStep.DoneCondition = "The fixture content is observed and reported"
@@ -151,7 +151,7 @@ func TestCompletionRequiresEvidenceAndWholeGoalEvaluation(t *testing.T) {
 		}
 	})
 	t.Run("nonzero negative evidence", func(t *testing.T) {
-		loop, p, _ := fixtureWorker(t, 1, `{"type":"action","command":"sh","args":["-c","printf 'expected absent'; exit 1"]}`, completeEval)
+		loop, p, _ := fixtureWorker(t, 1, `{"type":"bash","command":"sh","args":["-c","printf 'expected absent'; exit 1"]}`, completeEval)
 		out, err := loop.Run(context.Background(), p, 1)
 		if err != nil || out.Packet.LatestExecutionResult.ExitStatus != "1" {
 			t.Fatalf("valid negative evidence rejected: %v", err)
@@ -167,7 +167,7 @@ func TestCompletionRequiresEvidenceAndWholeGoalEvaluation(t *testing.T) {
 }
 
 func TestMalformedDecisionAndUnavailableToolCanBeCorrected(t *testing.T) {
-	for _, bad := range []string{`{"action":{"command":"touch","args":["should-not-exist"]}}`, `{"type":"action","command":"missing-fixture-command-xyz"}`} {
+	for _, bad := range []string{`{"action":{"command":"touch","args":["should-not-exist"]}}`, `{"type":"bash","command":"missing-fixture-command-xyz"}`} {
 		t.Run(bad, func(t *testing.T) {
 			loop, p, calls := fixtureWorker(t, 2, bad, printAction, completeEval)
 			out, err := loop.Run(context.Background(), p, 2)
@@ -188,7 +188,7 @@ func (f failProgress) EmitProgress(e ProgressEvent, p ctxpacket.WorkerPacket) er
 }
 
 func TestPersistenceFailureStopsBeforeExternalEffect(t *testing.T) {
-	loop, p, _ := fixtureWorker(t, 2, `{"type":"action","command":"touch","args":["should-not-exist"]}`)
+	loop, p, _ := fixtureWorker(t, 2, `{"type":"bash","command":"touch","args":["should-not-exist"]}`)
 	loop.Progress = failProgress{EventExecutionStarted}
 	out, err := loop.Run(context.Background(), p, 2)
 	if err == nil || out.Packet.TaskRuntime.State != "failed" {

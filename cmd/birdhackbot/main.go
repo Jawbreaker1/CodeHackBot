@@ -45,7 +45,7 @@ func main() {
 	contextPacket := flag.Bool("context-packet", false, "print minimal worker context packet")
 	inspectContext := flag.Bool("inspect-context", false, "write turn-by-turn context snapshots to the active session directory")
 	debugRunCommand := flag.String("debug-run-command", "", "development/debugging only: execute an exact command outside the worker loop")
-	debugRunShell := flag.Bool("debug-run-shell", false, "execute debug-run-command through /bin/sh -c")
+	debugRunShell := flag.Bool("debug-run-shell", false, "execute debug-run-command through /bin/bash -c")
 	llmBaseURL := flag.String("llm-base-url", "", "OpenAI-compatible base URL without trailing /chat/completions")
 	llmTokenFile := flag.String("llm-token-file", "", "private token file for a local subscription bridge")
 	llmModel := flag.String("llm-model", "", "LLM model id")

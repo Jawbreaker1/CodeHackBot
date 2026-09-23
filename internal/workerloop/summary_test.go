@@ -144,7 +144,7 @@ func TestBuildRunningSummaryInterruptedExecution(t *testing.T) {
 }
 
 func TestPrepareActionPreservesDirectArgumentsAndChecksExecutability(t *testing.T) {
-	action, validationFailure := prepareAction(Response{Type: "action", Command: "printf", Args: []string{"hello"}, UseShell: false}, t.TempDir())
+	action, validationFailure := prepareAction(Response{Type: "bash", Command: "printf", Args: []string{"hello"}, UseShell: false}, t.TempDir())
 	if validationFailure != nil {
 		t.Fatalf("prepareAction() validation failure = %#v", validationFailure)
 	}

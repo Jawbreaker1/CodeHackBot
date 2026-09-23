@@ -29,7 +29,7 @@ func (a *recordingApprover) Approve(_ context.Context, request approval.Request)
 func TestLoopApprovesActualInvocationAndWorkingDirectory(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]any{
-			"content": `{"type":"action","command":"printf","args":["%s","one; printf two"],"use_shell":false}`,
+			"content": `{"type":"bash","command":"printf","args":["%s","one; printf two"],"use_shell":false}`,
 		}}}})
 	}))
 	defer server.Close()
@@ -68,7 +68,7 @@ func TestLoopApprovesActualInvocationAndWorkingDirectory(t *testing.T) {
 	}
 }
 
-func TestDeleteFileApprovesAndRemovesOnlyOneExactFile(t *testing.T) {
+func TestBashApprovesAndRemovesOnlyOneExactFile(t *testing.T) {
 	dir := t.TempDir()
 	first, second := filepath.Join(dir, "first.txt"), filepath.Join(dir, "second.txt")
 	for _, path := range []string{first, second} {
@@ -76,7 +76,7 @@ func TestDeleteFileApprovesAndRemovesOnlyOneExactFile(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	decision := fmt.Sprintf(`{"type":"delete_file","path":%q,"summary":"Remove the reviewed first file","impact":"Only the first file will be deleted"}`, first)
+	decision := fmt.Sprintf(`{"type":"bash","command":"rm","args":["--",%q],"summary":"Remove the reviewed first file","target":%q,"risk":"dangerous","impact":"Only the first file will be deleted"}`, first, first)
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		content := decision
@@ -92,7 +92,7 @@ func TestDeleteFileApprovesAndRemovesOnlyOneExactFile(t *testing.T) {
 	packet := ctxpacket.NewInitialWorkerPacket(behavior.Frame{SystemPrompt: "test", AgentsText: "test"}, session.Foundation{Goal: "Remove only the first reviewed file"}, dir, "test", "per_action", 1)
 	outcome, err := loop.Run(context.Background(), packet, 1)
 	if err != nil || calls != 2 {
-		t.Fatalf("delete decision failed: err=%v calls=%d", err, calls)
+		t.Fatalf("bash decision failed: err=%v calls=%d", err, calls)
 	}
 	if approver.request.Target != first || approver.request.Risk != "dangerous" || approver.request.UseShell || !strings.Contains(approver.request.Command, first) || strings.Contains(approver.request.Command, second) {
 		t.Fatalf("approval was not for one exact file: %+v", approver.request)
@@ -109,7 +109,7 @@ func TestDeleteFileApprovesAndRemovesOnlyOneExactFile(t *testing.T) {
 }
 
 func TestActionContractPreservesQuotedLiteral(t *testing.T) {
-	response, err := ParseResponse(`{"type":"action","command":"printf","args":["%s","hello world"],"use_shell":false}`)
+	response, err := ParseResponse(`{"type":"bash","command":"printf","args":["%s","hello world"],"use_shell":false}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestAnalysisCompletionPassesProposedAnswerToEvidenceEvaluator(t *testing.T)
 		var response string
 		switch calls {
 		case 1:
-			response = `{"type":"action","command":"printf","args":["%s","observed version 1.4; advisory affects 1.1"]}`
+			response = `{"type":"bash","command":"printf","args":["%s","observed version 1.4; advisory affects 1.1"]}`
 		case 2:
 			response = `{"status":"in_progress","reason":"Need interpretation of captured facts","summary":""}`
 		case 3:

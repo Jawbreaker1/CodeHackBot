@@ -288,7 +288,7 @@ func TestCoordinatorDelegatesThenValidatesWithSharedBudgetAndEvidence(t *testing
 		mu.Lock()
 		active--
 		mu.Unlock()
-		reply(w, map[string]any{"type": "action", "command": "printf", "args": []string{"%s", "fixture observation"}})
+		reply(w, map[string]any{"type": "bash", "command": "printf", "args": []string{"%s", "fixture observation"}})
 	}))
 	defer server.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -408,7 +408,7 @@ func TestCoordinatorCancellationStopsAllWorkersAndWritesAbortedReport(t *testing
 			reply(w, Decision{Summary: "two long-running checks", Tasks: []Task{{ID: "one", Goal: "Wait for cancellation", DoneWhen: "wait finished"}, {ID: "two", Goal: "Wait for cancellation", DoneWhen: "wait finished"}}})
 			return
 		}
-		reply(w, map[string]any{"type": "action", "command": "sh", "args": []string{"-c", "printf ready > ready; sleep 30"}})
+		reply(w, map[string]any{"type": "bash", "command": "sh", "args": []string{"-c", "printf ready > ready; sleep 30"}})
 	}))
 	defer server.Close()
 	ctx, cancel := context.WithCancel(context.Background())
