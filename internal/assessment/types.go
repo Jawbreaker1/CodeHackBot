@@ -21,7 +21,7 @@ type Limits struct {
 }
 
 func DefaultLimits() Limits {
-	return Limits{Workers: 2, Rounds: 4, Tasks: 8, StepsPerTask: 6, ModelCalls: 96}
+	return Limits{Workers: 2, Rounds: 6, Tasks: 8, StepsPerTask: 10, ModelCalls: 192}
 }
 
 type Task struct {
@@ -35,28 +35,32 @@ type Task struct {
 // task metadata for a client to render a useful run view without reading
 // worker internals or guessing from prose.
 type Event struct {
-	TaskID              string        `json:"task_id,omitempty"`
-	Kind                string        `json:"kind"`
-	Message             string        `json:"message,omitempty"`
-	Goal                string        `json:"goal,omitempty"`
-	DoneWhen            string        `json:"done_when,omitempty"`
-	DependsOn           []string      `json:"depends_on,omitempty"`
-	Step                int           `json:"step,omitempty"`
-	ActiveStep          string        `json:"active_step,omitempty"`
-	Action              string        `json:"action,omitempty"`
-	Rationale           string        `json:"rationale,omitempty"`
-	ExitStatus          string        `json:"exit_status,omitempty"`
-	EvidenceCount       int           `json:"evidence_count,omitempty"`
-	RemainingBudget     string        `json:"remaining_budget,omitempty"`
-	ContextUsage        string        `json:"context_usage,omitempty"`
-	ContextUsedBytes    int           `json:"context_used_bytes,omitempty"`
-	ContextLimitBytes   int           `json:"context_limit_bytes,omitempty"`
-	ContextUsagePercent int           `json:"context_usage_percent,omitempty"`
-	ModelCalls          int           `json:"model_calls,omitempty"`
-	PlanSteps           []string      `json:"plan_steps,omitempty"`
-	Evidence            *EvidenceView `json:"evidence,omitempty"`
-	ExecutionLog        string        `json:"execution_log,omitempty"`
-	ExpectedArtifacts   []string      `json:"expected_artifacts,omitempty"`
+	TaskID              string                   `json:"task_id,omitempty"`
+	Kind                string                   `json:"kind"`
+	Message             string                   `json:"message,omitempty"`
+	Goal                string                   `json:"goal,omitempty"`
+	DoneWhen            string                   `json:"done_when,omitempty"`
+	DependsOn           []string                 `json:"depends_on,omitempty"`
+	Step                int                      `json:"step,omitempty"`
+	ActiveStep          string                   `json:"active_step,omitempty"`
+	Action              string                   `json:"action,omitempty"`
+	Rationale           string                   `json:"rationale,omitempty"`
+	ExitStatus          string                   `json:"exit_status,omitempty"`
+	EvidenceCount       int                      `json:"evidence_count,omitempty"`
+	RemainingBudget     string                   `json:"remaining_budget,omitempty"`
+	ContextUsage        string                   `json:"context_usage,omitempty"`
+	ContextUsedBytes    int                      `json:"context_used_bytes,omitempty"`
+	ContextLimitBytes   int                      `json:"context_limit_bytes,omitempty"`
+	ContextUsagePercent int                      `json:"context_usage_percent,omitempty"`
+	ModelCalls          int                      `json:"model_calls,omitempty"`
+	PlanSteps           []string                 `json:"plan_steps,omitempty"`
+	PlanSummary         string                   `json:"plan_summary,omitempty"`
+	PlanRevision        int                      `json:"plan_revision,omitempty"`
+	StepPurposes        map[string]string        `json:"step_purposes,omitempty"`
+	PlanHistory         []ctxpacket.PlanRevision `json:"plan_history,omitempty"`
+	Evidence            *EvidenceView            `json:"evidence,omitempty"`
+	ExecutionLog        string                   `json:"execution_log,omitempty"`
+	ExpectedArtifacts   []string                 `json:"expected_artifacts,omitempty"`
 }
 
 // EvidenceView is a compact execution observation for UI adapters. It contains

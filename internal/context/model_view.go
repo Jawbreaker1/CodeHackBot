@@ -24,6 +24,53 @@ func (p WorkerPacket) ModelView(maxBytes int) (WorkerPacket, error) {
 	v := p.Clone()
 	v.TaskRuntime.CurrentTarget, v.TaskRuntime.MissingFact = "", ""
 	v.ContextNotes = nil
+	// Keep the current plan and newest observations readable. Older full command
+	// bodies and output live in the durable session/log files, so do not resend
+	// them merely because the provider's hard ceiling has not been reached yet.
+	shortened := false
+	latest := &v.LatestExecutionResult
+	if len(latest.Action) > 1024 || len(latest.ActualExec) > 2048 || len(latest.OutputEvidence) > 8192 || len(latest.OutputSummary) > 1024 {
+		shortened = true
+	}
+	latest.Action = excerpt(latest.Action, 1024)
+	latest.ActualExec = excerpt(latest.ActualExec, 2048)
+	latest.OutputEvidence = excerpt(latest.OutputEvidence, 8192)
+	latest.OutputSummary = excerpt(latest.OutputSummary, 1024)
+	if len(v.RelevantRecentResults) > 0 {
+		r := &v.RelevantRecentResults[0]
+		if len(r.Action) > 1024 || len(r.ActualExec) > 1024 || len(r.OutputEvidence) > 4096 || len(r.OutputSummary) > 1024 {
+			shortened = true
+		}
+		r.Action = excerpt(r.Action, 1024)
+		r.ActualExec = excerpt(r.ActualExec, 1024)
+		r.OutputEvidence = excerpt(r.OutputEvidence, 4096)
+		r.OutputSummary = excerpt(r.OutputSummary, 1024)
+	}
+	for i := 1; i < len(v.RelevantRecentResults); i++ {
+		r := &v.RelevantRecentResults[i]
+		if len(r.Action) > 512 || len(r.ActualExec) > 512 || len(r.OutputEvidence) > 0 || len(r.OutputSummary) > 512 {
+			shortened = true
+		}
+		r.Action = excerpt(r.Action, 512)
+		r.ActualExec = excerpt(r.ActualExec, 512)
+		if r.OutputEvidence != "" {
+			r.OutputEvidence = "(omitted from model view; consult log_refs)"
+		}
+		r.OutputSummary = excerpt(r.OutputSummary, 512)
+	}
+	for i := 0; i < len(v.PlanHistory)-2; i++ {
+		revision := &v.PlanHistory[i]
+		if len(revision.Plan.Steps) > 0 || len(revision.Plan.ReplanConditions) > 0 {
+			shortened = true
+		}
+		revision.Plan.Summary = excerpt(revision.Plan.Summary, 512)
+		revision.Plan.Steps = nil
+		revision.Plan.StepPurposes = nil
+		revision.Plan.ReplanConditions = nil
+	}
+	if shortened {
+		v.ContextNotes = []string{"Oversized execution bodies and older plan details were excerpted or omitted from this model view. Their identities and log references remain here; complete records remain in the local session."}
+	}
 	size := func() int { return len(v.Render()) }
 	if size() <= maxBytes {
 		return v, nil

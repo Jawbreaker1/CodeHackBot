@@ -242,11 +242,18 @@ func TestServerRejectsDeletingRunningSession(t *testing.T) {
 func TestAggregateContextWindowUsesLargestCurrentWorkerRequest(t *testing.T) {
 	state := assessment.State{MaxInputBytes: 1000}
 	view := aggregateContextWindow(state, []workerView{
-		{ID: "worker-a", ContextUsedBytes: 100, ContextLimitBytes: 1000},
-		{ID: "worker-b", ContextUsedBytes: 250, ContextLimitBytes: 1000},
+		{ID: "worker-a", Phase: "decision_started", ContextUsedBytes: 100, ContextLimitBytes: 1000},
+		{ID: "worker-b", Phase: "execution_started", ContextUsedBytes: 250, ContextLimitBytes: 1000},
 	})
-	if view.UsedBytes != 250 || view.LimitBytes != 1000 || view.RemainingBytes != 750 || view.Percent != 25 {
+	if view.UsedBytes != 250 || view.LimitBytes != 1000 || view.RemainingBytes != 750 || view.Percent != 25 || view.WorkerID != "worker-b" || !view.Active {
 		t.Fatalf("context window = %+v", view)
+	}
+	view = aggregateContextWindow(state, []workerView{
+		{ID: "old", Phase: "task_blocked", ContextUsedBytes: 900, UpdatedAt: time.Unix(1, 0)},
+		{ID: "current", Phase: "decision_started", ContextUsedBytes: 250, UpdatedAt: time.Unix(2, 0)},
+	})
+	if view.WorkerID != "current" || view.UsedBytes != 250 || !view.Active {
+		t.Fatalf("historical worker masked current request: %+v", view)
 	}
 }
 

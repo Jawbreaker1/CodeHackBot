@@ -144,8 +144,28 @@ textarea::placeholder { color: #94938d; }
 .worker-goal { margin: 10px 0; color: var(--muted); line-height: 1.6; font-size: 12px; }
 .worker-detail { margin: 9px 0; font-size: 11px; line-height: 1.6; color: var(--muted); overflow-wrap: anywhere; }
 .worker-approval-note { margin: 10px 0; padding: 7px 9px; border-left: 2px solid var(--attention); color: var(--attention); font-size: 10px; }
-.worker-plan { margin: 8px 0; padding-left: 18px; color: var(--faint); font-size: 11px; line-height: 1.8; }
-.worker-plan .active { color: var(--text); }
+.plan-timeline { border-top: 1px solid var(--line); padding: 12px 0 10px; }
+.plan-heading { margin: 0 0 9px; color: var(--faint); font-size: 10px; font-weight: 500; text-transform: uppercase; letter-spacing: .08em; }
+.plan-timeline > details { border-left: 2px solid var(--line); padding-left: 10px; }
+.plan-timeline > details[open] { border-color: #b7b6aa; }
+.plan-timeline summary { color: var(--text); font-size: 11px; }
+.plan-summary { margin: 7px 0 10px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.coordinator-tasks, .worker-plan { margin: 8px 0; padding-left: 18px; font-size: 11px; }
+.coordinator-task, .worker-plan-step { padding: 5px 0; color: var(--muted); }
+.coordinator-task + .coordinator-task, .worker-plan-step + .worker-plan-step { border-top: 1px solid var(--line); }
+.plan-step-row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 11px; }
+.plan-step-row strong { color: var(--text); font-weight: 500; }
+.plan-step-state { color: var(--faint); white-space: nowrap; font-size: 10px; }
+.worker-plan-section { margin: 12px 0; padding: 10px; border: 1px solid var(--line); border-radius: 7px; background: #ffffff04; }
+.worker-plan { padding-left: 16px; }
+.worker-plan-step.active { color: var(--text); }
+.worker-plan-step.active::marker { color: var(--attention); }
+.worker-plan-step.completed::marker { color: #8d9b89; }
+.worker-plan-step.blocked::marker { color: var(--error); }
+.worker-plan-step details { margin: 0; }
+.worker-plan-step summary { font-size: 11px; }
+.worker-plan-step .worker-detail { margin: 5px 0; }
+.plan-revisions { margin: 7px 0; padding-left: 18px; color: var(--faint); font-size: 10px; }
 .detail-grid { display: grid; grid-template-columns: auto 1fr; font-size: 11px; gap: 7px 16px; margin: 13px 0; }
 .detail-grid dt { color: var(--faint); }
 .detail-grid dd { text-align: right; margin: 0; overflow-wrap: anywhere; color: var(--muted); }

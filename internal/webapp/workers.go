@@ -2,6 +2,7 @@ package webapp
 
 import (
 	"github.com/Jawbreaker1/CodeHackBot/internal/assessment"
+	ctxpacket "github.com/Jawbreaker1/CodeHackBot/internal/context"
 	"path/filepath"
 	"time"
 )
@@ -21,6 +22,10 @@ type workerView struct {
 	Step                int                       `json:"step"`
 	ActiveStep          string                    `json:"active_step"`
 	PlanSteps           []string                  `json:"plan_steps"`
+	PlanSummary         string                    `json:"plan_summary,omitempty"`
+	PlanRevision        int                       `json:"plan_revision,omitempty"`
+	StepPurposes        map[string]string         `json:"step_purposes,omitempty"`
+	PlanHistory         []ctxpacket.PlanRevision  `json:"plan_history,omitempty"`
 	Action              string                    `json:"action"`
 	Rationale           string                    `json:"rationale,omitempty"`
 	ExitStatus          string                    `json:"exit_status"`
@@ -78,6 +83,18 @@ func (r *run) updateWorker(e assessment.Event) {
 	}
 	if e.PlanSteps != nil {
 		w.PlanSteps = append([]string(nil), e.PlanSteps...)
+	}
+	if e.PlanSummary != "" {
+		w.PlanSummary = e.PlanSummary
+	}
+	if e.PlanRevision > 0 {
+		w.PlanRevision = e.PlanRevision
+	}
+	if e.StepPurposes != nil {
+		w.StepPurposes = e.StepPurposes
+	}
+	if e.PlanHistory != nil {
+		w.PlanHistory = e.PlanHistory
 	}
 	if e.Action != "" {
 		w.Action = e.Action

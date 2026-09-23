@@ -17,7 +17,7 @@ go build -buildvcs=false -o birdhackbot-web ./cmd/birdhackbot-web
   --llm-model qwen/qwen3.8-27b
 ```
 
-The default listener is `127.0.0.1:8080`. The endpoint must implement the OpenAI-compatible chat completions contract accepted by `internal/llmclient`; image-capable local endpoints should accept `image_url` content parts. PDF handling is provider-specific; the subscription bridge maps it to a Responses file input. the web server never exposes that endpoint to the browser. `--llm-token-file` supplies a local bridge token when the model endpoint requires it. Keep the listener on loopback until authentication, origin/CSRF protection, and deployment controls are implemented.
+The default listener is `127.0.0.1:8080`. The endpoint must implement the OpenAI-compatible chat completions contract accepted by `internal/llmclient`; image-capable local endpoints should accept `image_url` content parts. PDF handling is provider-specific; the subscription bridge maps it to a Responses file input. The web server never exposes that endpoint to the browser. `--llm-token-file` supplies a local bridge token when the model endpoint requires it. Keep the listener on loopback until authentication, origin/CSRF protection, and deployment controls are implemented.
 
 ## Conversation and session workflow
 
@@ -32,7 +32,7 @@ are registered as evidence. Browser authentication state and captures are
 sensitive local evidence and require the same scope and approval discipline as
 any other tool action.
 
-The console keeps customer workspaces and their sessions in a persistent left navigation rail while the coordinator transcript stays in the center. Runtime annotations between turns are collapsed by default and can be expanded to inspect planning, delegation, proposed actions, approvals, execution transitions, and evidence references. The worker inspector holds each task's phase, goal, current step, plan, action, approval state, context usage, remaining budget, evidence, and findings. Selecting a session restores its live view without opening a separate chat surface; at narrow widths the inspector is available from the `Workers` control instead of disappearing.
+The console keeps customer workspaces and their sessions in a persistent left navigation rail while the coordinator transcript stays in the center. Runtime annotations between turns are collapsed by default and can be expanded to inspect planning, delegation, proposed actions, approvals, execution transitions, and evidence references. The right inspector shows coordinator plan rounds and task outcomes, then each worker's current step, step purpose, progress, plan revisions, action, approval state, context usage, remaining budget, evidence, and findings. Expand a round or step to inspect its intended outcome; plan review and execution approvals still appear in the main conversation. Selecting a session restores its live view without opening a separate chat surface; at narrow widths the inspector is available from the `Workers` control instead of disappearing.
 
 Each start request produces a separate assessment session below `sessions/web/<customer>/<session-id>`. Intake conversations are kept separately below `sessions/web/intake/<session-id>`. Both directories contain an atomic `session.json` navigation/transcript record beside the assessment authority and evidence files. Workers show progress and pending approvals in the browser; the operator can approve, deny, answer a coordinator question, ask the live coordinator about progress or discoveries, or stop the assessment.
 

@@ -164,3 +164,10 @@ Earlier phase checklists are archived in `docs/archive/pre-core-cleanup-2026-09-
 
 Remaining foundation and comparative acceptance gates above still apply. The
 watch view is observational, not interactive remote control of the target browser.
+
+## Current slice: visible plans and active context
+
+- [x] Project coordinator planning rounds and task outcomes into the right inspector; show worker step progress, model-authored step purposes, and previous plan revisions without making the UI a second planner.
+- [x] Offload older worker execution bodies and superseded plan details from model requests before the input ceiling is reached. Keep full session records and log references locally; compact coordinator result cards while preserving the registered evidence catalog.
+- [x] Verify the revised inspector and context snapshots in a new Astra browser session, including the coordinator's concluding plan revision and switching away from and back to the completed session. A separate broader source-trace diagnostic exhausted two workers' decision budgets and was stopped after its consolidation worker repeated reads; this remains a worker-quality failure to investigate, not an acceptance pass.
+- [ ] Add relevance-based retrieval and independently checked long-run summaries only after a fixture demonstrates which lost fact the current projection fails to carry. Compare prompt growth and decision quality over multiple rounds; do not mistake a smaller byte count for reliable memory.

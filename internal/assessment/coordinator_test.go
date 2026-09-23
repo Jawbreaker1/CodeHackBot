@@ -3,6 +3,7 @@ package assessment
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -40,6 +41,33 @@ func TestCoordinatorPromptCompactsPriorExecutionBodies(t *testing.T) {
 	prompt := coordinatorPrompt(state)
 	if len(prompt) > 20000 || strings.Contains(prompt, large) || !strings.Contains(prompt, "/tmp/evidence.log") {
 		t.Fatalf("coordinator prompt was not compacted: bytes=%d", len(prompt))
+	}
+}
+
+func TestCoordinatorRetainsEvidenceCatalogWhileBoundingResultCards(t *testing.T) {
+	state := State{Version: 1, ID: "long-run", Goal: "review evidence", Scope: "fixture only"}
+	result := Result{Task: Task{ID: "worker-a", Goal: "inspect", DoneWhen: "evidence recorded"}, Status: "done", Summary: "five checks completed"}
+	for i := 0; i < 5; i++ {
+		result.Evidence = append(result.Evidence, ctxpacket.ExecutionResult{ActualExec: strings.Repeat("long command ", 500), OutputSummary: "check completed", LogRefs: []string{fmt.Sprintf("/tmp/check-%d.log", i)}, ArtifactRefs: []string{fmt.Sprintf("/tmp/check-%d.txt", i)}})
+	}
+	state.Results = []Result{result}
+	prompt := coordinatorPrompt(state)
+	if len(prompt) > 15000 {
+		t.Fatalf("coordinator prompt grew with repeated full commands: %d bytes", len(prompt))
+	}
+	var payload struct {
+		Assessment struct {
+			Results []struct {
+				OmittedEvidence int `json:"omitted_evidence"`
+			} `json:"results"`
+		} `json:"assessment"`
+		RecordedEvidence map[string][]string `json:"recorded_evidence"`
+	}
+	if err := json.Unmarshal([]byte(prompt), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Assessment.Results) != 1 || payload.Assessment.Results[0].OmittedEvidence != 2 || len(payload.RecordedEvidence["worker-a"]) != 10 {
+		t.Fatal("compact card lost the complete registered evidence catalog")
 	}
 }
 

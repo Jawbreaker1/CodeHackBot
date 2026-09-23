@@ -131,9 +131,10 @@ function mermaidEndpoint(value) {
   return {id: space < 0 ? clean : clean.slice(0, space), label: clean};
 }
 export function replacePreservingDetails(target, children) {
+  const known = new Set([...target.querySelectorAll('details[data-disclosure]')].map(d => d.dataset.disclosure));
   const open = new Set([...target.querySelectorAll('details[open][data-disclosure]')].map(d => d.dataset.disclosure));
   target.replaceChildren(...children);
-  for (const d of target.querySelectorAll('details[data-disclosure]')) d.open = open.has(d.dataset.disclosure);
+  for (const d of target.querySelectorAll('details[data-disclosure]')) d.open = open.has(d.dataset.disclosure) || (!known.has(d.dataset.disclosure) && d.dataset.defaultOpen === 'true');
 }
 function grid(values) {
   const list = node('dl', 'detail-grid');
@@ -235,6 +236,74 @@ function questionNode(item, act) {
   box.onsubmit = event => { event.preventDefault(); act('questions/' + encodeURIComponent(item.id), {text: input.value}, row); };
   return box;
 }
+function preview(value, limit = 200) {
+  const text = String(value || '').replaceAll('\n', ' ').trim();
+  return text.length > limit ? text.slice(0, limit - 1).trimEnd() + '…' : text;
+}
+export function renderCoordinatorPlans(view) {
+  const target = $('planTimeline');
+  const plans = view.plan_timeline || [];
+  target.classList.toggle('hidden', !plans.length);
+  if (!plans.length) return;
+  const items = [node('h3', 'plan-heading', 'Coordinator plan')];
+  for (const plan of [...plans].reverse()) {
+    const content = node('div', 'plan-content');
+    content.append(node('p', 'plan-summary', preview(plan.summary, 260)));
+    if (plan.summary?.length > 260) content.append(disclosure('Read full summary', node('p', 'worker-detail', plan.summary), view.id + '-coordinator-summary-' + plan.round));
+    const tasks = node('ol', 'coordinator-tasks');
+    for (const task of plan.tasks || []) {
+      const item = node('li', 'coordinator-task');
+      const row = node('div', 'plan-step-row');
+      row.append(node('span', '', task.id), node('span', 'plan-step-state', task.status));
+      item.append(row, node('p', 'worker-detail', preview(task.goal, 180)));
+      if (task.goal?.length > 180) item.append(disclosure('Full task scope', node('p', 'worker-detail', task.goal), view.id + '-coordinator-goal-' + plan.round + '-' + task.id));
+      if (task.done_when) item.append(disclosure('Completion criteria', node('p', 'worker-detail', task.done_when), view.id + '-coordinator-task-' + plan.round + '-' + task.id));
+      tasks.append(item);
+    }
+    if (tasks.children.length) content.append(tasks);
+    const completed = (plan.tasks || []).filter(task => task.status === 'done').length;
+    const total = (plan.tasks || []).filter(task => task.status !== 'skipped').length;
+    const progress = plan.status === 'complete' ? 'assessment concluded' : plan.status === 'review' ? 'awaiting selection' : `${completed}/${total} tasks completed`;
+    const label = `Round ${plan.round}${plan.round > 1 ? ' · revised' : ''} · ${progress}`;
+    const details = disclosure(label, content, view.id + '-coordinator-plan-' + plan.round);
+    if (plan.round === plans.length) details.dataset.defaultOpen = 'true';
+    items.push(details);
+  }
+  replacePreservingDetails(target, items);
+}
+function renderWorkerPlan(worker, phase, sessionID) {
+  const steps = worker.plan_steps || [];
+  if (!steps.length) return null;
+  const current = Math.max(0, steps.indexOf(worker.active_step));
+  const finished = isTerminal(phase) && ['done', 'task_completed', 'completed'].includes(phase);
+  const blocked = isTerminal(phase) && !finished;
+  const section = node('section', 'worker-plan-section');
+  const header = node('div', 'plan-step-row');
+  header.append(node('strong', '', 'Worker plan'), node('span', 'plan-step-state', `Step ${current + 1}/${steps.length} · revision ${worker.plan_revision || 1}`));
+  section.append(header);
+  if (worker.plan_summary) section.append(node('p', 'plan-summary', worker.plan_summary));
+  const list = node('ol', 'worker-plan');
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+    const status = i < current ? 'completed' : i === current ? (finished ? 'completed' : blocked ? 'blocked' : 'active') : finished ? 'unreported' : 'queued';
+    const item = node('li', 'worker-plan-step ' + status);
+    const body = node('div', 'plan-content');
+    body.append(node('p', 'worker-detail', worker.step_purposes?.[step] || step));
+    const details = disclosure(`${step} · ${status}`, body, sessionID + '-worker-step-' + worker.id + '-' + (worker.plan_revision || 1) + '-' + i);
+    if (i === current && !finished) details.dataset.defaultOpen = 'true';
+    item.append(details);
+    list.append(item);
+  }
+  section.append(list);
+  if ((worker.plan_history || []).length > 1) {
+    const history = node('ol', 'plan-revisions');
+    for (const [index, revision] of worker.plan_history.slice(0, -1).entries()) {
+      history.append(node('li', '', `Revision ${index + 1} · ${revision.Plan?.Summary || ''}`));
+    }
+    section.append(disclosure('Earlier worker plans', history, sessionID + '-worker-plan-history-' + worker.id));
+  }
+  return section;
+}
 export function renderWorkers(view, act, watch) {
   const workers = new Map((view.workers || []).map(w => [w.id, w]));
   // An approval can arrive just before the first progress snapshot.
@@ -251,10 +320,12 @@ export function renderWorkers(view, act, watch) {
     card.dataset.worker = w.id;
     const heading = node('div', 'worker-heading');
     heading.append(node('h3', '', w.id), badge(phaseLabel(phase), phase));
-    card.append(heading, node('p', 'worker-goal', w.goal));
-    if (w.active_step) card.append(node('p', 'worker-detail', w.active_step));
+    card.append(heading, node('p', 'worker-goal', preview(w.goal, 180)));
+    const plan = renderWorkerPlan(w, phase, view.id);
+    if (plan) card.append(plan);
+    else if (w.active_step) card.append(node('p', 'worker-detail', w.active_step));
     const metrics = node('div', 'metrics');
-    for (const [value, label] of [[w.step || 0, 'step'], [w.model_calls || 0, 'calls'], [w.evidence_count || 0, 'evidence']]) {
+    for (const [value, label] of [[`${w.step || 0}/${view.limits?.steps_per_task || '?'}`, 'decisions'], [w.model_calls || 0, 'calls'], [w.evidence_count || 0, 'evidence']]) {
       const metric = node('span'); metric.append(node('strong', '', value), document.createTextNode(' ' + label)); metrics.append(metric);
     }
     card.append(metrics);
@@ -275,11 +346,6 @@ export function renderWorkers(view, act, watch) {
     if (w.rationale) details.append(disclosure('Model summary', node('p', 'pre-wrap', w.rationale), 'worker-rationale-' + w.id));
     if (w.done_when) details.append(node('div', 'action-label', 'Completion criteria'), node('p', '', w.done_when));
     if (w.detail) details.append(node('div', 'action-label', 'Latest update'), node('p', 'pre-wrap', w.detail));
-    if (w.plan_steps?.length) {
-      const plan = node('ol', 'worker-plan');
-      for (const step of w.plan_steps) plan.append(node('li', step === w.active_step ? 'active' : '', step));
-      details.append(node('div', 'action-label', 'Worker plan'), plan);
-    }
     card.append(disclosure('Task details', details, 'task-' + w.id));
     if (w.evidence?.length) {
       const evidence = node('div');

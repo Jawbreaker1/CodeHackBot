@@ -1,4 +1,4 @@
-import {$, node, badge, disclosure, richText, eventNode, replacePreservingDetails, renderWorkers, renderFindings} from './inspector.js';
+import {$, node, badge, disclosure, richText, eventNode, replacePreservingDetails, renderWorkers, renderCoordinatorPlans, renderFindings} from './inspector.js';
 
 let current = null;
 let selection = 0;
@@ -275,7 +275,8 @@ function renderOverview(view) {
     $('contextUsageLabel').textContent = formatBytes(context.used_bytes) + ' / ' + formatBytes(context.limit_bytes);
     $('contextFill').style.width = percent + '%';
     $('contextFill').dataset.state = percent >= 90 ? 'high' : percent >= 75 ? 'warm' : '';
-    $('contextUsageDetail').textContent = percent + '% used · ' + formatBytes(context.remaining_bytes) + ' remaining · application input-byte ceiling';
+    const source = context.worker_id ? (context.active ? 'active: ' : 'latest: ') + context.worker_id + ' · ' : '';
+    $('contextUsageDetail').textContent = percent + '% used · ' + formatBytes(context.remaining_bytes) + ' remaining · ' + source + 'application input-byte ceiling';
   }
   $('scopeDetails').classList.toggle('hidden', !view.scope);
   $('assessmentScope').textContent = view.scope || '';
@@ -309,7 +310,8 @@ function renderView(view) {
   $('model').title = view.model ? 'Change model · ' + view.model : 'Choose a model';
   renderTranscript();
   renderOverview(view);
-  if (changed('workers', [view.workers, view.context_window, view.pending_approvals, view.pending_questions, view.pending_tool, view.model])) {
+  if (changed('plans', [view.id, view.plan_timeline, view.pending_plan])) renderCoordinatorPlans(view);
+  if (changed('workers', [view.id, view.workers, view.context_window, view.pending_approvals, view.pending_questions, view.pending_tool, view.model])) {
     $('workerCount').textContent = renderWorkers(view, act, openWatch);
   }
   if (changed('findings', view.findings)) renderFindings(view);

@@ -25,6 +25,7 @@ type PlanState struct {
 	WorkerGoal       string
 	Summary          string
 	Steps            []string
+	StepPurposes     map[string]string
 	ActiveStep       string
 	BlockedStep      string
 	ReplanConditions []string
@@ -219,7 +220,7 @@ func renderStep(s Step) string {
 }
 
 func renderPlanState(p PlanState) string {
-	return strings.Join([]string{
+	lines := []string{
 		"mode: " + blankOrValue(p.Mode),
 		"worker_goal: " + blankOrValue(p.WorkerGoal),
 		"summary: " + blankOrValue(p.Summary),
@@ -227,7 +228,13 @@ func renderPlanState(p PlanState) string {
 		"active_step: " + blankOrValue(p.ActiveStep),
 		"blocked_step: " + blankOrValue(p.BlockedStep),
 		"replan_conditions: " + joinOrNone(p.ReplanConditions),
-	}, "\n")
+	}
+	for _, step := range p.Steps {
+		if purpose := strings.TrimSpace(p.StepPurposes[step]); purpose != "" {
+			lines = append(lines, "purpose_for_"+strconv.Quote(step)+": "+purpose)
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func renderTaskRuntime(t TaskRuntime) string {

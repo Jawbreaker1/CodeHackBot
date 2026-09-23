@@ -80,6 +80,33 @@ func TestModelViewRejectsOversizedProtectedInstructions(t *testing.T) {
 	}
 }
 
+func TestModelViewOffloadsOlderEvidenceBeforeHardLimit(t *testing.T) {
+	p := NewInitialWorkerPacket(behavior.Frame{SystemPrompt: "policy"}, session.Foundation{Goal: "investigate and report"}, "/tmp", "fixture", "per_action", 10)
+	p.LatestExecutionResult = ExecutionResult{Action: "latest check", OutputEvidence: "current decisive observation" + strings.Repeat(" supplemental diagnostics", 1000), LogRefs: []string{"/logs/latest"}}
+	p.RelevantRecentResults = []ExecutionResult{
+		{Action: "previous check", OutputEvidence: "recent diagnostic", LogRefs: []string{"/logs/recent"}},
+		{Action: "older check", OutputEvidence: strings.Repeat("older output ", 300), LogRefs: []string{"/logs/older"}},
+	}
+	p.PlanHistory = []PlanRevision{
+		{Turn: 1, AfterExecutionLog: "/logs/first", Plan: PlanState{Summary: "initial approach", Steps: []string{"first", "second"}}},
+		{Turn: 2, Plan: PlanState{Summary: "revised approach", Steps: []string{"third"}}},
+		{Turn: 3, Plan: PlanState{Summary: "current approach", Steps: []string{"fourth"}}},
+	}
+	v, err := p.ModelView(100000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(v.LatestExecutionResult.OutputEvidence, "current decisive observation") || len(v.LatestExecutionResult.OutputEvidence) >= len(p.LatestExecutionResult.OutputEvidence) || v.LatestExecutionResult.LogRefs[0] != "/logs/latest" || v.RelevantRecentResults[0].OutputEvidence != "recent diagnostic" {
+		t.Fatal("current or recent observations were lost")
+	}
+	if strings.Contains(v.RelevantRecentResults[1].OutputEvidence, "older output") || v.RelevantRecentResults[1].LogRefs[0] != "/logs/older" || p.RelevantRecentResults[1].OutputEvidence == v.RelevantRecentResults[1].OutputEvidence {
+		t.Fatal("older evidence was not offloaded with its reference retained")
+	}
+	if len(v.PlanHistory[0].Plan.Steps) != 0 || v.PlanHistory[0].AfterExecutionLog != "/logs/first" || len(p.PlanHistory[0].Plan.Steps) != 2 || len(v.ContextNotes) == 0 {
+		t.Fatal("plan revision was not compacted transparently")
+	}
+}
+
 func TestConversationPreservesStructureAndNewestOversizedAnswer(t *testing.T) {
 	entry := "Operator answer:\n  field: value\n    child: text | keep this"
 	recent, _ := AppendConversation(nil, "", entry)

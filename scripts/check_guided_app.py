@@ -57,7 +57,7 @@ class Model(BaseHTTPRequestHandler):
         prompt = messages[1]["content"]
         payload = json.loads(prompt)
         if "Operator answer: fixture answer" in prompt:
-            remaining = 5 if payload.get("role") == "worker" else 4
+            remaining = 9 if payload.get("role") == "worker" else 8
             assert f"remaining_budget: {remaining} steps" in prompt, "worker budget did not decrease after the question/action"
         if payload.get("role") == "assessment_coordinator":
             state = payload["assessment"]
@@ -234,7 +234,7 @@ def run_case(binary, root, endpoint, mode):
             assert len(evidence) == 2 and evidence[0]["ExitStatus"] != "0" and evidence[1]["ExitStatus"] == "0", evidence
             worker = json.loads((runs[-1].parent / "tasks/observe/session.json").read_text())
             assert worker["packet"]["PlanState"]["ActiveStep"] == "Use the alternative", worker
-            assert worker["packet"]["Budget"] == {"Limit": 6, "Used": 2}, worker
+            assert worker["packet"]["Budget"] == {"Limit": 10, "Used": 2}, worker
         if mode == "orchestration":
             assert state["status"] == "completed" and len(state["results"]) == 3, state
             assert {item["task"]["id"] for item in state["results"]} == {"discover", "control", "validate"}, state

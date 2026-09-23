@@ -408,34 +408,35 @@ type planReviewRequest struct {
 }
 
 type assessmentView struct {
-	PermissionMode   approval.Mode        `json:"permission_mode"`
-	Customer         string               `json:"customer"`
-	ID               string               `json:"id"`
-	Goal             string               `json:"goal"`
-	Scope            string               `json:"scope"`
-	Status           string               `json:"status"`
-	Conclusion       string               `json:"conclusion,omitempty"`
-	Model            string               `json:"model"`
-	ModelBusy        bool                 `json:"model_busy"`
-	CanChangeModel   bool                 `json:"can_change_model"`
-	Resumable        bool                 `json:"resumable"`
-	UpdatedAt        time.Time            `json:"updated_at,omitempty"`
-	Error            string               `json:"error,omitempty"`
-	StartedAt        time.Time            `json:"started_at,omitempty"`
-	FinishedAt       time.Time            `json:"finished_at,omitempty"`
-	Usage            assessment.Usage     `json:"usage"`
-	ContextWindow    contextWindowView    `json:"context_window"`
-	Plans            int                  `json:"plans"`
-	Workers          []workerView         `json:"workers"`
-	Findings         []assessment.Finding `json:"findings"`
-	Limits           assessment.Limits    `json:"limits"`
-	Results          []assessment.Result  `json:"results"`
-	Events           []eventRecord        `json:"events"`
-	PendingApprovals []approvalView       `json:"pending_approvals"`
-	PendingQuestions []questionView       `json:"pending_questions"`
-	PendingPlan      *planApprovalView    `json:"pending_plan,omitempty"`
-	Messages         []messageView        `json:"messages"`
-	ReportURL        string               `json:"report_url,omitempty"`
+	PermissionMode   approval.Mode         `json:"permission_mode"`
+	Customer         string                `json:"customer"`
+	ID               string                `json:"id"`
+	Goal             string                `json:"goal"`
+	Scope            string                `json:"scope"`
+	Status           string                `json:"status"`
+	Conclusion       string                `json:"conclusion,omitempty"`
+	Model            string                `json:"model"`
+	ModelBusy        bool                  `json:"model_busy"`
+	CanChangeModel   bool                  `json:"can_change_model"`
+	Resumable        bool                  `json:"resumable"`
+	UpdatedAt        time.Time             `json:"updated_at,omitempty"`
+	Error            string                `json:"error,omitempty"`
+	StartedAt        time.Time             `json:"started_at,omitempty"`
+	FinishedAt       time.Time             `json:"finished_at,omitempty"`
+	Usage            assessment.Usage      `json:"usage"`
+	ContextWindow    contextWindowView     `json:"context_window"`
+	Plans            int                   `json:"plans"`
+	PlanTimeline     []coordinatorPlanView `json:"plan_timeline,omitempty"`
+	Workers          []workerView          `json:"workers"`
+	Findings         []assessment.Finding  `json:"findings"`
+	Limits           assessment.Limits     `json:"limits"`
+	Results          []assessment.Result   `json:"results"`
+	Events           []eventRecord         `json:"events"`
+	PendingApprovals []approvalView        `json:"pending_approvals"`
+	PendingQuestions []questionView        `json:"pending_questions"`
+	PendingPlan      *planApprovalView     `json:"pending_plan,omitempty"`
+	Messages         []messageView         `json:"messages"`
+	ReportURL        string                `json:"report_url,omitempty"`
 }
 
 type planApprovalView struct {
@@ -444,14 +445,16 @@ type planApprovalView struct {
 	Tasks   []assessment.Task `json:"tasks"`
 }
 
-// contextWindowView reports the largest current worker request against the
-// assessment's configured application input ceiling. These are bytes of
+// contextWindowView reports the largest active worker request, or the latest
+// worker request after completion, against the application input ceiling. These are bytes of
 // message text, not provider token counts.
 type contextWindowView struct {
-	UsedBytes      int `json:"used_bytes"`
-	LimitBytes     int `json:"limit_bytes"`
-	RemainingBytes int `json:"remaining_bytes"`
-	Percent        int `json:"percent"`
+	UsedBytes      int    `json:"used_bytes"`
+	LimitBytes     int    `json:"limit_bytes"`
+	RemainingBytes int    `json:"remaining_bytes"`
+	Percent        int    `json:"percent"`
+	WorkerID       string `json:"worker_id,omitempty"`
+	Active         bool   `json:"active"`
 }
 
 type customerView struct {
@@ -1944,6 +1947,7 @@ func (r *run) view(after string) assessmentView {
 	for _, plan := range r.state.Plans {
 		view.Findings = append(view.Findings, plan.Findings...)
 	}
+	view.PlanTimeline = coordinatorPlans(r.state, r.workers)
 	if n, err := strconv.ParseUint(strings.TrimSpace(after), 10, 64); err == nil {
 		for _, event := range r.events {
 			if event.Sequence > n {
@@ -1967,6 +1971,11 @@ func (r *run) view(after string) assessmentView {
 	}
 	if r.plan != nil {
 		view.PendingPlan = &planApprovalView{ID: r.plan.ID, Summary: r.plan.plan.Summary, Tasks: append([]assessment.Task(nil), r.plan.plan.Tasks...)}
+		pending := coordinatorPlanView{Round: len(r.state.Plans) + 1, Summary: r.plan.plan.Summary, Status: "review"}
+		for _, task := range r.plan.plan.Tasks {
+			pending.Tasks = append(pending.Tasks, coordinatorTaskView{ID: task.ID, Goal: task.Goal, DoneWhen: task.DoneWhen, Status: "review"})
+		}
+		view.PlanTimeline = append(view.PlanTimeline, pending)
 	}
 	sort.Slice(view.PendingApprovals, func(i, j int) bool { return view.PendingApprovals[i].ID < view.PendingApprovals[j].ID })
 	sort.Slice(view.PendingQuestions, func(i, j int) bool { return view.PendingQuestions[i].ID < view.PendingQuestions[j].ID })
@@ -1983,14 +1992,34 @@ func decorateEvidence(evidence assessment.EvidenceView, assessmentID string) ass
 
 func aggregateContextWindow(state assessment.State, workers []workerView) contextWindowView {
 	limit := state.MaxInputBytes
-	used := 0
+	var selected *workerView
 	for _, worker := range workers {
-		if worker.ContextUsedBytes > used {
-			used = worker.ContextUsedBytes
-		}
 		if limit == 0 && worker.ContextLimitBytes > limit {
 			limit = worker.ContextLimitBytes
 		}
+		if worker.ContextUsedBytes == 0 || worker.Phase == "done" || worker.Phase == "task_completed" || worker.Phase == "failed" || worker.Phase == "task_failed" || worker.Phase == "blocked" || worker.Phase == "task_blocked" || worker.Phase == "aborted" {
+			continue
+		}
+		if selected == nil || worker.ContextUsedBytes > selected.ContextUsedBytes {
+			copy := worker
+			selected = &copy
+		}
+	}
+	active := selected != nil
+	if selected == nil {
+		for _, worker := range workers {
+			if worker.ContextUsedBytes == 0 {
+				continue
+			}
+			if selected == nil || worker.UpdatedAt.After(selected.UpdatedAt) {
+				copy := worker
+				selected = &copy
+			}
+		}
+	}
+	used, workerID := 0, ""
+	if selected != nil {
+		used, workerID = selected.ContextUsedBytes, selected.ID
 	}
 	remaining := limit - used
 	if remaining < 0 {
@@ -2003,7 +2032,7 @@ func aggregateContextWindow(state assessment.State, workers []workerView) contex
 			percent = 100
 		}
 	}
-	return contextWindowView{UsedBytes: used, LimitBytes: limit, RemainingBytes: remaining, Percent: percent}
+	return contextWindowView{UsedBytes: used, LimitBytes: limit, RemainingBytes: remaining, Percent: percent, WorkerID: workerID, Active: active}
 }
 
 func (r *run) writeView(w http.ResponseWriter, after string) {

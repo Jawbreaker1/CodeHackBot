@@ -7,10 +7,11 @@ import (
 )
 
 type PlanUpdate struct {
-	Summary          string   `json:"summary"`
-	Steps            []string `json:"steps"`
-	ActiveStep       string   `json:"active_step"`
-	ReplanConditions []string `json:"replan_conditions,omitempty"`
+	Summary          string            `json:"summary"`
+	Steps            []string          `json:"steps"`
+	StepPurposes     map[string]string `json:"step_purposes,omitempty"`
+	ActiveStep       string            `json:"active_step"`
+	ReplanConditions []string          `json:"replan_conditions,omitempty"`
 }
 
 // A plan may accompany any decision. It never changes the original goal,
@@ -105,6 +106,11 @@ func validatePlan(p PlanUpdate) error {
 		}
 		seen[step] = true
 		active = active || step == strings.TrimSpace(p.ActiveStep)
+	}
+	for step, purpose := range p.StepPurposes {
+		if !seen[step] || strings.TrimSpace(purpose) == "" {
+			return fmt.Errorf("plan step purposes must describe listed steps")
+		}
 	}
 	if !active {
 		return fmt.Errorf("plan active_step must match a step")
