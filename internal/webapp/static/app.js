@@ -102,18 +102,21 @@ function messageNode(message) {
   const rich = richText(message.text, 'message-' + (message.at || ''));
   rich.classList.add('transcript-text');
   entry.append(node('div', 'transcript-role', message.role === 'user' ? 'You' : message.role === 'assistant' ? 'Coordinator' : 'System'), rich);
-  if (message.attachments?.length) {
+  if (message.attachments?.length || message.images?.length) {
     const files = node('div', 'message-attachments');
-    for (const attachment of message.attachments) {
+    for (const attachment of [...(message.attachments || []), ...(message.images || [])]) {
+      const item = node('div', 'message-attachment');
       if (attachment.mime_type?.startsWith('image/') && attachment.url) {
         const image = document.createElement('img');
         image.src = attachment.url; image.alt = attachment.filename || 'Attached image'; image.loading = 'lazy'; image.className = 'message-attachment-image';
-        files.append(image);
+        const preview = document.createElement('a');
+        preview.href = attachment.url; preview.target = '_blank'; preview.rel = 'noreferrer'; preview.className = 'message-attachment-preview';
+        preview.append(image); item.append(preview);
       }
       const link = document.createElement('a');
       link.href = attachment.url; link.target = '_blank'; link.rel = 'noreferrer'; link.className = 'attachment-chip';
       link.textContent = attachment.filename + ' · ' + formatBytes(attachment.bytes);
-      files.append(link);
+      item.append(link); files.append(item);
     }
     entry.append(files);
   }

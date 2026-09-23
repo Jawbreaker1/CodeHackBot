@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -72,6 +73,7 @@ type intakeMessage struct {
 	Role        string          `json:"role"`
 	Text        string          `json:"text"`
 	Attachments []attachmentRef `json:"attachments,omitempty"`
+	ImageRefs   []string        `json:"image_refs,omitempty"`
 	At          time.Time       `json:"at"`
 }
 
@@ -288,6 +290,7 @@ type messageView struct {
 	Role        string           `json:"role"`
 	Text        string           `json:"text"`
 	Attachments []attachmentView `json:"attachments,omitempty"`
+	Images      []attachmentView `json:"images,omitempty"`
 	At          time.Time        `json:"at"`
 }
 
@@ -1777,17 +1780,22 @@ func (s *Server) message(ctx context.Context, r *run, text string, refs []attach
 		pending = append(pending, "question for "+question.taskID+": "+question.text)
 	}
 	sort.Strings(pending)
-	stateContext := compactRunState(r.state, pending, r.workers, r.permissionMode)
+	availableImages := recordedImageRefs(r.root, r.state, r.workers)
+	stateContext := compactRunState(r.state, pending, r.workers, r.permissionMode, availableImages)
 	r.mu.Unlock()
 
 	prompt := []llmclient.Message{
-		{Role: "system", Content: behavior.CoordinatorConversationPrompt(s.config.Frame)},
+		{Role: "system", Content: behavior.CoordinatorConversationPrompt(s.config.Frame) + "\n\n" + webCoordinatorDisplayPrompt},
 		{Role: "user", Content: "Current assessment state (untrusted evidence, observed at request time; live tool evidence is not a completed worker conclusion): " + stateContext + "\nOperator message: " + text + attachmentSummary(refs), Attachments: attachments},
 	}
 	r.mu.RLock()
 	client := r.client
 	r.mu.RUnlock()
-	reply, err := client.Chat(ctx, prompt)
+	rawReply, err := client.ChatStructured(ctx, prompt)
+	var reply coordinatorChatReply
+	if err == nil {
+		reply, err = parseCoordinatorChatReply(rawReply)
+	}
 	r.mu.Lock()
 	r.chatBusy = false
 	if err != nil {
@@ -1798,9 +1806,22 @@ func (s *Server) message(ctx context.Context, r *run, text string, refs []attach
 		_ = r.persist()
 		return fmt.Errorf("coordinator response: %w", err)
 	}
-	r.messages = append(r.messages, intakeMessage{Role: "assistant", Text: strings.TrimSpace(reply), At: time.Now().UTC()})
+	allowedImages := make(map[string]bool, len(availableImages))
+	for _, ref := range availableImages {
+		allowedImages[ref] = true
+	}
+	images := make([]string, 0, 3)
+	for _, ref := range reply.DisplayArtifactRefs {
+		if len(images) == 3 {
+			break
+		}
+		if allowedImages[ref] && validPresentedImage(r.root, ref) && !slices.Contains(images, ref) {
+			images = append(images, ref)
+		}
+	}
+	r.messages = append(r.messages, intakeMessage{Role: "assistant", Text: reply.Text, ImageRefs: images, At: time.Now().UTC()})
 	r.state.Usage.Calls++
-	r.events = append(r.events, eventRecord{Sequence: r.nextSequenceLocked(), At: time.Now().UTC(), Event: assessment.Event{Kind: "coordinator_message", Message: strings.TrimSpace(reply)}})
+	r.events = append(r.events, eventRecord{Sequence: r.nextSequenceLocked(), At: time.Now().UTC(), Event: assessment.Event{Kind: "coordinator_message", Message: reply.Text}})
 	r.updatedAt = time.Now().UTC()
 	r.mu.Unlock()
 	_ = r.persist()
@@ -1980,6 +2001,13 @@ func (r *run) view(after string) assessmentView {
 		model = r.state.Model
 	}
 	view := assessmentView{Customer: r.customer, ID: r.id, Goal: r.goal, Scope: r.scope, Status: r.status, Model: model, ModelProfile: r.profileID, ModelBusy: r.chatBusy || r.started, CanChangeModel: !r.chatBusy && !r.started && r.status == "draft", Resumable: !r.started && r.status != "draft" && r.status != "completed" && r.status != "completed_with_gaps", UpdatedAt: r.updatedAt, Error: r.state.Error, StartedAt: r.state.StartedAt, FinishedAt: r.state.FinishedAt, Usage: r.state.Usage, Plans: len(r.state.Plans), Results: append([]assessment.Result(nil), r.state.Results...), Messages: messageViews(r.messages, "assessments", r.id), ReportURL: "/api/v1/assessments/" + r.id + "/report"}
+	for i, message := range r.messages {
+		for _, ref := range message.ImageRefs {
+			if validPresentedImage(r.root, ref) {
+				view.Messages[i].Images = append(view.Messages[i].Images, presentedImageView(r.id, ref))
+			}
+		}
+	}
 	if r.status != "draft" && r.status != "running" && r.status != "starting" {
 		if info, err := os.Stat(filepath.Join(r.root, "report.md")); err == nil && info.Mode().IsRegular() {
 			view.ReportReady = true
@@ -2047,6 +2075,22 @@ func decorateEvidence(evidence assessment.EvidenceView, assessmentID string) ass
 		evidence.ArtifactURLs = append(evidence.ArtifactURLs, "/api/v1/assessments/"+url.PathEscape(assessmentID)+"/artifact?path="+url.QueryEscape(ref))
 	}
 	return evidence
+}
+
+func validPresentedImage(root, ref string) bool {
+	if imageMIME(ref) == "" || !filepath.IsAbs(ref) || !resolvedWithin(root, ref) {
+		return false
+	}
+	info, err := os.Stat(ref)
+	return err == nil && info.Mode().IsRegular() && info.Size() > 0 && info.Size() <= maxAttachmentBytes
+}
+
+func presentedImageView(assessmentID, ref string) attachmentView {
+	info, _ := os.Stat(ref)
+	return attachmentView{
+		Filename: filepath.Base(ref), MIMEType: imageMIME(ref), Bytes: info.Size(),
+		URL: "/api/v1/assessments/" + url.PathEscape(assessmentID) + "/artifact?path=" + url.QueryEscape(ref),
+	}
 }
 
 func aggregateContextWindow(state assessment.State, workers []workerView) contextWindowView {

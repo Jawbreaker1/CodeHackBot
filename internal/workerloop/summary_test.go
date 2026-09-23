@@ -46,9 +46,9 @@ func TestBuildRunningSummaryDescribesLatestExecution(t *testing.T) {
 	summary := buildRunningSummary(
 		"extract archive",
 		ctxpacket.ExecutionResult{
-			Action:        "find /home/johan -name \"secret.zip\"",
+			Action:        "find /home/operator -name \"secret.zip\"",
 			ExitStatus:    "0",
-			OutputSummary: "stdout: /home/johan/.../secret.zip",
+			OutputSummary: "stdout: /home/operator/.../secret.zip",
 			Assessment:    "success",
 		},
 		[]ctxpacket.ExecutionResult{
@@ -64,7 +64,7 @@ func TestBuildRunningSummaryDescribesLatestExecution(t *testing.T) {
 	for _, want := range []string{
 		"Status: in progress.",
 		"Assessment: success.",
-		"Key output: stdout: /home/johan/.../secret.zip.",
+		"Key output: stdout: /home/operator/.../secret.zip.",
 	} {
 		if !strings.Contains(summary, want) {
 			t.Fatalf("summary missing %q in %q", want, summary)

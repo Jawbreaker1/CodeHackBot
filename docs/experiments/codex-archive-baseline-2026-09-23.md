@@ -1,6 +1,6 @@
 # Codex archive recovery baseline — 2026-09-23
 
-Scope: Johan's local `secret.zip` in the isolated Kali workspace. The original
+Scope: an operator-owned local `secret.zip` in the isolated Kali workspace. The original
 SHA-256 was `af82d38ac307097ed052739d20487fbbe9231f725993983f62a866ddb49225dd`
 before and after the experiment. No network target was contacted. The password
 and extracted text are deliberately absent from this document.

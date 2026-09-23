@@ -82,10 +82,10 @@ Acceptance should include process-tree stop and recovery, concurrent task isolat
 
 ## Local reproduction evidence
 
-Diagnostic sources, overlay mapping, and captured results are in [sessions/assessment-20260919](/home/johan/birdhackbot/CodeHackBot/sessions/assessment-20260919). This directory is intentionally ignored by Git, like other session evidence. The probes are Linux-specific and intentionally fail against the assessed revision; they are not added to normal CI.
+Diagnostic sources, overlay mapping, and captured results are in [sessions/assessment-20260919](../sessions/assessment-20260919). This directory is intentionally ignored by Git, like other session evidence. The probes are Linux-specific and intentionally fail against the assessed revision; they are not added to normal CI.
 
 ```sh
-go test -overlay=/home/johan/birdhackbot/CodeHackBot/sessions/assessment-20260919/overlay.json \
+go test -overlay=sessions/assessment-20260919/overlay.json \
   -run '^TestAssessment' -count=1 -timeout=30s -v \
   ./internal/execx ./internal/workerloop ./internal/context
 ```

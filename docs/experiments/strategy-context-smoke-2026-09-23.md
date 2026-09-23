@@ -1,6 +1,6 @@
 # Strategy and context GUI smoke — 2026-09-23
 
-The first run below is diagnostic, not a recovery acceptance pass. The target was Johan's
+The first run below is diagnostic, not a recovery acceptance pass. The target was an operator-owned
 local `secret.zip` in the closed Kali lab. The unchanged user request asked the
 coordinator to choose its own tools and strategy, verify access to an entry,
 and omit the password from chat. No network target was in scope.

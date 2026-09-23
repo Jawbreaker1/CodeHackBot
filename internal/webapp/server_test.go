@@ -135,8 +135,8 @@ func TestAssigningDraftToCustomerFolderPersistsAndIndexesIt(t *testing.T) {
 	defer httpServer.Close()
 
 	draft := getJSON[intakeView](t, httpServer.URL+"/api/v1/intake")
-	assigned := postJSON[intakeView](t, httpServer.URL+"/api/v1/intake/"+draft.ID+"/customer", intakeCustomerRequest{Customer: "johans-lab"})
-	if assigned.Customer != "johans-lab" {
+	assigned := postJSON[intakeView](t, httpServer.URL+"/api/v1/intake/"+draft.ID+"/customer", intakeCustomerRequest{Customer: "example-lab"})
+	if assigned.Customer != "example-lab" {
 		t.Fatalf("assigned draft = %#v", assigned)
 	}
 	var index struct {
@@ -153,7 +153,7 @@ func TestAssigningDraftToCustomerFolderPersistsAndIndexesIt(t *testing.T) {
 
 	restarted := NewServer(server.config)
 	restored := restarted.getIntake(draft.ID)
-	if restarted.loadErr != nil || restored == nil || restored.customer != "johans-lab" {
+	if restarted.loadErr != nil || restored == nil || restored.customer != "example-lab" {
 		t.Fatalf("restored assigned draft = %v, %+v", restarted.loadErr, restored)
 	}
 }
