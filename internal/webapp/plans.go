@@ -16,11 +16,12 @@ type coordinatorPlanView struct {
 }
 
 type coordinatorTaskView struct {
-	ID            string `json:"id"`
-	Goal          string `json:"goal"`
-	DoneWhen      string `json:"done_when"`
-	Status        string `json:"status"`
-	ResultSummary string `json:"result_summary,omitempty"`
+	ID            string   `json:"id"`
+	Goal          string   `json:"goal"`
+	DoneWhen      string   `json:"done_when"`
+	StrategyHints []string `json:"strategy_hints,omitempty"`
+	Status        string   `json:"status"`
+	ResultSummary string   `json:"result_summary,omitempty"`
 }
 
 func coordinatorPlans(state assessment.State, workers map[string]workerView) []coordinatorPlanView {
@@ -59,7 +60,7 @@ func coordinatorPlans(state assessment.State, workers map[string]workerView) []c
 					plan.Status = "running"
 				}
 			}
-			plan.Tasks = append(plan.Tasks, coordinatorTaskView{ID: task.ID, Goal: task.Goal, DoneWhen: task.DoneWhen, Status: status, ResultSummary: result.Summary})
+			plan.Tasks = append(plan.Tasks, coordinatorTaskView{ID: task.ID, Goal: task.Goal, DoneWhen: task.DoneWhen, StrategyHints: task.StrategyHints, Status: status, ResultSummary: result.Summary})
 		}
 		plan.Signal = planSignal(plan, state, i)
 		plans = append(plans, plan)

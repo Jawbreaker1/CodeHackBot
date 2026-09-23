@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/behavior"
 	ctxpacket "github.com/Jawbreaker1/CodeHackBot/internal/context"
@@ -38,6 +39,9 @@ func (c Coordinator) runWorker(ctx context.Context, root string, state State, ta
 	// The worker decides whether a plan is useful and may revise it as it learns.
 	packet.CurrentStep.DoneCondition = task.DoneWhen
 	packet.MemoryBankRetrievals = workerHandoff(state.Results, task.DependsOn, filepath.Join(root, "tasks"))
+	if len(task.StrategyHints) > 0 {
+		packet.CapabilityInputs = append(packet.CapabilityInputs, "Coordinator-suggested local guides: "+strings.Join(task.StrategyHints, ", ")+". These are optional leads, not loaded instructions. Select only a useful guide through load_strategy; you may choose a different catalog entry as evidence changes.")
+	}
 	packet.CapabilityInputs = append(packet.CapabilityInputs, "Verify installed tools before use; no implicit installs or host changes. The declared scope is in behavior_frame.parameters.scope.")
 	packet.CapabilityInputs = append(packet.CapabilityInputs, "For scoped web work, read tools/playwright-runner/README.md before using the preprovisioned helper. Name browser steps, declare task-local captures as artifacts, and use browser-artifacts/browser-live.png for operator preview. No implicit downloads or installs.")
 	researchMode := c.Frame.Parameters["research_mode"]

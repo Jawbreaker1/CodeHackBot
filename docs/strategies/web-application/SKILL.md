@@ -1,3 +1,8 @@
+---
+name: web-application
+description: Use when a browser-facing application needs UI behavior, HTTP traffic, and available source or configuration assessed together.
+---
+
 # Web application investigation
 
 Revision: 2026-09-23. Applies only to declared web targets and permitted user roles.

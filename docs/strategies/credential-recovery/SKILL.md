@@ -1,3 +1,8 @@
+---
+name: credential-recovery
+description: Use for explicitly authorized recovery of an encrypted artifact or account where candidate strategy, coverage, secret handling, and independent verification matter.
+---
+
 # Authorized credential and encrypted-artifact recovery
 
 Revision: 2026-09-23. Use only for an explicitly in-scope local artifact or account. Credential attempts may be disruptive or sensitive; describe the target and effect in the action approval.

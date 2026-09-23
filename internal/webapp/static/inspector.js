@@ -278,6 +278,7 @@ export function renderCoordinatorPlans(view) {
       item.append(row);
       if (task.goal) item.append(disclosure('Assigned work', node('p', 'worker-detail', task.goal), view.id + '-coordinator-goal-' + plan.round + '-' + task.id));
       if (task.done_when) item.append(disclosure('What the worker was asked to establish', node('p', 'worker-detail', task.done_when), view.id + '-coordinator-task-' + plan.round + '-' + task.id));
+      if (task.strategy_hints?.length) item.append(disclosure('Suggested guidance', node('p', 'worker-detail', task.strategy_hints.map(path => path.replace('/SKILL.md', '').replaceAll('-', ' ')).join(', ')), view.id + '-coordinator-guide-' + plan.round + '-' + task.id));
       if (task.result_summary) item.append(disclosure('Worker report', richText(task.result_summary, 'worker-result-' + task.id), view.id + '-coordinator-result-' + plan.round + '-' + task.id));
       tasks.append(item);
     }

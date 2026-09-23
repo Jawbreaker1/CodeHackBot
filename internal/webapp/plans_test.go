@@ -10,12 +10,15 @@ func TestCoordinatorPlansFollowPersistedDecisionsAndLiveWorkerState(t *testing.T
 	state := assessment.State{Plans: []assessment.Decision{{
 		Phase:           "research",
 		Summary:         "Trace plan display",
-		Tasks:           []assessment.Task{{ID: "trace", Goal: "trace the UI", DoneWhen: "source evidence"}, {ID: "skip", Goal: "unused"}},
+		Tasks:           []assessment.Task{{ID: "trace", Goal: "trace the UI", DoneWhen: "source evidence", StrategyHints: []string{"source-review/SKILL.md"}}, {ID: "skip", Goal: "unused"}},
 		ApprovedTaskIDs: []string{"trace"},
 	}}}
 	plans := coordinatorPlans(state, map[string]workerView{"trace": {ID: "trace", Phase: "execution_started"}})
 	if len(plans) != 1 || plans[0].Phase != "research" || plans[0].Status != "running" || plans[0].Tasks[0].Status != "running" || plans[0].Tasks[1].Status != "skipped" {
 		t.Fatalf("live plan projection = %+v", plans)
+	}
+	if len(plans[0].Tasks[0].StrategyHints) != 1 || plans[0].Tasks[0].StrategyHints[0] != "source-review/SKILL.md" {
+		t.Fatalf("plan lost suggested guidance: %+v", plans[0])
 	}
 	state.Results = []assessment.Result{{Task: state.Plans[0].Tasks[0], Status: "done"}}
 	plans = coordinatorPlans(state, nil)

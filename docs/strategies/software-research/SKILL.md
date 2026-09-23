@@ -1,3 +1,8 @@
+---
+name: software-research
+description: Use when an observed software product or build needs attributable source, advisory, CVE, or exploit research before target-specific tests.
+---
+
 # Software identity and vulnerability research
 
 Revision: 2026-09-23. Applies to software observed on an authorized target.

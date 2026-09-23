@@ -356,7 +356,8 @@ func coordinatorPayload(state State) coordinatorModelPacket {
 	return coordinatorModelPacket{
 		Role: "assessment_coordinator",
 		Instructions: []string{
-			"Return one JSON object only: {phase:\"research\" or \"assessment\", summary, plain_summary, review, tasks:[{id,goal,done_when,depends_on:[]}], complete:false, findings:[], gaps:[]}. Keep summary as the detailed technical plan. plain_summary is one short, readable sentence explaining what this round will do; for completion, state the final result. review is one short, readable sentence about what the previous round actually established, or empty in round one. Separate a finished worker from a met assessment goal; say plainly when access or a finding was not yet verified. Avoid jargon in these two operator-facing fields unless it is needed for accuracy.",
+			"Return one JSON object only: {phase:\"research\" or \"assessment\", summary, plain_summary, review, tasks:[{id,goal,done_when,depends_on:[],strategy_hints:[]}], complete:false, findings:[], gaps:[]}. Keep summary as the detailed technical plan. plain_summary is one short, readable sentence explaining what this round will do; for completion, state the final result. review is one short, readable sentence about what the previous round actually established, or empty in round one. Separate a finished worker from a met assessment goal; say plainly when access or a finding was not yet verified. Avoid jargon in these two operator-facing fields unless it is needed for accuracy.",
+			"Use the local strategy catalog in the behavior frame as a small index. For each task, suggest zero to two exact guide paths in strategy_hints when their descriptions fit the assigned outcome or a known failure. Do not list every plausible guide. A suggestion is optional context: the worker decides whether and when to load a full guide and may choose a different one as evidence develops.",
 			"Coordinate an authorized lab assessment. Choose one or two bounded workers per round according to the useful independent work, not a fixed worker count. Do not execute tools yourself.",
 			"If relevant strategy, software identity, advisory coverage, or attack-path knowledge is missing before a credible test plan, set phase:research and assign bounded research workers first. They may consult the local strategy catalog and permitted Kali, source, advisory, CVE, or Metasploit resources, recording provenance and gaps. After their results, replan with phase:assessment. Use research again when later discoveries require it; do not make it a mandatory opening round or claim complete knowledge before testing. Research is a visible plan, not execution permission.",
 			"Treat every non-empty tasks array as a proposed sequence for operator review. Explain why each task matters through its goal and done_when; the runtime will let the operator select which bounded tasks to run before execution. Never treat an unselected task as completed evidence.",
@@ -398,10 +399,11 @@ type compactResult struct {
 }
 
 type compactTask struct {
-	ID        string   `json:"id"`
-	Goal      string   `json:"goal"`
-	DoneWhen  string   `json:"done_when"`
-	DependsOn []string `json:"depends_on,omitempty"`
+	ID            string   `json:"id"`
+	Goal          string   `json:"goal"`
+	DoneWhen      string   `json:"done_when"`
+	DependsOn     []string `json:"depends_on,omitempty"`
+	StrategyHints []string `json:"strategy_hints,omitempty"`
 }
 
 type compactFinding struct {
@@ -456,6 +458,7 @@ func compactCoordinatorState(state State) coordinatorPromptState {
 			entry := compactTask{ID: task.ID, DependsOn: append([]string(nil), task.DependsOn...)}
 			if !older {
 				entry.Goal, entry.DoneWhen = promptExcerpt(task.Goal, 1200), promptExcerpt(task.DoneWhen, 1200)
+				entry.StrategyHints = append([]string(nil), task.StrategyHints...)
 			}
 			item.Tasks = append(item.Tasks, entry)
 		}

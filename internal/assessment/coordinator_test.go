@@ -30,7 +30,7 @@ func testCoordinator(url string) Coordinator {
 
 func TestCoordinatorResearchPhaseIsAnOperatorVisiblePlan(t *testing.T) {
 	state := State{Version: 1, Goal: "investigate a scoped system", Scope: "fixture only", Limits: DefaultLimits()}
-	d := Decision{Phase: "research", Summary: "Establish software identity and relevant sources", Tasks: []Task{{ID: "identify", Goal: "Identify the software and research applicable advisories", DoneWhen: "identity and sources are recorded"}}}
+	d := Decision{Phase: "research", Summary: "Establish software identity and relevant sources", Tasks: []Task{{ID: "identify", Goal: "Identify the software and research applicable advisories", DoneWhen: "identity and sources are recorded", StrategyHints: []string{"software-research/SKILL.md"}}}}
 	if err := validateDecision(d, state); err != nil {
 		t.Fatalf("research plan rejected: %v", err)
 	}
@@ -42,6 +42,16 @@ func TestCoordinatorResearchPhaseIsAnOperatorVisiblePlan(t *testing.T) {
 	}
 	if !strings.Contains(coordinatorPrompt(state), "phase:research") {
 		t.Fatal("coordinator prompt does not offer a research plan")
+	}
+	if !strings.Contains(coordinatorPrompt(state), "strategy_hints") {
+		t.Fatal("coordinator prompt does not offer task-specific guide suggestions")
+	}
+	for _, hints := range [][]string{{"../outside/SKILL.md"}, {"/tmp/guide/SKILL.md"}, {"one/SKILL.md", "two/SKILL.md", "three/SKILL.md"}} {
+		invalid := d
+		invalid.Tasks = []Task{{ID: "identify", Goal: "research", DoneWhen: "record evidence", StrategyHints: hints}}
+		if err := validateDecision(invalid, state); err == nil {
+			t.Fatalf("accepted invalid strategy hints: %v", hints)
+		}
 	}
 	state.Plans = []Decision{d}
 	if got := compactCoordinatorState(state).Plans[0].Phase; got != "research" {
@@ -239,7 +249,7 @@ func TestCoordinatorDelegatesThenValidatesWithSharedBudgetAndEvidence(t *testing
 			s := payload.Assessment
 			switch len(s.Results) {
 			case 0:
-				reply(w, Decision{Summary: "Investigate two independent questions", Tasks: []Task{{ID: "first", Goal: "Print observation one", DoneWhen: "literal output recorded"}, {ID: "second", Goal: "Print observation two", DoneWhen: "literal output recorded"}}})
+				reply(w, Decision{Summary: "Investigate two independent questions", Tasks: []Task{{ID: "first", Goal: "Print observation one", DoneWhen: "literal output recorded", StrategyHints: []string{"investigation/SKILL.md"}}, {ID: "second", Goal: "Print observation two", DoneWhen: "literal output recorded"}}})
 			case 2:
 				reply(w, Decision{Summary: "Validate the first observation", Tasks: []Task{{ID: "validate", Goal: "Print validation evidence", DoneWhen: "literal output recorded", DependsOn: []string{"first"}}}})
 			case 3:
@@ -318,6 +328,9 @@ func TestCoordinatorDelegatesThenValidatesWithSharedBudgetAndEvidence(t *testing
 		}
 		if !strings.Contains(string(data), "synthetic files only") {
 			t.Fatal("persisted scope missing")
+		}
+		if result.Task.ID == "first" && (!strings.Contains(string(data), "Coordinator-suggested local guides: investigation/SKILL.md") || !strings.Contains(string(data), "not loaded instructions")) {
+			t.Fatal("coordinator guide suggestion was not preserved in worker context")
 		}
 	}
 	data, err := os.ReadFile(filepath.Join(root, "report.md"))

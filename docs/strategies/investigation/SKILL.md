@@ -1,3 +1,8 @@
+---
+name: investigation
+description: Use when an authorized assessment has an ambiguous or multi-step goal and needs bounded hypotheses, evidence-led prioritization, and replanning.
+---
+
 # Evidence-led assessment strategy
 
 Revision: 2026-09-23. Applies to authorized work inside the declared scope.

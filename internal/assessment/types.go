@@ -25,10 +25,11 @@ func DefaultLimits() Limits {
 }
 
 type Task struct {
-	ID        string   `json:"id"`
-	Goal      string   `json:"goal"`
-	DoneWhen  string   `json:"done_when"`
-	DependsOn []string `json:"depends_on"`
+	ID            string   `json:"id"`
+	Goal          string   `json:"goal"`
+	DoneWhen      string   `json:"done_when"`
+	DependsOn     []string `json:"depends_on"`
+	StrategyHints []string `json:"strategy_hints,omitempty"`
 }
 
 // Event is an observational transition for UI adapters. It carries enough
@@ -199,6 +200,14 @@ func validateDecision(d Decision, state State) error {
 	for _, task := range d.Tasks {
 		if !validID(task.ID) || seen[task.ID] || known[task.ID].Task.ID != "" || strings.TrimSpace(task.Goal) == "" || strings.TrimSpace(task.DoneWhen) == "" {
 			return fmt.Errorf("invalid or reused task identity, goal, or done condition")
+		}
+		if len(task.StrategyHints) > 2 {
+			return fmt.Errorf("task %s suggests more than two strategy guides", task.ID)
+		}
+		for _, hint := range task.StrategyHints {
+			if !filepath.IsLocal(hint) || filepath.Clean(hint) != hint || filepath.Base(hint) != "SKILL.md" {
+				return fmt.Errorf("task %s has an invalid strategy guide path", task.ID)
+			}
 		}
 		seen[task.ID] = true
 		dependencies := map[string]bool{}
