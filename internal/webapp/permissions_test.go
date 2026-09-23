@@ -70,3 +70,37 @@ func TestAutomaticPermissionModesStartProposedTasksWithoutPlanPrompt(t *testing.
 		}
 	}
 }
+
+func TestChangingApprovalModeReleasesCoveredPendingWork(t *testing.T) {
+	s := NewServer(Config{RepoRoot: t.TempDir()})
+	current, err := s.newRun("fixture", "test approvals", "local fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	low := &pendingApproval{ID: "low", request: approval.Request{Summary: "read", Target: "fixture", Impact: "read only", Risk: "low"}, result: make(chan approval.Decision, 1)}
+	high := &pendingApproval{ID: "high", request: approval.Request{Summary: "modify", Target: "fixture", Impact: "changes file", Risk: "dangerous"}, result: make(chan approval.Decision, 1)}
+	plan := &pendingPlan{ID: "plan", plan: assessment.Decision{Tasks: []assessment.Task{{ID: "inspect"}}}, result: make(chan assessment.PlanReview, 1)}
+	current.approvals[low.ID] = low
+	current.approvals[high.ID] = high
+	current.plan = plan
+	httpServer := httptest.NewServer(s)
+	defer httpServer.Close()
+	path := httpServer.URL + "/api/v1/assessments/" + current.id + "/permissions"
+	view := postJSON[assessmentView](t, path, permissionRequest{Mode: approval.DangerousOnly, Acknowledge: true})
+	if view.PermissionMode != approval.DangerousOnly || len(view.PendingApprovals) != 1 || view.PendingApprovals[0].ID != high.ID || view.PendingPlan != nil {
+		t.Fatalf("dangerous-only did not release covered pending work: %+v", view)
+	}
+	if decision := <-low.result; decision != approval.DecisionApproveSession {
+		t.Fatal(decision)
+	}
+	if reviewed := <-plan.result; len(reviewed.TaskIDs) != 1 || reviewed.TaskIDs[0] != "inspect" {
+		t.Fatalf("pending plan not selected: %+v", reviewed)
+	}
+	view = postJSON[assessmentView](t, path, permissionRequest{Mode: approval.FullAccess, Acknowledge: true})
+	if view.PermissionMode != approval.FullAccess || len(view.PendingApprovals) != 0 {
+		t.Fatalf("full access left a pending action: %+v", view)
+	}
+	if decision := <-high.result; decision != approval.DecisionApproveSession {
+		t.Fatal(decision)
+	}
+}

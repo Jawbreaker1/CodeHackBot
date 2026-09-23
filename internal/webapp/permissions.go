@@ -1,9 +1,11 @@
 package webapp
 
 import (
-	"github.com/Jawbreaker1/CodeHackBot/internal/approval"
 	"net/http"
 	"time"
+
+	"github.com/Jawbreaker1/CodeHackBot/internal/approval"
+	"github.com/Jawbreaker1/CodeHackBot/internal/assessment"
 )
 
 type permissionRequest struct {
@@ -43,8 +45,6 @@ func (s *Server) changeRunPermissions(w http.ResponseWriter, r *http.Request, cu
 		return
 	}
 	current.mu.Lock()
-	// Existing requests remain explicit decisions; changing a mode never drains
-	// or silently approves the pending queue.
 	previous := current.permissionMode
 	current.permissionMode = mode
 	current.updatedAt = time.Now().UTC()
@@ -56,6 +56,24 @@ func (s *Server) changeRunPermissions(w http.ResponseWriter, r *http.Request, cu
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	current.mu.Lock()
+	if current.plan != nil && mode != approval.EveryExecution {
+		pending := current.plan
+		current.plan = nil
+		ids := make([]string, 0, len(pending.plan.Tasks))
+		for _, task := range pending.plan.Tasks {
+			ids = append(ids, task.ID)
+		}
+		pending.result <- assessment.PlanReview{TaskIDs: ids}
+	}
+	for id, pending := range current.approvals {
+		if mode.RequiresApproval(pending.request) {
+			continue
+		}
+		delete(current.approvals, id)
+		pending.result <- approval.DecisionApproveSession
+	}
+	current.mu.Unlock()
 	current.writeView(w, "")
 }
 
@@ -80,6 +98,14 @@ func (s *Server) changeIntakePermissions(w http.ResponseWriter, r *http.Request,
 		current.mu.Unlock()
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if mode == approval.FullAccess {
+		current.mu.Lock()
+		if pending := current.pendingTool; pending != nil {
+			current.pendingTool = nil
+			pending.Result <- approval.DecisionApproveSession
+		}
+		current.mu.Unlock()
 	}
 	writeJSON(w, http.StatusOK, current.view())
 }

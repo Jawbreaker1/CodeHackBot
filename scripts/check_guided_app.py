@@ -202,7 +202,15 @@ def run_case(binary, root, endpoint, mode):
             before = terminal.expect("Allow this action?")
             assert "Exact invocation: cat missing-fixture.txt" in before, terminal.transcript
             terminal.send("y")
-        approvals = 0 if mode == "auto" else 3 if mode == "orchestration" else 1
+        if mode == "mode-switch":
+            terminal.expect("Allow this action?")
+            terminal.send("p")
+            terminal.expect("Choose 1–3")
+            terminal.send("3")
+            terminal.expect("Type confirm to apply.")
+            terminal.send("confirm")
+            terminal.expect("Approval setting: Approve everything")
+        approvals = 0 if mode in ("auto", "mode-switch") else 3 if mode == "orchestration" else 1
         for approval_index in range(approvals):
             terminal.expect("Allow this action?")
             terminal.send("d")
@@ -235,7 +243,7 @@ def run_case(binary, root, endpoint, mode):
             assert len(evidence) == 2 and evidence[0]["ExitStatus"] != "0" and evidence[1]["ExitStatus"] == "0", evidence
             worker = json.loads((runs[-1].parent / "tasks/observe/session.json").read_text())
             assert worker["packet"]["PlanState"]["ActiveStep"] == "Use the alternative", worker
-            assert worker["packet"]["Budget"] == {"Limit": 10, "Used": 3}, worker
+            assert worker["packet"]["Budget"] == {"Limit": state["limits"]["steps_per_task"], "Used": 3}, worker
         if mode == "orchestration":
             assert state["status"] == "completed" and len(state["results"]) == 3, state
             assert {item["task"]["id"] for item in state["results"]} == {"discover", "control", "validate"}, state
@@ -286,7 +294,7 @@ def main():
         with tempfile.TemporaryDirectory(prefix="birdhackbot-terminal-") as temporary:
             base = Path(temporary)
             endpoint = f"http://127.0.0.1:{server.server_port}/v1"
-            for mode in ["success", "reuse", "auto", "deny", "stop", "cancel", "provider-error", "question", "recovery", "orchestration"]:
+            for mode in ["success", "reuse", "auto", "mode-switch", "deny", "stop", "cancel", "provider-error", "question", "recovery", "orchestration"]:
                 root = base / ("success" if mode == "reuse" else mode)
                 root.mkdir(exist_ok=True)
                 (root / "AGENTS.md").write_text("Authorized synthetic fixture commands only.\n")

@@ -217,6 +217,9 @@ func (a taskApprover) Approve(ctx context.Context, r approval.Request) (approval
 			if err := a.console.choosePermissions(ctx); err != nil {
 				return approval.DecisionDeny, err
 			}
+			if !a.console.approvalMode().RequiresApproval(r) {
+				return approval.DecisionApproveSession, nil
+			}
 		case "y", "yes":
 			return approval.DecisionApproveOnce, nil
 		case "", "n", "no":

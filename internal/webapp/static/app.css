@@ -52,8 +52,10 @@ svg { flex-shrink: 0; }
 @media (hover: none) { .session-delete { opacity: 1; } }
 .session-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--faint); }
 .session-dot.running, .session-dot.starting { background: var(--attention); }
-.sidebar-footer { display: flex; align-items: center; gap: 8px; padding: 17px 9px; font-size: 11px; color: var(--faint); }
-.connection-dot { width: 5px; height: 5px; border-radius: 50%; background: #8d9b89; }
+.sidebar-footer { padding: 12px 0 15px; border-top: 1px solid var(--line); }
+.sidebar-footer button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px; text-align: left; color: var(--muted); font-size: 12px; }
+.sidebar-footer button:hover { color: var(--text); }
+.sidebar-footer .icon { width: 16px; height: 16px; }
 .main-column { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .main-header { height: 62px; min-height: 62px; padding: 0 22px; display: flex; align-items: center; gap: 12px; }
 .heading { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; }
@@ -264,6 +266,12 @@ input:focus { border-color: #aaaa9e; }
 .trace .activity-item { font-size: 12px; }
 .welcome p { white-space: pre-line; }
 .model-dialog { width: min(480px, calc(100vw - 32px)); color: var(--text); background: var(--surface); border: 1px solid #ffffff25; border-radius: 12px; padding: 0; box-shadow: 0 18px 80px #0009; }
+.settings-dialog { width: min(400px, calc(100vw - 32px)); }
+.settings-panel { padding: 20px; }
+.settings-option { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 13px 11px; margin-top: 8px; text-align: left; border: 1px solid var(--line); }
+.settings-option:first-of-type { margin-top: 22px; }
+.settings-option small { display: block; margin-top: 4px; color: var(--faint); font-size: 11px; }
+.settings-option > span:last-child { color: var(--faint); font-size: 20px; }
 .model-dialog::backdrop { background: #0008; }
 .model-dialog form { padding: 20px; }
 .dialog-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }

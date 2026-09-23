@@ -638,6 +638,15 @@ setInspector(!narrow.matches);
 selectTab($('workersTab'));
 $('toggleSidebar').setAttribute('aria-expanded', String(!mobile.matches));
 const permissionLabels = {per_action: 'Approve every execution', dangerous_only: 'Approve dangerous executions', full_access: 'Approve everything'};
+$('settings').onclick = () => {
+  $('settingsModelValue').textContent = current?.model || 'Choose a model';
+  $('settingsPermissionsValue').textContent = permissionLabels[current?.permission_mode] || permissionLabels.per_action;
+  $('settingsPermissions').disabled = $('permissions').disabled;
+  $('appSettingsDialog').showModal();
+};
+$('closeAppSettings').onclick = () => $('appSettingsDialog').close();
+$('settingsModel').onclick = () => { $('appSettingsDialog').close(); openModelPicker(); };
+$('settingsPermissions').onclick = () => { $('appSettingsDialog').close(); $('permissions').click(); };
 $('permissions').onclick = () => {
   const selected = current?.permission_mode || 'per_action';
   $('permissionsForm').querySelector('input[value="' + selected + '"]').checked = true;

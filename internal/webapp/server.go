@@ -2060,13 +2060,15 @@ func (r *run) approve(id, decision string) error {
 	default:
 		return fmt.Errorf("unsupported approval decision")
 	}
-	r.mu.RLock()
+	r.mu.Lock()
 	pending := r.approvals[id]
-	r.mu.RUnlock()
 	if pending == nil {
+		r.mu.Unlock()
 		return fmt.Errorf("approval is no longer pending")
 	}
+	delete(r.approvals, id)
 	pending.result <- value
+	r.mu.Unlock()
 	return nil
 }
 

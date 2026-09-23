@@ -76,6 +76,39 @@ def run_session(base, customer, goal, mode="per_action"):
     return view
 
 
+def run_pending_approval_switch(base):
+    _, intake = call(base, "/api/v1/intake")
+    _, intake = call(base, f"/api/v1/intake/{intake['id']}/messages", "POST", {"text": "record mode-switch web fixture"})
+    _, view = call(base, f"/api/v1/intake/{intake['id']}/start", "POST", {"customer": "permissions"})
+    assessment_id = view["id"]
+    path = f"/api/v1/assessments/{assessment_id}"
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        _, view = call(base, path)
+        if view.get("pending_plan"):
+            plan = view["pending_plan"]
+            call(base, f"{path}/plans/{plan['id']}", "POST", {"decision": "approved"})
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError("fixture did not propose a plan")
+    while time.monotonic() < deadline:
+        _, view = call(base, path)
+        if view["pending_approvals"]:
+            _, view = call(base, path + "/permissions", "POST", {"mode": "full_access", "acknowledge": True})
+            assert not view["pending_approvals"] and view["permission_mode"] == "full_access", view
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError("fixture did not request an execution approval")
+    while time.monotonic() < deadline:
+        _, view = call(base, path)
+        if view["status"] in ("completed", "incomplete", "aborted") and not view["model_busy"]:
+            break
+        time.sleep(0.05)
+    assert view["status"] == "completed" and not view["pending_approvals"], view
+
+
 def call_text(base, path):
     request = Request(base + path)
     try:
@@ -134,6 +167,7 @@ def main():
             second = run_session(base, "web-customer", "record the second web fixture")
             run_session(base, "permissions", "record automatic web fixture", "full_access")
             run_session(base, "permissions", "record unclassified web fixture", "dangerous_only")
+            run_pending_approval_switch(base)
             _, customer = call(base, "/api/v1/customers/web-customer")
             assert len(customer["sessions"]) == 2, customer
             assert {session["id"] for session in customer["sessions"]} == {first["id"], second["id"]}, customer

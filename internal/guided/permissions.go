@@ -31,7 +31,7 @@ func (c *Console) choosePermissions(ctx context.Context) error {
 		return nil
 	}
 	if mode != approval.EveryExecution {
-		answer, err := c.Ask(ctx, "Enable "+mode.Label()+" for this authorized VM session? Scope and prohibitions still apply. Pending actions still need a decision. Type confirm to apply.")
+		answer, err := c.Ask(ctx, "Enable "+mode.Label()+" for this authorized VM session? Scope and prohibitions still apply. Any pending execution covered by this mode will proceed. Type confirm to apply.")
 		if err != nil {
 			return err
 		}
@@ -43,6 +43,6 @@ func (c *Console) choosePermissions(ctx context.Context) error {
 	c.permissionMode = mode
 	c.mu.Unlock()
 	c.emit(consolePermissions, mode.Label())
-	c.Print("Approval setting: %s. Pending requests still need a decision.\n", mode.Label())
+	c.Print("Approval setting: %s. Covered pending executions will proceed.\n", mode.Label())
 	return nil
 }

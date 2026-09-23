@@ -21,7 +21,7 @@ type Limits struct {
 }
 
 func DefaultLimits() Limits {
-	return Limits{Workers: 2, Rounds: 6, Tasks: 8, StepsPerTask: 10, ModelCalls: 192}
+	return Limits{Workers: 2, Rounds: 8, Tasks: 12, StepsPerTask: 16, ModelCalls: 320}
 }
 
 type Task struct {
