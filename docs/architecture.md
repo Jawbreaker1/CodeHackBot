@@ -202,7 +202,7 @@ Session state is one local JSON snapshot per worker session, written through a t
 
 Canceled runs persist an aborted outcome. The TUI keeps ownership of terminal input, routes typed prompt events to the guided console, and waits for the application to finalize before quitting. Task preparation runs outside the UI update handler. Per-action approvals and worker questions use the same prompt event path as setup; the UI never creates a second stdin reader.
 
-The worker stops when execution evidence, configured context inspection, or progress persistence fails. Progress is persisted synchronously before an action starts, with a single worker-side writer; queued UI events cannot overwrite newer snapshots. Optional UI transcripts still have best-effort paths; production evidence journaling is separate future work.
+The worker stops when execution evidence, configured context inspection, or progress persistence fails. After an action it observes the actual result before proposing whole-task completion; a completion claim is evaluated against evidence. Two rejected completion claims with no intervening action or operator answer prevent a third identical-evidence evaluation and return a blocked result for coordinator revision. Progress is persisted synchronously before an action starts, with a single worker-side writer; queued UI events cannot overwrite newer snapshots. Optional UI transcripts still have best-effort paths; production evidence journaling is separate future work.
 
 ## Scope and security boundaries
 

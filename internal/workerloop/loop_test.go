@@ -63,6 +63,15 @@ func TestActionIntentCannotBecomeWorkerOutcome(t *testing.T) {
 	}
 }
 
+func TestRepeatedUnsupportedCompletionWithoutNewEvidenceStops(t *testing.T) {
+	claim := `{"type":"step_complete","summary":"The task is complete"}`
+	loop, packet, calls := fixtureWorker(t, 5, printAction, claim, continueEval, claim, continueEval, claim)
+	out, err := loop.Run(context.Background(), packet, 5)
+	if err == nil || !strings.Contains(err.Error(), "without new execution evidence") || out.Packet.TaskRuntime.State != "blocked" || *calls != 6 {
+		t.Fatalf("repeated unsupported completion was not stopped: state=%s calls=%d err=%v", out.Packet.TaskRuntime.State, *calls, err)
+	}
+}
+
 func TestWorkerRecoversAndRevisesPlanWithoutChangingGoal(t *testing.T) {
 	first := `{"type":"action","command":"cat","args":["missing.txt"],"plan":{"summary":"Read the supplied path","steps":["read supplied file"],"active_step":"read supplied file"}}`
 	second := `{"type":"action","command":"cat","args":["actual.txt"],"plan":{"summary":"The first path was absent; use the provided alternative","steps":["read alternative file","report evidence"],"active_step":"read alternative file"}}`

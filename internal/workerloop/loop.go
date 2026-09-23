@@ -101,6 +101,7 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 		return out, err
 	}
 
+	completionRejectionsWithoutAction := 0
 	for current.Budget.Used < current.Budget.Limit {
 		if policy, ok := l.Approver.(approval.ModeProvider); ok {
 			if current.BehaviorFrame.Parameters == nil {
@@ -171,6 +172,7 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 			}
 			current.RecentConversation, current.OlderConversationSummary = ctxpacket.AppendConversation(current.RecentConversation, current.OlderConversationSummary, "Operator answer: "+answer)
 			current.TaskRuntime.State = "running"
+			completionRejectionsWithoutAction = 0
 			current.RunningSummary = "Operator answered. Continue within the original goal, scope and permissions."
 			if err := l.emit(EventUserAnswered, current, "operator answer recorded"); err != nil {
 				return out, err
@@ -184,6 +186,7 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 			if !executed {
 				continue
 			}
+			completionRejectionsWithoutAction = 0
 			// Let the worker interpret this observation and decide whether its
 			// goal is met. Evaluating every action with a second model call can
 			// end a multi-step task on an action's intended outcome before the
@@ -191,6 +194,11 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 			// needs an automatic evidence check because no decision turn remains.
 			if current.Budget.Used < current.Budget.Limit {
 				continue
+			}
+		case "step_complete":
+			if completionRejectionsWithoutAction >= 2 {
+				current.TaskRuntime.State = "blocked"
+				return out, fmt.Errorf("completion remains unsupported after two evaluations without new execution evidence; coordinator must revise the task or provide a new prerequisite")
 			}
 		}
 		// An explicit completion proposal, or the final-budget action, uses the
@@ -240,6 +248,9 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 		// A judge's blocker is advice to the deciding model, not a runtime stop.
 		// It can revise the plan, gather a prerequisite, ask the operator, or stop.
 		current.RunningSummary = "Goal not yet satisfied (" + string(evaluation.Status) + "): " + evaluation.Reason
+		if response.Type == "step_complete" {
+			completionRejectionsWithoutAction++
+		}
 	}
 	current.TaskRuntime.State = "blocked"
 	return out, fmt.Errorf("worker exhausted its %d-turn budget", current.Budget.Limit)
