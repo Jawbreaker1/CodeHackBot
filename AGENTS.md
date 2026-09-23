@@ -2,6 +2,7 @@
 
 ## Authorization & Scope
 - The operator is responsible for obtaining authorization and setting the engagement scope. BirdHackBot records the operator's stated target boundaries and approvals; it does not verify ownership, demand proof, or block an exploratory run behind an authorization questionnaire.
+- Treat an operator-named hostname as that exact hostname unless the operator includes others. Resolving it does not silently add `www`, sibling subdomains, or separate IP-service targets.
 - For formal customer work, retain the authorization and Rules of Engagement details the operator supplies in the session and report. Missing owner names, document paths, windows, or escalation contacts are reporting gaps to discuss, not preconditions for using the harness.
 - `docs/roe/public-test-targets.md` governs this project's own validation targets; it is not a product allowlist for operator sessions.
 - Evidence collection must use minimal, non-sensitive data and remain stored locally in this repo/workspace.
