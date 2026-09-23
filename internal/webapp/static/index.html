@@ -92,8 +92,8 @@
       <p class="muted">Applies to this session. Scope and prohibited actions still apply. Pending approvals remain yours to decide.</p>
       <div class="model-options">
         <label class="model-option"><input type="radio" name="permission-mode" value="per_action"><span>Approve every execution<small>Review each command before it runs.</small></span></label>
-        <label class="model-option"><input type="radio" name="permission-mode" value="dangerous_only"><span>Approve dangerous executions<small>Routine actions run automatically. Model-assessed dangerous or uncertain actions ask first.</small></span></label>
-        <label class="model-option"><input type="radio" name="permission-mode" value="full_access"><span>Approve everything<small>All scoped executions run without prompting. Use only in your authorized VM environment.</small></span></label>
+        <label class="model-option"><input type="radio" name="permission-mode" value="dangerous_only"><span>Approve dangerous executions<small>Scoped plans and routine actions start automatically. Dangerous or uncertain commands ask first.</small></span></label>
+        <label class="model-option"><input type="radio" name="permission-mode" value="full_access"><span>Approve everything<small>Scoped plans and executions start automatically. Use only in your authorized VM environment.</small></span></label>
       </div>
       <label id="permissionAcknowledgement" class="permission-ack hidden"><input id="permissionAck" type="checkbox">I understand that this allows automatic executions in this session.</label>
       <p id="permissionError" class="danger" role="alert"></p>

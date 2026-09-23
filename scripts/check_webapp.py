@@ -53,6 +53,8 @@ def run_session(base, customer, goal, mode="per_action"):
     plan_approved = False
     while time.monotonic() < deadline:
         _, view = call(base, f"/api/v1/assessments/{assessment_id}")
+        if mode != "per_action":
+            assert not view.get("pending_plan"), view
         if view.get("pending_plan") and not plan_approved:
             plan = view["pending_plan"]
             task_ids = [task["id"] for task in plan.get("tasks", [])]
@@ -66,7 +68,7 @@ def run_session(base, customer, goal, mode="per_action"):
         if view["status"] in ("completed", "incomplete", "aborted") and not view["model_busy"]:
             break
         time.sleep(0.05)
-    assert view["status"] == "completed" and approved == expect_approval and len(view["results"]) == 1, view
+    assert view["status"] == "completed" and approved == expect_approval and plan_approved == (mode == "per_action") and len(view["results"]) == 1, view
     assert view["context_window"]["limit_bytes"] > 0 and view["context_window"]["used_bytes"] > 0, view
     assert any(worker.get("context_used_bytes", 0) > 0 for worker in view["workers"]), view
     status, report = call_text(base, view["report_url"])

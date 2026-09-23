@@ -189,6 +189,10 @@ VM. Scope and prohibitions still apply. No command-text heuristics classify risk
 
 The browser stores this selection with the session; new sessions default to
 per-action review. Changing mode never resolves a pending approval implicitly.
+In the browser, the default mode also asks the operator to select proposed
+worker tasks. Either automatic mode starts all proposed tasks without a plan
+selection prompt; dangerous-only mode still pauses for dangerous or uncertain
+executions. The plan remains visible and the operator can stop the run.
 The CLI exposes the same choices through `/permissions` and starts each app
 invocation with per-action review. Approval cards lead with purpose, target,
 and effects; exact invocations and working directories are available on demand.

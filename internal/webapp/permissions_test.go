@@ -3,6 +3,7 @@ package webapp
 import (
 	"context"
 	"github.com/Jawbreaker1/CodeHackBot/internal/approval"
+	"github.com/Jawbreaker1/CodeHackBot/internal/assessment"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -55,6 +56,17 @@ func TestAutomaticPermissionModesRequireAcknowledgement(t *testing.T) {
 		w := httptest.NewRecorder()
 		if _, ok := readPermission(w, r); ok || w.Code != 400 {
 			t.Fatalf("mode %s changed without confirmation", mode)
+		}
+	}
+}
+
+func TestAutomaticPermissionModesStartProposedTasksWithoutPlanPrompt(t *testing.T) {
+	plan := assessment.Decision{Tasks: []assessment.Task{{ID: "discovery"}, {ID: "research"}}}
+	for _, mode := range []approval.Mode{approval.DangerousOnly, approval.FullAccess} {
+		r := &run{permissionMode: mode}
+		review, err := r.reviewPlanWait(context.Background(), plan)
+		if err != nil || len(review.TaskIDs) != 2 || review.TaskIDs[0] != "discovery" || review.TaskIDs[1] != "research" || r.plan != nil {
+			t.Fatalf("mode %s: review=%+v pending=%v err=%v", mode, review, r.plan, err)
 		}
 	}
 }

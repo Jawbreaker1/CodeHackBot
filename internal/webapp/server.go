@@ -1930,6 +1930,14 @@ func (r *run) ask(ctx context.Context, taskID, text string) (string, error) {
 
 func (r *run) reviewPlanWait(ctx context.Context, plan assessment.Decision) (assessment.PlanReview, error) {
 	r.mu.Lock()
+	if r.permissionMode.Normalized() != approval.EveryExecution {
+		ids := make([]string, 0, len(plan.Tasks))
+		for _, task := range plan.Tasks {
+			ids = append(ids, task.ID)
+		}
+		r.mu.Unlock()
+		return assessment.PlanReview{TaskIDs: ids}, nil
+	}
 	if r.plan != nil {
 		r.mu.Unlock()
 		return assessment.PlanReview{}, fmt.Errorf("another plan is already awaiting review")
