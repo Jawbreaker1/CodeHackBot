@@ -15,8 +15,9 @@ import (
 // Draft is the model's proposed assessment. It is still subject to operator
 // review and does not grant execution permission.
 type Draft struct {
-	Goal  string `json:"goal"`
-	Scope string `json:"scope"`
+	Goal       string                `json:"goal"`
+	Scope      string                `json:"scope"`
+	Approaches []assessment.Approach `json:"approaches,omitempty"`
 }
 
 // Turn is the strict response contract for conversational intake.
@@ -66,7 +67,7 @@ Respect authorization already supplied in this conversation. When a user identif
 For work needing assessment workers, propose a concrete, minimal goal and evidence-grounded scope that preserves the stated authorization. This includes authorized local maintenance requested as part of an assessment, not only target probing. If the operator asks for a plan, explain the likely investigation stages concisely and label tool or worker choices as provisional; the assessment coordinator will choose tasks from observed evidence after proposal review. Apply the configured safety defaults instead of asking the user to repeat every prohibition. Device contact and arbitrary tools run through assessment workers after proposal review and action approvals; local observation cannot probe targets. Do not expand permission to other devices, authentication attempts, exploitation, or changes merely because discovery was requested. Use the assessment session's normal report unless the operator specifically requests an additional output path; do not add an invented report location to the proposal goal or scope.
 Return exactly one JSON object: {"reply":"natural response", "proposal":null, "tool":null}.
 For a local observation set tool to {"name":"advertised tool", "path":"optional directory"} and proposal:null. Use host_system for operating-system or host identity questions, list_directory for workspace entry questions, and local_network for this host's connectivity metadata. Describe briefly what you will inspect. After the tool result, answer from the observation with a concise, readable summary and mention relevant limits; do not paste an opaque JSON dump unless the operator asks for raw evidence.
-For a target assessment set proposal to {"goal":"objective", "scope":"resolved target boundaries, allowed actions, exclusions"} and tool:null. Use both null for ordinary discussion, clarification, cancellation, or correction. Never invent tool results, paths, targets, or authorization.`
+For a target assessment set proposal to {"goal":"objective", "scope":"resolved target boundaries, allowed actions, exclusions", "approaches":[{"id":"focused","label":"Focused","description":"what this depth covers and leaves open","estimate":"rough elapsed time range"},{"id":"balanced","label":"Balanced","description":"what this depth covers and leaves open","estimate":"rough elapsed time range"},{"id":"thorough","label":"Thorough","description":"what this depth covers and leaves open","estimate":"rough elapsed time range"}]} and tool:null. Tailor the three approaches and rough elapsed-time ranges to the actual goal and known environment. Include likely model/tool latency and operator review in the ranges; do not imply that a test finishes as fast as its underlying shell command. Keep each description short and plain; say in reply that estimates are preliminary and may change after discovery, approvals, or long-running tools. These are choices about investigation depth, not extra authorization or a fixed test sequence. Use both null for ordinary discussion, clarification, cancellation, or correction. Never invent tool results, paths, targets, or authorization.`
 
 // Turn uses a bounded sequence of model-selected, approved local observations.
 // Target execution and delegation remain in the existing assessment runtime.
@@ -168,6 +169,18 @@ func DecodeTurn(raw string) (Turn, error) {
 	}
 	if turn.Proposal != nil && (strings.TrimSpace(turn.Proposal.Goal) == "" || strings.TrimSpace(turn.Proposal.Scope) == "") {
 		return Turn{}, fmt.Errorf("intake proposal must include goal and scope")
+	}
+	if turn.Proposal != nil && len(turn.Proposal.Approaches) > 0 {
+		if len(turn.Proposal.Approaches) != 3 {
+			return Turn{}, fmt.Errorf("intake proposal needs three investigation approaches")
+		}
+		seen := map[string]bool{}
+		for _, approach := range turn.Proposal.Approaches {
+			if approach.ID == "" || seen[approach.ID] || strings.TrimSpace(approach.Label) == "" || strings.TrimSpace(approach.Description) == "" || strings.TrimSpace(approach.Estimate) == "" {
+				return Turn{}, fmt.Errorf("intake proposal has an incomplete or duplicate approach")
+			}
+			seen[approach.ID] = true
+		}
 	}
 	return turn, nil
 }

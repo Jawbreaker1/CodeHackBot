@@ -222,7 +222,8 @@ function renderTranscript() {
   let trace = [];
   const flushTrace = () => { if (trace.length) items.push(traceNode(trace)); trace = []; };
   for (const item of timeline) {
-    if (item.record) trace.push(item.record);
+    if (item.record?.event.kind === 'round_update') { flushTrace(); items.push(messageNode({role:'assistant', text:item.record.event.message, at:'round-' + item.record.sequence})); }
+    else if (item.record) trace.push(item.record);
     else if (item.conclusion) { flushTrace(); items.push(messageNode({role: 'assistant', text: item.conclusion, at: 'conclusion-' + current.id})); }
     else if (item.report) { flushTrace(); items.push(reportNode(item.report)); }
     else { flushTrace(); items.push(messageNode(item.message)); }
@@ -299,6 +300,8 @@ function renderOverview(view) {
   $('assessmentStatus').dataset.state = view.status;
   renderWorkStatus(view);
   $('assessmentGoal').textContent = view.goal || 'Workers appear here as the coordinator delegates work.';
+  $('assessmentApproach').classList.toggle('hidden', !view.approach);
+  $('assessmentApproach').textContent = view.approach ? `${view.approach.label} investigation · initial estimate ${view.approach.estimate}` : '';
   $('assessmentMetrics').classList.toggle('hidden', !assessment);
   $('assessmentMetrics').textContent = (view.usage?.calls || 0) + ' assessment calls · ' + (view.post_run_usage?.calls || 0) + ' follow-up calls · ' + (view.plans || 0) + ' plans';
   const context = view.context_window || {};
@@ -326,6 +329,18 @@ function renderOverview(view) {
     $('proposalGoal').textContent = view.proposal.goal;
     $('proposalScope').textContent = view.proposal.scope;
     if (!$('customer').value.trim() || view.customer) $('customer').value = view.customer || '';
+  }
+  if (changed('approaches', [view.id, view.proposal?.approaches])) {
+    const options = view.proposal?.approaches || [];
+    $('approachSection').classList.toggle('hidden', !options.length);
+    $('approachOptions').replaceChildren(...options.map((option, index) => {
+      const label = node('label', 'approach-option');
+      const input = document.createElement('input');
+      input.type = 'radio'; input.name = 'approach'; input.value = option.id;
+      input.checked = index === Math.floor(options.length / 2);
+      label.append(input, node('strong', '', `${option.label} · ${option.estimate}`), node('small', '', option.description));
+      return label;
+    }));
   }
   $('customerReport').classList.toggle('hidden', !assessment);
   if (assessment) $('customerReport').href = '/api/v1/customers/' + encodeURIComponent(view.customer) + '/report';
@@ -582,7 +597,7 @@ $('startForm').onsubmit = async event => {
   const token = selection;
   starting = true; $('start').disabled = true; updateComposer();
   try {
-    const view = await api('/api/v1/intake/' + encodeURIComponent(current.id) + '/start', {method:'POST', body:JSON.stringify({customer:$('customer').value.trim()})});
+    const view = await api('/api/v1/intake/' + encodeURIComponent(current.id) + '/start', {method:'POST', body:JSON.stringify({customer:$('customer').value.trim(), approach_id:document.querySelector('#approachOptions input:checked')?.value || ''})});
     if (token !== selection) return;
     eventRecords = new Map();
     renderView(view); localStorage.setItem('birdhackbot.selectedSession', sessionPath(view)); refreshSidebar(); setInspector(true);

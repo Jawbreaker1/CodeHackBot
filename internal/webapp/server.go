@@ -338,7 +338,8 @@ type modelRequest struct {
 }
 
 type intakeStartRequest struct {
-	Customer string `json:"customer"`
+	Customer   string `json:"customer"`
+	ApproachID string `json:"approach_id,omitempty"`
 }
 
 type intakeCustomerRequest struct {
@@ -432,6 +433,7 @@ type assessmentView struct {
 	ID               string                `json:"id"`
 	Goal             string                `json:"goal"`
 	Scope            string                `json:"scope"`
+	Approach         *assessment.Approach  `json:"approach,omitempty"`
 	Status           string                `json:"status"`
 	Conclusion       string                `json:"conclusion,omitempty"`
 	Model            string                `json:"model"`
@@ -735,7 +737,7 @@ func (s *Server) intakeRoute(w http.ResponseWriter, r *http.Request) {
 		if !decodeJSON(w, r, &input) {
 			return
 		}
-		currentView, err := s.startIntake(current, input.Customer)
+		currentView, err := s.startIntake(current, input.Customer, input.ApproachID)
 		if err != nil {
 			writeError(w, http.StatusConflict, err.Error())
 			return
@@ -967,7 +969,7 @@ func (s *Server) intakeMessage(ctx context.Context, current *intakeRun, text str
 	return nil
 }
 
-func (s *Server) startIntake(current *intakeRun, customer string) (assessmentView, error) {
+func (s *Server) startIntake(current *intakeRun, customer, approachID string) (assessmentView, error) {
 	customer = strings.TrimSpace(customer)
 	current.mu.Lock()
 	if customer == "" {
@@ -986,6 +988,23 @@ func (s *Server) startIntake(current *intakeRun, customer string) (assessmentVie
 		return assessmentView{}, fmt.Errorf("model endpoint and model are required; configure the web server first")
 	}
 	proposal := cloneDraft(current.proposal)
+	var selectedApproach *assessment.Approach
+	if len(proposal.Approaches) > 0 {
+		for i := range proposal.Approaches {
+			if proposal.Approaches[i].ID == approachID {
+				choice := proposal.Approaches[i]
+				selectedApproach = &choice
+				break
+			}
+		}
+		if selectedApproach == nil {
+			current.mu.Unlock()
+			return assessmentView{}, fmt.Errorf("choose an investigation approach before starting")
+		}
+	} else if approachID != "" {
+		current.mu.Unlock()
+		return assessmentView{}, fmt.Errorf("the selected investigation approach is unavailable")
+	}
 	client := current.client
 	current.customer = customer
 	current.busy = true
@@ -1008,6 +1027,7 @@ func (s *Server) startIntake(current *intakeRun, customer string) (assessmentVie
 		return assessmentView{}, err
 	}
 	created.mu.Lock()
+	created.state.Approach = selectedApproach
 	created.permissionMode = current.permissionMode
 	created.client = client
 	created.profileID = current.profileID
@@ -1155,6 +1175,7 @@ func cloneDraft(draft *intake.Draft) *intake.Draft {
 		return nil
 	}
 	copy := *draft
+	copy.Approaches = append([]assessment.Approach(nil), draft.Approaches...)
 	return &copy
 }
 
@@ -1660,11 +1681,12 @@ func (s *Server) runAssessment(ctx context.Context, current *run) {
 	initial := current.state
 	current.mu.RUnlock()
 	runner := assessment.Coordinator{
-		LLM:    client,
-		Budget: budget,
-		Frame:  s.config.Frame,
-		Limits: s.config.Limits,
-		Emit:   current.emit,
+		LLM:      client,
+		Budget:   budget,
+		Frame:    s.config.Frame,
+		Limits:   s.config.Limits,
+		Approach: initial.Approach,
+		Emit:     current.emit,
 		Approver: func(task assessment.Task) approval.Approver {
 			return &runApprover{run: current, taskID: task.ID}
 		},
@@ -2114,7 +2136,7 @@ func (r *run) view(after string) assessmentView {
 	if strings.TrimSpace(model) == "" {
 		model = r.state.Model
 	}
-	view := assessmentView{Customer: r.customer, ID: r.id, Goal: r.goal, Scope: r.scope, Status: r.status, Model: model, ModelProfile: r.profileID, ModelBusy: r.chatBusy || r.started, CanChangeModel: !r.chatBusy && !r.started && r.status == "draft", Resumable: !r.started && r.status != "draft" && r.status != "completed" && r.status != "completed_with_gaps", UpdatedAt: r.updatedAt, Error: r.state.Error, StartedAt: r.state.StartedAt, FinishedAt: r.state.FinishedAt, Usage: r.state.Usage, PostRunUsage: r.postRunUsage, Plans: len(r.state.Plans), Results: append([]assessment.Result(nil), r.state.Results...), Messages: messageViews(r.messages, "assessments", r.id), ReportURL: "/api/v1/assessments/" + r.id + "/report"}
+	view := assessmentView{Customer: r.customer, ID: r.id, Goal: r.goal, Scope: r.scope, Approach: r.state.Approach, Status: r.status, Model: model, ModelProfile: r.profileID, ModelBusy: r.chatBusy || r.started, CanChangeModel: !r.chatBusy && !r.started && r.status == "draft", Resumable: !r.started && r.status != "draft" && r.status != "completed" && r.status != "completed_with_gaps", UpdatedAt: r.updatedAt, Error: r.state.Error, StartedAt: r.state.StartedAt, FinishedAt: r.state.FinishedAt, Usage: r.state.Usage, PostRunUsage: r.postRunUsage, Plans: len(r.state.Plans), Results: append([]assessment.Result(nil), r.state.Results...), Messages: messageViews(r.messages, "assessments", r.id), ReportURL: "/api/v1/assessments/" + r.id + "/report"}
 	if r.persistErr != nil {
 		view.Error = r.persistErr.Error()
 	}

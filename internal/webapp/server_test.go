@@ -326,8 +326,14 @@ func TestServerUsesModelLedIntakeAndCoordinatorChat(t *testing.T) {
 	if view.Status != "ready" || view.Proposal == nil || len(view.Messages) != 2 {
 		t.Fatalf("intake response = %#v", view)
 	}
-	started := postJSON[assessmentView](t, httpServer.URL+"/api/v1/intake/"+view.ID+"/start", intakeStartRequest{Customer: "intake-fixture"})
-	if started.Customer != "intake-fixture" {
+	if len(view.Proposal.Approaches) != 3 {
+		t.Fatalf("intake did not offer investigation depth: %+v", view.Proposal)
+	}
+	if status := postStatus(t, httpServer.URL+"/api/v1/intake/"+view.ID+"/start", intakeStartRequest{Customer: "intake-fixture", ApproachID: "unknown"}); status != http.StatusConflict {
+		t.Fatalf("unknown investigation approach started an assessment: %d", status)
+	}
+	started := postJSON[assessmentView](t, httpServer.URL+"/api/v1/intake/"+view.ID+"/start", intakeStartRequest{Customer: "intake-fixture", ApproachID: "balanced"})
+	if started.Customer != "intake-fixture" || started.Approach == nil || started.Approach.ID != "balanced" {
 		t.Fatalf("started assessment = %#v", started)
 	}
 	chat := postJSON[assessmentView](t, httpServer.URL+"/api/v1/assessments/"+started.ID+"/messages", messageRequest{Text: "What is the worker doing right now?"})
@@ -792,7 +798,7 @@ func webModelFixture(w http.ResponseWriter, r *http.Request) {
 	}
 	response := `{"type":"bash","command":"printf","args":["%s","web fixture"],"summary":"recorded web fixture"}`
 	if len(request.Messages) > 0 && strings.Contains(request.Messages[0].Content, "conversational assessment orchestrator") {
-		response = `{"reply":"I can coordinate that authorized synthetic check. I have enough detail to propose one bounded observation.","proposal":{"goal":"record the web fixture","scope":"Authorized synthetic fixture only; run one printf command and approve each action."}}`
+		response = `{"reply":"I can coordinate that authorized synthetic check. These times are preliminary.","proposal":{"goal":"record the web fixture","scope":"Authorized synthetic fixture only; run one printf command and approve each action.","approaches":[{"id":"focused","label":"Focused","description":"One bounded check","estimate":"a few minutes"},{"id":"balanced","label":"Balanced","description":"Check and review the result","estimate":"several minutes"},{"id":"thorough","label":"Thorough","description":"Follow any new leads","estimate":"longer if leads appear"}]}}`
 	} else if len(request.Messages) > 0 && strings.Contains(request.Messages[0].Content, "conversational interface") {
 		response = `The worker is waiting for your approval before it runs the proposed action.`
 	} else if strings.Contains(latest, "Evaluate whether the original worker goal") {
@@ -806,9 +812,9 @@ func webModelFixture(w http.ResponseWriter, r *http.Request) {
 		if err := json.Unmarshal([]byte(latest), &payload); err == nil {
 			if payload.Role == "assessment_coordinator" {
 				if len(payload.Assessment.Results) == 0 {
-					response = `{"summary":"web fixture plan","tasks":[{"id":"observe","goal":"record the web fixture","done_when":"fixture output is recorded","depends_on":[]}],"complete":false,"findings":[],"gaps":[]}`
+					response = `{"summary":"web fixture plan","plain_summary":"Record the fixture output.","review":"","tasks":[{"id":"observe","goal":"record the web fixture","done_when":"fixture output is recorded","depends_on":[]}],"complete":false,"findings":[],"gaps":[]}`
 				} else if len(payload.Assessment.Results) == 1 {
-					response = `{"summary":"web fixture complete","tasks":[],"complete":true,"findings":[],"gaps":["synthetic fixture"]}`
+					response = `{"summary":"web fixture complete","plain_summary":"The fixture output was recorded.","review":"The worker recorded the expected output.","tasks":[],"complete":true,"findings":[],"gaps":["synthetic fixture"]}`
 				}
 			} else if payload.Role == "worker" && strings.Contains(payload.ContextPacket, "[latest_execution_result]\naction: printf") {
 				response = `{"type":"step_complete","summary":"web fixture recorded"}`

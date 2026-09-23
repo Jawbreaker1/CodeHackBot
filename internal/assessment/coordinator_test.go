@@ -69,6 +69,22 @@ func TestCoordinatorResearchPhaseIsAnOperatorVisiblePlan(t *testing.T) {
 	}
 }
 
+func TestCoordinatorCarriesDepthAndExplainsRoundTransition(t *testing.T) {
+	approach := &Approach{ID: "focused", Label: "Focused", Description: "Check the exposed surface", Estimate: "about 10–20 minutes"}
+	state := State{Version: 1, Goal: "inspect fixture", Scope: "synthetic only", Approach: approach}
+	if !strings.Contains(coordinatorPrompt(state), `"approach":{"id":"focused"`) {
+		t.Fatal("selected investigation depth was not sent to planning")
+	}
+	update := roundUpdate(2, Decision{Review: "The first check found one reachable service but no verified weakness.", PlainSummary: "Check that service's access controls next."})
+	if !strings.Contains(update, "Round 1 complete: The first check found one reachable service") || !strings.Contains(update, "Proposed next: Check that service's access controls next.") {
+		t.Fatalf("round transition was not readable: %q", update)
+	}
+	finished := roundUpdate(2, Decision{Review: "The authorized file was read.", PlainSummary: "The file contents were confirmed.", Complete: true})
+	if finished != "Round 1 complete: The authorized file was read." {
+		t.Fatalf("completion update duplicated the final conclusion: %q", finished)
+	}
+}
+
 func TestCoordinatorPromptCompactsPriorExecutionBodies(t *testing.T) {
 	large := strings.Repeat("full shell script and output ", 10000)
 	state := State{

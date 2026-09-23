@@ -208,6 +208,14 @@ input:focus { border-color: #aaaa9e; }
 .proposal p { line-height: 1.6; }
 .proposal label { display: block; color: var(--muted); font-size: 11px; margin: 15px 0 7px; }
 .proposal .primary-button { margin-top: 10px; width: 100%; }
+.proposal .proposal-kicker { margin: 17px 0 8px; color: var(--text); font-size: 11px; font-weight: 600; }
+.approach-options { display: grid; gap: 6px; }
+.proposal .approach-option { display: grid; grid-template-columns: auto 1fr; gap: 2px 9px; margin: 0; padding: 9px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
+.approach-option:has(input:checked) { border-color: #b2aea3; background: #ffffff09; }
+.approach-option input { grid-row: span 2; width: auto; margin: 3px 0 0; accent-color: var(--attention); }
+.approach-option strong { font-size: 11px; color: var(--text); }
+.approach-option small { grid-column: 2; font-size: 10px; color: var(--muted); line-height: 1.5; }
+.proposal .estimate-note { margin: 7px 0 0; font-size: 10px; color: var(--faint); }
 .evidence-item { padding: 10px 0; border-top: 1px solid var(--line); }
 .evidence-item p { max-height: 180px; overflow: auto; }
 .evidence-image-link { display: block; max-width: 100%; margin: 10px 0; }

@@ -25,3 +25,11 @@ func TestDecodeTurnRequiresExactProtocol(t *testing.T) {
 		t.Fatal("tool and proposal must not be combined")
 	}
 }
+
+func TestDecodeTurnAcceptsEstimatedInvestigationApproaches(t *testing.T) {
+	raw := `{"reply":"These are preliminary estimates.","proposal":{"goal":"inspect fixture","scope":"synthetic only","approaches":[{"id":"focused","label":"Focused","description":"One relevant check","estimate":"10–20 minutes"},{"id":"balanced","label":"Balanced","description":"Check observed surfaces","estimate":"30–60 minutes"},{"id":"thorough","label":"Thorough","description":"Follow more leads","estimate":"1–2 hours"}]}}`
+	turn, err := DecodeTurn(raw)
+	if err != nil || turn.Proposal == nil || len(turn.Proposal.Approaches) != 3 || turn.Proposal.Approaches[1].ID != "balanced" {
+		t.Fatalf("estimated choices were lost: turn=%+v err=%v", turn, err)
+	}
+}

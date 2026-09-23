@@ -43,6 +43,9 @@ func (d *assessmentDashboard) apply(e assessment.Event) []string {
 		if e.Kind == "plan" {
 			return []string{"Coordinator plan: " + dashboardText(e.Message, 180)}
 		}
+		if e.Kind == "round_update" {
+			return []string{"Coordinator: " + e.Message}
+		}
 		return nil
 	}
 

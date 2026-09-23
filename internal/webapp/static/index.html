@@ -55,6 +55,7 @@
         <section class="assessment-overview">
           <div class="status-row"><span id="assessmentStatus" class="status">Not started</span><span><button id="resume" class="text-button hidden">Resume</button><button id="stop" class="text-button danger hidden">Stop all</button></span></div>
           <p id="assessmentGoal" class="overview-goal">Workers appear here as the coordinator delegates work.</p>
+          <p id="assessmentApproach" class="muted hidden"></p>
           <div id="assessmentMetrics" class="metrics hidden"></div>
           <div id="contextWindow" class="context-window hidden" aria-label="Current input context usage">
             <div class="context-window-header"><span>Input context</span><strong id="contextUsageLabel"></strong></div>
@@ -64,7 +65,7 @@
           <details id="scopeDetails" class="hidden"><summary>Scope & limits</summary><p id="assessmentScope" class="pre-wrap"></p><p id="assessmentLimits" class="muted"></p></details>
           <a id="report" class="report-link hidden" target="_blank" rel="noopener">Session report ↗</a>
         </section>
-        <section id="proposalReview" class="proposal hidden"><h3>Review assessment</h3><p id="proposalGoal"></p><details open><summary>Scope & permissions</summary><p id="proposalScope" class="pre-wrap"></p></details><form id="startForm"><label for="customer">Customer workspace</label><input id="customer" aria-label="Customer workspace" placeholder="e.g. internal-lab" pattern="[A-Za-z0-9_-]+" maxlength="80" required><button id="start" class="primary-button" type="submit">Start assessment</button></form></section>
+        <section id="proposalReview" class="proposal hidden"><h3>Review assessment</h3><p id="proposalGoal"></p><details open><summary>Scope & permissions</summary><p id="proposalScope" class="pre-wrap"></p></details><form id="startForm"><div id="approachSection" class="hidden"><p class="proposal-kicker">Choose how deep to investigate</p><div id="approachOptions" class="approach-options"></div><p class="estimate-note">Time ranges are early estimates. Discovery, approvals, and slow tools can change them.</p></div><label for="customer">Customer workspace</label><input id="customer" aria-label="Customer workspace" placeholder="e.g. internal-lab" pattern="[A-Za-z0-9_-]+" maxlength="80" required><button id="start" class="primary-button" type="submit">Start assessment</button></form></section>
         <section id="planTimeline" class="plan-timeline hidden" aria-label="Coordinator plan"></section>
         <div id="inspectorTabs" class="tabs" role="tablist" aria-label="Assessment detail">
           <button id="workersTab" role="tab" aria-selected="true" aria-controls="workersPanel" data-panel="workersPanel">Workers</button>

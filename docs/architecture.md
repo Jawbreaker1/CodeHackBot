@@ -36,6 +36,8 @@ The product has two UI adapters over the same assessment runtime:
 
 Both surfaces call the shared `internal/assessment` coordinator; neither should call `internal/workerloop` directly. The local subscription bridge remains an inference-provider adapter and is not the user-facing assessment API. Bind the web server to loopback by default until authentication, authorization, CSRF/origin handling, and deployment policy are implemented. Do not add an embedded desktop wrapper until the browser product is useful; a Wails-style wrapper can be considered later if native packaging is required.
 
+Before first execution, model-led intake can propose three investigation depths with preliminary elapsed-time ranges. The operator's selection is saved in the assessment and guides planning; it neither expands scope nor guarantees a deadline. Each coordinator decision supplies a short plain-language purpose and, after round one, a review of what the preceding worker evidence established. Both interfaces show these updates in the conversation; detailed tasks, raw activity, and evidence remain available for inspection.
+
 ## Ownership
 
 | Component | Owns | Does not own |

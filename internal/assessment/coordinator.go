@@ -26,6 +26,7 @@ type Coordinator struct {
 	Limits       Limits
 	Budget       *ModelBudget    // Shared with live operator chat when supplied.
 	Conversation func() []string // Durable operator conversation excerpts.
+	Approach     *Approach       // Selected during intake for a new assessment.
 	Snapshot     func(State)     // Read-only snapshot; called by the coordinator goroutine.
 }
 
@@ -84,6 +85,9 @@ func (c Coordinator) run(ctx context.Context, root string, initial State) (state
 		return state, err
 	}
 	state = initial
+	if state.Approach == nil {
+		state.Approach = c.Approach
+	}
 	state.ID, state.Model, state.Status, state.Limits = filepath.Base(root), c.LLM.Model, "running", limits
 	state.Error, state.FinishedAt = "", time.Time{}
 	state.ReasoningEffort = c.LLM.ReasoningEffort
@@ -139,6 +143,9 @@ func (c Coordinator) run(ctx context.Context, root string, initial State) (state
 		d, err := c.decide(ctx, root, round, state)
 		if err != nil {
 			return state, err
+		}
+		if update := roundUpdate(round, d); update != "" {
+			c.emit(Event{Kind: "round_update", Message: update})
 		}
 		selectedTasks := append([]Task(nil), d.Tasks...)
 		d.ApprovedTaskIDs = nil
@@ -259,6 +266,26 @@ func (c Coordinator) run(ctx context.Context, root string, initial State) (state
 	return state, fmt.Errorf("assessment reached its planning-round limit; review the partial report")
 }
 
+func roundUpdate(round int, d Decision) string {
+	parts := make([]string, 0, 2)
+	if round > 1 && strings.TrimSpace(d.Review) != "" {
+		parts = append(parts, fmt.Sprintf("Round %d complete: %s", round-1, strings.TrimSpace(d.Review)))
+	}
+	if strings.TrimSpace(d.PlainSummary) != "" {
+		label := "Proposed next"
+		if round == 1 {
+			label = "First step"
+		} else if d.Complete {
+			if len(parts) > 0 {
+				return strings.Join(parts, "\n")
+			}
+			label = "Conclusion"
+		}
+		parts = append(parts, label+": "+strings.TrimSpace(d.PlainSummary))
+	}
+	return strings.Join(parts, "\n")
+}
+
 // An invalid proposal gets one correction from the same model under the same
 // budget. Nothing from the rejected proposal executes or becomes evidence.
 func (c Coordinator) decide(ctx context.Context, root string, round int, state State) (Decision, error) {
@@ -356,6 +383,7 @@ func coordinatorPayload(state State) coordinatorModelPacket {
 		Role: "assessment_coordinator",
 		Instructions: []string{
 			"Return one JSON object only: {phase:\"research\" or \"assessment\", summary, plain_summary, review, tasks:[{id,goal,done_when,depends_on:[],strategy_hints:[]}], complete:false, findings:[], gaps:[]}. Keep summary as the detailed technical plan. plain_summary is one short, readable sentence explaining what this round will do; for completion, state the final result. review is one short, readable sentence about what the previous round actually established, or empty in round one. Separate a finished worker from a met assessment goal; say plainly when access or a finding was not yet verified. Avoid jargon in these two operator-facing fields unless it is needed for accuracy.",
+			"The assessment.approach, when present, is the operator's chosen depth. Fit the work to its intent while still reacting to evidence and respecting scope and runtime limits. It is a planning preference, not permission for new actions or a guaranteed time budget. If the estimate changes materially after discovery, explain that in plain_summary or review.",
 			"Use the local strategy catalog in the behavior frame as a small index. For each task, suggest zero to two exact guide paths in strategy_hints when their descriptions fit the assigned outcome or a known failure. Do not list every plausible guide. A suggestion is optional context: the worker decides whether and when to load a full guide and may choose a different one as evidence develops.",
 			"Coordinate an authorized lab assessment. Choose one or two bounded workers per round according to the useful independent work, not a fixed worker count. Do not execute tools yourself.",
 			"If relevant strategy, software identity, advisory coverage, or attack-path knowledge is missing before a credible test plan, set phase:research and assign bounded research workers first. They may consult the local strategy catalog and permitted Kali, source, advisory, CVE, or Metasploit resources, recording provenance and gaps. After their results, replan with phase:assessment. Use research again when later discoveries require it; do not make it a mandatory opening round or claim complete knowledge before testing. Research is a visible plan, not execution permission.",
@@ -435,6 +463,7 @@ type coordinatorPromptState struct {
 	ID               string            `json:"id"`
 	Goal             string            `json:"goal"`
 	Scope            string            `json:"scope"`
+	Approach         *Approach         `json:"approach,omitempty"`
 	Model            string            `json:"model"`
 	Status           string            `json:"status"`
 	Limits           Limits            `json:"limits"`
@@ -475,7 +504,8 @@ func compactCoordinatorState(state State) coordinatorPromptState {
 	}
 	return coordinatorPromptState{
 		Version: state.Version, ID: state.ID, Goal: state.Goal, Scope: state.Scope,
-		Model: state.Model, Status: state.Status, Limits: state.Limits,
+		Approach: state.Approach,
+		Model:    state.Model, Status: state.Status, Limits: state.Limits,
 		Plans: plans, Results: compactPriorResults(state.Results),
 		OperatorMessages: messages, Usage: state.Usage,
 	}

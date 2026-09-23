@@ -112,6 +112,15 @@ type Decision struct {
 	Gaps            []string  `json:"gaps"`
 }
 
+// Approach is an operator-selected investigation depth proposed during intake.
+// Its time estimate is preliminary; worker evidence may change the plan.
+type Approach struct {
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Description string `json:"description"`
+	Estimate    string `json:"estimate"`
+}
+
 // PlanReview is the operator's selection of model-proposed tasks. The model
 // proposes; the operator decides which bounded tasks may run.
 type PlanReview struct {
@@ -123,6 +132,7 @@ type State struct {
 	ID               string     `json:"id"`
 	Goal             string     `json:"goal"`
 	Scope            string     `json:"scope"`
+	Approach         *Approach  `json:"approach,omitempty"`
 	Model            string     `json:"model"`
 	ReasoningEffort  string     `json:"reasoning_effort,omitempty"`
 	MaxOutputTokens  int        `json:"max_output_tokens,omitempty"`

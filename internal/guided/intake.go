@@ -3,6 +3,7 @@ package guided
 import (
 	"context"
 
+	"github.com/Jawbreaker1/CodeHackBot/internal/assessment"
 	"github.com/Jawbreaker1/CodeHackBot/internal/intake"
 	"github.com/Jawbreaker1/CodeHackBot/internal/llmclient"
 )
@@ -38,5 +39,5 @@ func draftFromIntake(draft *intake.Draft) *assessmentDraft {
 	if draft == nil {
 		return nil
 	}
-	return &assessmentDraft{Goal: draft.Goal, Scope: draft.Scope}
+	return &assessmentDraft{Goal: draft.Goal, Scope: draft.Scope, Approaches: append([]assessment.Approach(nil), draft.Approaches...)}
 }

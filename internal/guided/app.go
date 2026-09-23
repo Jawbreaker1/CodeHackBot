@@ -108,8 +108,9 @@ type savedAssessment struct {
 }
 
 type assessmentDraft struct {
-	Goal  string
-	Scope string
+	Goal       string
+	Scope      string
+	Approaches []assessment.Approach
 }
 
 func findSavedAssessments(base string) []savedAssessment {
@@ -238,6 +239,27 @@ func (a App) runPlain(ctx context.Context) error {
 		goal, scope := draft.Goal, draft.Scope
 		limits := assessment.DefaultLimits()
 		c.Print("\nAssessment review\nGoal: %s\nDeclared scope: %s\nProvider: %s / %s\nPermissions: %s\nLimits: up to %d workers, %d tasks, %d model calls\n", goal, scope, prefs.Provider, prefs.Model, c.approvalMode().Label(), limits.Workers, limits.Tasks, limits.ModelCalls)
+		var selectedApproach *assessment.Approach
+		if len(draft.Approaches) > 0 {
+			c.Print("\nChoose investigation depth (preliminary time estimates; discovery and approvals may change them):\n")
+			for i, option := range draft.Approaches {
+				c.Print("  %d. %s · %s\n     %s\n", i+1, option.Label, option.Estimate, option.Description)
+			}
+			choice, err := c.Ask(ctx, "Choose 1-3, or press Enter for the middle option")
+			if err != nil {
+				return err
+			}
+			index := 1
+			if strings.TrimSpace(choice) != "" {
+				if _, err := fmt.Sscanf(choice, "%d", &index); err != nil || index < 1 || index > len(draft.Approaches) {
+					c.Print("Invalid depth choice; assessment canceled before execution.\n")
+					return nil
+				}
+				index--
+			}
+			selected := draft.Approaches[index]
+			selectedApproach = &selected
+		}
 		c.Print("Requested reasoning: %s\n", reasoningLabel(prefs))
 		if prefs.Provider == "local" {
 			c.Print("Local response budget: %d output tokens, up to 10 minutes per request. Ctrl-C remains available.\n", prefs.MaxOutputTokens)
@@ -268,7 +290,7 @@ func (a App) runPlain(ctx context.Context) error {
 		}
 		c.Print("\nAssessment directory: %s\n", root)
 		c.assessmentStarted()
-		return a.runAssessmentWithFrame(ctx, c, prefs, client, root, assessment.State{Goal: goal, Scope: scope}, frame)
+		return a.runAssessmentWithFrame(ctx, c, prefs, client, root, assessment.State{Goal: goal, Scope: scope, Approach: selectedApproach}, frame)
 	}
 }
 
@@ -363,7 +385,7 @@ func (a App) runAssessmentWithFrame(ctx context.Context, c *Console, prefs prefe
 	}
 	budget := assessment.NewModelBudget(limits.ModelCalls, initial.Usage)
 	chatClient := budget.Client(client)
-	runner := assessment.Coordinator{LLM: client, Budget: budget, Frame: frame, Limits: limits, Emit: c.Progress, Approver: func(task assessment.Task) approval.Approver {
+	runner := assessment.Coordinator{LLM: client, Budget: budget, Frame: frame, Limits: limits, Approach: initial.Approach, Emit: c.Progress, Approver: func(task assessment.Task) approval.Approver {
 		return taskApprover{console: c, task: task, scope: scope}
 	}}
 	conversation := &assessmentConversation{}

@@ -18,6 +18,7 @@ const phases = {
   task_failed: 'Failed', failed: 'Failed', task_blocked: 'Blocked', blocked: 'Blocked',
   aborted: 'Stopped', waiting_user: 'Needs your input', planning: 'Planning',
   plan: 'Assessment plan', assessment_started: 'Assessment started',
+  round_update: 'Coordinator update',
   assessment_finished: 'Assessment finished', assessment_stop_requested: 'Stopping workers',
 };
 export const phaseLabel = (kind) => phases[kind] || kind;
@@ -251,7 +252,7 @@ export function renderCoordinatorPlans(view) {
     needs_attention: ['Needs review', 'A worker stopped or failed. The coordinator needs to review what was established.'],
     not_run: ['Not run', 'No worker ran in this round.'],
     awaiting_review: ['Awaiting review', 'The workers finished. The coordinator has not reported what their results mean yet.'],
-    continued: ['Goal not yet confirmed', 'The workers finished, but the coordinator had not confirmed the assessment goal. It continued with a revised plan.'],
+    continued: ['Round reviewed', 'The coordinator reviewed this round’s evidence. Its conclusion appears below.'],
     candidate: ['Possible finding', 'The coordinator reported a possible finding. Independent verification was still needed.'],
     verified: ['Finding verified', 'A separate worker verified a finding from this round.'],
     verified_final: ['Assessment complete', 'The assessment ended with an independently verified finding.'],

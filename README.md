@@ -8,7 +8,7 @@ BirdHackBot is System Verification's security testing platform for authorized as
 
 The full raven wordmark is used for larger presentation; the web console switches to a compact raven-head mark at favicon and small-header sizes so the eye and silhouette remain legible.
 
-The product is organized around a conversation with a coordinator. Explain the situation in plain language, let the coordinator build and adapt a test sequence, choose which bounded tasks may run, and follow parallel workers as they collect evidence. Chat is the control surface; analysis and reporting are separate review surfaces.
+The product is organized around a conversation with a coordinator. Explain the situation in plain language, review preliminary focused/balanced/thorough investigation choices and time ranges, then let the coordinator build and adapt a test sequence. Choose which bounded tasks may run and follow parallel workers as they collect evidence. After each round, the coordinator briefly explains what the evidence established and what it proposes to do next. Chat is the control surface; analysis and reporting are separate review surfaces.
 
 ## Screenshots
 
