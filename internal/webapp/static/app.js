@@ -136,11 +136,11 @@ function chatApprovalNode(item, kind) {
   const box = node('article', 'chat-approval');
   box.setAttribute('aria-live', 'assertive');
   const observation = kind === 'observation';
-  const observationNames = {host_system: 'Identify this computer’s operating system', local_network: 'Inspect this computer’s network metadata', list_directory: 'List files in the workspace'};
-  const title = observation ? observationNames[item.tool.name] || 'Inspect local metadata' : item.summary || 'Review worker execution';
+  const observationNames = {host_system: 'Identify this computer’s operating system', local_network: 'Inspect this computer’s network metadata', list_directory: 'List files in the workspace', dns_lookup: 'Look up public DNS', web_fetch: 'Read a public page'};
+  const title = observation ? item.summary || observationNames[item.tool.name] || 'Review coordinator observation' : item.summary || 'Review worker execution';
   box.append(node('div', 'chat-approval-title', title));
-  const impact = observation ? 'Reads local metadata. No target probing or file changes.' : item.impact || 'The worker has not explained the effects. Review the command before approving.';
-  if (!observation && item.target) box.append(node('p', 'approval-target', item.target));
+  const impact = observation ? item.impact || 'Read-only observation; review its exact target below.' : item.impact || 'The worker has not explained the effects. Review the command before approving.';
+  if (item.target) box.append(node('p', 'approval-target', item.target));
   box.append(node('p', 'worker-detail', impact));
   if (!observation && item.risk !== 'low') box.append(node('p', 'approval-risk', item.risk === 'dangerous' ? 'Potentially dangerous · review before running' : 'Risk uncertain · review before running'));
   const technical = node('div');

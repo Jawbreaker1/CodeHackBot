@@ -45,6 +45,8 @@ The operator has since clarified that obtaining authorization is their responsib
 
 The operator then observed another first-turn authorization checklist for an exact-hostname scan request. The same wording was not a fixed failure in a fresh build, but a reproduction silently added `www` to the proposal. Intake now explicitly makes an identified target sufficient for a proposal, treats local observation limits as separate from worker assessment capability, and keeps a named hostname exact. Three fresh Daybreak GUI runs with the operator's exact wording each produced a reviewable proposal for `opensverige.se` alone without contacting it or asking for owner paperwork. This establishes a focused intake regression check, not a guarantee of model compliance in every future turn.
 
+On 2026-09-24, a plain public-site question gained a shared intake path for approved DNS lookup and one bounded HTTP/HTTPS page fetch in connected mode. Qwen 3.8 used both tools in the browser and answered from recorded evidence without an assessment proposal; an unresolved domain produced a DNS-limited answer instead of invented page details. A repeat GUI run exposed an empty interim `reply` on a valid tool call; the protocol now accepts that while still requiring a final answer, and the next Qwen GUI smoke completed both observations and a qualified summary. Evidence files and the persisted conversation were inspected. These are targeted smoke checks of the information-request flow, not a three-run acceptance result or a security assessment. Air-gapped mode rejects external observation before approval.
+
 ## Completed: core cleanup
 
 Checkpoint: `checkpoint/pre-core-rebuild-2026-09-19` (`95edae1`). Implementation branch: `codex/core-foundation`.

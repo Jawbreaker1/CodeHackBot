@@ -221,7 +221,8 @@ func (a App) runPlain(ctx context.Context) error {
 	conversation.conversation.Inspection = &intakepkg.Inspection{
 		Workspace:   a.RepoRoot,
 		EvidenceDir: filepath.Join(a.RepoRoot, ".birdhackbot", "intake-evidence"),
-		Policy:      "Local observation only. Keep evidence minimal; do not access credentials, contact targets, or mutate files.",
+		Connected:   intakeFrame.Parameters["research_mode"] != "air_gapped" && intakeFrame.Parameters["research_mode"] != "offline",
+		Policy:      "Use local metadata and public DNS/page observations only for the operator's requested question. Keep evidence minimal; do not access credentials, scan targets, or mutate files. Broader testing belongs to assessment workers.",
 		Approver:    observationApprover{console: c},
 		Emit:        c.Progress,
 	}
@@ -294,17 +295,15 @@ func (a App) runPlain(ctx context.Context) error {
 	}
 }
 
-// observationApprover makes the coordinator's local inspection request visible
-// before it runs. It is intentionally separate from worker action approval:
-// observations are read-only and bounded, while worker commands retain the
-// normal exact-command approval flow.
+// observationApprover makes the coordinator's bounded read-only request visible
+// before it runs. Worker commands retain their separate exact-action approval.
 type observationApprover struct{ console *Console }
 
 func (a observationApprover) Approve(ctx context.Context, request approval.Request) (approval.Decision, error) {
 	if !a.console.approvalMode().RequiresApproval(request) {
 		return approval.DecisionApproveSession, ctx.Err()
 	}
-	prompt := fmt.Sprintf("\nCoordinator observation approval\nThis is a read-only local observation. It will not probe a target, read file contents, or modify the workspace.\nExact request: %s\nWorking directory: %s\nAllow this observation? [y/N]", request.Command, request.Cwd)
+	prompt := fmt.Sprintf("\nCoordinator observation approval\n%s\n%s\nTarget: %s\nExact request: %s\nAllow this observation? [y/N]", request.Summary, request.Impact, request.Target, request.Command)
 	for {
 		answer, err := a.console.Ask(ctx, prompt)
 		if err != nil {

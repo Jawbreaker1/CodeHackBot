@@ -318,14 +318,20 @@ type intakeView struct {
 }
 
 type intakeApproval struct {
-	ID     string
-	Tool   intake.ToolCall
-	Result chan approval.Decision
+	ID      string
+	Tool    intake.ToolCall
+	Summary string
+	Impact  string
+	Target  string
+	Result  chan approval.Decision
 }
 
 type intakeApprovalView struct {
-	ID   string          `json:"id"`
-	Tool intake.ToolCall `json:"tool"`
+	ID      string          `json:"id"`
+	Tool    intake.ToolCall `json:"tool"`
+	Summary string          `json:"summary,omitempty"`
+	Impact  string          `json:"impact,omitempty"`
+	Target  string          `json:"target,omitempty"`
 }
 
 type intakeMessageRequest struct {
@@ -943,7 +949,8 @@ func (s *Server) intakeMessage(ctx context.Context, current *intakeRun, text str
 	current.conversation.Inspection = &intake.Inspection{
 		Workspace:   s.config.RepoRoot,
 		EvidenceDir: filepath.Join(s.config.SessionsRoot, "intake", current.id),
-		Policy:      "These intake observations inspect only this local host and workspace. Keep them minimal; do not access credentials, contact the assessment target, or mutate files.",
+		Connected:   s.config.Frame.Parameters["research_mode"] != "air_gapped" && s.config.Frame.Parameters["research_mode"] != "offline",
+		Policy:      "Use local metadata and public DNS/page observations only for the operator's requested question. Keep them minimal; do not access credentials, scan targets, or mutate files. Broader testing belongs to assessment workers.",
 		Approver:    &intakeToolApprover{run: current},
 		Emit:        current.recordObservation,
 	}
@@ -1086,7 +1093,7 @@ func (r *intakeRun) view() intakeView {
 	var pending *intakeApprovalView
 	if r.pendingTool != nil {
 		status = "waiting_approval"
-		pending = &intakeApprovalView{ID: r.pendingTool.ID, Tool: r.pendingTool.Tool}
+		pending = &intakeApprovalView{ID: r.pendingTool.ID, Tool: r.pendingTool.Tool, Summary: r.pendingTool.Summary, Impact: r.pendingTool.Impact, Target: r.pendingTool.Target}
 	}
 	title := "New session"
 	if r.proposal != nil && strings.TrimSpace(r.proposal.Goal) != "" {
@@ -1124,7 +1131,7 @@ func (a *intakeToolApprover) Approve(ctx context.Context, request approval.Reque
 		a.run.mu.Unlock()
 		return approval.DecisionDeny, fmt.Errorf("invalid observation request")
 	}
-	pending := &intakeApproval{ID: id, Tool: tool, Result: make(chan approval.Decision, 1)}
+	pending := &intakeApproval{ID: id, Tool: tool, Summary: request.Summary, Impact: request.Impact, Target: request.Target, Result: make(chan approval.Decision, 1)}
 	a.run.pendingTool = pending
 	a.run.updatedAt = time.Now().UTC()
 	a.run.mu.Unlock()

@@ -15,12 +15,13 @@ import (
 	"github.com/Jawbreaker1/CodeHackBot/internal/execx"
 )
 
-// Inspection is a small local observation capability, not another worker or
-// arbitrary command executor. Target interaction remains owned by assessment.
+// Inspection offers fixed, read-only coordinator observations. Broader target
+// work and arbitrary commands remain owned by assessment workers.
 type Inspection struct {
 	Workspace   string
 	EvidenceDir string
 	Policy      string
+	Connected   bool
 	Approver    approval.Approver
 	Emit        func(assessment.Event)
 }
@@ -28,6 +29,8 @@ type Inspection struct {
 type ToolCall struct {
 	Name string `json:"name"`
 	Path string `json:"path,omitempty"`
+	Host string `json:"host,omitempty"`
+	URL  string `json:"url,omitempty"`
 }
 
 type Observation struct {
@@ -38,9 +41,15 @@ type Observation struct {
 	EvidenceRef string   `json:"evidence_ref,omitempty"`
 }
 
-const inspectionScope = "Local observation only: directory entry names/types within the configured workspace, this host's operating-system metadata, and kernel network metadata. Host metadata is limited to fixed read-only queries (uname, hostname, and /etc/os-release when present). No arbitrary commands, credential files, file contents beyond that fixed metadata, device probes, network packets, or mutations."
+const localInspectionScope = "Local observation: directory entry names/types within the configured workspace, this host's operating-system metadata, and kernel network metadata. Host metadata is limited to fixed read-only queries (uname, hostname, and /etc/os-release when present). No arbitrary commands, credential files, other file contents, device probes, or mutations."
+const connectedInspectionScope = " Connected observation also offers DNS lookup for a named public domain and one bounded HTTP/HTTPS page fetch from a public address. No credentials, custom headers, redirects to other hosts, private-network fetches, active scans, or mutations."
 
-func (i *Inspection) Scope() string { return inspectionScope }
+func (i *Inspection) Scope() string {
+	if i.Connected {
+		return localInspectionScope + connectedInspectionScope
+	}
+	return localInspectionScope + " External DNS and web fetch are unavailable in air-gapped mode."
+}
 
 func (i *Inspection) Run(ctx context.Context, call ToolCall) (Observation, error) {
 	observation := Observation{Tool: call, Status: "failed"}
@@ -48,10 +57,16 @@ func (i *Inspection) Run(ctx context.Context, call ToolCall) (Observation, error
 	if err != nil {
 		return observation, err
 	}
-	var relative string
+	var relative, target, summary, impact string
+	target = root
+	impact = "Reads local metadata without changing files or probing a target."
 	switch call.Name {
 	case "list_directory":
-		target := call.Path
+		if call.Host != "" || call.URL != "" {
+			observation.Error = "list_directory accepts only a path"
+			return observation, nil
+		}
+		target = call.Path
 		if target == "" {
 			target = "."
 		}
@@ -64,32 +79,67 @@ func (i *Inspection) Run(ctx context.Context, call ToolCall) (Observation, error
 			return observation, nil
 		}
 	case "local_network":
-		if call.Path != "" {
+		if call.Path != "" || call.Host != "" || call.URL != "" {
 			observation.Error = "local_network accepts no path or target"
 			return observation, nil
 		}
 	case "host_system":
-		if call.Path != "" {
+		if call.Path != "" || call.Host != "" || call.URL != "" {
 			observation.Error = "host_system accepts no path or target"
 			return observation, nil
 		}
+	case "dns_lookup":
+		if !i.Connected {
+			observation.Error = "public DNS lookup is unavailable in air-gapped mode"
+			return observation, nil
+		}
+		if call.Path != "" || call.URL != "" {
+			observation.Error = "dns_lookup accepts only a host"
+			return observation, nil
+		}
+		call.Host, err = publicDomain(call.Host)
+		if err != nil {
+			observation.Error = err.Error()
+			return observation, nil
+		}
+		target, summary, impact = call.Host, "Look up public DNS for "+call.Host, "Queries DNS for the named domain. It does not scan the site or change it."
+	case "web_fetch":
+		if !i.Connected {
+			observation.Error = "public web fetch is unavailable in air-gapped mode"
+			return observation, nil
+		}
+		if call.Path != "" || call.Host != "" {
+			observation.Error = "web_fetch accepts only a URL"
+			return observation, nil
+		}
+		parsed, parseErr := publicPageURL(call.URL)
+		if parseErr != nil {
+			observation.Error = parseErr.Error()
+			return observation, nil
+		}
+		call.URL = parsed.String()
+		target, summary, impact = call.URL, "Read public page "+call.URL, "Sends one ordinary HTTP GET to this public page. No login, form submission, or file change."
 	default:
-		observation.Error = "unknown local observation tool"
+		observation.Error = "unknown coordinator observation tool"
 		return observation, nil
 	}
+	observation.Tool = call
 	if i.Approver == nil {
-		return observation, fmt.Errorf("local observation requires an approver")
+		return observation, fmt.Errorf("coordinator observation requires an approver")
+	}
+	if summary == "" {
+		summary = "Inspect local " + call.Name
 	}
 	encoded, _ := json.Marshal(call)
 	description := string(encoded)
-	i.emit(assessment.Event{Kind: "action_proposed", Goal: inspectionScope, Action: description, Message: "Inspect local environment"})
-	decision, err := i.Approver.Approve(ctx, approval.Request{Command: description, Cwd: root, Summary: "Inspect local " + call.Name, Target: root, Risk: "low", Impact: "Read local metadata without changing files or probing a target"})
+	i.emit(assessment.Event{Kind: "action_proposed", Goal: i.Scope(), Action: description, Message: summary})
+	decision, err := i.Approver.Approve(ctx, approval.Request{Command: description, Cwd: root, Summary: summary, Target: target, Risk: "low", Impact: impact})
 	if err != nil {
 		return observation, err
 	}
 	if decision != approval.DecisionApproveOnce && decision != approval.DecisionApproveSession {
 		observation.Status = "denied"
-		i.emit(assessment.Event{Kind: "blocked", Message: "Local observation denied; nothing executed"})
+		i.emit(assessment.Event{Kind: "blocked", Message: "Coordinator observation denied; nothing executed"})
 		return observation, nil
 	}
 	if err := ctx.Err(); err != nil {
@@ -98,7 +148,7 @@ func (i *Inspection) Run(ctx context.Context, call ToolCall) (Observation, error
 	if err := os.MkdirAll(i.EvidenceDir, 0700); err != nil {
 		return observation, err
 	}
-	i.emit(assessment.Event{Kind: "execution_started", Action: description, Message: "Reading approved local metadata"})
+	i.emit(assessment.Event{Kind: "execution_started", Action: description, Message: summary})
 	switch call.Name {
 	case "list_directory":
 		observation.Data, err = listDirectory(root, relative)
@@ -106,6 +156,10 @@ func (i *Inspection) Run(ctx context.Context, call ToolCall) (Observation, error
 		observation.Data, err = i.localNetwork(ctx, root)
 	case "host_system":
 		observation.Data, err = i.hostSystem(ctx, root)
+	case "dns_lookup":
+		observation.Data, err = lookupPublicDNS(ctx, call.Host)
+	case "web_fetch":
+		observation.Data, err = fetchPublicPage(ctx, call.URL)
 	}
 	if err != nil {
 		observation.Error = err.Error()
@@ -126,7 +180,7 @@ func (i *Inspection) Run(ctx context.Context, call ToolCall) (Observation, error
 		return observation, closeErr
 	}
 	data, _ := json.Marshal(observation)
-	i.emit(assessment.Event{Kind: "execution_finished", Action: description, Message: "Local observation recorded", EvidenceCount: 1, Evidence: &assessment.EvidenceView{Command: description, ExitStatus: observation.Status, Summary: string(data), LogRefs: []string{evidence.Name()}}})
+	i.emit(assessment.Event{Kind: "execution_finished", Action: description, Message: "Coordinator observation recorded", EvidenceCount: 1, Evidence: &assessment.EvidenceView{Command: description, ExitStatus: observation.Status, Summary: string(data), LogRefs: []string{evidence.Name()}}})
 	return observation, nil
 }
 
