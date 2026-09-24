@@ -24,13 +24,14 @@ type dnsObservation struct {
 }
 
 type pageObservation struct {
-	URL         string            `json:"url"`
-	Address     string            `json:"address"`
-	Status      int               `json:"status"`
-	Headers     map[string]string `json:"headers"`
-	BodyExcerpt string            `json:"body_excerpt,omitempty"`
-	Truncated   bool              `json:"truncated,omitempty"`
-	ObservedAt  time.Time         `json:"observed_at"`
+	URL            string            `json:"url"`
+	Address        string            `json:"address"`
+	Status         int               `json:"status"`
+	Headers        map[string]string `json:"headers"`
+	SetCookieCount int               `json:"set_cookie_count"`
+	BodyExcerpt    string            `json:"body_excerpt,omitempty"`
+	Truncated      bool              `json:"truncated,omitempty"`
+	ObservedAt     time.Time         `json:"observed_at"`
 }
 
 func publicDomain(raw string) (string, error) {
@@ -158,7 +159,7 @@ func fetchPublicPage(ctx context.Context, raw string) (pageObservation, error) {
 	}
 	defer response.Body.Close()
 	connectedMu.Lock()
-	result := pageObservation{URL: u.String(), Address: connected, Status: response.StatusCode, Headers: boundedHeaders(response.Header), ObservedAt: time.Now().UTC()}
+	result := pageObservation{URL: u.String(), Address: connected, Status: response.StatusCode, Headers: boundedHeaders(response.Header), SetCookieCount: len(response.Header.Values("Set-Cookie")), ObservedAt: time.Now().UTC()}
 	connectedMu.Unlock()
 	contentType := strings.ToLower(response.Header.Get("Content-Type"))
 	if strings.HasPrefix(contentType, "text/") || strings.Contains(contentType, "json") || strings.Contains(contentType, "xml") {
