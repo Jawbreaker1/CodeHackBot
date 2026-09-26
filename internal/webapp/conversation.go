@@ -21,7 +21,7 @@ type workerProgress struct {
 	LatestEvidence *assessment.EvidenceView `json:"latest_evidence,omitempty"`
 }
 
-const webCoordinatorDisplayPrompt = `Return one JSON object with "text" (your plain-language reply) and optional "display_artifact_refs" (up to three exact paths from available_images in the current assessment state). Select images only when they help answer the operator; never invent a path. The application validates each reference and displays accepted images beneath your reply. If no image helps, omit display_artifact_refs. Do not put Markdown image syntax in text.`
+const webCoordinatorDisplayPrompt = `Return one JSON object with "text" (your plain-language reply), optional "display_artifact_refs" (up to three exact paths from available_images), and optional "revise_plan":true. Explain what the recorded evidence establishes, why the current step matters, and the most useful next step when relevant; keep the reply short and respect a different path chosen by the operator. If pending_plan is present and the operator directs a different course before workers start, set revise_plan:true and explain that you are preparing a revised proposal. Do not set it for a question about the plan, or when no plan is awaiting review. A revised proposal still needs the normal plan review and action permissions. Select images only when they help answer the operator; never invent a path. The application validates each reference and displays accepted images beneath your reply. If no image helps, omit display_artifact_refs. Do not put Markdown image syntax in text.`
 
 const webPostRunReportPrompt = `The assessment has ended. You can still discuss its recorded results, but no workers or commands are active. When the operator asks you to generate a report in OWASP WSTG or PTES format, set "report_format" to exactly "owasp-wstg" or "ptes" in your JSON reply. The application renders that template from saved assessment findings and links the new Markdown artifact in chat. Do not claim to have generated a report unless you set this field. For any other question, omit it. The template contains an introduction, executive summary, recorded findings, task coverage, limitations, and reporting basis; it does not automatically map each OWASP or PTES test category. Describe only sections and tests actually present. These are reporting structures, not certification or proof that every standard test was performed. Do not invent a WSTG test ID, CVSS score, finding, or validation. If final_review_pending is true, say clearly that the assessment ended before the coordinator reviewed its last worker result.`
 
@@ -29,6 +29,7 @@ type coordinatorChatReply struct {
 	Text                string                  `json:"text"`
 	DisplayArtifactRefs []string                `json:"display_artifact_refs,omitempty"`
 	ReportFormat        assessment.ReportFormat `json:"report_format,omitempty"`
+	RevisePlan          bool                    `json:"revise_plan,omitempty"`
 }
 
 func parseCoordinatorChatReply(raw string) (coordinatorChatReply, error) {
@@ -94,7 +95,7 @@ func imageMIME(path string) string {
 }
 
 // Called under run.mu so completed results and live workers form one snapshot.
-func compactRunState(state assessment.State, pending []string, workers map[string]workerView, mode approval.Mode, images []string) string {
+func compactRunState(state assessment.State, pending []string, workers map[string]workerView, mode approval.Mode, images []string, proposed *assessment.Decision) string {
 	results := make([]string, 0, len(state.Results))
 	for _, result := range state.Results {
 		results = append(results, result.Task.ID+"="+result.Status+": "+conversationExcerpt(result.Summary, 240))
@@ -112,18 +113,29 @@ func compactRunState(state assessment.State, pending []string, workers map[strin
 		progress = append(progress, item)
 	}
 	sort.Slice(progress, func(i, j int) bool { return progress[i].ID < progress[j].ID })
+	var latestPlan, pendingPlan *assessment.PlanBrief
+	if len(state.Plans) > 0 {
+		brief := assessment.BriefPlan(state.Plans[len(state.Plans)-1])
+		latestPlan = &brief
+	}
+	if proposed != nil {
+		brief := assessment.BriefPlan(*proposed)
+		pendingPlan = &brief
+	}
 	data, _ := json.Marshal(struct {
-		ApprovalMode    approval.Mode    `json:"approval_mode"`
-		Status          string           `json:"status"`
-		Goal            string           `json:"goal"`
-		Scope           string           `json:"scope"`
-		Plans           int              `json:"plans"`
-		Results         []string         `json:"results"`
-		Workers         []workerProgress `json:"live_workers"`
-		Pending         []string         `json:"pending_operator_actions"`
-		AvailableImages []string         `json:"available_images,omitempty"`
-		ModelCalls      int              `json:"model_calls"`
-	}{ApprovalMode: mode.Normalized(), Status: state.Status, Goal: state.Goal, Scope: state.Scope, Plans: len(state.Plans), Results: results, Workers: progress, Pending: pending, AvailableImages: images, ModelCalls: state.Usage.Calls})
+		ApprovalMode    approval.Mode         `json:"approval_mode"`
+		Status          string                `json:"status"`
+		Goal            string                `json:"goal"`
+		Scope           string                `json:"scope"`
+		Plans           int                   `json:"plans"`
+		Results         []string              `json:"results"`
+		Workers         []workerProgress      `json:"live_workers"`
+		Pending         []string              `json:"pending_operator_actions"`
+		AvailableImages []string              `json:"available_images,omitempty"`
+		LatestPlan      *assessment.PlanBrief `json:"latest_plan,omitempty"`
+		PendingPlan     *assessment.PlanBrief `json:"pending_plan,omitempty"`
+		ModelCalls      int                   `json:"model_calls"`
+	}{ApprovalMode: mode.Normalized(), Status: state.Status, Goal: state.Goal, Scope: state.Scope, Plans: len(state.Plans), Results: results, Workers: progress, Pending: pending, AvailableImages: images, LatestPlan: latestPlan, PendingPlan: pendingPlan, ModelCalls: state.Usage.Calls})
 	return string(data)
 }
 

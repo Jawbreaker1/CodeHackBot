@@ -86,6 +86,50 @@ func TestCoordinatorCarriesDepthAndExplainsRoundTransition(t *testing.T) {
 	}
 }
 
+func TestOperatorCanRedirectProposedPlanBeforeExecution(t *testing.T) {
+	requests := 0
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var request struct {
+			Messages []llmclient.Message `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			return
+		}
+		if strings.Contains(request.Messages[1].Content, "focus on access controls") {
+			reply(w, Decision{Summary: "The operator chose a different path; existing evidence is sufficient to close this fixture.", Complete: true})
+			return
+		}
+		reply(w, Decision{Summary: "Inspect transport first", Tasks: []Task{{ID: "transport", Goal: "Inspect transport", DoneWhen: "transport recorded"}}})
+	}))
+	defer model.Close()
+	root := t.TempDir()
+	initial := State{Version: 1, Goal: "Inspect the fixture", Scope: "synthetic only", Limits: DefaultLimits(), Results: []Result{{Task: Task{ID: "prior", Goal: "Earlier inspection"}, Status: "done"}}}
+	coordinator := testCoordinator(model.URL)
+	coordinator.PlanApproval = func(_ context.Context, plan Decision) (PlanReview, error) {
+		if len(plan.Tasks) != 1 || plan.Tasks[0].ID != "transport" {
+			t.Fatalf("unexpected proposed tasks: %+v", plan.Tasks)
+		}
+		return PlanReview{Revision: "focus on access controls"}, nil
+	}
+	state, err := coordinator.RunState(t.Context(), root, initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 || state.Status != "completed" || len(state.Plans) != 1 || !state.Plans[0].Complete || len(state.Results) != 1 {
+		t.Fatalf("revision executed or saved the rejected plan: requests=%d state=%+v", requests, state)
+	}
+	if _, err := os.Stat(filepath.Join(root, "tasks", "transport")); !os.IsNotExist(err) {
+		t.Fatalf("rejected task workspace exists: %v", err)
+	}
+	for _, name := range []string{"coordinator-01-request.json", "coordinator-01-revision-01-request.json"} {
+		if _, err := os.Stat(filepath.Join(root, name)); err != nil {
+			t.Fatalf("missing model decision trace %s: %v", name, err)
+		}
+	}
+}
+
 func TestCoordinatorPromptCompactsPriorExecutionBodies(t *testing.T) {
 	large := strings.Repeat("full shell script and output ", 10000)
 	state := State{
@@ -110,7 +154,7 @@ func TestCoordinatorRetainsEvidenceCatalogWhileBoundingResultCards(t *testing.T)
 	}
 	state.Results = []Result{result}
 	prompt := coordinatorPrompt(state)
-	if len(prompt) > 15000 {
+	if len(prompt) > 16<<10 {
 		t.Fatalf("coordinator prompt grew with repeated full commands: %d bytes", len(prompt))
 	}
 	var payload struct {

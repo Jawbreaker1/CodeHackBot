@@ -13,6 +13,8 @@ The product remains orchestrator-first. The first two steps establish its shared
 
 ## Current priority: foundation acceptance and capability proof
 
+The coordinator-guidance slice now gives browser chat the current and pending plan purpose, intended worker outcomes, and recorded gaps. A user who chooses another path while a plan awaits review can trigger a fresh proposal through the model-led conversation before workers start; the declined proposal is not executed and both decision requests are retained. The terminal conversation receives the same compact latest-plan briefing. This improves operator control but does not yet establish unfamiliar-operator usability or instant redirection of active workers.
+
 Objective: prove one shared worker can carry a bounded multi-step task from goal to evidence-backed completion, adapt when observations invalidate its plan, and return an honest blocked/aborted result when appropriate.
 
 - [x] Audit and replace competing worker control paths. One decision loop now owns model-authored plan changes, approved actions, questions, explicit blockers, and whole-goal completion. Removed keyword mode selection, startup-only planner, action reviewer, separate step judge, target/prerequisite inference, synthetic facts, failure ranking, and ambiguous response aliases.

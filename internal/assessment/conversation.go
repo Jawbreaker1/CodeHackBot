@@ -7,6 +7,41 @@ import (
 	"github.com/Jawbreaker1/CodeHackBot/internal/llmclient"
 )
 
+// PlanBrief gives both conversation surfaces the same bounded account of the
+// coordinator's current decision. It describes a proposal, not a test result.
+type PlanBrief struct {
+	Phase           string   `json:"phase,omitempty"`
+	Purpose         string   `json:"purpose"`
+	PreviousResult  string   `json:"previous_result,omitempty"`
+	Tasks           []string `json:"tasks,omitempty"`
+	Gaps            []string `json:"gaps,omitempty"`
+	ApprovedTaskIDs []string `json:"approved_task_ids,omitempty"`
+	SkippedTaskIDs  []string `json:"skipped_task_ids,omitempty"`
+}
+
+func BriefPlan(plan Decision) PlanBrief {
+	purpose := plan.PlainSummary
+	if strings.TrimSpace(purpose) == "" {
+		purpose = plan.Summary
+	}
+	brief := PlanBrief{
+		Phase: plan.Phase, Purpose: promptExcerpt(purpose, 480),
+		PreviousResult:  promptExcerpt(plan.Review, 480),
+		ApprovedTaskIDs: append([]string(nil), plan.ApprovedTaskIDs...),
+		SkippedTaskIDs:  append([]string(nil), plan.SkippedTaskIDs...),
+	}
+	for _, task := range plan.Tasks {
+		brief.Tasks = append(brief.Tasks, task.ID+": "+promptExcerpt(task.Goal, 260)+"; intended result: "+promptExcerpt(task.DoneWhen, 220))
+	}
+	for _, gap := range plan.Gaps {
+		if len(brief.Gaps) == 4 {
+			break
+		}
+		brief.Gaps = append(brief.Gaps, promptExcerpt(gap, 260))
+	}
+	return brief
+}
+
 // ConversationRequest gives a live coordinator reply recent dialogue without
 // making the transcript the source of truth for scope, evidence, or budgets.
 // The current state and operator message are protected from history pruning.

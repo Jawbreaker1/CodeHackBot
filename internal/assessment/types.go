@@ -124,7 +124,8 @@ type Approach struct {
 // PlanReview is the operator's selection of model-proposed tasks. The model
 // proposes; the operator decides which bounded tasks may run.
 type PlanReview struct {
-	TaskIDs []string
+	TaskIDs  []string
+	Revision string // Operator direction; no task from this proposal may run.
 }
 
 type State struct {

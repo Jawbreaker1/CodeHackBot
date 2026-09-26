@@ -163,7 +163,8 @@ function planReviewNode(plan) {
   box.setAttribute('aria-live', 'assertive');
   const research = plan.phase === 'research';
   box.append(node('div', 'chat-approval-title', research ? 'Review proposed research' : 'Review proposed test sequence'));
-  box.append(node('p', 'worker-detail', research ? 'The coordinator wants to gather relevant knowledge before testing. Select which bounded research tasks should run.' : 'The coordinator has proposed bounded tests. Select what should run; unselected tasks will not execute or become evidence.'));
+  if (plan.plain_summary) box.append(node('p', 'plan-summary', plan.plain_summary));
+  box.append(node('p', 'worker-detail', research ? 'Select which research tasks should run.' : 'Select which tests should run. Unselected tasks will not execute or become evidence.'));
   const choices = node('div', 'plan-choices');
   for (const task of plan.tasks || []) {
     const label = node('label', 'plan-choice');
@@ -183,7 +184,9 @@ function planReviewNode(plan) {
   };
   const reject = node('button', 'secondary', 'Reject plan'); reject.type = 'button';
   reject.onclick = () => act('plans/' + encodeURIComponent(plan.id), {decision: 'denied'}, row);
-  row.append(run, reject); box.append(row);
+  const redirect = node('button', 'secondary', 'Suggest another path'); redirect.type = 'button';
+  redirect.onclick = () => { $('chatInput').focus(); $('chatInput').placeholder = 'Tell the coordinator what you would prefer to investigate…'; };
+  row.append(run, redirect, reject); box.append(row);
   return box;
 }
 function traceNode(records) {

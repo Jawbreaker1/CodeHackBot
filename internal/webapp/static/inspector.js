@@ -19,6 +19,7 @@ const phases = {
   aborted: 'Stopped', waiting_user: 'Needs your input', planning: 'Planning',
   plan: 'Assessment plan', assessment_started: 'Assessment started',
   round_update: 'Coordinator update',
+  plan_revision_requested: 'Revising plan',
   assessment_finished: 'Assessment finished', assessment_stop_requested: 'Stopping workers',
 };
 export const phaseLabel = (kind) => phases[kind] || kind;

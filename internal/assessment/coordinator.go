@@ -140,25 +140,41 @@ func (c Coordinator) run(ctx context.Context, root string, initial State) (state
 		}
 		state.Usage = budget.Usage()
 		c.emit(Event{Kind: "planning", Message: fmt.Sprintf("Reviewing evidence and planning next work (round %d/%d)", round, limits.Rounds)})
-		d, err := c.decide(ctx, root, round, state)
-		if err != nil {
-			return state, err
-		}
-		if update := roundUpdate(round, d); update != "" {
-			c.emit(Event{Kind: "round_update", Message: update})
-		}
-		selectedTasks := append([]Task(nil), d.Tasks...)
-		d.ApprovedTaskIDs = nil
-		d.SkippedTaskIDs = nil
-		if c.PlanApproval == nil {
-			for _, task := range d.Tasks {
-				d.ApprovedTaskIDs = append(d.ApprovedTaskIDs, task.ID)
+		var d Decision
+		var selectedTasks []Task
+		proposal := 0
+		for {
+			var err error
+			d, err = c.decide(ctx, root, round, proposal, state)
+			if err != nil {
+				return state, err
 			}
-		}
-		if c.PlanApproval != nil && len(d.Tasks) > 0 {
+			if update := roundUpdate(round, d); update != "" {
+				c.emit(Event{Kind: "round_update", Message: update})
+			}
+			selectedTasks = append([]Task(nil), d.Tasks...)
+			d.ApprovedTaskIDs = nil
+			d.SkippedTaskIDs = nil
+			if c.PlanApproval == nil {
+				for _, task := range d.Tasks {
+					d.ApprovedTaskIDs = append(d.ApprovedTaskIDs, task.ID)
+				}
+			}
+			if c.PlanApproval == nil || len(d.Tasks) == 0 {
+				break
+			}
 			review, reviewErr := c.PlanApproval(ctx, d)
 			if reviewErr != nil {
 				return state, reviewErr
+			}
+			if direction := strings.TrimSpace(review.Revision); direction != "" {
+				c.syncConversation(&state)
+				if c.Conversation == nil {
+					state.OperatorMessages = append(state.OperatorMessages, "user: "+direction)
+				}
+				c.emit(Event{Kind: "plan_revision_requested", Message: "Reconsidering the proposed work after operator direction."})
+				proposal++
+				continue // The rejected proposal is never recorded as accepted or executed.
 			}
 			selected := make(map[string]bool, len(review.TaskIDs))
 			for _, id := range review.TaskIDs {
@@ -185,9 +201,7 @@ func (c Coordinator) run(ctx context.Context, root string, initial State) (state
 			if len(selectedTasks) != len(selected) {
 				return state, fmt.Errorf("operator plan selection contains an unknown task")
 			}
-			if len(selectedTasks) == 0 {
-				return state, fmt.Errorf("operator rejected the proposed plan")
-			}
+			break
 		}
 		state.Plans = append(state.Plans, d)
 		c.syncConversation(&state)
@@ -288,7 +302,7 @@ func roundUpdate(round int, d Decision) string {
 
 // An invalid proposal gets one correction from the same model under the same
 // budget. Nothing from the rejected proposal executes or becomes evidence.
-func (c Coordinator) decide(ctx context.Context, root string, round int, state State) (Decision, error) {
+func (c Coordinator) decide(ctx context.Context, root string, round, proposal int, state State) (Decision, error) {
 	systemPrompt := c.Frame.PromptText()
 	prompt, err := coordinatorPromptBounded(state, c.LLM.InputByteLimit()-len(systemPrompt))
 	if err != nil {
@@ -297,6 +311,9 @@ func (c Coordinator) decide(ctx context.Context, root string, round int, state S
 	messages := []llmclient.Message{{Role: "system", Content: systemPrompt}, {Role: "user", Content: prompt}}
 	for attempt := 0; attempt < 2; attempt++ {
 		stem := filepath.Join(root, fmt.Sprintf("coordinator-%02d", round))
+		if proposal > 0 {
+			stem += fmt.Sprintf("-revision-%02d", proposal)
+		}
 		if attempt == 1 {
 			stem += "-correction"
 		}
@@ -382,7 +399,7 @@ func coordinatorPayload(state State) coordinatorModelPacket {
 	return coordinatorModelPacket{
 		Role: "assessment_coordinator",
 		Instructions: []string{
-			"Return one JSON object only: {phase:\"research\" or \"assessment\", summary, plain_summary, review, tasks:[{id,goal,done_when,depends_on:[],strategy_hints:[]}], complete:false, findings:[], gaps:[]}. Keep summary to two or three clear sentences about the plan; for completion, give a concise executive conclusion rather than an evidence dump. Put technical detail in tasks, structured findings, gaps, and recorded evidence. plain_summary is one short, readable sentence explaining what this round will do; for completion, state the main result. review is one short, readable sentence about what the previous round actually established, or empty in round one. Separate a finished worker from a met assessment goal; say plainly when access or a finding was not yet verified. Avoid jargon in these operator-facing fields unless needed for accuracy.",
+			"Return one JSON object only: {phase:\"research\" or \"assessment\", summary, plain_summary, review, tasks:[{id,goal,done_when,depends_on:[],strategy_hints:[]}], complete:false, findings:[], gaps:[]}. Keep summary to two or three clear sentences about the plan; for completion, give a concise executive conclusion rather than an evidence dump. Put technical detail in tasks, structured findings, gaps, and recorded evidence. plain_summary is one short, readable sentence recommending this round's immediate work and why the evidence makes it useful; for completion, state the main result. review is one short, readable sentence about what the previous round actually established, or empty in round one. When the operator prefers another path, reconsider the proposal within the same scope; do not defend the old plan merely because it was proposed. Separate a finished worker from a met assessment goal; say plainly when access or a finding was not yet verified. Avoid jargon in these operator-facing fields unless needed for accuracy.",
 			"The assessment.approach, when present, is the operator's chosen depth. Fit the work to its intent while still reacting to evidence and respecting scope and runtime limits. It is a planning preference, not permission for new actions or a guaranteed time budget. If the estimate changes materially after discovery, explain that in plain_summary or review.",
 			"Use the local strategy catalog in the behavior frame as a small index. For each task, suggest zero to two exact guide paths in strategy_hints when their descriptions fit the assigned outcome or a known failure. Do not list every plausible guide. A suggestion is optional context: the worker decides whether and when to load a full guide and may choose a different one as evidence develops.",
 			"Coordinate the operator's assessment. The operator owns authorization and chooses the approval level. Choose one or two bounded workers per round according to useful independent work, not a fixed worker count. Do not execute tools yourself.",

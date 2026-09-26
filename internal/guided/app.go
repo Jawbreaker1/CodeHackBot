@@ -79,14 +79,15 @@ type coordinatorChatResult struct {
 }
 
 type coordinatorChatState struct {
-	Status     string            `json:"status"`
-	Goal       string            `json:"goal"`
-	Scope      string            `json:"scope"`
-	Model      string            `json:"model"`
-	Plans      int               `json:"plans"`
-	Results    map[string]string `json:"results"`
-	ModelCalls int               `json:"model_calls"`
-	CallLimit  int               `json:"model_call_limit"`
+	Status     string                `json:"status"`
+	Goal       string                `json:"goal"`
+	Scope      string                `json:"scope"`
+	Model      string                `json:"model"`
+	Plans      int                   `json:"plans"`
+	LatestPlan *assessment.PlanBrief `json:"latest_plan,omitempty"`
+	Results    map[string]string     `json:"results"`
+	ModelCalls int                   `json:"model_calls"`
+	CallLimit  int                   `json:"model_call_limit"`
 }
 
 func compactCoordinatorState(state assessment.State) []byte {
@@ -98,7 +99,12 @@ func compactCoordinatorState(state assessment.State) []byte {
 		}
 		results[result.Task.ID] = result.Status + ": " + summary
 	}
-	data, _ := json.Marshal(coordinatorChatState{Status: state.Status, Goal: state.Goal, Scope: state.Scope, Model: state.Model, Plans: len(state.Plans), Results: results, ModelCalls: state.Usage.Calls, CallLimit: state.Limits.ModelCalls})
+	view := coordinatorChatState{Status: state.Status, Goal: state.Goal, Scope: state.Scope, Model: state.Model, Plans: len(state.Plans), Results: results, ModelCalls: state.Usage.Calls, CallLimit: state.Limits.ModelCalls}
+	if len(state.Plans) > 0 {
+		brief := assessment.BriefPlan(state.Plans[len(state.Plans)-1])
+		view.LatestPlan = &brief
+	}
+	data, _ := json.Marshal(view)
 	return data
 }
 

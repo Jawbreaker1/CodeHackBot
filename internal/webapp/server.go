@@ -471,10 +471,11 @@ type assessmentView struct {
 }
 
 type planApprovalView struct {
-	ID      string            `json:"id"`
-	Phase   string            `json:"phase"`
-	Summary string            `json:"summary"`
-	Tasks   []assessment.Task `json:"tasks"`
+	ID           string            `json:"id"`
+	Phase        string            `json:"phase"`
+	Summary      string            `json:"summary"`
+	PlainSummary string            `json:"plain_summary,omitempty"`
+	Tasks        []assessment.Task `json:"tasks"`
 }
 
 // contextWindowView reports the largest active worker request, or the latest
@@ -1875,7 +1876,12 @@ func (s *Server) message(ctx context.Context, r *run, text string, refs []attach
 	}
 	sort.Strings(pending)
 	availableImages := recordedImageRefs(r.root, r.state, r.workers)
-	stateContext := compactRunState(r.state, pending, r.workers, r.permissionMode, availableImages)
+	var proposed *assessment.Decision
+	if r.plan != nil {
+		proposal := r.plan.plan
+		proposed = &proposal
+	}
+	stateContext := compactRunState(r.state, pending, r.workers, r.permissionMode, availableImages, proposed)
 	system := behavior.CoordinatorConversationPrompt(s.config.Frame) + "\n\n" + webCoordinatorDisplayPrompt
 	if postRun {
 		stateContext += "\nRecorded final findings and gaps: " + postRunFindingsContext(r.state)
@@ -1936,12 +1942,25 @@ func (s *Server) message(ctx context.Context, r *run, text string, refs []attach
 			images = append(images, ref)
 		}
 	}
+	var revision *pendingPlan
+	if reply.RevisePlan && !postRun {
+		if r.plan != nil {
+			revision = r.plan
+			r.plan = nil
+			r.events = append(r.events, eventRecord{Sequence: r.nextSequenceLocked(), At: time.Now().UTC(), Event: assessment.Event{Kind: "plan_revision_requested", Message: "Reconsidering the proposed work after operator direction."}})
+		} else {
+			reply.Text += "\n\nThe previous plan has already advanced. I'll consider your direction at the next planning step."
+		}
+	}
 	r.messages = append(r.messages, intakeMessage{Role: "assistant", Text: reply.Text, ImageRefs: images, Report: generated, At: time.Now().UTC()})
 	r.events = append(r.events, eventRecord{Sequence: r.nextSequenceLocked(), At: time.Now().UTC(), Event: assessment.Event{Kind: "coordinator_message", Message: reply.Text}})
 	r.updatedAt = time.Now().UTC()
 	r.mu.Unlock()
 	if err := r.persistOrStop(); err != nil {
 		return fmt.Errorf("save coordinator conversation: %w", err)
+	}
+	if revision != nil {
+		revision.result <- assessment.PlanReview{Revision: text}
 	}
 	return nil
 }
@@ -2206,7 +2225,7 @@ func (r *run) view(after string) assessmentView {
 		if phase == "" {
 			phase = "assessment"
 		}
-		view.PendingPlan = &planApprovalView{ID: r.plan.ID, Phase: phase, Summary: r.plan.plan.Summary, Tasks: append([]assessment.Task(nil), r.plan.plan.Tasks...)}
+		view.PendingPlan = &planApprovalView{ID: r.plan.ID, Phase: phase, Summary: r.plan.plan.Summary, PlainSummary: r.plan.plan.PlainSummary, Tasks: append([]assessment.Task(nil), r.plan.plan.Tasks...)}
 		pending := coordinatorPlanView{Round: len(r.state.Plans) + 1, Phase: phase, Summary: r.plan.plan.Summary, PlainSummary: r.plan.plan.PlainSummary, Signal: "review", Status: "review"}
 		for _, task := range r.plan.plan.Tasks {
 			pending.Tasks = append(pending.Tasks, coordinatorTaskView{ID: task.ID, Goal: task.Goal, DoneWhen: task.DoneWhen, StrategyHints: task.StrategyHints, Status: "review"})

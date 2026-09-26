@@ -27,3 +27,15 @@ func TestConversationRequestKeepsRecentDialogueAndProtectsCurrentMessage(t *test
 		t.Fatal("oversized protected state should fail visibly")
 	}
 }
+
+func TestPlanBriefCarriesPurposeChoicesAndCoverageLimits(t *testing.T) {
+	brief := BriefPlan(Decision{
+		Phase: "assessment", PlainSummary: "Check access controls because the API exposes record IDs.",
+		Review: "Discovery found two API routes, but no vulnerability has been verified.",
+		Tasks:  []Task{{ID: "access", Goal: "Compare records across two authorized roles", DoneWhen: "role-specific responses are recorded"}},
+		Gaps:   []string{"Session handling has not been tested."},
+	})
+	if !strings.Contains(brief.Purpose, "because") || len(brief.Tasks) != 1 || !strings.Contains(brief.Tasks[0], "role-specific responses") || len(brief.Gaps) != 1 || !strings.Contains(brief.PreviousResult, "no vulnerability") {
+		t.Fatalf("plan brief lost operator guidance: %+v", brief)
+	}
+}

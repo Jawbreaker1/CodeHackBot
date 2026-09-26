@@ -63,6 +63,51 @@ func TestPostRunContextMarksWorkerResultAwaitingFinalReview(t *testing.T) {
 	}
 }
 
+func TestChatDirectionRevisesPendingPlanBeforeWorkersStart(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Messages []llmclient.Message `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			return
+		}
+		var input strings.Builder
+		for _, message := range request.Messages {
+			input.WriteString(message.Content)
+		}
+		if !strings.Contains(input.String(), `"pending_plan"`) || !strings.Contains(input.String(), "Inspect transport") || !strings.Contains(input.String(), "why the current step matters") {
+			t.Error("live chat did not receive the pending plan and guidance contract")
+		}
+		answer := `{"text":"Access control is a reasonable priority. I will prepare a revised proposal before testing starts.","revise_plan":true}`
+		writeJSON(w, http.StatusOK, map[string]any{"choices": []any{map[string]any{"message": map[string]string{"role": "assistant", "content": answer}}}})
+	}))
+	defer model.Close()
+	server := NewServer(Config{RepoRoot: t.TempDir(), LLM: llmclient.Client{BaseURL: model.URL + "/v1", Model: "fixture"}})
+	current, err := server.newRun("fixture", "inspect fixture", "synthetic only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.started, current.status = true, "running"
+	current.state = assessment.State{Version: 1, ID: current.id, Goal: current.goal, Scope: current.scope, Status: "running", Limits: assessment.DefaultLimits()}
+	pending := &pendingPlan{ID: "plan-1", plan: assessment.Decision{PlainSummary: "Inspect transport first", Tasks: []assessment.Task{{ID: "transport", Goal: "Inspect transport", DoneWhen: "transport evidence"}}}, result: make(chan assessment.PlanReview, 1)}
+	current.plan = pending
+	if err := server.message(t.Context(), current, "Please test access controls first", nil); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case review := <-pending.result:
+		if review.Revision != "Please test access controls first" || len(review.TaskIDs) != 0 {
+			t.Fatalf("unexpected plan review: %+v", review)
+		}
+	default:
+		t.Fatal("chat did not release the pending plan for revision")
+	}
+	if current.plan != nil || len(current.messages) != 2 {
+		t.Fatalf("plan was still pending or conversation was lost: %+v", current.view(""))
+	}
+}
+
 func TestCoordinatorCanPresentRecordedImageInChat(t *testing.T) {
 	var imagePath, unregisteredPath string
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
