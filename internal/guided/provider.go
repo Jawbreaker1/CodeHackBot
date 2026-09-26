@@ -150,6 +150,11 @@ func savePreferences(ctx context.Context, c *Console, path string, p preferences
 			p.MaxOutputTokens = llmclient.SubscriptionMaxOutputTokens
 		}
 	}
+	if p.Provider == "local" && p.Model == "qwen/qwen3.8-27b" && (p.MaxInputBytes == 0 || p.MaxInputBytes == llmclient.DefaultInputByteLimit) {
+		// Older guided preferences stored the generic 48 KiB default. Refresh
+		// that Qwen profile after the operator expanded its server window.
+		p.MaxInputBytes = llmclient.Qwen38LabInputByteLimit
+	}
 	if p.MaxInputBytes == 0 {
 		if p.Provider == "subscription" {
 			p.MaxInputBytes = SubscriptionInputByteLimit

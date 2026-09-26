@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/Jawbreaker1/CodeHackBot/internal/llmclient"
 	"github.com/Jawbreaker1/CodeHackBot/internal/localauth"
 )
 
@@ -41,9 +42,10 @@ func TestConfiguredProfilesRouteAndRestoreEntireClient(t *testing.T) {
 	}
 	config := Config{RepoRoot: t.TempDir(), SessionsRoot: filepath.Join(t.TempDir(), "sessions"), DefaultProfile: "daybreak", Profiles: []ModelProfile{
 		{ID: "daybreak", Label: "Daybreak Blue", Provider: "subscription", BaseURL: daybreak.URL + "/v1", Model: "gpt-daybreak-blue-latest", TokenFile: token},
-		{ID: "qwen38", Label: "Qwen 3.8", Provider: "local", BaseURL: qwen.URL + "/v1", Model: "qwen/qwen3.8-27b", ReasoningEffort: "low", MaxInputBytes: 48 * 1024, MaxOutputTokens: 32768, RequestTimeoutSeconds: 600},
+		{ID: "qwen38", Label: "Qwen 3.8", Provider: "local", BaseURL: qwen.URL + "/v1", Model: "qwen/qwen3.8-27b", ReasoningEffort: "low", MaxInputBytes: llmclient.Qwen38LabInputByteLimit, MaxOutputTokens: 32768, RequestTimeoutSeconds: 600},
 	}}
-	app := httptest.NewServer(NewServer(config))
+	server := NewServer(config)
+	app := httptest.NewServer(server)
 	defer app.Close()
 	var catalog struct {
 		ProfilesEnabled bool          `json:"profiles_enabled"`
@@ -68,6 +70,9 @@ func TestConfiguredProfilesRouteAndRestoreEntireClient(t *testing.T) {
 	second = postJSON[intakeView](t, app.URL+"/api/v1/intake/"+second.ID+"/model", modelRequest{Profile: "qwen38"})
 	if second.ModelProfile != "qwen38" || second.Model != "qwen/qwen3.8-27b" {
 		t.Fatalf("selected profile = %+v", second)
+	}
+	if got := server.getIntake(second.ID).client.InputByteLimit(); got != llmclient.Qwen38LabInputByteLimit {
+		t.Fatalf("selected Qwen input ceiling = %d", got)
 	}
 	if status := postStatus(t, app.URL+"/api/v1/intake/"+second.ID+"/model", modelRequest{Profile: "unknown"}); status != http.StatusConflict {
 		t.Fatalf("unknown profile status = %d", status)

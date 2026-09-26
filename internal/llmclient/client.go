@@ -41,6 +41,11 @@ type Client struct {
 // profile does not declare a larger request budget.
 const DefaultInputByteLimit = 48 * 1024
 
+// Qwen38LabInputByteLimit is the application input-text ceiling for the lab's
+// approximately 70k-token Qwen 3.8 server setting. It is measured in bytes,
+// with separate room needed for output, reasoning, and provider overhead.
+const Qwen38LabInputByteLimit = 96 * 1024
+
 // SubscriptionInputByteLimit is the application-side input budget used for
 // the subscription bridge. The bridge keeps this separate from local-model
 // defaults because Daybreak's verified provider profile has a much larger

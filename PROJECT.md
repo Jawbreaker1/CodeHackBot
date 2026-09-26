@@ -97,8 +97,8 @@ Testing discipline:
 - Use 3 runs per scenario unless the check is explicitly labeled as a smoke test.
 - Smoke/debug runs must never be presented as acceptance evidence for platform capability or pentest effectiveness.
 - Live validation is not a pass unless the actual context snapshots and persisted session state are inspected and found sound.
-- The current local worker benchmark is `qwen/qwen3.8-27b` (Q6_K), confirmed by the user on 2026-09-19. Use the user's approximately 50k-token context configuration, at most two concurrent inference requests, and reasoning effort **low**. Do not substitute the older Qwen 3.5 baseline or another variant without asking.
-- Qwen may need substantial output capacity even with low reasoning. The guided local profile requests 32,768 output tokens with a ten-minute request limit; do not confuse a provider timeout with operator cancellation. LM Studio reported the configured context as 50,176 tokens and parallelism as two.
+- The current local worker benchmark is `qwen/qwen3.8-27b` (Q6_K), confirmed by the user on 2026-09-19. Use the user's approximately 70k-token context configuration (updated 2026-09-26), at most two concurrent inference requests, and reasoning effort **low**. Do not substitute the older Qwen 3.5 baseline or another variant without asking. Further Qwen inference is paused by operator request as of 2026-09-26; keep using Daybreak until they resume local-model testing.
+- Qwen may need substantial output capacity even with low reasoning. The guided local profile requests 32,768 output tokens with a ten-minute request limit; do not confuse a provider timeout with operator cancellation. LM Studio previously reported 50,176 tokens and parallelism two; one small 2026-09-26 smoke request observed a loaded 70,144-token window with parallelism two. Stability near the enlarged limit remains unvalidated.
 - Confirm the active model and relevant inference settings with the user before changing a live validation setup. Historical Qwen 3.5 results remain labeled with their original model and cannot establish Qwen 3.8 acceptance.
 
 ## Implementation Discipline
