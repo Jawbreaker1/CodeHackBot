@@ -268,6 +268,14 @@ func validateDecision(d Decision, state State) error {
 				return fmt.Errorf("finding references unrecorded evidence: %s", ref)
 			}
 		}
+		for _, ref := range f.References {
+			if !refs[ref] {
+				return fmt.Errorf("finding references an unrecorded research source: %s", ref)
+			}
+		}
+		if len(f.CVEIDs) > 0 && len(f.References) == 0 {
+			return fmt.Errorf("finding with CVE leads needs a recorded research source")
+		}
 		if f.Status == "reproduced" {
 			r := known[f.ValidationTask]
 			if r.Status != "done" || !hasCompletedEarlierTask(state, f.ValidationTask, known) || len(r.Evidence) == 0 {
@@ -275,7 +283,7 @@ func validateDecision(d Decision, state State) error {
 			}
 			ownEvidence := false
 			for _, e := range r.Evidence {
-				for _, ref := range append(append([]string{}, e.LogRefs...), e.ArtifactRefs...) {
+				for _, ref := range e.LogRefs {
 					for _, cited := range f.Evidence {
 						if ref == cited {
 							ownEvidence = true
@@ -284,7 +292,7 @@ func validateDecision(d Decision, state State) error {
 				}
 			}
 			if !ownEvidence {
-				return fmt.Errorf("reproduced finding must cite its validation task")
+				return fmt.Errorf("reproduced finding must cite its validation task execution log")
 			}
 		}
 	}

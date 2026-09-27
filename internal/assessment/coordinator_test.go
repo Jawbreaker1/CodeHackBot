@@ -309,10 +309,19 @@ func TestWorkerHandoffPrioritizesDeclaredDependencies(t *testing.T) {
 
 func TestFindingAdvisoryFieldsRemainStructuredAndValidated(t *testing.T) {
 	state := State{Limits: DefaultLimits(), Results: []Result{{Task: Task{ID: "research"}, Status: "done", Evidence: []ctxpacket.ExecutionResult{{LogRefs: []string{"research.log"}}}}}}
-	finding := Finding{Title: "Known issue", Status: "candidate", Severity: "high", Confidence: "medium", CVEIDs: []string{"CVE-2026-1234"}, AffectedSoftware: []string{"fixture 1.2"}, References: []string{"https://example.invalid/advisory"}, Impact: "fixture", Steps: []string{"repeat the check"}, Evidence: []string{"research.log"}, Remediation: []string{"upgrade"}}
+	finding := Finding{Title: "Known issue", Status: "candidate", Severity: "high", Confidence: "medium", CVEIDs: []string{"CVE-2026-1234"}, AffectedSoftware: []string{"fixture 1.2"}, References: []string{"research.log"}, Impact: "fixture", Steps: []string{"repeat the check"}, Evidence: []string{"research.log"}, Remediation: []string{"upgrade"}}
 	if err := validateDecision(Decision{Summary: "research recorded", Complete: true, Findings: []Finding{finding}}, state); err != nil {
 		t.Fatalf("structured advisory finding rejected: %v", err)
 	}
+	finding.References = []string{"https://example.invalid/remembered-advisory"}
+	if err := validateDecision(Decision{Summary: "research recorded", Complete: true, Findings: []Finding{finding}}, state); err == nil {
+		t.Fatal("unrecorded research reference was accepted")
+	}
+	finding.References = nil
+	if err := validateDecision(Decision{Summary: "research recorded", Complete: true, Findings: []Finding{finding}}, state); err == nil {
+		t.Fatal("CVE lead without a recorded source was accepted")
+	}
+	finding.References = []string{"research.log"}
 	finding.Severity = "urgent"
 	if err := validateDecision(Decision{Summary: "research recorded", Complete: true, Findings: []Finding{finding}}, state); err == nil {
 		t.Fatal("invalid finding severity was accepted")
@@ -640,13 +649,18 @@ func TestReproducedFindingUsesLaterWorkerEvidenceWithoutFormalDependency(t *test
 	validate := Task{ID: "validate", Goal: "check the lead against the target", DoneWhen: "response recorded"}
 	state := State{Limits: DefaultLimits(), Plans: []Decision{{Tasks: []Task{inspect}}, {Tasks: []Task{validate}}}, Results: []Result{
 		{Task: inspect, Status: "done", Evidence: []ctxpacket.ExecutionResult{{LogRefs: []string{"inspect.log"}}}},
-		{Task: validate, Status: "done", Evidence: []ctxpacket.ExecutionResult{{LogRefs: []string{"validate.log"}}}},
+		{Task: validate, Status: "done", Evidence: []ctxpacket.ExecutionResult{{LogRefs: []string{"validate.log"}, ArtifactRefs: []string{"validation-note.md"}}}},
 	}}
 	finding := Finding{Title: "Observed issue", Status: "reproduced", ValidationTask: "validate", Impact: "fixture impact", Steps: []string{"repeat the validation"}, Evidence: []string{"validate.log"}, Remediation: []string{"fix the issue"}}
 	decision := Decision{Summary: "target behavior verified", Complete: true, Findings: []Finding{finding}}
 	if err := validateDecision(decision, state); err != nil {
 		t.Fatalf("later independent validation was rejected: %v", err)
 	}
+	decision.Findings[0].Evidence = []string{"validation-note.md"}
+	if err := validateDecision(decision, state); err == nil {
+		t.Fatal("worker-written note alone counted as reproduction evidence")
+	}
+	decision.Findings[0].Evidence = []string{"validate.log"}
 	state.Plans = []Decision{{Tasks: []Task{inspect, validate}}}
 	if err := validateDecision(decision, state); err == nil {
 		t.Fatal("same-round task counted as later validation")

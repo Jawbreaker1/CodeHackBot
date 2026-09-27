@@ -17,7 +17,7 @@ func writeReport(root string, s State) error {
 	if !s.FinishedAt.IsZero() {
 		fmt.Fprintf(&b, "**Finished:** %s  \n", s.FinishedAt.UTC().Format("2006-01-02 15:04 UTC"))
 	}
-	b.WriteString("\nThis draft is compiled from model-authored findings and recorded evidence for professional review. The operator is responsible for authorization and target boundaries; the runtime does not enforce network scope isolation. Completion does not establish absence of vulnerabilities.\n\n")
+	b.WriteString("\nThis draft is compiled from model-authored findings and recorded evidence for professional review. A reproduced status means a later worker cited its execution log; it is not independent confirmation that every claim is correct. The operator is responsible for authorization and target boundaries; the runtime does not enforce network scope isolation. Completion does not establish absence of vulnerabilities.\n\n")
 	b.WriteString("## Executive summary\n\n")
 	summary, unreviewed := reportOutcome(s)
 	fmt.Fprintf(&b, "%s\n\n", summary)
