@@ -63,8 +63,8 @@ Execution still requires the worker's normal operator approvals. For resumed ses
 
 ## Contract and limits
 
-- Only authenticated `POST /v1/chat/completions` is exposed. Input is a model ID and text messages with system, developer, user, or assistant roles. Unsupported fields, tools, and client streaming requests are rejected.
-- `temperature` is accepted for the existing worker wire format but omitted upstream. Model defaults apply. Images, reasoning controls, function-call forwarding, model discovery, remote hosting, and scheduling are deferred.
+- Only authenticated `POST /v1/chat/completions` is exposed. Input is a model ID and messages with system, developer, user, or assistant roles; user messages may include supported image/PDF parts. Unsupported fields, tools, and client streaming requests are rejected.
+- `temperature` is accepted for the existing worker wire format but omitted upstream. An optional `reasoning_effort` is forwarded as Responses `reasoning.effort`; if omitted, the model default applies. The Daybreak web and guided profiles request `high`. Images and PDFs are supported; function-call forwarding, model discovery, remote hosting, and scheduling are deferred.
 - Upstream requests use `store: false`, `tools: []`, and `tool_choice: "none"`. Responses streams are collected into one Chat Completions response, including token usage. Only a completed response with usable text succeeds; unfinished streams and unexpected tool output fail.
 - The requested model ID is sent unchanged. The response preserves the backend's resolved model name. No automatic substitution occurs. Access depends on the signed-in account, not a hardcoded supported-model list.
 - The bridge uses only subscription credentials. API-key credentials are rejected; environment API keys are not used. Subscription limits and any account credit settings still apply. This does not promise unlimited usage or free access.
@@ -78,6 +78,8 @@ Cloud inference sends the selected worker context, including tool evidence in th
 ## Validation
 
 The signed-in Codex catalog exposed `gpt-daybreak-blue-latest`; a real request using that alias reported resolved model `gpt-5.6-sol`. This verifies this account's route, not universal availability or a separate audit of provider-side safety settings.
+
+A 2026-09-27 loopback bridge probe sent `reasoning_effort: high` to Daybreak Blue and received a completed response. The bridge test also verifies that the upstream request contains `reasoning: {"effort":"high"}`. The subscription backend is a compatibility endpoint rather than a documented public API, and its completion did not echo the effective effort; acceptance and forwarding are verified, but provider-internal allocation is not observable here. Higher effort can increase latency and token usage.
 
 The first live transport probe found that the terminal event could omit output already delivered through completed-item events. The parser was corrected and this exact behavior has a regression test. Mock tests cover the client-to-bridge-to-provider path, auth rejection/refresh, rate/access errors, redirects, cancellation, and incomplete/tool output. Expired credentials and exhausted quotas are simulated; the account was not deliberately expired or exhausted.
 

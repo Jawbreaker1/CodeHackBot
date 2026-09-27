@@ -41,7 +41,7 @@ func TestConfiguredProfilesRouteAndRestoreEntireClient(t *testing.T) {
 		t.Fatal(err)
 	}
 	config := Config{RepoRoot: t.TempDir(), SessionsRoot: filepath.Join(t.TempDir(), "sessions"), DefaultProfile: "daybreak", Profiles: []ModelProfile{
-		{ID: "daybreak", Label: "Daybreak Blue", Provider: "subscription", BaseURL: daybreak.URL + "/v1", Model: "gpt-daybreak-blue-latest", TokenFile: token},
+		{ID: "daybreak", Label: "Daybreak Blue", Provider: "subscription", BaseURL: daybreak.URL + "/v1", Model: "gpt-daybreak-blue-latest", TokenFile: token, ReasoningEffort: "high"},
 		{ID: "qwen38", Label: "Qwen 3.8", Provider: "local", BaseURL: qwen.URL + "/v1", Model: "qwen/qwen3.8-27b", ReasoningEffort: "low", MaxInputBytes: llmclient.Qwen38LabInputByteLimit, MaxOutputTokens: 32768, RequestTimeoutSeconds: 600},
 	}}
 	server := NewServer(config)
@@ -63,7 +63,7 @@ func TestConfiguredProfilesRouteAndRestoreEntireClient(t *testing.T) {
 		t.Fatalf("default intake = %+v", first)
 	}
 	_ = postJSON[intakeView](t, app.URL+"/api/v1/intake/"+first.ID+"/messages", intakeMessageRequest{Text: "Plan a scoped test"})
-	if call := <-daybreakCalls; call.Model != "gpt-daybreak-blue-latest" || call.ReasoningEffort != "" {
+	if call := <-daybreakCalls; call.Model != "gpt-daybreak-blue-latest" || call.ReasoningEffort != "high" {
 		t.Fatalf("default provider request = %+v", call)
 	}
 	second := getJSON[intakeView](t, app.URL+"/api/v1/intake")

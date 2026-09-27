@@ -59,10 +59,10 @@ func main() {
 	}
 	requestReasoning, requestMaxOutput := *reasoning, *maxOutput
 	inputLimit := *maxInput
-	// The local subscription bridge deliberately exposes only its text contract;
-	// provider-specific reasoning and max-token fields are for local servers.
+	// The local subscription bridge accepts reasoning effort; its output limit
+	// remains the provider-backed subscription budget.
 	if strings.TrimSpace(*tokenFile) != "" {
-		requestReasoning, requestMaxOutput = "", llmclient.SubscriptionMaxOutputTokens
+		requestMaxOutput = llmclient.SubscriptionMaxOutputTokens
 		if inputLimit == 0 {
 			inputLimit = llmclient.SubscriptionInputByteLimit
 		}

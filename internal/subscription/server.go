@@ -40,7 +40,7 @@ func Handler(provider *Provider, token string) http.Handler {
 		decoder.DisallowUnknownFields()
 		var input Request
 		if decoder.Decode(&input) != nil {
-			writeError(w, 400, "invalid request; only model, text messages, temperature, and max_tokens are supported")
+			writeError(w, 400, "invalid request; only model, messages, temperature, reasoning_effort, and max_tokens are supported")
 			return
 		}
 		if decoder.Decode(new(any)) != io.EOF {

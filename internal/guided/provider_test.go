@@ -22,6 +22,13 @@ func TestSavePreferencesAppliesSubscriptionInputBudget(t *testing.T) {
 	if got.MaxInputBytes != SubscriptionInputByteLimit {
 		t.Fatalf("subscription input bytes = %d, want %d", got.MaxInputBytes, SubscriptionInputByteLimit)
 	}
+	if got.ReasoningEffort != "high" {
+		t.Fatalf("subscription reasoning = %q, want high", got.ReasoningEffort)
+	}
+	other, err := savePreferences(ctx, NewConsole(ctx, strings.NewReader(""), io.Discard), filepath.Join(t.TempDir(), "other.json"), preferences{Provider: "subscription", Model: "other-model"})
+	if err != nil || other.ReasoningEffort != "" {
+		t.Fatalf("unselected model should retain provider default: %+v, %v", other, err)
+	}
 }
 
 func TestSavePreferencesUpdatesQwen38ContextBudget(t *testing.T) {

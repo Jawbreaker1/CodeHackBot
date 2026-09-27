@@ -20,10 +20,11 @@ import (
 const responsesURL = "https://chatgpt.com/backend-api/codex/responses"
 
 type Request struct {
-	Model     string              `json:"model"`
-	Messages  []llmclient.Message `json:"messages"`
-	MaxTokens int                 `json:"max_tokens,omitempty"`
-	// Accepted for the existing worker protocol; reasoning models use their default.
+	Model           string              `json:"model"`
+	Messages        []llmclient.Message `json:"messages"`
+	MaxTokens       int                 `json:"max_tokens,omitempty"`
+	ReasoningEffort string              `json:"reasoning_effort,omitempty"`
+	// Accepted for the existing worker protocol but omitted upstream.
 	Temperature *float64 `json:"temperature,omitempty"`
 }
 
@@ -76,6 +77,9 @@ func (p *Provider) Complete(ctx context.Context, input Request) (map[string]any,
 	request := map[string]any{
 		"model": input.Model, "instructions": strings.Join(instructions, "\n\n"), "input": messages,
 		"store": false, "stream": true, "tools": []any{}, "tool_choice": "none",
+	}
+	if input.ReasoningEffort != "" {
+		request["reasoning"] = map[string]string{"effort": input.ReasoningEffort}
 	}
 	includeOutputLimit := input.MaxTokens > 0
 	if input.MaxTokens > 0 {

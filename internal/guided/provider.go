@@ -110,6 +110,9 @@ func configureProvider(ctx context.Context, c *Console, path string) (preference
 			model = "gpt-daybreak-blue-latest"
 		}
 		p.Model, p.BaseURL = model, ""
+		if model == "gpt-daybreak-blue-latest" {
+			p.ReasoningEffort = "high"
+		}
 		p.MaxInputBytes = SubscriptionInputByteLimit
 	}
 	return savePreferences(ctx, c, path, p)
@@ -148,6 +151,9 @@ func savePreferences(ctx context.Context, c *Console, path string, p preferences
 		}
 		if p.MaxOutputTokens == 0 {
 			p.MaxOutputTokens = llmclient.SubscriptionMaxOutputTokens
+		}
+		if p.Model == "gpt-daybreak-blue-latest" && p.ReasoningEffort == "" {
+			p.ReasoningEffort = "high"
 		}
 	}
 	if p.Provider == "local" && p.Model == "qwen/qwen3.8-27b" && (p.MaxInputBytes == 0 || p.MaxInputBytes == llmclient.DefaultInputByteLimit) {
@@ -241,6 +247,9 @@ func startProvider(ctx context.Context, p preferences) (llmclient.Client, func()
 		return client, func() {}, nil
 	}
 	client.MaxOutputTokens = llmclient.SubscriptionMaxOutputTokens
+	if p.ReasoningEffort != "default" {
+		client.ReasoningEffort = p.ReasoningEffort
+	}
 	// Reuse the existing subscription adapter; the application owns its local
 	// listener and ephemeral credential, never provider credential copies.
 	codexDir := os.Getenv("CODEX_HOME")

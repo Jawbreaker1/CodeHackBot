@@ -54,6 +54,9 @@ func TestWorkerClientThroughBridge(t *testing.T) {
 		if payload["max_output_tokens"] != float64(1234) {
 			t.Errorf("max output was not forwarded: %v", payload["max_output_tokens"])
 		}
+		if reasoning, ok := payload["reasoning"].(map[string]any); !ok || reasoning["effort"] != "high" {
+			t.Errorf("reasoning effort was not forwarded: %v", payload["reasoning"])
+		}
 		fmt.Fprint(w, completedEvent)
 	}))
 	defer upstream.Close()
@@ -67,7 +70,7 @@ func TestWorkerClientThroughBridge(t *testing.T) {
 	}
 	bridge := httptest.NewServer(Handler(&Provider{Auth: &testAuth{}, endpoint: upstream.URL}, token))
 	defer bridge.Close()
-	client := llmclient.Client{BaseURL: bridge.URL + "/v1", Model: "chosen-model", AuthTokenFile: path, MaxOutputTokens: 1234}
+	client := llmclient.Client{BaseURL: bridge.URL + "/v1", Model: "chosen-model", AuthTokenFile: path, ReasoningEffort: "high", MaxOutputTokens: 1234}
 	got, err := client.Complete(context.Background(), []llmclient.Message{{Role: "system", Content: "Return JSON"}, {Role: "user", Content: "Hello"}}, llmclient.ChatOptions{Profile: llmclient.ProfileStructuredControl})
 	if err != nil {
 		t.Fatal(err)

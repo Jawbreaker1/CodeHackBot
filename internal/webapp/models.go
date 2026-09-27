@@ -87,7 +87,6 @@ func LoadModelProfiles(path string) (ModelProfilesFile, error) {
 func (p ModelProfile) client() llmclient.Client {
 	client := llmclient.Client{BaseURL: p.BaseURL, Model: p.Model, AuthTokenFile: p.TokenFile, ReasoningEffort: p.ReasoningEffort, StructuredJSON: p.StructuredJSON, MaxOutputTokens: p.MaxOutputTokens, MaxInputBytes: p.MaxInputBytes}
 	if p.Provider == "subscription" {
-		client.ReasoningEffort = ""
 		if client.MaxInputBytes == 0 {
 			client.MaxInputBytes = llmclient.SubscriptionInputByteLimit
 		}

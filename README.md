@@ -44,6 +44,8 @@ Required product capabilities include Kali tooling, adaptable playbooks, reusabl
 
 Astra is the development/review model. The intended OpenAI pentest runtime is Daybreak on GPT-5.6 Sol, alongside local models. The subscription bridge has called `gpt-daybreak-blue-latest` successfully; the backend reports `gpt-5.6-sol`. Access remains account-dependent.
 
+The Daybreak web profile and guided subscription setup request **high reasoning**. The local bridge forwards this to the subscription backend; a live probe confirmed the request completes. This may increase latency and model usage. Existing running processes need a restart to load the updated bridge and profile.
+
 ## Build and run
 
 The supported host is Kali Linux Rolling. Install the platform baseline and
