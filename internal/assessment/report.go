@@ -10,7 +10,7 @@ import (
 func writeReport(root string, s State) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Security assessment — %s\n\n", s.ID)
-	fmt.Fprintf(&b, "**Status:** **%s**  \n**Objective:** %s  \n**Scope:** %s\n\n", s.Status, s.Goal, s.Scope)
+	fmt.Fprintf(&b, "**Status:** **%s**  \n**Objective:** %s  \n**Scope:** %s\n\n", strings.ReplaceAll(s.Status, "_", " "), s.Goal, s.Scope)
 	if !s.StartedAt.IsZero() {
 		fmt.Fprintf(&b, "**Started:** %s  \n", s.StartedAt.UTC().Format("2006-01-02 15:04 UTC"))
 	}

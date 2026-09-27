@@ -270,8 +270,8 @@ func validateDecision(d Decision, state State) error {
 		}
 		if f.Status == "reproduced" {
 			r := known[f.ValidationTask]
-			if r.Status != "done" || len(r.Task.DependsOn) == 0 || len(r.Evidence) == 0 {
-				return fmt.Errorf("reproduced finding needs a completed dependent validation task")
+			if r.Status != "done" || !hasCompletedEarlierTask(state, f.ValidationTask, known) || len(r.Evidence) == 0 {
+				return fmt.Errorf("reproduced finding needs a completed later-round validation task")
 			}
 			ownEvidence := false
 			for _, e := range r.Evidence {
@@ -289,6 +289,27 @@ func validateDecision(d Decision, state State) error {
 		}
 	}
 	return nil
+}
+
+// A later worker can validate an earlier observation without declaring a
+// formal dependency. The dependency field controls its detailed context
+// handoff; the finding gate checks the durable execution sequence and the
+// validation worker's own evidence instead.
+func hasCompletedEarlierTask(state State, validationTask string, results map[string]Result) bool {
+	priorDone := false
+	for _, plan := range state.Plans {
+		for _, task := range plan.Tasks {
+			if task.ID == validationTask {
+				return priorDone
+			}
+		}
+		for _, task := range plan.Tasks {
+			if results[task.ID].Status == "done" {
+				priorDone = true
+			}
+		}
+	}
+	return false
 }
 
 func validFindingSeverity(value string) bool {

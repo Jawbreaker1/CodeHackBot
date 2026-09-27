@@ -14,6 +14,7 @@ const narrow = matchMedia('(max-width: 1150px)');
 const mobile = matchMedia('(max-width: 680px)');
 const activeStatuses = ['running', 'starting'];
 function isAssessmentView(view) { return !!view && typeof view.goal === 'string'; }
+function displayStatus(status) { return (status || '').replaceAll('_', ' '); }
 
 async function api(path, options = {}) {
   const headers = options.body instanceof FormData ? {} : {'Content-Type': 'application/json'};
@@ -328,7 +329,7 @@ function renderWorkStatus(view) {
 function renderOverview(view) {
   const assessment = isAssessmentView(view);
   const running = activeStatuses.includes(view.status);
-  const status = assessment ? (view.pending_plan ? 'Plan ready' : view.status) : view.pending_tool ? 'Needs approval' : view.status === 'thinking' ? 'Thinking' : view.proposal ? 'Ready for review' : 'Conversation';
+  const status = assessment ? (view.pending_plan ? 'Plan ready' : displayStatus(view.status)) : view.pending_tool ? 'Needs approval' : view.status === 'thinking' ? 'Thinking' : view.proposal ? 'Ready for review' : 'Conversation';
   $('assessmentStatus').textContent = status;
   $('assessmentStatus').dataset.state = view.status;
   renderWorkStatus(view);
@@ -434,11 +435,11 @@ function sessionRow(session, isIntake) {
   }
   const button = node('button', 'session-link');
   button.dataset.session = session.id;
-  button.title = isIntake ? label : label + ' · ' + session.status;
+  button.title = isIntake ? label : label + ' · ' + displayStatus(session.status);
   const dot = node('span', 'session-dot ' + session.status);
   dot.setAttribute('aria-hidden', 'true');
   button.append(dot, node('span', 'session-link-title', label));
-  button.setAttribute('aria-label', label + (isIntake ? '' : ' · ' + session.status) + ' · ' + session.id.slice(-6));
+  button.setAttribute('aria-label', label + (isIntake ? '' : ' · ' + displayStatus(session.status)) + ' · ' + session.id.slice(-6));
   button.onclick = () => isIntake ? selectIntake(session.id) : selectSession(session.id);
   const remove = node('button', 'session-delete');
   remove.type = 'button';

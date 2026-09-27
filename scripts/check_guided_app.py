@@ -228,7 +228,7 @@ def run_case(binary, root, endpoint, mode):
             terminal.expect("Assessment aborted.")
             terminal.finish(130)
         else:
-            terminal.expect("Assessment incomplete." if mode == "deny" else "Assessment completed.")
+            terminal.expect("Assessment completed with gaps." if mode == "deny" else "Assessment completed.")
             terminal.expect("Report:")
             terminal.finish(0)
         runs = sorted((root / "sessions").glob("assessment-*/assessment.json"), key=lambda p: p.stat().st_mtime_ns)
@@ -237,6 +237,7 @@ def run_case(binary, root, endpoint, mode):
         assert state["max_output_tokens"] == 32768, state
         assert state["results"][0]["status"] == {"deny": "failed", "stop": "aborted"}.get(mode, "done"), state
         if mode == "deny":
+            assert state["status"] == "completed_with_gaps", state
             assert not state["results"][0]["evidence"], state
         if mode == "recovery":
             evidence = state["results"][0]["evidence"]

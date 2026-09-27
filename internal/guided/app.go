@@ -148,7 +148,7 @@ func chooseSavedAssessment(ctx context.Context, c *Console, base string) (*saved
 	}
 	c.Print("\nSaved assessment sessions\n")
 	for i, session := range sessions {
-		c.Print("  %d. %-20s %-18s %s\n", i+1, session.State.Status, session.State.StartedAt.Local().Format("2006-01-02 15:04"), compactSessionText(session.State.Goal, 72))
+		c.Print("  %d. %-20s %-18s %s\n", i+1, strings.ReplaceAll(session.State.Status, "_", " "), session.State.StartedAt.Local().Format("2006-01-02 15:04"), compactSessionText(session.State.Goal, 72))
 	}
 	answer, err := c.Ask(ctx, "Choose a session number to resume, or press Enter to start a new assessment")
 	if err != nil {
@@ -432,7 +432,8 @@ func (a App) runAssessmentWithFrame(ctx context.Context, c *Console, prefs prefe
 	for {
 		select {
 		case result := <-done:
-			c.Print("\nAssessment %s. Model calls: %d.\nEvidence and worker state: %s\n", result.state.Status, budget.Usage().Calls, root)
+			status := strings.ReplaceAll(result.state.Status, "_", " ")
+			c.Print("\nAssessment %s. Model calls: %d.\nEvidence and worker state: %s\n", status, budget.Usage().Calls, root)
 			if _, err := os.Stat(filepath.Join(root, "report.md")); err == nil {
 				c.Print("Report: %s\n", filepath.Join(root, "report.md"))
 			}

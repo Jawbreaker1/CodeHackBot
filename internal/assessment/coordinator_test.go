@@ -150,7 +150,7 @@ func TestCoordinatorRetainsEvidenceCatalogWhileBoundingResultCards(t *testing.T)
 	state := State{Version: 1, ID: "long-run", Goal: "review evidence", Scope: "fixture only"}
 	result := Result{Task: Task{ID: "worker-a", Goal: "inspect", DoneWhen: "evidence recorded"}, Status: "done", Summary: "five checks completed"}
 	for i := 0; i < 5; i++ {
-		result.Evidence = append(result.Evidence, ctxpacket.ExecutionResult{ActualExec: strings.Repeat("long command ", 500), OutputSummary: "check completed", LogRefs: []string{fmt.Sprintf("/tmp/check-%d.log", i)}, ArtifactRefs: []string{fmt.Sprintf("/tmp/check-%d.txt", i)}})
+		result.Evidence = append(result.Evidence, ctxpacket.ExecutionResult{ActualExec: fmt.Sprintf("check-%d ", i) + strings.Repeat("long command ", 500), OutputSummary: "check completed", LogRefs: []string{fmt.Sprintf("/tmp/check-%d.log", i)}, ArtifactRefs: []string{fmt.Sprintf("/tmp/check-%d.txt", i)}})
 	}
 	state.Results = []Result{result}
 	prompt := coordinatorPrompt(state)
@@ -161,6 +161,9 @@ func TestCoordinatorRetainsEvidenceCatalogWhileBoundingResultCards(t *testing.T)
 		Assessment struct {
 			Results []struct {
 				OmittedEvidence int `json:"omitted_evidence"`
+				Evidence        []struct {
+					Command string `json:"command"`
+				} `json:"evidence"`
 			} `json:"results"`
 		} `json:"assessment"`
 		RecordedEvidence map[string][]string `json:"recorded_evidence"`
@@ -170,6 +173,10 @@ func TestCoordinatorRetainsEvidenceCatalogWhileBoundingResultCards(t *testing.T)
 	}
 	if len(payload.Assessment.Results) != 1 || payload.Assessment.Results[0].OmittedEvidence != 2 || len(payload.RecordedEvidence["worker-a"]) != 10 {
 		t.Fatal("compact card lost the complete registered evidence catalog")
+	}
+	previews := payload.Assessment.Results[0].Evidence
+	if len(previews) != 3 || !strings.HasPrefix(previews[0].Command, "check-0 ") || !strings.HasPrefix(previews[1].Command, "check-3 ") || !strings.HasPrefix(previews[2].Command, "check-4 ") {
+		t.Fatalf("compact card lost the opening or latest actions: %+v", previews)
 	}
 }
 
@@ -466,8 +473,31 @@ func TestRecoverableWorkerFailureReachesNextPlanningRound(t *testing.T) {
 	coordinator := testCoordinator(server.URL)
 	coordinator.Limits = Limits{Workers: 1, Rounds: 2, Tasks: 2, StepsPerTask: 1, ModelCalls: 8}
 	state, err := coordinator.Run(context.Background(), t.TempDir(), "record a fixture observation", "synthetic fixture only")
-	if err != nil || state.Status != "incomplete" || len(state.Results) != 1 || state.Results[0].Status != "blocked" || len(state.Plans) != 2 {
+	if err != nil || state.Status != "completed_with_gaps" || len(state.Results) != 1 || state.Results[0].Status != "blocked" || len(state.Plans) != 2 {
 		t.Fatalf("worker failure stopped adaptation: state=%+v err=%v", state, err)
+	}
+}
+
+func TestResumeFinalPlanReconcilesStatusWithoutAnotherModelCall(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "assessment")
+	coordinator := testCoordinator("http://127.0.0.1:1/v1")
+	initial := State{
+		Version: 1, Goal: "Inspect synthetic fixture", Scope: "fixture only", Status: "incomplete",
+		Limits:  DefaultLimits(),
+		Plans:   []Decision{{Summary: "Initial check", Tasks: []Task{{ID: "first"}}}, {Summary: "Recovery", Tasks: []Task{{ID: "second"}}}, {Summary: "Assessment concluded", Complete: true}},
+		Results: []Result{{Task: Task{ID: "first"}, Status: "blocked"}, {Task: Task{ID: "second"}, Status: "done"}},
+	}
+	state, err := coordinator.RunState(context.Background(), root, initial)
+	if err != nil || state.Status != "completed_with_gaps" || len(state.Plans) != 3 || state.Usage.Calls != 0 {
+		t.Fatalf("final plan was not reconciled locally: state=%+v err=%v", state, err)
+	}
+	loaded, err := LoadState(root)
+	if err != nil || loaded.Status != state.Status || len(loaded.Results) != 2 {
+		t.Fatalf("reconciled state was not saved: state=%+v err=%v", loaded, err)
+	}
+	report, err := os.ReadFile(filepath.Join(root, "report.md"))
+	if err != nil || !strings.Contains(string(report), "**Status:** **completed with gaps**") {
+		t.Fatalf("reconciled report was not written: err=%v report=%s", err, report)
 	}
 }
 
@@ -602,6 +632,29 @@ func TestCoordinatorRejectsUnfinishedDependenciesAndInventedEvidence(t *testing.
 		if err := validateDecision(d, s); err == nil {
 			t.Fatalf("accepted invalid decision: %+v", d)
 		}
+	}
+}
+
+func TestReproducedFindingUsesLaterWorkerEvidenceWithoutFormalDependency(t *testing.T) {
+	inspect := Task{ID: "inspect", Goal: "inspect", DoneWhen: "lead recorded"}
+	validate := Task{ID: "validate", Goal: "check the lead against the target", DoneWhen: "response recorded"}
+	state := State{Limits: DefaultLimits(), Plans: []Decision{{Tasks: []Task{inspect}}, {Tasks: []Task{validate}}}, Results: []Result{
+		{Task: inspect, Status: "done", Evidence: []ctxpacket.ExecutionResult{{LogRefs: []string{"inspect.log"}}}},
+		{Task: validate, Status: "done", Evidence: []ctxpacket.ExecutionResult{{LogRefs: []string{"validate.log"}}}},
+	}}
+	finding := Finding{Title: "Observed issue", Status: "reproduced", ValidationTask: "validate", Impact: "fixture impact", Steps: []string{"repeat the validation"}, Evidence: []string{"validate.log"}, Remediation: []string{"fix the issue"}}
+	decision := Decision{Summary: "target behavior verified", Complete: true, Findings: []Finding{finding}}
+	if err := validateDecision(decision, state); err != nil {
+		t.Fatalf("later independent validation was rejected: %v", err)
+	}
+	state.Plans = []Decision{{Tasks: []Task{inspect, validate}}}
+	if err := validateDecision(decision, state); err == nil {
+		t.Fatal("same-round task counted as later validation")
+	}
+	state.Plans = []Decision{{Tasks: []Task{inspect}}, {Tasks: []Task{validate}}}
+	state.Results[0].Status = "failed"
+	if err := validateDecision(decision, state); err == nil {
+		t.Fatal("failed prior task counted as a completed investigation")
 	}
 }
 
