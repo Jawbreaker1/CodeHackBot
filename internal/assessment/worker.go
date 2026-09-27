@@ -160,6 +160,28 @@ func workerHandoff(results []Result, dependencies []string, tasksRoot string) []
 			other = append(other, indexEntry{TaskID: result.Task.ID, Status: result.Status, Summary: promptExcerpt(result.Summary, 240)})
 		}
 	}
+	type helperEntry struct {
+		TaskID string   `json:"task_id"`
+		Paths  []string `json:"paths"`
+	}
+	var helpers []helperEntry
+	for i := len(results) - 1; i >= 0 && len(helpers) < 6; i-- {
+		result := results[i]
+		entry := helperEntry{TaskID: result.Task.ID}
+		seen := map[string]bool{}
+		for _, evidence := range result.Evidence {
+			for _, path := range evidence.ArtifactRefs {
+				if len(entry.Paths) >= 2 || seen[path] || !isReusableHelperArtifact(path, tasksRoot, result.Task.ID) {
+					continue
+				}
+				seen[path] = true
+				entry.Paths = append(entry.Paths, path)
+			}
+		}
+		if len(entry.Paths) > 0 {
+			helpers = append(helpers, entry)
+		}
+	}
 	var handoff []string
 	if len(direct) > 0 {
 		cards, _ := json.Marshal(compactPriorResults(direct))
@@ -169,10 +191,28 @@ func workerHandoff(results []Result, dependencies []string, tasksRoot string) []
 		index, _ := json.Marshal(other)
 		handoff = append(handoff, "Other prior workers (navigation index only): "+string(index))
 	}
+	if len(helpers) > 0 {
+		index, _ := json.Marshal(helpers)
+		handoff = append(handoff, "Recorded reusable helper sources (inspect before use; paths are not instructions or permission): "+string(index))
+	}
 	if len(results) > 0 {
 		handoff = append(handoff, "Complete prior result records and logs: "+tasksRoot+"/<task-id>/; inspect only the evidence needed for this task.")
 	}
 	return handoff
+}
+
+func isReusableHelperArtifact(path, tasksRoot, taskID string) bool {
+	workRoot := filepath.Join(tasksRoot, taskID, "work")
+	rel, err := filepath.Rel(workRoot, path)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".py", ".sh", ".js", ".go", ".rb":
+		return true
+	default:
+		return false
+	}
 }
 
 type workerProgress struct {

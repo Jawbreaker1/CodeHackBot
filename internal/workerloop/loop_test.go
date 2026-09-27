@@ -202,12 +202,21 @@ func TestPersistenceFailureStopsBeforeExternalEffect(t *testing.T) {
 	}
 }
 
-func TestApprovalDenialAndCancellationStopWorker(t *testing.T) {
+func TestApprovalDenialStopsWorkerWithPartialEvidence(t *testing.T) {
 	loop, p, calls := fixtureWorker(t, 2, printAction)
 	loop.Approver = approval.StaticApprover{Decision: approval.DecisionDeny}
+	sink := &recordingProgressSink{}
+	loop.Progress = sink
 	out, err := loop.Run(context.Background(), p, 2)
-	if err == nil || out.Packet.LatestExecutionResult.Action != "" || *calls != 1 {
-		t.Fatalf("denied execution err=%v calls=%d", err, *calls)
+	if err == nil || out.Packet.TaskRuntime.State != "blocked" || out.Packet.LatestExecutionResult.Action != "" || *calls != 1 || !strings.Contains(out.Summary, "did not execute") {
+		t.Fatalf("denied execution state=%s summary=%q err=%v calls=%d", out.Packet.TaskRuntime.State, out.Summary, err, *calls)
+	}
+	denialSeen := false
+	for _, event := range sink.events {
+		denialSeen = denialSeen || event.Kind == EventExecutionDenied
+	}
+	if !denialSeen {
+		t.Fatal("denied action was not visible in progress")
 	}
 	loop, p, calls = fixtureWorker(t, 2)
 	ctx, cancel := context.WithCancel(context.Background())

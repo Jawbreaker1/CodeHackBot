@@ -180,6 +180,20 @@ func TestCoordinatorRetainsEvidenceCatalogWhileBoundingResultCards(t *testing.T)
 	}
 }
 
+func TestCoordinatorIndexesMiddleEvidenceWhenWorkerIsBlocked(t *testing.T) {
+	result := Result{Task: Task{ID: "partial", Goal: "assess fixture"}, Status: "blocked", Summary: "The operator denied the next action."}
+	for i := 0; i < 5; i++ {
+		result.Evidence = append(result.Evidence, ctxpacket.ExecutionResult{
+			ExitStatus: "0", OutputSummary: fmt.Sprintf("completed family %d with no recovery", i),
+			LogRefs: []string{fmt.Sprintf("/tmp/family-%d.log", i)},
+		})
+	}
+	card := compactPriorResults([]Result{result})[0]
+	if len(card.Evidence) != 3 || len(card.EvidenceIndex) != 2 || card.EvidenceIndex[0].Step != 2 || card.EvidenceIndex[0].Summary != "completed family 1 with no recovery" || card.EvidenceIndex[1].LogRef != "/tmp/family-2.log" {
+		t.Fatalf("blocked worker lost middle completed coverage: %+v", card)
+	}
+}
+
 func TestCoordinatorModelCatalogIndexesLogsAndDistinctArtifacts(t *testing.T) {
 	log := "/tmp/tasks/inspect/logs/action.log"
 	image := "/tmp/tasks/inspect/work/capture.png"
@@ -298,11 +312,11 @@ func TestCoordinatorBoundedViewReservesSpaceForFinalCorrection(t *testing.T) {
 func TestWorkerHandoffPrioritizesDeclaredDependencies(t *testing.T) {
 	large := strings.Repeat("prior investigation details ", 300)
 	results := []Result{
-		{Task: Task{ID: "independent"}, Status: "done", Summary: large, Evidence: []ctxpacket.ExecutionResult{{LogRefs: []string{"/tasks/independent/log"}}}},
-		{Task: Task{ID: "required"}, Status: "done", Summary: "validated prerequisite", Evidence: []ctxpacket.ExecutionResult{{LogRefs: []string{"/tasks/required/log"}}}},
+		{Task: Task{ID: "independent"}, Status: "done", Summary: large, Evidence: []ctxpacket.ExecutionResult{{LogRefs: []string{"/tasks/independent/log"}, ArtifactRefs: []string{"/tasks/independent/work/validator.py", "/tasks/independent/work/private.pot", "/outside/helper.py"}}}},
+		{Task: Task{ID: "required"}, Status: "done", Summary: "validated prerequisite", Evidence: []ctxpacket.ExecutionResult{{LogRefs: []string{"/tasks/required/log"}}, {ArtifactRefs: []string{"/tasks/required/work/checker.sh"}}}},
 	}
 	handoff := strings.Join(workerHandoff(results, []string{"required"}, "/tasks"), "\n")
-	if !strings.Contains(handoff, "/tasks/required/log") || strings.Contains(handoff, "/tasks/independent/log") || strings.Contains(handoff, large) || !strings.Contains(handoff, "independent") || !strings.Contains(handoff, "/tasks/<task-id>/") {
+	if !strings.Contains(handoff, "/tasks/required/log") || strings.Contains(handoff, "/tasks/independent/log") || strings.Contains(handoff, large) || !strings.Contains(handoff, "/tasks/independent/work/validator.py") || !strings.Contains(handoff, "/tasks/required/work/checker.sh") || strings.Contains(handoff, "private.pot") || strings.Contains(handoff, "/outside/helper.py") || !strings.Contains(handoff, "/tasks/<task-id>/") {
 		t.Fatalf("worker handoff lost prerequisite or overincluded unrelated evidence: %s", handoff)
 	}
 }

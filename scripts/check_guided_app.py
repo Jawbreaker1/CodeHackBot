@@ -235,7 +235,7 @@ def run_case(binary, root, endpoint, mode):
         state = json.loads(runs[-1].read_text())
         assert state["reasoning_effort"] == "low", state
         assert state["max_output_tokens"] == 32768, state
-        assert state["results"][0]["status"] == {"deny": "failed", "stop": "aborted"}.get(mode, "done"), state
+        assert state["results"][0]["status"] == {"deny": "blocked", "stop": "aborted"}.get(mode, "done"), state
         if mode == "deny":
             assert state["status"] == "completed_with_gaps", state
             assert not state["results"][0]["evidence"], state

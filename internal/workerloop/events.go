@@ -17,6 +17,7 @@ const (
 	EventStrategyLoaded       ProgressEventKind = "strategy_loaded"
 	EventStrategyLookupFailed ProgressEventKind = "strategy_lookup_failed"
 	EventActionProposed       ProgressEventKind = "action_proposed"
+	EventExecutionDenied      ProgressEventKind = "execution_denied"
 	EventExecutionStarted     ProgressEventKind = "execution_started"
 	EventExecutionFinished    ProgressEventKind = "execution_finished"
 	EventPostExecEvalStarted  ProgressEventKind = "post_exec_eval_started"
