@@ -6,6 +6,18 @@ import (
 	"testing"
 )
 
+func TestCompactOutputSummaryKeepsShortMultilineResults(t *testing.T) {
+	listing := "stdout: config.yaml\nserver.go\nroutes.go\nhandlers.go\nREADME.md"
+	if got := compactOutputSummary(listing); got != listing {
+		t.Fatalf("short inventory lost entries: %q", got)
+	}
+	long := strings.Repeat("observed data\n", 80)
+	got := compactOutputSummary(long)
+	if len(got) > 480 || !strings.Contains(got, "[truncated; full result in execution log]") {
+		t.Fatalf("long preview does not signal omission: %q", got)
+	}
+}
+
 func TestBuildRunningSummary(t *testing.T) {
 	summary := buildRunningSummary(
 		"inspect archive",

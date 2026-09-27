@@ -72,6 +72,50 @@ func TestRepeatedUnsupportedCompletionWithoutNewEvidenceStops(t *testing.T) {
 	}
 }
 
+func TestPlanOnlyLoopReturnsControlWithoutExecuting(t *testing.T) {
+	plan := `{"type":"update_plan","plan":{"summary":"Review the fixture","steps":["inspect"],"active_step":"inspect"}}`
+	loop, packet, calls := fixtureWorker(t, 8, plan, plan, plan, plan)
+	out, err := loop.Run(context.Background(), packet, 8)
+	if err == nil || !strings.Contains(err.Error(), "four worker decisions produced no execution") || *calls != 4 || out.Packet.TaskRuntime.State != "blocked" {
+		t.Fatalf("plan loop was not handed back: calls=%d state=%s err=%v", *calls, out.Packet.TaskRuntime.State, err)
+	}
+	if out.Packet.WorkProgress.ExecutedActions != 0 || out.Packet.WorkProgress.DecisionsSinceExecution != 4 || out.Packet.WorkProgress.StartedAt.IsZero() {
+		t.Fatalf("incorrect progress accounting: %+v", out.Packet.WorkProgress)
+	}
+}
+
+func TestProgressReviewReachesWorkerAndExecutionResetsIt(t *testing.T) {
+	plan := `{"type":"update_plan","plan":{"summary":"Review the fixture","steps":["inspect"],"active_step":"inspect"}}`
+	loop, packet, _ := fixtureWorker(t, 4, plan, plan, printAction, `{"type":"step_complete","summary":"Fixture observed"}`, completeEval)
+	sink := &recordingProgressSink{}
+	loop.Progress = sink
+	out, err := loop.Run(context.Background(), packet, 4)
+	if err != nil || out.Packet.TaskRuntime.State != "done" || out.Packet.WorkProgress.ExecutedActions != 1 || out.Packet.WorkProgress.DecisionsSinceExecution != 1 {
+		t.Fatalf("execution did not reset no-action count: progress=%+v err=%v", out.Packet.WorkProgress, err)
+	}
+	seen := false
+	for i, event := range sink.events {
+		if event.Kind == EventDecisionStarted && event.StepIndex == 3 && strings.Contains(sink.packets[i].WorkProgress.Review, "no new execution evidence") {
+			seen = true
+		}
+	}
+	if !seen {
+		t.Fatal("progress review was not visible before the third decision")
+	}
+}
+
+func TestProgressReviewChecksAfterTwoActions(t *testing.T) {
+	packet := ctxpacket.WorkerPacket{}
+	packet.WorkProgress.ExecutedActions = 2
+	if review := progressReview(packet); !strings.Contains(review, "original done condition") {
+		t.Fatalf("second action did not trigger an outcome checkpoint: %q", review)
+	}
+	packet.WorkProgress.ExecutedActions = 3
+	if review := progressReview(packet); review != "(none)" {
+		t.Fatalf("checkpoint repeated without a new trigger: %q", review)
+	}
+}
+
 func TestWorkerRecoversAndRevisesPlanWithoutChangingGoal(t *testing.T) {
 	first := `{"type":"bash","command":"cat","args":["missing.txt"],"plan":{"summary":"Read the supplied path","steps":["read supplied file"],"active_step":"read supplied file"}}`
 	second := `{"type":"bash","command":"cat","args":["actual.txt"],"plan":{"summary":"The first path was absent; use the provided alternative","steps":["read alternative file","report evidence"],"active_step":"read alternative file"}}`

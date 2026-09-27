@@ -33,6 +33,7 @@ func coordinatorPromptBounded(state State, maxBytes int) (string, error) {
 		result.Task.DoneWhen = promptExcerpt(result.Task.DoneWhen, 240)
 		result.OmittedEvidence += len(result.Evidence)
 		result.Evidence = nil
+		result.EvidenceIndex = nil
 		refs := packet.RecordedEvidence[result.Task.ID]
 		kept := make([]string, 0, len(refs))
 		for _, ref := range refs {
@@ -102,6 +103,13 @@ func coordinatorPromptBounded(state State, maxBytes int) (string, error) {
 			packet.Assessment.Plans[i].Findings = nil
 		}
 		packet.ContextNotes = append(packet.ContextNotes, "Distant worker conclusions and superseded finding revisions are short navigation entries; use saved results and plans for omitted details.")
+		prompt = encode()
+	}
+	if len(prompt) > maxBytes {
+		for i := oldCount; i < len(packet.Assessment.Results); i++ {
+			packet.Assessment.Results[i].Summary = promptExcerptEnds(packet.Assessment.Results[i].Summary, 1024)
+		}
+		packet.ContextNotes = append(packet.ContextNotes, "Recent worker prose was shortened at both ends; exact observations remain in the evidence index and saved task records.")
 		prompt = encode()
 	}
 	if len(prompt) > maxBytes {

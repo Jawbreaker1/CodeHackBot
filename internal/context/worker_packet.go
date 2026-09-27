@@ -114,7 +114,18 @@ type WorkerPacket struct {
 	CapabilityInputs         []string
 	OperatorState            OperatorState
 	Budget                   TurnBudget
+	WorkProgress             WorkProgress
 	ContextNotes             []string
+}
+
+// WorkProgress counts decisions and executions without interpreting target
+// output. The model decides whether an observation advances the task.
+type WorkProgress struct {
+	ExecutedActions         int
+	DecisionsSinceExecution int
+	StartedAt               time.Time
+	ElapsedSeconds          int64
+	Review                  string
 }
 
 // TurnBudget survives pause/resume. Each model decision, including a question
@@ -214,8 +225,18 @@ func (p WorkerPacket) RenderSections() []RenderedSection {
 		{Name: "strategy_guidance", Content: renderStrategyGuidance(p.StrategyGuidance)},
 		{Name: "capability_inputs", Content: renderList(p.CapabilityInputs)},
 		{Name: "operator_state", Content: renderOperatorState(p.OperatorState)},
+		{Name: "work_progress", Content: renderWorkProgress(p.WorkProgress)},
 		{Name: "context_notes", Content: renderList(p.ContextNotes)},
 	}
+}
+
+func renderWorkProgress(p WorkProgress) string {
+	return strings.Join([]string{
+		"executed_actions: " + strconv.Itoa(p.ExecutedActions),
+		"decisions_since_execution: " + strconv.Itoa(p.DecisionsSinceExecution),
+		"elapsed_seconds: " + strconv.FormatInt(p.ElapsedSeconds, 10),
+		"review: " + blankOrValue(p.Review),
+	}, "\n")
 }
 
 func sectionBlock(name, content string) string {

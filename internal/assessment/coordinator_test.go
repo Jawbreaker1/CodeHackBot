@@ -194,6 +194,42 @@ func TestCoordinatorIndexesMiddleEvidenceWhenWorkerIsBlocked(t *testing.T) {
 	}
 }
 
+func TestCoordinatorIndexesMiddleEvidenceFromCompletedWorker(t *testing.T) {
+	result := Result{Task: Task{ID: "service-check", Goal: "Assess the fixture service"}, Status: "done", Summary: "No issue found in the selected checks."}
+	for i, method := range []string{"banner", "headers", "anonymous access", "role boundary", "configuration"} {
+		result.Evidence = append(result.Evidence, ctxpacket.ExecutionResult{
+			ExitStatus: "0", OutputSummary: "checked " + method,
+			LogRefs: []string{fmt.Sprintf("/tmp/method-%d.log", i)},
+		})
+	}
+	card := compactPriorResults([]Result{result})[0]
+	if len(card.EvidenceIndex) != 2 || card.EvidenceIndex[0].Summary != "checked headers" || card.EvidenceIndex[1].Summary != "checked anonymous access" {
+		t.Fatalf("completed worker lost tested method coverage: %+v", card)
+	}
+	state := State{Version: 1, Goal: "assess fixture", Scope: "synthetic only", Results: []Result{result}}
+	if !strings.Contains(coordinatorPrompt(state), "checked anonymous access") {
+		t.Fatal("coordinator did not receive the completed worker's middle actions")
+	}
+}
+
+func TestCoordinatorReceivesDecisiveRecordedOutputAfterLongPreamble(t *testing.T) {
+	output := "file header\n" + strings.Repeat("setup detail\n", 90) + "route check: access disabled\n"
+	result := Result{Task: Task{ID: "source-review", Goal: "Review the service"}, Status: "blocked", Evidence: []ctxpacket.ExecutionResult{{
+		ActualExec: "read source", ExitStatus: "0", OutputSummary: "file header\nsetup detail ... [truncated; full result in execution log]",
+		OutputEvidence: output, LogRefs: []string{"/tmp/source-review.log"},
+	}}}
+	card := compactPriorResults([]Result{result})[0]
+	if len(card.Evidence) != 1 || !strings.Contains(card.Evidence[0].Summary, "access disabled") || strings.Contains(card.Evidence[0].Summary, "[excerpt truncated") {
+		t.Fatalf("decisive recorded result was hidden from coordinator: %+v", card.Evidence)
+	}
+	long := strings.Repeat("data\n", 1200)
+	result.Evidence[0].OutputEvidence = long
+	card = compactPriorResults([]Result{result})[0]
+	if !strings.Contains(card.Evidence[0].Summary, "[excerpt truncated; consult the recorded evidence]") {
+		t.Fatal("long coordinator evidence preview did not mark its omission")
+	}
+}
+
 func TestCoordinatorModelCatalogIndexesLogsAndDistinctArtifacts(t *testing.T) {
 	log := "/tmp/tasks/inspect/logs/action.log"
 	image := "/tmp/tasks/inspect/work/capture.png"

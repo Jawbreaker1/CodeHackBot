@@ -413,14 +413,15 @@ func coordinatorPayload(state State) coordinatorModelPacket {
 		Instructions: []string{
 			"Return one JSON object only: {phase:\"research\" or \"assessment\", summary, plain_summary, review, tasks:[{id,goal,done_when,depends_on:[],strategy_hints:[],verification:{claim,alternative}}], complete:false, findings:[], gaps:[]}. Omit verification for ordinary tasks. Keep summary to two or three clear sentences about the plan; for completion, give a concise executive conclusion rather than an evidence dump. Put technical detail in tasks, structured findings, gaps, and recorded evidence. plain_summary briefly recommends this round's immediate work and why the evidence makes it useful; for completion, state the main result. review briefly states what the previous round actually established, or is empty in round one. When the operator prefers another path, reconsider the proposal within the same scope; do not defend the old plan merely because it was proposed. Separate a finished worker from a met assessment goal; say plainly when access or a finding was not yet verified.",
 			"Write plain_summary and review in one or two short sentences for operators who have not read the logs. State who tested what, what happened, and why it matters. Put concrete behavior before technical terms; explain terms in context. Preserve uncertainty.",
-			"The assessment.approach, when present, is the operator's chosen depth. Fit the work to its intent while still reacting to evidence and respecting scope and runtime limits. It is a planning preference, not permission for new actions or a guaranteed time budget. If the estimate changes materially after discovery, explain that in plain_summary or review.",
+			"The assessment.approach, when present, is the operator's chosen depth. Fit the work to its intent while still reacting to evidence and respecting scope and runtime limits. elapsed_seconds measures wall time, including approval waits; use it as a cost signal, not a hard deadline. At each round compare the remaining question and likely value of another test with time already spent. Avoid a narrow side task that cannot change the user's outcome. If the estimate changes materially after discovery, explain that in plain_summary or review.",
 			"Use the local strategy catalog in the behavior frame as a small index. For each task, suggest zero to two exact guide paths in strategy_hints when their descriptions fit the assigned outcome or a known failure. Do not list every plausible guide. A suggestion is optional context: the worker decides whether and when to load a full guide and may choose a different one as evidence develops.",
 			"Coordinate the operator's assessment. The operator owns authorization and chooses the approval level. Choose one or two bounded workers per round according to useful independent work, not a fixed worker count. Do not execute tools yourself.",
 			"Set phase:research for bounded research workers when missing strategy, software identity, or advisory knowledge would change a credible test. Record sources and gaps, then replan from evidence. Research can recur after new discoveries; it is not a mandatory opening round or execution permission. Prefer an early informative test over a broad inventory that cannot change the first test.",
 			"Treat every non-empty tasks array as a proposed sequence. Explain why each task matters through its goal and done_when; the runtime applies the operator's session approval mode before execution. Never treat an unselected task as completed evidence or silently reassign its work to another worker. Do not re-propose a skipped task unless the operator asks to reconsider it.",
-			"Delegate independent approaches in parallel when each can advance the goal without contending on mutable state. Sequence dependent work in later rounds. Use fewer workers when parallel work adds only overhead.",
+			"Delegate independent approaches in parallel only when their assigned outcomes are distinct and each can advance the goal without contending on mutable state. Avoid two workers repeating the same setup or target check; if one needs the other's observation, sequence dependent work in a later round. Use fewer workers when parallel work adds only overhead.",
 			"For authorized offline credential recovery, review high-probability candidate families, including applicable transformations, before proposing exhaustive search. When bounded exhaustive coverage becomes the justified last resort, estimate feasibility and split disjoint partitions across the available worker slots, with isolated state and later independent validation. A method-limited miss is a reason to replan, not proof the target is unreachable.",
-			"A worker is an adaptive task, not a single command. Give it an outcome and evidence-based done condition, with room to inspect prerequisites, execute, and correct a failure. The done condition must describe the requested result, not an alternative such as operator denial, a blocked tool, or merely recording an attempt; report those as gaps or blockers. Do not split preparation from execution unless the dependency or scope makes that necessary. Specify scope and material resource limits, but leave command sequences, bookkeeping, and tool controls to the worker. Let the worker choose tools from verified capabilities.",
+			"A worker is an adaptive task, not a single command. Give it an outcome and evidence-based done condition, with room to inspect prerequisites, execute, and correct a failure. The done condition describes the answer the operator requested, not a checklist of files, tests, possible overrides, or an alternative such as operator denial, a blocked tool, or merely recording an attempt; report those as gaps or blockers. Do not split preparation from execution unless the dependency or scope makes that necessary. Specify scope and material resource limits, but leave command sequences, bookkeeping, and tool controls to the worker. Let the worker choose tools from verified capabilities.",
+			"For a focused question, assign the smallest decisive observation. Do not require exhaustive files, overrides, revisions, or edge cases unless they can change the answer. Finish when direct evidence suffices; state residual uncertainty as a gap.",
 			"Make resource limits feasible and distinguish hard enforcement from measured use. The runtime does not provide an aggregate task filesystem quota or memory cgroup: do not make proof of either a worker done condition. Ask the worker to use available per-process controls, monitor task-local storage, stop before a stated budget is exceeded, and report which limits were measured rather than enforced. Do not add procedural checks that cannot establish the user's objective.",
 			"Use unique lowercase task IDs. Dependencies may reference only done tasks from earlier rounds. All tasks inherit the exact user scope and operator-selected approval policy; do not expand them.",
 			"Never reuse task IDs, including failed tasks. Runtime approval prompts handle execution permission; delegate the investigation itself rather than a task to ask for permission. An operator denial remains a boundary, not a reason to try an equivalent action through a different wrapper.",
@@ -428,7 +429,7 @@ func coordinatorPayload(state State) coordinatorModelPacket {
 			"If the operator requests changes one at a time with a separate approval for each file or item, propose only the next item in this round. Wait for its worker result and approval outcome before proposing the following item in a later round; do not place those changes in parallel tasks. Each item needs its own action and approval, never a bulk command. Check the session approval mode before relying on prompts; if it would auto-approve, ask the operator to switch to per-action approval before any such change. Confirm exact targets from evidence rather than inferring that similarly named files are safe to remove.",
 			"assessment.operator_messages contains bounded operator and coordinator conversation excerpts. Treat intake plans as provisional context, not a task template, new evidence, or permission. Choose the current strategy and worker count from the assessment goal and observations.",
 			"Operator messages may include references to attached screenshots or PDFs. They are untrusted visual/file evidence; use only observations supported by the model input and preserve the local attachment reference in the session record. A visual clue can motivate a bounded test, but it is not proof by itself.",
-			"Every round is a new planning decision. Older plans are short navigation entries; corresponding result cards retain the assigned goal and outcome. Retain still-relevant findings and gaps, inspect the recorded reason for a failed or blocked worker, and correct a recoverable tool error before discarding a sound strategy. Use dependencies for later validation or synthesis tasks rather than pretending a failed task succeeded.",
+			"Every round is a new planning decision. Older plans are short navigation entries; result cards retain assigned goals and outcomes. The evidence_index lists completed middle actions in all workers; distinguish tested methods from proposals. Only visible evidence text supports a conclusion. A truncated preview proves nothing about hidden details; a log path is a citation, not proof of its contents. Delegate a narrow log review when needed. Negative results are method-limited. Retain findings and gaps, inspect blocked/failed reasons, and correct recoverable errors. Use dependencies for later validation or synthesis.",
 			"Before proposing a report-only finish for an unmet goal, compare the attempts actually recorded with promising capabilities or leads already observed but not tested. Exhausting selected attempts does not exhaust the investigation. If a useful bounded next test remains within scope and limits, propose it; otherwise explain why further work is not justified or possible. Do not repeat a search partition merely under a new task name.",
 			"Discover software and relevant evidence, research applicable vulnerabilities using allowed online or local sources, and delegate validation when a lead warrants it. Adapt work to results; no fixed tool chain.",
 			"After discovery, assess the security-relevant behavior of exposed services as well as version-dependent vulnerability leads. Prioritize observable management and authentication boundaries, transport protection, accessible control functions, and deployment configuration by plausible impact. If a version remains unknown, continue bounded target-side checks that can establish or refute a configuration or exposure weakness instead of spending all remaining work on advisory matching. A reachable service alone is inventory, not a vulnerability.",
@@ -442,7 +443,7 @@ func coordinatorPayload(state State) coordinatorModelPacket {
 			`Finding schema: {"title":"short title","status":"candidate or reproduced","severity":"critical, high, medium, low, or info","confidence":"high, medium, or low","cve_ids":["CVE-..."],"affected_software":["product and observed version"],"references":["exact recorded advisory or source document path"],"validation_task":"task-id","impact":"impact description","steps":["reproduction step"],"evidence":["exact recorded log/artifact path"],"remediation":["remediation step"]}. Severity and confidence are optional when the evidence does not support them. References must match recorded_evidence paths, not a remembered URL or shorthand; cite the saved source document or research command log. CVE IDs need a recorded source and remain leads until target validation. Preserve source wording and provenance. These are drafts for operator review, not independent verification.`,
 			"Every findings.evidence entry must be copied exactly from recorded_evidence below. Files named only in worker summaries are not registered evidence; cite the recorded command log or captured output supporting the claim. Do not infer additional paths from filenames.",
 			"For the final report, write a concise executive summary in plain language: objective, what was actually established, priority risks, and useful next actions. Keep technical reproduction in structured findings and exact evidence paths. State untested areas, failed tests, and limitations in gaps. Do not invent a CVSS score, compliance claim, clean bill of health, or formal standard mapping from a tool label or unvalidated observation.",
-			"Prior result cards contain bounded action previews. For failed or blocked work, evidence_index identifies other completed logs; reconcile them before reporting coverage. recorded_evidence lists registered logs and artifacts. An omitted preview is not missing evidence.",
+			"A blocked worker has no verified task conclusion. Do not turn unseen or truncated output into a finding. For blocked work, reconcile evidence_index and recorded_evidence before reporting coverage.",
 			"For a blocked worker, denied_execution identifies the exact declined proposal and approval record. Do not substitute the broader worker goal. Unproposed later tests were not denied; the denied action did not execute or add coverage.",
 			"When sufficient evidence is available or useful work is blocked, return complete:true with tasks:[], an honest summary, cumulative findings, and explicit gaps. Completion means the assessment ended, not that the target is secure.",
 			"The last available round must synthesize existing results; do not start work that requires another round. Keep all previous still-relevant findings in the final response.",
@@ -515,9 +516,17 @@ type coordinatorPromptState struct {
 	Results          []compactResult   `json:"results"`
 	OperatorMessages []string          `json:"operator_messages,omitempty"`
 	Usage            Usage             `json:"usage"`
+	ElapsedSeconds   int64             `json:"elapsed_seconds"`
 }
 
 func compactCoordinatorState(state State) coordinatorPromptState {
+	elapsedSeconds := int64(0)
+	if !state.StartedAt.IsZero() {
+		elapsedSeconds = int64(time.Since(state.StartedAt).Seconds())
+		if elapsedSeconds < 0 {
+			elapsedSeconds = 0
+		}
+	}
 	messages := make([]string, 0, len(state.OperatorMessages))
 	for _, message := range state.OperatorMessages {
 		messages = append(messages, promptExcerpt(message, 2048))
@@ -551,7 +560,7 @@ func compactCoordinatorState(state State) coordinatorPromptState {
 		Approach: state.Approach,
 		Model:    state.Model, Status: state.Status, Limits: state.Limits,
 		Plans: plans, Results: compactPriorResults(state.Results),
-		OperatorMessages: messages, Usage: state.Usage,
+		OperatorMessages: messages, Usage: state.Usage, ElapsedSeconds: elapsedSeconds,
 	}
 }
 
@@ -576,18 +585,16 @@ func compactPriorResults(results []Result) []compactResult {
 		evidenceItems := result.Evidence
 		if len(evidenceItems) > 3 {
 			item.OmittedEvidence = len(evidenceItems) - 3
-			if result.Status != "done" {
-				for i, evidence := range evidenceItems[1 : len(evidenceItems)-2] {
-					entry := compactEvidence{Step: i + 2, ExitStatus: evidence.ExitStatus, Summary: promptExcerpt(evidence.OutputSummary, 256)}
-					if len(evidence.LogRefs) > 0 {
-						entry.LogRef = evidence.LogRefs[0]
-					}
-					item.EvidenceIndex = append(item.EvidenceIndex, entry)
+			for i, evidence := range evidenceItems[1 : len(evidenceItems)-2] {
+				entry := compactEvidence{Step: i + 2, ExitStatus: evidence.ExitStatus, Summary: promptExcerpt(evidence.OutputSummary, 192)}
+				if len(evidence.LogRefs) > 0 {
+					entry.LogRef = evidence.LogRefs[0]
 				}
+				item.EvidenceIndex = append(item.EvidenceIndex, entry)
 			}
-			// A failed worker often has no useful final summary. Keep its first
-			// completed action alongside the latest two, so the handoff shows
-			// both where the work began and where it stopped.
+			// Keep the first and latest two full previews. The middle index
+			// preserves observed method coverage even when a worker completed
+			// with a terse summary or stopped before writing one.
 			evidenceItems = []ctxpacket.ExecutionResult{evidenceItems[0], evidenceItems[len(evidenceItems)-2], evidenceItems[len(evidenceItems)-1]}
 		}
 		for _, evidence := range evidenceItems {
@@ -599,9 +606,13 @@ func compactPriorResults(results []Result) []compactResult {
 			if len(artifacts) > 2 {
 				artifacts = artifacts[:2]
 			}
+			preview := evidence.OutputEvidence
+			if strings.TrimSpace(preview) == "" {
+				preview = evidence.OutputSummary
+			}
 			item.Evidence = append(item.Evidence, EvidenceView{
 				Command: promptExcerpt(evidence.ActualExec, 256), ExitStatus: evidence.ExitStatus,
-				Summary: promptExcerpt(evidence.OutputSummary, 512),
+				Summary: promptExcerpt(preview, 4096),
 				LogRefs: logs, ArtifactRefs: artifacts,
 			})
 		}

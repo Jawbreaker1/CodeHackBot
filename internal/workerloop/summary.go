@@ -25,14 +25,13 @@ func compactOutputSummary(s string) string {
 	if s == "" || s == "(none)" {
 		return "(none)"
 	}
-	lines := strings.Split(s, "\n")
-	if len(lines) > 2 {
-		lines = lines[:2]
-	}
-	s = strings.Join(lines, "\n")
-	const limit = 220
+	// A fixed two-line preview silently dropped short inventories and led later
+	// planning to treat omitted entries as absent. Preserve complete small
+	// results, and label genuinely shortened output as incomplete.
+	const limit = 480
+	const marker = " ... [truncated; full result in execution log]"
 	if len(s) > limit {
-		return strings.TrimSpace(s[:limit]) + "..."
+		return strings.TrimSpace(s[:limit-len(marker)]) + marker
 	}
 	return s
 }
