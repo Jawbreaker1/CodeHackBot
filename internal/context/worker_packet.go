@@ -85,6 +85,16 @@ type OperatorState struct {
 	PendingArtifacts  []string
 }
 
+// DeniedExecution records the exact proposal that the operator declined.
+// AuditRef points to the full approval request; no execution log exists.
+type DeniedExecution struct {
+	Summary  string `json:"summary"`
+	Target   string `json:"target"`
+	Impact   string `json:"impact"`
+	Command  string `json:"command"`
+	AuditRef string `json:"audit_ref"`
+}
+
 // WorkerPacket is the authoritative v1 worker context packet.
 type WorkerPacket struct {
 	BehaviorFrame            behavior.Frame
@@ -96,6 +106,7 @@ type WorkerPacket struct {
 	RecentConversation       []string
 	OlderConversationSummary string
 	LatestExecutionResult    ExecutionResult
+	DeniedExecution          *DeniedExecution
 	RunningSummary           string
 	RelevantRecentResults    []ExecutionResult
 	MemoryBankRetrievals     []string

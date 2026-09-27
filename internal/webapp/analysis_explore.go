@@ -46,7 +46,7 @@ type analysisCorrelationMatch struct {
 }
 
 func coverageForAssessment(id string, state assessment.State, findings []analysisFinding, challenges []analysisChallenge) analysisCoverage {
-	coverage := analysisCoverage{Scope: state.Scope, SessionIDs: []string{id}, Gaps: latestGaps(state.Plans)}
+	coverage := analysisCoverage{Scope: state.Scope, SessionIDs: []string{id}, Gaps: uniqueStrings(assessment.ReportGaps(state))}
 	for _, result := range state.Results {
 		coverage.Tests = append(coverage.Tests, analysisCoverageTest{SessionID: id, TaskID: result.Task.ID, Goal: result.Task.Goal, Status: result.Status})
 	}

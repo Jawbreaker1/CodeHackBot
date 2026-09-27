@@ -101,6 +101,21 @@ func writeReport(root string, s State) error {
 			b.WriteString("\n")
 		}
 	}
+	deniedCount := 0
+	for _, result := range s.Results {
+		if result.DeniedExecution != nil {
+			deniedCount++
+		}
+	}
+	if deniedCount > 0 {
+		b.WriteString("## Operator-denied actions\n\nThese proposed actions did not execute and provide no test coverage. The record below identifies the action that was denied; it does not mean every later test in the worker's goal was proposed or denied.\n\n")
+		for _, result := range s.Results {
+			if denied := result.DeniedExecution; denied != nil {
+				fmt.Fprintf(&b, "- `%s`: %s (target: %s). Approval record: %s\n", result.Task.ID, denied.Summary, denied.Target, denied.AuditRef)
+			}
+		}
+		b.WriteString("\n")
+	}
 	b.WriteString("## Limitations and unresolved gaps\n\n")
 	if unreviewed {
 		b.WriteString("The gaps below are from the last coordinator plan and were not reconciled with subsequent worker results.\n\n")
@@ -108,12 +123,11 @@ func writeReport(root string, s State) error {
 	if s.Error != "" {
 		fmt.Fprintf(&b, "- Run limitation: %s\n", s.Error)
 	}
-	if len(s.Plans) > 0 {
-		for _, gap := range s.Plans[len(s.Plans)-1].Gaps {
-			fmt.Fprintf(&b, "- %s\n", gap)
-		}
+	gaps := ReportGaps(s)
+	for _, gap := range gaps {
+		fmt.Fprintf(&b, "- %s\n", gap)
 	}
-	if s.Error == "" && (len(s.Plans) == 0 || len(s.Plans[len(s.Plans)-1].Gaps) == 0) {
+	if s.Error == "" && len(gaps) == 0 {
 		b.WriteString("No additional gaps were stated by the coordinator; this is not a coverage guarantee.\n")
 	}
 	b.WriteString("\n## Work performed and evidence\n\n")
@@ -148,6 +162,9 @@ func writeEvidenceIndex(root string, s State) error {
 	b.WriteString("Worker-authored conclusions and local references are retained here for review; they may quote commands or results and require sensitive-content review. Full raw invocations, output, and approvals remain in the referenced task logs.\n\n")
 	for _, r := range s.Results {
 		fmt.Fprintf(&b, "## %s — %s\n\n%s\n\nCompletion criterion: %s\n\n%s\n\n", r.Task.ID, r.Status, r.Task.Goal, r.Task.DoneWhen, r.Summary)
+		if denied := r.DeniedExecution; denied != nil {
+			fmt.Fprintf(&b, "Operator-denied proposal (not executed): %s\n\nApproval record: %s\n\n", denied.Summary, denied.AuditRef)
+		}
 		if r.Error != "" {
 			fmt.Fprintf(&b, "Limitation: %s\n\n", r.Error)
 		}

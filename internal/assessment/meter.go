@@ -22,6 +22,7 @@ type Usage struct {
 type ModelBudget struct {
 	mu       sync.Mutex
 	idle     *sync.Cond
+	slots    chan struct{}
 	limit    int
 	usage    Usage
 	inFlight int
@@ -29,7 +30,7 @@ type ModelBudget struct {
 }
 
 func NewModelBudget(limit int, usage Usage) *ModelBudget {
-	budget := &ModelBudget{limit: limit, usage: usage}
+	budget := &ModelBudget{limit: limit, usage: usage, slots: make(chan struct{}, 2)}
 	budget.idle = sync.NewCond(&budget.mu)
 	return budget
 }
@@ -61,12 +62,23 @@ func (m *ModelBudget) reserve(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	select {
+	case m.slots <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		<-m.slots
+		return err
+	}
 	if m.closed {
+		<-m.slots
 		return fmt.Errorf("assessment model-call budget is closed")
 	}
 	if m.usage.Calls >= m.limit {
+		<-m.slots
 		return fmt.Errorf("assessment model-call budget exhausted (%d)", m.limit)
 	}
 	m.usage.Calls++
@@ -79,6 +91,7 @@ func (m *ModelBudget) record(c llmclient.Completion, err error) {
 	defer m.mu.Unlock()
 	defer func() {
 		m.inFlight--
+		<-m.slots
 		if m.inFlight == 0 {
 			m.idle.Broadcast()
 		}

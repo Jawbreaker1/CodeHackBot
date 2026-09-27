@@ -74,11 +74,8 @@ func RenderFormattedReport(state State, format ReportFormat) ([]byte, error) {
 		data.Finished = state.FinishedAt.UTC().Format("2006-01-02 15:04 UTC")
 	}
 	data.Summary, data.UnreviewedResults = reportOutcome(state)
-	if len(state.Plans) > 0 {
-		last := state.Plans[len(state.Plans)-1]
-		if !data.UnreviewedResults {
-			data.Gaps = last.Gaps
-		}
+	if !data.UnreviewedResults {
+		data.Gaps = ReportGaps(state)
 	}
 	if state.Error != "" {
 		data.Gaps = append(append([]string(nil), data.Gaps...), "Run limitation: "+state.Error)

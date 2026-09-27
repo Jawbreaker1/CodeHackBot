@@ -151,7 +151,7 @@ func postRunFindingsContext(state assessment.State) string {
 	var gaps []string
 	lastResult, finalReviewPending := assessment.LatestUnreviewedResult(state)
 	if len(state.Plans) > 0 && !finalReviewPending {
-		gaps = state.Plans[len(state.Plans)-1].Gaps
+		gaps = assessment.ReportGaps(state)
 	}
 	latestResult := ""
 	if finalReviewPending {
@@ -176,6 +176,13 @@ func assessmentConclusion(state assessment.State) string {
 	if !last.Complete {
 		return ""
 	}
+	if assessment.HasDeniedExecution(state) {
+		text := []rune(strings.Join(strings.Fields(assessment.ReviewSummary(state)), " "))
+		if len(text) > 360 {
+			return string(text[:359]) + "…"
+		}
+		return string(text)
+	}
 	text := strings.TrimSpace(last.PlainSummary)
 	if text == "" {
 		text = last.Summary
@@ -191,6 +198,9 @@ func assessmentConclusion(state assessment.State) string {
 func assessmentConclusionDetail(state assessment.State) string {
 	if len(state.Plans) == 0 || !state.Plans[len(state.Plans)-1].Complete {
 		return ""
+	}
+	if assessment.HasDeniedExecution(state) {
+		return assessment.ReviewSummary(state)
 	}
 	return state.Plans[len(state.Plans)-1].Summary
 }

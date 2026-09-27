@@ -101,7 +101,7 @@
       <p class="muted">Applies to this session. Keep targets and intended actions clear in the coordinator conversation. Switching to automatic approval also releases pending actions covered by the new setting.</p>
       <div class="model-options">
         <label class="model-option"><input type="radio" name="permission-mode" value="per_action"><span>Approve every execution<small>Review each command before it runs.</small></span></label>
-        <label class="model-option"><input type="radio" name="permission-mode" value="dangerous_only"><span>Approve dangerous executions<small>Scoped plans and routine actions start automatically. Dangerous or uncertain commands ask first.</small></span></label>
+        <label class="model-option"><input type="radio" name="permission-mode" value="dangerous_only"><span>Review commands and risky actions<small>Scoped plans and built-in read-only observations start automatically. Worker commands ask first, even when labeled low risk.</small></span></label>
         <label class="model-option"><input type="radio" name="permission-mode" value="full_access"><span>Approve everything<small>Plans and executions start automatically within the session. You remain responsible for target authorization.</small></span></label>
       </div>
       <label id="permissionAcknowledgement" class="permission-ack hidden"><input id="permissionAck" type="checkbox">I understand that this allows automatic executions in this session.</label>

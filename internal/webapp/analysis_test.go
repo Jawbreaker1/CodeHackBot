@@ -1,10 +1,27 @@
 package webapp
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/assessment"
+	ctxpacket "github.com/Jawbreaker1/CodeHackBot/internal/context"
 )
+
+func TestAnalysisUsesRecordedDeniedActionInsteadOfModelGap(t *testing.T) {
+	state := assessment.State{
+		Status: "completed_with_gaps",
+		Plans:  []assessment.Decision{{Complete: true, Summary: "The operator denied a marker execution.", PlainSummary: "The marker was denied.", Gaps: []string{"The operator denied a marker execution."}}},
+		Results: []assessment.Result{{
+			Task: assessment.Task{ID: "validate", Goal: "Validate a marker"}, Status: "blocked",
+			DeniedExecution: &ctxpacket.DeniedExecution{Summary: "Read source excerpts", AuditRef: "tasks/validate/logs/denied.approval.json"},
+		}},
+	}
+	view := buildAnalysis("fixture", "lab", state, nil)
+	if len(view.Gaps) != 1 || !strings.Contains(view.Gaps[0], "Read source excerpts") || strings.Contains(view.Gaps[0], "denied a marker") || strings.Contains(view.Conclusion, "marker was denied") || strings.Contains(view.ConclusionDetail, "denied a marker") || len(view.Coverage) != 1 || len(view.Coverage[0].Gaps) != 1 {
+		t.Fatalf("analysis did not use the recorded denial: %+v", view)
+	}
+}
 
 func TestAnalysisPreservesLatestUnresolvedGap(t *testing.T) {
 	state := assessment.State{Status: "incomplete", Plans: []assessment.Decision{

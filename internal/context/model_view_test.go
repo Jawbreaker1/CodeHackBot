@@ -107,6 +107,36 @@ func TestModelViewOffloadsOlderEvidenceBeforeHardLimit(t *testing.T) {
 	}
 }
 
+func TestModelViewKeepsEvidenceIndexWithoutResendingLongHistory(t *testing.T) {
+	p := NewInitialWorkerPacket(behavior.Frame{SystemPrompt: "policy"}, session.Foundation{Goal: "review a bounded system"}, "/tmp", "fixture", "per_action", 16)
+	for i := 0; i < 8; i++ {
+		p.RelevantRecentResults = append(p.RelevantRecentResults, ExecutionResult{
+			Action:         strings.Repeat("inspect source and compare evidence ", 30),
+			ActualExec:     strings.Repeat("long command body ", 150),
+			OutputEvidence: strings.Repeat("recorded observation ", 250),
+			OutputSummary:  strings.Repeat("short interpretation ", 50),
+			LogRefs:        []string{fmt.Sprintf("/logs/action-%d", i)},
+		})
+		p.PlanHistory = append(p.PlanHistory, PlanRevision{Turn: i + 1, Plan: PlanState{Summary: strings.Repeat("plan revision ", 80), Steps: []string{"inspect", "validate"}}})
+	}
+	p.LatestExecutionResult = ExecutionResult{Action: "latest check", ActualExec: strings.Repeat("script ", 400), OutputEvidence: strings.Repeat("decisive observation ", 300), LogRefs: []string{"/logs/latest"}}
+	view, err := p.ModelView(100000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(view.Render())*2 >= len(p.Render()) {
+		t.Fatalf("worker resent too much settled history: view=%d full=%d", len(view.Render()), len(p.Render()))
+	}
+	if len(view.RelevantRecentResults) != 8 || view.LatestExecutionResult.LogRefs[0] != "/logs/latest" || len(p.RelevantRecentResults[7].OutputEvidence) <= len(view.RelevantRecentResults[7].OutputEvidence) {
+		t.Fatal("context projection lost provenance or altered durable observations")
+	}
+	for i, result := range view.RelevantRecentResults {
+		if result.LogRefs[0] != fmt.Sprintf("/logs/action-%d", i) {
+			t.Fatalf("log reference %d changed", i)
+		}
+	}
+}
+
 func TestModelViewKeepsOneCanonicalGoalAndRecentEvidenceIndex(t *testing.T) {
 	goal := strings.Repeat("long authorized task description ", 80)
 	p := NewInitialWorkerPacket(behavior.Frame{SystemPrompt: "policy", AgentsText: "rules"}, session.Foundation{Goal: goal}, "/tmp", "fixture", "per_action", 10)

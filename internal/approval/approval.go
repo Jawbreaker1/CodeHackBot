@@ -25,9 +25,22 @@ type Request struct {
 	Command  string
 	UseShell bool
 	Cwd      string
+	// trustedReadOnlyObservation is set only by the fixed observation path.
+	// A worker's model-authored risk label cannot grant this capability.
+	trustedReadOnlyObservation bool
 	// Impact is model-authored context about what the action is expected to do.
 	// It never grants permission; the exact invocation remains authoritative.
 	Impact string
+}
+
+// ReadOnlyObservationRequest marks a validated built-in observation as eligible
+// for automatic approval. Call only after the observation tool and its inputs
+// have been checked by the host application; arbitrary commands must use Request.
+func ReadOnlyObservationRequest(command, cwd, summary, target, impact string) Request {
+	return Request{
+		Command: command, Cwd: cwd, Summary: summary, Target: target,
+		Impact: impact, Risk: "low", trustedReadOnlyObservation: true,
+	}
 }
 
 // Approver decides whether an action may execute.

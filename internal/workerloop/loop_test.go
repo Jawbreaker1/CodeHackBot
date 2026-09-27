@@ -211,6 +211,13 @@ func TestApprovalDenialStopsWorkerWithPartialEvidence(t *testing.T) {
 	if err == nil || out.Packet.TaskRuntime.State != "blocked" || out.Packet.LatestExecutionResult.Action != "" || *calls != 1 || !strings.Contains(out.Summary, "did not execute") {
 		t.Fatalf("denied execution state=%s summary=%q err=%v calls=%d", out.Packet.TaskRuntime.State, out.Summary, err, *calls)
 	}
+	denied := out.Packet.DeniedExecution
+	if denied == nil || denied.Command == "" || denied.AuditRef == "" {
+		t.Fatalf("denied action was not preserved in the worker packet: %+v", denied)
+	}
+	if _, err := os.Stat(denied.AuditRef); err != nil {
+		t.Fatalf("denied action has no approval record: %v", err)
+	}
 	denialSeen := false
 	for _, event := range sink.events {
 		denialSeen = denialSeen || event.Kind == EventExecutionDenied

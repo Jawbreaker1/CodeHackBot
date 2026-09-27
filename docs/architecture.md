@@ -185,27 +185,32 @@ captures remain local task artifacts and are never implicitly uploaded.
 ### Session approvals and observable execution
 
 Both interfaces use the shared `approval.Mode` policy: approve every execution
-(the default), approve dangerous executions, or approve everything. The model
+(the default), review commands and risky actions, or approve everything. The model
 supplies a short action summary, affected target, impact, and structured risk
-(`low`, `dangerous`, or `unknown`). Dangerous-only mode automatically permits
-only complete low-risk descriptions; unknown or missing assessments require
-review. This is a model risk judgment, not a security sandbox or a command
-allowlist. Full access is an explicit session override inside the authorized
-VM. Scope and prohibitions still apply. No command-text heuristics classify risk.
+(`low`, `dangerous`, or `unknown`). The middle mode automatically permits only
+validated built-in read-only observations. Arbitrary worker commands require
+review even when the model labels them `low`; shell scripts and task-local helpers
+cannot be proved harmless from that label alone. Full access is an explicit
+session override inside the authorized VM. Scope and prohibitions still apply.
+No command-text heuristics classify risk, and this is not a security sandbox.
 
 The browser stores this selection with the session; new sessions default to
 per-action review. Selecting an automatic mode releases pending plans and
 executions covered by that mode, after the operator acknowledges the change.
-Dangerous or uncertain pending executions still require review in
-dangerous-only mode.
+Pending worker commands still require review in the middle mode even when
+the model labels them low risk.
 In the browser, the default mode also asks the operator to select proposed
 worker tasks. Either automatic mode starts all proposed tasks without a plan
-selection prompt; dangerous-only mode still pauses for dangerous or uncertain
-executions. The plan remains visible and the operator can stop the run.
+selection prompt; the middle mode still pauses for worker commands. The plan
+remains visible and the operator can stop the run.
 The CLI exposes the same choices through `/permissions` and starts each app
 invocation with per-action review. Approval cards lead with purpose, target,
 and effects; exact invocations and working directories are available on demand.
 The worker writes an approval record beside the execution log before running.
+
+The worker's declared risk remains visible as context but cannot by itself
+auto-approve a command. A command without an independently constrained
+execution surface is treated as uncertain in the middle mode.
 
 The optional worker watch view reads bounded tails of runtime-recorded tool
 streams and declared image previews. The browser helper provides named step
@@ -261,7 +266,21 @@ The default limits are eight coordinator rounds, twelve tasks, sixteen decisions
 
 All roles inherit the same model client. Guided local preferences include explicit reasoning effort and an output-token allowance (initially 32,768), with a ten-minute request timeout. Subscription profiles forward their selected reasoning effort through the bridge; new guided Daybreak preferences and the web Daybreak profile use `high`. The guided preference `default`, or an omitted web profile setting, retains the provider setting. Provider timeouts remain incomplete results, distinct from an operator stop. Server context and parallel load settings remain externally managed; the coordinator permits at most two concurrent requests.
 
+The shared assessment model budget admits at most two in-flight provider
+requests across workers and live coordinator chat. Waiting for a slot does not
+consume a model call, and cancellation releases the wait. Worker model views
+proactively shorten older output, command bodies, and plan revisions while
+keeping durable log references. This is byte-bounded projection, not semantic
+memory summarization or proof of better task quality.
+
 The coordinator may request one correction of an invalid JSON decision under the same budget; rejected proposals never execute or become evidence. An operator-denied worker command is recorded as a non-executed decision and stops that worker with a blocked, partial result. Its completed evidence remains available for the coordinator to review and replan; the denial cannot be counted as test coverage. Worker questions are serialized through the same console as approvals, and answers return to the worker's existing step budget. Plain-language operator messages are answered through the configured model and appended to the next coordinator planning context; they cannot approve actions, alter scope, or become evidence. A proposed final worker answer reaches the semantic evaluator alongside recorded evidence; the answer itself is not new execution evidence.
+
+The exact denied proposal and its approval record are carried in structured
+worker results. When a run contains a denied action, formal reports and Analysis
+use recorded task outcomes for their summary and gaps rather than treating a
+model's description of the denial as an authoritative event. The full model
+plan remains in saved session state for review. This does not verify unrelated
+model-authored finding prose.
 
 Draft findings require recorded evidence paths. Research references must also point to registered source documents or execution logs, and CVE leads require such a source reference. A model-reported reproduction requires a distinct later-round verification task that names the claim and a plausible benign alternative. That worker returns a supported, refuted, or inconclusive challenge verdict, including the alternative result and its own execution log. Only a supported verdict with a cited log permits reproduced status; an inconclusive or refuted lead remains a candidate or is withdrawn with an explanation. Verification must stay within scope and does not justify repeating a disruptive test. Explicit `depends_on` links provide detailed prior context, but their absence alone does not invalidate independently recorded checks. These structural checks prove provenance and a recorded challenge, not the semantic truth of every model-written claim. Reports remain drafts for professional review. Failed workers and exhausted budgets remain visible, including in partial reports.
 

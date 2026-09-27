@@ -69,6 +69,40 @@ func TestReportKeepsRepeatedExecutionReferencesOutOfOverview(t *testing.T) {
 	}
 }
 
+func TestReportsIdentifyTheExactDeniedAction(t *testing.T) {
+	root := t.TempDir()
+	denied := &ctxpacket.DeniedExecution{
+		Summary: "Read approval source excerpts", Target: "local source files",
+		Command: "cat policy.go", AuditRef: "tasks/check/logs/denied.approval.json",
+	}
+	state := State{
+		ID: "fixture", Status: "completed_with_gaps",
+		Plans:   []Decision{{Complete: true, Summary: "The operator declined the harmless marker test.", Gaps: []string{"The marker test was denied."}}},
+		Results: []Result{{Task: Task{ID: "check", Goal: "Validate a harmless marker"}, Status: "blocked", DeniedExecution: denied}},
+	}
+	if err := writeReport(root, state); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "report.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if !strings.Contains(text, denied.Summary) || !strings.Contains(text, denied.AuditRef) || !strings.Contains(text, "did not execute") || strings.Contains(text, "declined the harmless marker") || strings.Contains(text, "marker test was denied") {
+		t.Fatalf("report lost the precise denied action: %s", text)
+	}
+	for _, format := range []ReportFormat{OWASPReport, PTESReport} {
+		formatted, err := RenderFormattedReport(state, format)
+		if err != nil || !strings.Contains(string(formatted), denied.Summary) || !strings.Contains(string(formatted), denied.AuditRef) || strings.Contains(string(formatted), "marker test was denied") {
+			t.Fatalf("%s report lost denied action: %v %s", format, err, formatted)
+		}
+	}
+	compact := compactPriorResults(state.Results)
+	if len(compact) != 1 || compact[0].DeniedExecution == nil || compact[0].DeniedExecution.Command != denied.Command {
+		t.Fatalf("coordinator handoff lost denied action: %+v", compact)
+	}
+}
+
 func TestReportUsesCurrentFindingRevision(t *testing.T) {
 	root := t.TempDir()
 	prior := Finding{Title: "withdrawn candidate", Status: "candidate", Impact: "hypothesis", Steps: []string{"inspect"}, Evidence: []string{"old.log"}, Remediation: []string{"review"}}

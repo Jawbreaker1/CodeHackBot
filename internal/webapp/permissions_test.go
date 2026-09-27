@@ -24,12 +24,16 @@ func TestSessionPermissionsPersistAndDefaultIndependently(t *testing.T) {
 		t.Fatal(view.PermissionMode)
 	}
 	a := &runApprover{run: current, taskID: "check"}
-	d, err := a.Approve(context.Background(), approval.Request{Summary: "read title", Target: "local fixture", Impact: "read only", Risk: "low"})
+	d, err := a.Approve(context.Background(), approval.ReadOnlyObservationRequest(`{"name":"host_system"}`, ".", "read host metadata", "local fixture", "read only"))
 	if err != nil || d != approval.DecisionApproveSession || len(current.approvals) != 0 {
-		t.Fatalf("low-risk execution was not auto-approved: %s %v", d, err)
+		t.Fatalf("built-in observation was not auto-approved: %s %v", d, err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
+	d, _ = a.Approve(ctx, approval.Request{Summary: "read title", Target: "local fixture", Impact: "read only", Risk: "low", Command: "uname -a"})
+	if d != approval.DecisionDeny {
+		t.Fatalf("model-labeled low-risk command bypassed review: %s", d)
+	}
 	d, _ = a.Approve(ctx, approval.Request{Risk: "dangerous"})
 	if d != approval.DecisionDeny {
 		t.Fatalf("dangerous execution bypassed operator: %s", d)
@@ -77,7 +81,7 @@ func TestChangingApprovalModeReleasesCoveredPendingWork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	low := &pendingApproval{ID: "low", request: approval.Request{Summary: "read", Target: "fixture", Impact: "read only", Risk: "low"}, result: make(chan approval.Decision, 1)}
+	low := &pendingApproval{ID: "low", request: approval.ReadOnlyObservationRequest(`{"name":"host_system"}`, ".", "read", "fixture", "read only"), result: make(chan approval.Decision, 1)}
 	high := &pendingApproval{ID: "high", request: approval.Request{Summary: "modify", Target: "fixture", Impact: "changes file", Risk: "dangerous"}, result: make(chan approval.Decision, 1)}
 	plan := &pendingPlan{ID: "plan", plan: assessment.Decision{Tasks: []assessment.Task{{ID: "inspect"}}}, result: make(chan assessment.PlanReview, 1)}
 	current.approvals[low.ID] = low

@@ -86,6 +86,7 @@ func (c Coordinator) runWorker(ctx context.Context, root string, state State, ta
 	}
 	outcome, workerErr := loop.Run(ctx, packet, state.Limits.StepsPerTask)
 	r.Evidence = progress.evidence
+	r.DeniedExecution = outcome.Packet.DeniedExecution
 	r.Summary = outcome.Summary
 	if r.Summary == "" {
 		r.Summary = outcome.Packet.RunningSummary

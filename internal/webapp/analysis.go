@@ -165,7 +165,7 @@ func buildAnalysis(id, customer string, state assessment.State, inputs []analysi
 	sortAnalysisFindings(view.Findings)
 	view.Coverage = []analysisCoverage{coverageForAssessment(id, state, view.Findings, view.Challenges)}
 	view.Risk = summarizeRisk(view.Findings)
-	view.Gaps = latestGaps(state.Plans)
+	view.Gaps = uniqueStrings(assessment.ReportGaps(state))
 	view.Conclusion = assessmentConclusion(state)
 	view.ConclusionDetail = assessmentConclusionDetail(state)
 	lastResult, reviewPending := assessment.LatestUnreviewedResult(state)
@@ -302,15 +302,6 @@ func summarizeRisk(findings []analysisFinding) analysisRisk {
 		}
 	}
 	return risk
-}
-
-func latestGaps(plans []assessment.Decision) []string {
-	if len(plans) == 0 {
-		return nil
-	}
-	// Decisions replace the current gap list, just as in the formal report.
-	// Earlier plans stay in the audit history, including gaps since resolved.
-	return uniqueStrings(plans[len(plans)-1].Gaps)
 }
 
 func uniqueStrings(values []string) []string {

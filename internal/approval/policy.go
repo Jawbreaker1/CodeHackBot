@@ -25,7 +25,7 @@ func (m Mode) Normalized() Mode {
 func (m Mode) Label() string {
 	switch m.Normalized() {
 	case DangerousOnly:
-		return "Approve dangerous executions"
+		return "Review commands and risky actions"
 	case FullAccess:
 		return "Approve everything"
 	default:
@@ -33,14 +33,15 @@ func (m Mode) Label() string {
 	}
 }
 
-// Risk is model-authored advisory information about the complete invocation,
-// including scripts it calls. Unknown or incomplete assessments require review.
+// A model-authored risk label is advisory. Arbitrary commands are opaque and
+// require review in dangerous-only mode, even when labeled low. Only the fixed
+// observation path can mark a validated read-only operation for auto-approval.
 func (m Mode) RequiresApproval(r Request) bool {
 	switch m.Normalized() {
 	case FullAccess:
 		return false
 	case DangerousOnly:
-		return r.Risk != "low" || strings.TrimSpace(r.Summary) == "" || strings.TrimSpace(r.Target) == "" || strings.TrimSpace(r.Impact) == ""
+		return !r.trustedReadOnlyObservation || r.Risk != "low" || strings.TrimSpace(r.Summary) == "" || strings.TrimSpace(r.Target) == "" || strings.TrimSpace(r.Impact) == ""
 	default:
 		return true
 	}

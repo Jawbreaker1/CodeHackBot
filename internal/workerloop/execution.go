@@ -50,12 +50,16 @@ func (l Loop) execute(ctx context.Context, current *ctxpacket.WorkerPacket, resp
 	}
 	current.OperatorState.ApprovalState = string(decision)
 	if decision != approval.DecisionApproveOnce && decision != approval.DecisionApproveSession {
+		current.DeniedExecution = &ctxpacket.DeniedExecution{
+			Summary: request.Summary, Target: request.Target, Impact: request.Impact,
+			Command: request.Command, AuditRef: auditPath,
+		}
 		completed := len(current.RelevantRecentResults)
 		if current.LatestExecutionResult.Action != "" {
 			completed++
 		}
 		current.TaskRuntime.State = "blocked"
-		current.RunningSummary = fmt.Sprintf("The operator declined this action; it did not execute. %d earlier tool results remain recorded for the coordinator to review before replanning or reporting. The denied action adds no coverage.", completed)
+		current.RunningSummary = fmt.Sprintf("The operator declined the proposed action %q; it did not execute. %d earlier tool results remain recorded for the coordinator to review before replanning or reporting. The denied action adds no coverage. Approval record: %s", request.Summary, completed, auditPath)
 		if err := l.emit(EventExecutionDenied, *current, current.RunningSummary); err != nil {
 			return false, err
 		}

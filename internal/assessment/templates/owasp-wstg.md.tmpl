@@ -72,6 +72,8 @@ The table of work below records assigned objectives and outcomes. Consult the ca
 {{end}}
 ## 5. Limitations and unresolved gaps
 
+{{range .Results}}{{if .DeniedExecution}}- Operator denied the proposed action for `{{inline .Task.ID}}`: {{inline .DeniedExecution.Summary}} (target: {{inline .DeniedExecution.Target}}). It did not execute; approval record: `{{inline .DeniedExecution.AuditRef}}`. This does not imply that later planned tests were proposed or denied.
+{{end}}{{end}}
 {{if .UnreviewedResults}}The coordinator did not reconcile the last worker results with its findings and gaps. Review the saved evidence and prior plan before publishing this report.
 
 {{end}}

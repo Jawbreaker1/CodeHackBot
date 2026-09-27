@@ -442,7 +442,8 @@ func coordinatorPayload(state State) coordinatorModelPacket {
 			`Finding schema: {"title":"short title","status":"candidate or reproduced","severity":"critical, high, medium, low, or info","confidence":"high, medium, or low","cve_ids":["CVE-..."],"affected_software":["product and observed version"],"references":["exact recorded advisory or source document path"],"validation_task":"task-id","impact":"impact description","steps":["reproduction step"],"evidence":["exact recorded log/artifact path"],"remediation":["remediation step"]}. Severity and confidence are optional when the evidence does not support them. References must match recorded_evidence paths, not a remembered URL or shorthand; cite the saved source document or research command log. CVE IDs need a recorded source and remain leads until target validation. Preserve source wording and provenance. These are drafts for operator review, not independent verification.`,
 			"Every findings.evidence entry must be copied exactly from recorded_evidence below. Files named only in worker summaries are not registered evidence; cite the recorded command log or captured output supporting the claim. Do not infer additional paths from filenames.",
 			"For the final report, write a concise executive summary in plain language: objective, what was actually established, priority risks, and useful next actions. Keep technical reproduction in structured findings and exact evidence paths. State untested areas, failed tests, and limitations in gaps. Do not invent a CVSS score, compliance claim, clean bill of health, or formal standard mapping from a tool label or unvalidated observation.",
-			"Prior result cards show the first and latest bounded action previews. For a blocked or failed worker, evidence_index also lists bounded summaries of middle executions; reconcile those completed tests before reporting coverage. The recorded_evidence catalog lists command logs and distinct declared artifacts; automatic stdout, stderr and approval sidecars are reachable from their command log in the saved task record. Do not mistake an omitted preview for missing evidence or an unexecuted proposal for coverage.",
+			"Prior result cards contain bounded action previews. For failed or blocked work, evidence_index identifies other completed logs; reconcile them before reporting coverage. recorded_evidence lists registered logs and artifacts. An omitted preview is not missing evidence.",
+			"For a blocked worker, denied_execution identifies the exact declined proposal and approval record. Do not substitute the broader worker goal. Unproposed later tests were not denied; the denied action did not execute or add coverage.",
 			"When sufficient evidence is available or useful work is blocked, return complete:true with tasks:[], an honest summary, cumulative findings, and explicit gaps. Completion means the assessment ended, not that the target is secure.",
 			"The last available round must synthesize existing results; do not start work that requires another round. Keep all previous still-relevant findings in the final response.",
 			"This runtime does not enforce a network allowlist or sandbox. Keep the operator's stated targets and objectives visible, explain potentially disruptive or data-changing steps clearly, and apply the selected approval level. Do not invent authorization facts or silently add unrelated targets.",
@@ -453,14 +454,15 @@ func coordinatorPayload(state State) coordinatorModelPacket {
 }
 
 type compactResult struct {
-	Task            Task                `json:"task"`
-	Status          string              `json:"status"`
-	Summary         string              `json:"summary,omitempty"`
-	Error           string              `json:"error,omitempty"`
-	Verification    *VerificationResult `json:"verification,omitempty"`
-	OmittedEvidence int                 `json:"omitted_evidence,omitempty"`
-	Evidence        []EvidenceView      `json:"evidence,omitempty"`
-	EvidenceIndex   []compactEvidence   `json:"evidence_index,omitempty"`
+	Task            Task                       `json:"task"`
+	Status          string                     `json:"status"`
+	Summary         string                     `json:"summary,omitempty"`
+	Error           string                     `json:"error,omitempty"`
+	DeniedExecution *ctxpacket.DeniedExecution `json:"denied_execution,omitempty"`
+	Verification    *VerificationResult        `json:"verification,omitempty"`
+	OmittedEvidence int                        `json:"omitted_evidence,omitempty"`
+	Evidence        []EvidenceView             `json:"evidence,omitempty"`
+	EvidenceIndex   []compactEvidence          `json:"evidence_index,omitempty"`
 }
 
 type compactEvidence struct {
@@ -563,6 +565,14 @@ func compactPriorResults(results []Result) []compactResult {
 		// 2 KiB head-only excerpt hid observed alternatives in real runs even
 		// while the larger prompt repeated older plans and log sidecars.
 		item := compactResult{Task: task, Status: result.Status, Summary: promptExcerpt(result.Summary, 4096), Error: promptExcerpt(result.Error, 512), Verification: result.Verification}
+		if result.DeniedExecution != nil {
+			denied := *result.DeniedExecution
+			denied.Summary = promptExcerpt(denied.Summary, 320)
+			denied.Target = promptExcerpt(denied.Target, 320)
+			denied.Impact = promptExcerpt(denied.Impact, 320)
+			denied.Command = promptExcerpt(denied.Command, 512)
+			item.DeniedExecution = &denied
+		}
 		evidenceItems := result.Evidence
 		if len(evidenceItems) > 3 {
 			item.OmittedEvidence = len(evidenceItems) - 3

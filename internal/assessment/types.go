@@ -92,12 +92,13 @@ type EvidenceView struct {
 }
 
 type Result struct {
-	Task         Task                        `json:"task"`
-	Status       string                      `json:"status"`
-	Summary      string                      `json:"summary"`
-	Error        string                      `json:"error,omitempty"`
-	Evidence     []ctxpacket.ExecutionResult `json:"evidence"`
-	Verification *VerificationResult         `json:"verification,omitempty"`
+	Task            Task                        `json:"task"`
+	Status          string                      `json:"status"`
+	Summary         string                      `json:"summary"`
+	Error           string                      `json:"error,omitempty"`
+	Evidence        []ctxpacket.ExecutionResult `json:"evidence"`
+	DeniedExecution *ctxpacket.DeniedExecution  `json:"denied_execution,omitempty"`
+	Verification    *VerificationResult         `json:"verification,omitempty"`
 }
 
 // Findings are model-authored drafts, never independent verification claims.

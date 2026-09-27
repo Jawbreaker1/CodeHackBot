@@ -2,6 +2,7 @@ package assessment
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -44,7 +45,7 @@ func TestModelBudgetIsSharedAcrossClientsAndAccountsForFailures(t *testing.T) {
 }
 
 func TestModelBudgetReservesConcurrentRequestsAcrossRoles(t *testing.T) {
-	arrived := make(chan struct{}, 2)
+	arrived := make(chan struct{}, 3)
 	release := make(chan struct{})
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		arrived <- struct{}{}
@@ -55,10 +56,10 @@ func TestModelBudgetReservesConcurrentRequestsAcrossRoles(t *testing.T) {
 	defer provider.Close()
 	var releaseOnce sync.Once
 	defer releaseOnce.Do(func() { close(release) })
-	budget := NewModelBudget(2, Usage{})
+	budget := NewModelBudget(4, Usage{})
 	base := llmclient.Client{BaseURL: provider.URL + "/v1", Model: "fixture"}
 	roles := []llmclient.Client{budget.Client(base), budget.Client(base)}
-	results := make(chan error, 2)
+	results := make(chan error, 3)
 	for _, role := range roles {
 		go func(client llmclient.Client) {
 			_, err := client.Chat(context.Background(), []llmclient.Message{{Role: "user", Content: "fixture"}})
@@ -72,16 +73,46 @@ func TestModelBudgetReservesConcurrentRequestsAcrossRoles(t *testing.T) {
 			t.Fatal("concurrent requests did not reach the provider")
 		}
 	}
-	if _, err := roles[0].Chat(context.Background(), []llmclient.Message{{Role: "user", Content: "third"}}); err == nil || !strings.Contains(err.Error(), "budget exhausted") {
-		t.Fatalf("third concurrent request should be rejected: %v", err)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
+	defer cancel()
+	canceled := make(chan error, 1)
+	go func() {
+		_, err := roles[0].Chat(ctx, []llmclient.Message{{Role: "user", Content: "cancel while queued"}})
+		canceled <- err
+	}()
+	if err := <-canceled; !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("queued request did not honor cancellation: %v", err)
+	}
+	if got := budget.Usage().Calls; got != 2 {
+		t.Fatalf("queued request consumed model budget before provider entry: %d", got)
+	}
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		_, err := roles[0].Chat(context.Background(), []llmclient.Message{{Role: "user", Content: "third"}})
+		results <- err
+	}()
+	<-started
+	select {
+	case <-arrived:
+		t.Fatal("third request reached the provider while two were active")
+	case <-time.After(30 * time.Millisecond):
+	}
+	if got := budget.Usage().Calls; got != 2 {
+		t.Fatalf("third request was reserved before a slot opened: %d", got)
 	}
 	releaseOnce.Do(func() { close(release) })
-	for range 2 {
+	select {
+	case <-arrived:
+	case <-time.After(5 * time.Second):
+		t.Fatal("queued third request never reached the provider")
+	}
+	for range 3 {
 		if err := <-results; err != nil {
 			t.Fatal(err)
 		}
 	}
-	if got := budget.Usage(); got.Calls != 2 || got.CallsWithoutUsage != 2 {
+	if got := budget.Usage(); got.Calls != 3 || got.CallsWithoutUsage != 3 {
 		t.Fatalf("concurrent usage = %+v", got)
 	}
 }

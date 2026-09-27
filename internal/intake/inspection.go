@@ -133,7 +133,7 @@ func (i *Inspection) Run(ctx context.Context, call ToolCall) (Observation, error
 	encoded, _ := json.Marshal(call)
 	description := string(encoded)
 	i.emit(assessment.Event{Kind: "action_proposed", Goal: i.Scope(), Action: description, Message: summary})
-	decision, err := i.Approver.Approve(ctx, approval.Request{Command: description, Cwd: root, Summary: summary, Target: target, Risk: "low", Impact: impact})
+	decision, err := i.Approver.Approve(ctx, approval.ReadOnlyObservationRequest(description, root, summary, target, impact))
 	if err != nil {
 		return observation, err
 	}
