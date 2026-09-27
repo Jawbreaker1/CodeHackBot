@@ -310,7 +310,8 @@ function renderWorkerPlan(worker, phase, sessionID) {
   const blocked = isTerminal(phase) && !finished;
   const section = node('section', 'worker-plan-section');
   const header = node('div', 'plan-step-row');
-  header.append(node('strong', '', 'Worker plan'), node('span', 'plan-step-state', `Step ${current + 1}/${steps.length} · revision ${worker.plan_revision || 1}`));
+  const progress = finished ? 'Worker finished' : `Step ${current + 1}/${steps.length}`;
+  header.append(node('strong', '', 'Worker plan'), node('span', 'plan-step-state', `${progress} · revision ${worker.plan_revision || 1}`));
   section.append(header);
   if (worker.plan_summary) {
     section.append(node('p', 'plan-summary', preview(worker.plan_summary, 155)));
@@ -323,11 +324,13 @@ function renderWorkerPlan(worker, phase, sessionID) {
     const item = node('li', 'worker-plan-step ' + status);
     const body = node('div', 'plan-content');
     body.append(node('p', 'worker-detail', worker.step_purposes?.[step] || step));
-    const details = disclosure(`${preview(step, 72)} · ${status}`, body, sessionID + '-worker-step-' + worker.id + '-' + (worker.plan_revision || 1) + '-' + i);
+    const statusLabel = status === 'unreported' ? 'not individually marked' : status;
+    const details = disclosure(`${preview(step, 72)} · ${statusLabel}`, body, sessionID + '-worker-step-' + worker.id + '-' + (worker.plan_revision || 1) + '-' + i);
     item.append(details);
     list.append(item);
   }
   section.append(list);
+  if (finished && current < steps.length - 1) section.append(node('p', 'worker-detail', 'The worker finished its task without marking every planned step. Check its result for what was actually done.'));
   if ((worker.plan_history || []).length > 1) {
     const history = node('ol', 'plan-revisions');
     for (const [index, revision] of worker.plan_history.slice(0, -1).entries()) {

@@ -1,6 +1,6 @@
 # Tasks
 
-Updated 2026-09-24. This file owns immediate implementation order and status.
+Updated 2026-09-27. This file owns immediate implementation order and status.
 
 ## Agreed sequence
 
@@ -14,6 +14,8 @@ The product remains orchestrator-first. The first two steps establish its shared
 ## Current priority: foundation acceptance and capability proof
 
 The coordinator-guidance slice now gives browser chat the current and pending plan purpose, intended worker outcomes, and recorded gaps. A user who chooses another path while a plan awaits review can trigger a fresh proposal through the model-led conversation before workers start; the declined proposal is not executed and both decision requests are retained. The terminal conversation receives the same compact latest-plan briefing. This improves operator control but does not yet establish unfamiliar-operator usability or instant redirection of active workers.
+
+A 2026-09-27 Daybreak browser smoke on the synthetic tenant-reporting service exercised guided depth selection, operator-directed revision from two parallel workers to a sequential plan before execution, HTTP comparison, source and local-advisory review, independent validation, and a final reproduced finding. The saved session and worker context snapshots were inspected; 34 assessment model calls used 374,869 reported tokens over about 20 minutes. This is one focused smoke, not the repeated foundation or comparative discovery gate. Review also found that the canonical report copied raw commands and output, including fixture bearer values. The report renderer now cites restricted local logs instead of inlining raw execution or operator conversation; a credential-leak regression, full CI, regenerated saved report, and browser review passed. Report-authored summaries and findings still require professional review for sensitive content. Next acceptance work should repeat a broader held-out scenario and measure discovery quality, operator effort, elapsed time, and model usage against a matched baseline.
 
 Objective: prove one shared worker can carry a bounded multi-step task from goal to evidence-backed completion, adapt when observations invalidate its plan, and return an honest blocked/aborted result when appropriate.
 

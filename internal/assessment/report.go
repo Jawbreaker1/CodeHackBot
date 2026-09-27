@@ -108,18 +108,15 @@ func writeReport(root string, s State) error {
 		b.WriteString("No additional gaps were stated by the coordinator; this is not a coverage guarantee.\n")
 	}
 	b.WriteString("\n## Technical evidence trail\n\n")
-	b.WriteString("Invocations, results, and local references below support the findings and record unsuccessful or partial work.\n\n")
+	b.WriteString("Worker conclusions and local evidence references below support the findings and record unsuccessful or partial work. Exact invocations and output remain in the local execution logs; they are not copied into this review draft because they may contain credentials or other sensitive data.\n\n")
 	for _, r := range s.Results {
 		fmt.Fprintf(&b, "### %s — %s\n\n%s\n\nCompletion criterion: %s\n\n%s\n\n", r.Task.ID, r.Status, r.Task.Goal, r.Task.DoneWhen, r.Summary)
 		if r.Error != "" {
 			fmt.Fprintf(&b, "Limitation: %s\n\n", r.Error)
 		}
-		for _, e := range r.Evidence {
-			if e.ActualExec != "" {
-				fmt.Fprintf(&b, "Invocation: `%s`\n\nExit status: `%s`\n\n", markdownCode(e.ActualExec), markdownCode(e.ExitStatus))
-			}
-			if e.OutputSummary != "" {
-				fmt.Fprintf(&b, "Observed result: %s\n\n", e.OutputSummary)
+		for i, e := range r.Evidence {
+			if e.ExitStatus != "" {
+				fmt.Fprintf(&b, "Execution %d exit status: `%s`\n\n", i+1, e.ExitStatus)
 			}
 			for _, ref := range e.LogRefs {
 				fmt.Fprintf(&b, "- %s\n", ref)
@@ -139,14 +136,7 @@ func writeReport(root string, s State) error {
 		fmt.Fprintf(&b, "Output budget per model request: %d tokens.\n\n", s.MaxOutputTokens)
 	}
 	if len(s.OperatorMessages) > 0 {
-		b.WriteString("### Operator conversation\n\n")
-		for _, message := range s.OperatorMessages {
-			fmt.Fprintf(&b, "- %s\n", message)
-		}
+		b.WriteString("The operator conversation is retained in local session state and omitted from this review draft.\n\n")
 	}
 	return os.WriteFile(filepath.Join(root, "report.md"), []byte(b.String()), 0600)
-}
-
-func markdownCode(value string) string {
-	return strings.ReplaceAll(value, "`", "'")
 }
