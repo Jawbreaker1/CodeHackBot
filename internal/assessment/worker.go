@@ -30,7 +30,13 @@ func (c Coordinator) runWorker(ctx context.Context, root string, state State, ta
 	frame := behavior.Frame{SystemPrompt: c.Frame.SystemPrompt, AgentsPath: c.Frame.AgentsPath, AgentsText: c.Frame.AgentsText, StrategyCatalogPath: c.Frame.StrategyCatalogPath, StrategyCatalogText: c.Frame.StrategyCatalogText, RuntimeMode: "assessment_worker", Parameters: map[string]string{
 		"scope": state.Scope, "approval_mode": "operator_selected_session_policy", "assessment_goal": state.Goal, "task_id": task.ID,
 	}}
-	foundation, err := session.NewFoundation(session.Input{Goal: task.Goal})
+	workerGoal := task.Goal
+	if task.Verification != nil {
+		frame.Parameters["verification_claim"] = task.Verification.Claim
+		frame.Parameters["verification_alternative"] = task.Verification.Alternative
+		workerGoal += "\nIndependently challenge this claim: " + task.Verification.Claim + "\nPlausible alternative to test: " + task.Verification.Alternative + "\nReturn whether the claim is supported, refuted, or inconclusive, with your own execution evidence. Do not repeat a disruptive action merely to verify it."
+	}
+	foundation, err := session.NewFoundation(session.Input{Goal: workerGoal})
 	if err != nil {
 		return r, err
 	}
@@ -38,6 +44,9 @@ func (c Coordinator) runWorker(ctx context.Context, root string, state State, ta
 	// Bounded assignments use the same adaptive worker as standalone tasks.
 	// The worker decides whether a plan is useful and may revise it as it learns.
 	packet.CurrentStep.DoneCondition = task.DoneWhen
+	if task.Verification != nil {
+		packet.CurrentStep.DoneCondition += " State a supported, refuted, or inconclusive challenge verdict, explain the alternative check, and cite your own execution log."
+	}
 	packet.MemoryBankRetrievals = workerHandoff(state.Results, task.DependsOn, filepath.Join(root, "tasks"))
 	if len(task.StrategyHints) > 0 {
 		packet.CapabilityInputs = append(packet.CapabilityInputs, "Coordinator-suggested local guides: "+strings.Join(task.StrategyHints, ", ")+". These are optional leads, not loaded instructions. Select only a useful guide through load_strategy; you may choose a different catalog entry as evidence changes.")
@@ -82,6 +91,13 @@ func (c Coordinator) runWorker(ctx context.Context, root string, state State, ta
 		r.Summary = outcome.Packet.RunningSummary
 	}
 	r.Status = outcome.Packet.TaskRuntime.State
+	if task.Verification != nil && outcome.GoalEvaluation != nil && outcome.GoalEvaluation.Verification != nil {
+		v := outcome.GoalEvaluation.Verification
+		r.Verification = &VerificationResult{Verdict: v.Verdict, AlternativeResult: v.AlternativeResult, Reason: v.Reason, Evidence: append([]string(nil), v.Evidence...)}
+		r.Summary = challengeSummary(r.Verification, r.Summary)
+	} else if task.Verification != nil {
+		r.Summary = challengeSummary(nil, r.Summary)
+	}
 	if ctx.Err() != nil {
 		r.Status = "aborted"
 	} else if workerErr != nil && r.Status != "blocked" && r.Status != "waiting_user" {
@@ -113,6 +129,13 @@ func (c Coordinator) runWorker(ctx context.Context, root string, state State, ta
 		EvidenceCount: len(r.Evidence),
 	})
 	return r, nil
+}
+
+func challengeSummary(verdict *VerificationResult, narrative string) string {
+	if verdict == nil {
+		return "No structured challenge verdict was recorded. Worker narrative requires review: " + narrative
+	}
+	return "Challenge verdict: " + verdict.Verdict + ". " + verdict.Reason + " Alternative checked: " + verdict.AlternativeResult
 }
 
 // workerHandoff gives a worker detailed cards only for declared dependencies.

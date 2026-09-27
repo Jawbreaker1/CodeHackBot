@@ -25,11 +25,27 @@ func DefaultLimits() Limits {
 }
 
 type Task struct {
-	ID            string   `json:"id"`
-	Goal          string   `json:"goal"`
-	DoneWhen      string   `json:"done_when"`
-	DependsOn     []string `json:"depends_on"`
-	StrategyHints []string `json:"strategy_hints,omitempty"`
+	ID            string               `json:"id"`
+	Goal          string               `json:"goal"`
+	DoneWhen      string               `json:"done_when"`
+	DependsOn     []string             `json:"depends_on"`
+	StrategyHints []string             `json:"strategy_hints,omitempty"`
+	Verification  *VerificationRequest `json:"verification,omitempty"`
+}
+
+// A verification assignment names both the proposed weakness and a credible
+// alternative explanation. The worker must test both before a later finding
+// can be called reproduced.
+type VerificationRequest struct {
+	Claim       string `json:"claim"`
+	Alternative string `json:"alternative"`
+}
+
+type VerificationResult struct {
+	Verdict           string   `json:"verdict"` // supported, refuted, or inconclusive
+	AlternativeResult string   `json:"alternative_result"`
+	Reason            string   `json:"reason"`
+	Evidence          []string `json:"evidence"`
 }
 
 // Event is an observational transition for UI adapters. It carries enough
@@ -76,11 +92,12 @@ type EvidenceView struct {
 }
 
 type Result struct {
-	Task     Task                        `json:"task"`
-	Status   string                      `json:"status"`
-	Summary  string                      `json:"summary"`
-	Error    string                      `json:"error,omitempty"`
-	Evidence []ctxpacket.ExecutionResult `json:"evidence"`
+	Task         Task                        `json:"task"`
+	Status       string                      `json:"status"`
+	Summary      string                      `json:"summary"`
+	Error        string                      `json:"error,omitempty"`
+	Evidence     []ctxpacket.ExecutionResult `json:"evidence"`
+	Verification *VerificationResult         `json:"verification,omitempty"`
 }
 
 // Findings are model-authored drafts, never independent verification claims.
@@ -225,6 +242,9 @@ func validateDecision(d Decision, state State) error {
 		if len(task.StrategyHints) > 2 {
 			return fmt.Errorf("task %s suggests more than two strategy guides", task.ID)
 		}
+		if task.Verification != nil && (strings.TrimSpace(task.Verification.Claim) == "" || strings.TrimSpace(task.Verification.Alternative) == "") {
+			return fmt.Errorf("task %s needs a claim and alternative explanation to verify", task.ID)
+		}
 		for _, hint := range task.StrategyHints {
 			if !filepath.IsLocal(hint) || filepath.Clean(hint) != hint || filepath.Base(hint) != "SKILL.md" {
 				return fmt.Errorf("task %s has an invalid strategy guide path", task.ID)
@@ -281,9 +301,14 @@ func validateDecision(d Decision, state State) error {
 			if r.Status != "done" || !hasCompletedEarlierTask(state, f.ValidationTask, known) || len(r.Evidence) == 0 {
 				return fmt.Errorf("reproduced finding needs a completed later-round validation task")
 			}
+			if r.Task.Verification == nil || strings.TrimSpace(r.Task.Verification.Claim) == "" || strings.TrimSpace(r.Task.Verification.Alternative) == "" || r.Verification == nil || r.Verification.Verdict != "supported" || strings.TrimSpace(r.Verification.AlternativeResult) == "" || strings.TrimSpace(r.Verification.Reason) == "" || len(r.Verification.Evidence) == 0 {
+				return fmt.Errorf("reproduced finding needs a supported challenge verdict from its validation worker")
+			}
 			ownEvidence := false
+			verifiedLogs := map[string]bool{}
 			for _, e := range r.Evidence {
 				for _, ref := range e.LogRefs {
+					verifiedLogs[ref] = true
 					for _, cited := range f.Evidence {
 						if ref == cited {
 							ownEvidence = true
@@ -293,6 +318,20 @@ func validateDecision(d Decision, state State) error {
 			}
 			if !ownEvidence {
 				return fmt.Errorf("reproduced finding must cite its validation task execution log")
+			}
+			challengeEvidence := false
+			for _, ref := range r.Verification.Evidence {
+				if !verifiedLogs[ref] {
+					return fmt.Errorf("verification verdict cites an unrecorded validation log: %s", ref)
+				}
+				for _, cited := range f.Evidence {
+					if ref == cited {
+						challengeEvidence = true
+					}
+				}
+			}
+			if !challengeEvidence {
+				return fmt.Errorf("reproduced finding must cite the challenge verdict's execution log")
 			}
 		}
 	}

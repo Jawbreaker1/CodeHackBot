@@ -9,6 +9,7 @@ import (
 
 func writeReport(root string, s State) error {
 	var b strings.Builder
+	findings, legacyClaims := reviewFindings(s)
 	fmt.Fprintf(&b, "# Security assessment — %s\n\n", s.ID)
 	fmt.Fprintf(&b, "**Status:** **%s**  \n**Objective:** %s  \n**Scope:** %s\n\n", strings.ReplaceAll(s.Status, "_", " "), s.Goal, s.Scope)
 	if !s.StartedAt.IsZero() {
@@ -17,7 +18,10 @@ func writeReport(root string, s State) error {
 	if !s.FinishedAt.IsZero() {
 		fmt.Fprintf(&b, "**Finished:** %s  \n", s.FinishedAt.UTC().Format("2006-01-02 15:04 UTC"))
 	}
-	b.WriteString("\nThis draft is compiled from model-authored findings and recorded evidence for professional review. A reproduced status means a later worker cited its execution log; it is not independent confirmation that every claim is correct. The operator is responsible for authorization and target boundaries; the runtime does not enforce network scope isolation. Completion does not establish absence of vulnerabilities.\n\n")
+	b.WriteString("\nThis draft is compiled from model-authored findings and recorded evidence for professional review. A reproduced status means a later worker challenged the claim and recorded a supported verdict with its own execution log; it is not independent professional confirmation that every claim is correct. The operator is responsible for authorization and target boundaries; the runtime does not enforce network scope isolation. Completion does not establish absence of vulnerabilities.\n\n")
+	if legacyClaims {
+		b.WriteString("Earlier reproduction claims without a supported challenge and cited execution log are presented here as candidates requiring recheck. The saved session record is unchanged.\n\n")
+	}
 	b.WriteString("## Executive summary\n\n")
 	summary, unreviewed := reportOutcome(s)
 	fmt.Fprintf(&b, "%s\n\n", summary)
@@ -49,7 +53,6 @@ func writeReport(root string, s State) error {
 		b.WriteString("\n")
 	}
 	b.WriteString("## Findings\n\n")
-	findings := CurrentFindings(s.Plans)
 	if len(findings) == 0 {
 		b.WriteString("No findings were recorded. This is not a claim that the scoped system has no vulnerabilities.\n\n")
 	}
@@ -64,6 +67,12 @@ func writeReport(root string, s State) error {
 			}
 			if f.ValidationTask != "" {
 				fmt.Fprintf(&b, "Validation task: `%s`\n\n", f.ValidationTask)
+				for _, result := range s.Results {
+					if result.Task.ID == f.ValidationTask && result.Task.Verification != nil && result.Verification != nil {
+						fmt.Fprintf(&b, "Challenge: %s\n\nAlternative checked: %s\n\nWorker verdict: **%s** — %s\n\n", result.Task.Verification.Claim, result.Verification.AlternativeResult, result.Verification.Verdict, result.Verification.Reason)
+						break
+					}
+				}
 			}
 			if len(f.CVEIDs) > 0 {
 				fmt.Fprintf(&b, "CVE references: %s\n\n", strings.Join(f.CVEIDs, ", "))

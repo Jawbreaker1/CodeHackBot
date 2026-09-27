@@ -515,13 +515,20 @@ async function refreshSidebar() {
       heading.dataset.customer = group.id;
       heading.setAttribute('aria-expanded', String(!collapsed.has(group.id)));
       heading.append(node('span', '', group.id), node('span', 'customer-count', group.sessions.length + group.drafts.length));
+      const analysis = node('a', 'customer-analysis-link', 'Analysis');
+      analysis.href = '/analysis?customer=' + encodeURIComponent(group.id);
+      analysis.target = '_blank';
+      analysis.rel = 'noopener';
+      analysis.setAttribute('aria-label', 'Analyze all sessions for ' + group.id);
+      const header = node('div', 'customer-header');
+      header.append(heading, analysis);
       const list = node('div', collapsed.has(group.id) ? 'hidden' : '');
       heading.onclick = () => { const hide = !list.classList.contains('hidden'); list.classList.toggle('hidden', hide); heading.setAttribute('aria-expanded', String(!hide)); };
       for (const draft of [...group.drafts].reverse()) list.append(sessionRow(draft, true));
       for (const session of [...group.sessions].reverse()) {
         list.append(sessionRow(session, false));
       }
-      section.append(heading, list);
+      section.append(header, list);
       sections.push(section);
     }
     $('sidebarSessions').replaceChildren(...(sections.length ? sections : [node('p', 'empty', 'Your assessments will appear here.')]));

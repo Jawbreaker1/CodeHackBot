@@ -431,19 +431,26 @@ func TestServerAcceptsVisualAttachmentsAndServesLocalEvidence(t *testing.T) {
 	}
 }
 
-func TestServerServesOnlyRegisteredWorkerArtifacts(t *testing.T) {
+func TestServerServesOnlyRegisteredWorkerArtifactsAndLogs(t *testing.T) {
 	root := t.TempDir()
 	sessions := filepath.Join(root, "sessions")
 	server := NewServer(Config{RepoRoot: root, SessionsRoot: sessions})
 	runRoot := filepath.Join(sessions, "fixture", "assessment")
 	artifact := filepath.Join(runRoot, "tasks", "browser", "work", "home.png")
+	log := filepath.Join(runRoot, "tasks", "browser", "logs", "browser.log")
 	if err := os.MkdirAll(filepath.Dir(artifact), 0700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(artifact, []byte("PNG fixture"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	current := &run{id: "assessment", customer: "fixture", root: runRoot, status: "completed", state: assessment.State{Version: 1, ID: "assessment", Goal: "browser fixture", Scope: "synthetic only", Status: "completed", Results: []assessment.Result{{Task: assessment.Task{ID: "browser"}, Status: "done", Evidence: []ctxpacket.ExecutionResult{{ArtifactRefs: []string{artifact}}}}}}, updatedAt: time.Now().UTC()}
+	if err := os.MkdirAll(filepath.Dir(log), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(log, []byte("GET /fixture 200"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	current := &run{id: "assessment", customer: "fixture", root: runRoot, status: "completed", state: assessment.State{Version: 1, ID: "assessment", Goal: "browser fixture", Scope: "synthetic only", Status: "completed", Results: []assessment.Result{{Task: assessment.Task{ID: "browser"}, Status: "done", Evidence: []ctxpacket.ExecutionResult{{ArtifactRefs: []string{artifact}, LogRefs: []string{log}}}}}}, updatedAt: time.Now().UTC()}
 	server.runs[current.id] = current
 	httpServer := httptest.NewServer(server)
 	defer httpServer.Close()
@@ -457,6 +464,14 @@ func TestServerServesOnlyRegisteredWorkerArtifacts(t *testing.T) {
 	}
 	if body, _ := io.ReadAll(response.Body); string(body) != "PNG fixture" {
 		t.Fatalf("artifact body=%q", body)
+	}
+	logResponse, err := http.Get(httpServer.URL + "/api/v1/assessments/assessment/artifact?path=" + url.QueryEscape(log))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logResponse.Body.Close()
+	if body, _ := io.ReadAll(logResponse.Body); logResponse.StatusCode != http.StatusOK || string(body) != "GET /fixture 200" {
+		t.Fatalf("registered log status=%d body=%q", logResponse.StatusCode, body)
 	}
 	response, err = http.Get(httpServer.URL + "/api/v1/assessments/assessment/artifact?path=" + url.QueryEscape(filepath.Join(runRoot, "tasks", "browser", "work", "missing.png")))
 	if err != nil {
@@ -573,6 +588,8 @@ func TestAnalysisPrioritizesFindingsAndAggregatesSessions(t *testing.T) {
 	first.mu.Lock()
 	first.status = "completed"
 	first.state = assessment.State{ID: first.id, Goal: first.goal, Scope: first.scope, Status: "completed", Model: "daybreak", Plans: []assessment.Decision{{Summary: "validated", Findings: []assessment.Finding{{Title: "Critical auth bypass", Status: "reproduced", Severity: "critical", Confidence: "high", CVEIDs: []string{"CVE-2026-1234"}, AffectedSoftware: []string{"fixture 1.2"}, References: []string{"advisory.json"}, Impact: "account access", Steps: []string{"repeat"}, Evidence: []string{"validate.log"}, Remediation: []string{"patch"}}}}}}
+	first.state.Plans[0].Findings[0].ValidationTask = "verify"
+	first.state.Results = []assessment.Result{{Task: assessment.Task{ID: "verify", Verification: &assessment.VerificationRequest{Claim: "authorization can be bypassed", Alternative: "cached response"}}, Status: "done", Evidence: []ctxpacket.ExecutionResult{{LogRefs: []string{"validate.log"}}}, Verification: &assessment.VerificationResult{Verdict: "supported", AlternativeResult: "fresh request reproduced it", Reason: "cache did not explain the result", Evidence: []string{"validate.log"}}}}
 	first.mu.Unlock()
 	second.mu.Lock()
 	second.status = "completed"

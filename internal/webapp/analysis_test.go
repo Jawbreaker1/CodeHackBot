@@ -33,7 +33,7 @@ func TestAnalysisSeparatesUnreviewedWorkerResultFromCandidateRisk(t *testing.T) 
 	}
 }
 
-func TestCurrentFindingsAgreeAcrossAssessmentAndCustomerViews(t *testing.T) {
+func TestAnalysisFlagsLegacyReproducedFindingWithoutChangingSavedState(t *testing.T) {
 	server := NewServer(Config{RepoRoot: t.TempDir()})
 	current, err := server.newRun("fixture-lab", "review fixture", "synthetic only")
 	if err != nil {
@@ -48,8 +48,8 @@ func TestCurrentFindingsAgreeAcrossAssessmentAndCustomerViews(t *testing.T) {
 	view := current.view("")
 	analysis := current.analysis()
 	customer := server.customerView("fixture-lab")
-	if len(view.Findings) != 1 || view.Findings[0].Status != "reproduced" || len(analysis.Findings) != 1 || analysis.Risk.Candidates != 0 || analysis.Risk.Reproduced != 1 || len(customer.Findings) != 1 || customer.Findings[0].Finding.Status != "reproduced" {
-		t.Fatalf("views disagree on current finding: session=%+v analysis=%+v customer=%+v", view.Findings, analysis.Findings, customer.Findings)
+	if len(view.Findings) != 1 || view.Findings[0].Status != "reproduced" || len(analysis.Findings) != 1 || analysis.Findings[0].Status != "candidate" || analysis.Findings[0].RecordedStatus != "reproduced" || analysis.Risk.Candidates != 1 || analysis.Risk.Reproduced != 0 || len(customer.Findings) != 1 || customer.Findings[0].Finding.Status != "reproduced" {
+		t.Fatalf("legacy reproduction was not marked for review without changing saved state: session=%+v analysis=%+v customer=%+v", view.Findings, analysis.Findings, customer.Findings)
 	}
 	current.state.Plans = append(current.state.Plans, assessment.Decision{Complete: true})
 	if len(current.view("").Findings) != 0 || len(current.analysis().Findings) != 0 || len(server.customerView("fixture-lab").Findings) != 0 {

@@ -2,7 +2,10 @@
 
 **Assessment:** {{inline .ID}}  
 **Status:** {{inline .Status}}  
-**Draft:** Compiled from model-authored findings and recorded evidence; professional review required. A reproduced status indicates a later worker cited its execution log, not independent confirmation of every claim.
+**Draft:** Compiled from model-authored findings and recorded evidence; professional review required. A reproduced status indicates a later worker challenged the claim and cited its own execution log, not independent professional confirmation of every claim.
+
+{{if .LegacyClaims}}**Historical claim review:** Earlier reproduction claims without a supported challenge and cited execution log appear here as candidates requiring recheck. The saved session record is unchanged.
+{{end}}
 
 ## 1. Executive summary
 
@@ -39,6 +42,13 @@ The methods below reflect only recorded worker activity. No exploitation or acce
 **Confidence:** {{if $f.Confidence}}{{inline $f.Confidence}}{{else}}Not rated{{end}}  
 **Affected software:** {{if $f.AffectedSoftware}}{{join $f.AffectedSoftware ", "}}{{else}}Not established{{end}}  
 **Validation task:** {{if $f.ValidationTask}}{{inline $f.ValidationTask}}{{else}}Not recorded{{end}}
+{{with index $.Verifications $f.ValidationTask}}
+**Verification challenge:** {{inline .Claim}}
+
+**Alternative check:** {{inline .AlternativeResult}}
+
+**Worker verdict:** {{inline .Verdict}} — {{inline .Reason}}
+{{end}}
 
 **Impact:** {{inline $f.Impact}}
 

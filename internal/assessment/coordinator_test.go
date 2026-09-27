@@ -358,7 +358,7 @@ func TestCoordinatorDelegatesThenValidatesWithSharedBudgetAndEvidence(t *testing
 			case 0:
 				reply(w, Decision{Summary: "Investigate two independent questions", Tasks: []Task{{ID: "first", Goal: "Print observation one", DoneWhen: "literal output recorded", StrategyHints: []string{"investigation/SKILL.md"}}, {ID: "second", Goal: "Print observation two", DoneWhen: "literal output recorded"}}})
 			case 2:
-				reply(w, Decision{Summary: "Validate the first observation", Tasks: []Task{{ID: "validate", Goal: "Print validation evidence", DoneWhen: "literal output recorded", DependsOn: []string{"first"}}}})
+				reply(w, Decision{Summary: "Challenge the first observation", Tasks: []Task{{ID: "validate", Goal: "Check the first observation independently", DoneWhen: "claim and alternative checked", DependsOn: []string{"first"}, Verification: &VerificationRequest{Claim: "the fixture prints the observed value", Alternative: "the first worker misread its output"}}}})
 			case 3:
 				reply(w, Decision{Summary: "Evidence recorded", Complete: true, Findings: []Finding{{Title: "Synthetic finding", Status: "reproduced", ValidationTask: "validate", Impact: "fixture only", Steps: []string{"repeat the recorded invocation"}, Evidence: []string{s.Results[2].Evidence[0].LogRefs[0]}, Remediation: []string{"fixture only"}}}})
 			default:
@@ -370,7 +370,18 @@ func TestCoordinatorDelegatesThenValidatesWithSharedBudgetAndEvidence(t *testing
 			t.Error("worker lost inherited scope")
 		}
 		if strings.Contains(req.Messages[1].Content, "Evaluate whether the original worker goal") {
-			reply(w, map[string]string{"status": "satisfied", "reason": "literal execution evidence exists", "summary": "observed fixture output"})
+			if payload.Role == "goal_evaluator" && strings.Contains(payload.ContextPacket, "Independently challenge this claim") {
+				latest, _, _ := strings.Cut(strings.SplitN(payload.ContextPacket, "[latest_execution_result]\n", 2)[1], "\n\n[")
+				var logRef string
+				for _, line := range strings.Split(latest, "\n") {
+					if strings.HasPrefix(line, "log_refs: ") {
+						logRef = strings.TrimPrefix(line, "log_refs: ")
+					}
+				}
+				reply(w, map[string]any{"status": "satisfied", "reason": "independent output supports the claim", "summary": "fixture output reproduced", "verification": map[string]any{"verdict": "supported", "alternative_result": "the second execution printed the same value", "reason": "the misread-output alternative did not explain the second result", "evidence": []string{logRef}}})
+			} else {
+				reply(w, map[string]string{"status": "satisfied", "reason": "literal execution evidence exists", "summary": "observed fixture output"})
+			}
 			return
 		}
 		if strings.Contains(payload.ContextPacket, "[latest_execution_result]\naction: printf") {
@@ -646,16 +657,26 @@ func TestCoordinatorRejectsUnfinishedDependenciesAndInventedEvidence(t *testing.
 
 func TestReproducedFindingUsesLaterWorkerEvidenceWithoutFormalDependency(t *testing.T) {
 	inspect := Task{ID: "inspect", Goal: "inspect", DoneWhen: "lead recorded"}
-	validate := Task{ID: "validate", Goal: "check the lead against the target", DoneWhen: "response recorded"}
+	validate := Task{ID: "validate", Goal: "check the lead against the target", DoneWhen: "response recorded", Verification: &VerificationRequest{Claim: "target exposes the resource", Alternative: "a cached response created the appearance of exposure"}}
 	state := State{Limits: DefaultLimits(), Plans: []Decision{{Tasks: []Task{inspect}}, {Tasks: []Task{validate}}}, Results: []Result{
 		{Task: inspect, Status: "done", Evidence: []ctxpacket.ExecutionResult{{LogRefs: []string{"inspect.log"}}}},
-		{Task: validate, Status: "done", Evidence: []ctxpacket.ExecutionResult{{LogRefs: []string{"validate.log"}, ArtifactRefs: []string{"validation-note.md"}}}},
+		{Task: validate, Status: "done", Evidence: []ctxpacket.ExecutionResult{{LogRefs: []string{"validate.log"}, ArtifactRefs: []string{"validation-note.md"}}}, Verification: &VerificationResult{Verdict: "supported", AlternativeResult: "fresh response had the same behavior", Reason: "cache did not explain it", Evidence: []string{"validate.log"}}},
 	}}
 	finding := Finding{Title: "Observed issue", Status: "reproduced", ValidationTask: "validate", Impact: "fixture impact", Steps: []string{"repeat the validation"}, Evidence: []string{"validate.log"}, Remediation: []string{"fix the issue"}}
 	decision := Decision{Summary: "target behavior verified", Complete: true, Findings: []Finding{finding}}
 	if err := validateDecision(decision, state); err != nil {
 		t.Fatalf("later independent validation was rejected: %v", err)
 	}
+	state.Results[1].Verification.Verdict = "inconclusive"
+	if err := validateDecision(decision, state); err == nil {
+		t.Fatal("inconclusive verification counted as reproduced")
+	}
+	state.Results[1].Verification.Verdict = "supported"
+	state.Results[1].Verification.Evidence = []string{"inspect.log"}
+	if err := validateDecision(decision, state); err == nil {
+		t.Fatal("prior worker's log counted as independent verification")
+	}
+	state.Results[1].Verification.Evidence = []string{"validate.log"}
 	decision.Findings[0].Evidence = []string{"validation-note.md"}
 	if err := validateDecision(decision, state); err == nil {
 		t.Fatal("worker-written note alone counted as reproduction evidence")

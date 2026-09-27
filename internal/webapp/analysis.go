@@ -29,6 +29,9 @@ type analysisView struct {
 	SessionCount     int                      `json:"session_count"`
 	Risk             analysisRisk             `json:"risk"`
 	Findings         []analysisFinding        `json:"findings"`
+	Challenges       []analysisChallenge      `json:"challenges"`
+	Coverage         []analysisCoverage       `json:"coverage"`
+	Correlations     []analysisCorrelation    `json:"correlations"`
 	NextActions      []string                 `json:"next_actions"`
 	Gaps             []string                 `json:"gaps"`
 	Sessions         []analysisSessionSummary `json:"sessions,omitempty"`
@@ -47,35 +50,67 @@ type analysisRisk struct {
 }
 
 type analysisFinding struct {
-	SessionID        string   `json:"session_id,omitempty"`
-	Title            string   `json:"title"`
-	Status           string   `json:"status"`
-	Severity         string   `json:"severity,omitempty"`
-	Confidence       string   `json:"confidence,omitempty"`
-	Priority         string   `json:"priority"`
-	PriorityScore    int      `json:"priority_score"`
-	PriorityReason   string   `json:"priority_reason"`
-	ValidationTask   string   `json:"validation_task,omitempty"`
-	Impact           string   `json:"impact"`
-	Steps            []string `json:"steps"`
-	Evidence         []string `json:"evidence"`
-	Remediation      []string `json:"remediation"`
-	CVEIDs           []string `json:"cve_ids,omitempty"`
-	AffectedSoftware []string `json:"affected_software,omitempty"`
-	References       []string `json:"references,omitempty"`
+	SessionID        string                `json:"session_id,omitempty"`
+	Scope            string                `json:"scope,omitempty"`
+	Title            string                `json:"title"`
+	Status           string                `json:"status"`
+	RecordedStatus   string                `json:"recorded_status,omitempty"`
+	Verification     *analysisVerification `json:"verification,omitempty"`
+	Severity         string                `json:"severity,omitempty"`
+	Confidence       string                `json:"confidence,omitempty"`
+	Priority         string                `json:"priority"`
+	PriorityScore    int                   `json:"priority_score"`
+	PriorityReason   string                `json:"priority_reason"`
+	ValidationTask   string                `json:"validation_task,omitempty"`
+	Impact           string                `json:"impact"`
+	Steps            []string              `json:"steps"`
+	Evidence         []string              `json:"evidence"`
+	Remediation      []string              `json:"remediation"`
+	CVEIDs           []string              `json:"cve_ids,omitempty"`
+	AffectedSoftware []string              `json:"affected_software,omitempty"`
+	References       []string              `json:"references,omitempty"`
+}
+
+type analysisVerification struct {
+	Claim             string   `json:"claim"`
+	Alternative       string   `json:"alternative"`
+	Verdict           string   `json:"verdict"`
+	AlternativeResult string   `json:"alternative_result"`
+	Reason            string   `json:"reason"`
+	Evidence          []string `json:"evidence"`
+}
+
+// A challenge remains useful assessment evidence even when the coordinator
+// correctly declines to promote the observation to a finding.
+type analysisChallenge struct {
+	SessionID         string   `json:"session_id"`
+	TaskID            string   `json:"task_id"`
+	Scope             string   `json:"scope"`
+	Claim             string   `json:"claim"`
+	Alternative       string   `json:"alternative"`
+	Verdict           string   `json:"verdict"`
+	AlternativeResult string   `json:"alternative_result"`
+	Reason            string   `json:"reason"`
+	Evidence          []string `json:"evidence"`
 }
 
 type analysisSessionSummary struct {
-	ID        string    `json:"id"`
-	Goal      string    `json:"goal"`
-	Status    string    `json:"status"`
-	Model     string    `json:"model,omitempty"`
-	UpdatedAt time.Time `json:"updated_at,omitempty"`
-	ReportURL string    `json:"report_url"`
+	ID         string    `json:"id"`
+	Goal       string    `json:"goal"`
+	Scope      string    `json:"scope"`
+	Status     string    `json:"status"`
+	Model      string    `json:"model,omitempty"`
+	UpdatedAt  time.Time `json:"updated_at,omitempty"`
+	ReportURL  string    `json:"report_url"`
+	Tests      int       `json:"tests"`
+	Findings   int       `json:"findings"`
+	Challenges int       `json:"challenges"`
+	Gaps       int       `json:"gaps"`
 }
 
 type analysisFindingInput struct {
 	SessionID string
+	Scope     string
 	Finding   assessment.Finding
 }
 
@@ -94,10 +129,41 @@ func buildAnalysis(id, customer string, state assessment.State, inputs []analysi
 	view.ReportURL = "/api/v1/assessments/" + id + "/report"
 	if len(inputs) == 0 {
 		for _, finding := range assessment.CurrentFindings(state.Plans) {
-			inputs = append(inputs, analysisFindingInput{SessionID: id, Finding: finding})
+			inputs = append(inputs, analysisFindingInput{SessionID: id, Scope: state.Scope, Finding: finding})
 		}
 	}
 	view.Findings = prioritizeFindings(inputs)
+	for _, result := range state.Results {
+		if result.Task.Verification == nil || result.Verification == nil {
+			continue
+		}
+		view.Challenges = append(view.Challenges, analysisChallenge{
+			SessionID: id, TaskID: result.Task.ID, Scope: state.Scope,
+			Claim: result.Task.Verification.Claim, Alternative: result.Task.Verification.Alternative,
+			Verdict: result.Verification.Verdict, AlternativeResult: result.Verification.AlternativeResult,
+			Reason: result.Verification.Reason, Evidence: append([]string(nil), result.Verification.Evidence...),
+		})
+	}
+	for i := range view.Findings {
+		finding := &view.Findings[i]
+		if finding.ValidationTask != "" {
+			for _, result := range state.Results {
+				if result.Task.ID == finding.ValidationTask && result.Task.Verification != nil && result.Verification != nil {
+					finding.Verification = &analysisVerification{Claim: result.Task.Verification.Claim, Alternative: result.Task.Verification.Alternative, Verdict: result.Verification.Verdict, AlternativeResult: result.Verification.AlternativeResult, Reason: result.Verification.Reason, Evidence: append([]string(nil), result.Verification.Evidence...)}
+					break
+				}
+			}
+		}
+		if finding.Status == "reproduced" && assessment.SupportedChallengeForFinding(state.Results, assessment.Finding{ValidationTask: finding.ValidationTask, Evidence: finding.Evidence}) == nil {
+			finding.RecordedStatus = finding.Status
+			finding.Status = "candidate"
+			finding.Priority = "review"
+			finding.PriorityScore, _, _ = findingPriority(assessment.Finding{Status: "candidate", Severity: finding.Severity, Confidence: finding.Confidence})
+			finding.PriorityReason = "Earlier reproduction claim has no supported challenge verdict"
+		}
+	}
+	sortAnalysisFindings(view.Findings)
+	view.Coverage = []analysisCoverage{coverageForAssessment(id, state, view.Findings, view.Challenges)}
 	view.Risk = summarizeRisk(view.Findings)
 	view.Gaps = latestGaps(state.Plans)
 	view.Conclusion = assessmentConclusion(state)
@@ -108,48 +174,45 @@ func buildAnalysis(id, customer string, state assessment.State, inputs []analysi
 		view.LatestResult = fmt.Sprintf("%s — %s: %s", lastResult.Task.ID, lastResult.Status, lastResult.Summary)
 		view.Summary = "Assessment ended before the coordinator reviewed its latest worker result. Findings and gaps are from the preceding plan and need review."
 	} else {
-		view.Summary = analysisSummary(view.Status, view.Risk, len(view.Findings), len(view.Gaps))
+		view.Summary = analysisSummary(view.Status, view.Risk, len(view.Findings), len(view.Gaps), unresolvedChallenges(view.Challenges))
 	}
-	view.NextActions = nextActions(view.Findings, view.Gaps)
+	view.NextActions = nextActions(view.Findings, view.Challenges, view.Gaps)
 	return view
 }
 
 func buildCustomerAnalysis(id string, sessions []analysisView) analysisView {
 	view := analysisView{Kind: "customer", ID: id, Status: "no_sessions", ReportURL: "/api/v1/customers/" + id + "/report", GeneratedAt: time.Now().UTC()}
-	var inputs []analysisFindingInput
 	for _, session := range sessions {
-		view.Sessions = append(view.Sessions, analysisSessionSummary{ID: session.ID, Goal: session.Goal, Status: session.Status, Model: session.Model, ReportURL: "/api/v1/assessments/" + session.ID + "/report"})
+		tests := 0
+		for _, scope := range session.Coverage {
+			tests += len(scope.Tests)
+		}
+		view.Sessions = append(view.Sessions, analysisSessionSummary{ID: session.ID, Goal: session.Goal, Scope: session.Scope, Status: session.Status, Model: session.Model, ReportURL: "/api/v1/assessments/" + session.ID + "/report", Tests: tests, Findings: len(session.Findings), Challenges: len(session.Challenges), Gaps: len(session.Gaps)})
 		if session.Status == "running" || session.Status == "starting" {
 			view.Status = "active"
 		} else if view.Status == "no_sessions" {
 			view.Status = session.Status
 		}
-		for _, finding := range session.Findings {
-			inputs = append(inputs, analysisFindingInput{SessionID: finding.SessionID, Finding: finding.toFinding()})
-		}
+		view.Findings = append(view.Findings, session.Findings...)
+		view.Challenges = append(view.Challenges, session.Challenges...)
 	}
 	view.SessionCount = len(sessions)
 	if len(sessions) == 0 {
 		view.Summary = "No assessment sessions have been recorded yet."
 		return view
 	}
-	view.Findings = dedupeAnalysisFindings(prioritizeFindings(inputs))
+	sortAnalysisFindings(view.Findings)
+	view.Coverage = mergeCoverage(sessions)
+	view.Correlations = correlateFindings(view.Findings)
 	view.Risk = summarizeRisk(view.Findings)
 	for _, session := range sessions {
 		view.Gaps = append(view.Gaps, session.Gaps...)
 	}
 	view.Gaps = uniqueStrings(view.Gaps)
-	view.Summary = analysisSummary(view.Status, view.Risk, len(view.Findings), len(view.Gaps))
-	view.NextActions = nextActions(view.Findings, view.Gaps)
+	view.Summary = analysisSummary(view.Status, view.Risk, len(view.Findings), len(view.Gaps), unresolvedChallenges(view.Challenges))
+	view.NextActions = nextActions(view.Findings, view.Challenges, view.Gaps)
 	sort.Slice(view.Sessions, func(i, j int) bool { return view.Sessions[i].ID < view.Sessions[j].ID })
 	return view
-}
-
-// analysisFindingView is intentionally converted back to the shared finding
-// contract only for customer aggregation; evidence ownership remains in the
-// assessment state and is never reconstructed from prose.
-func (f analysisFinding) toFinding() assessment.Finding {
-	return assessment.Finding{Title: f.Title, Status: f.Status, Severity: f.Severity, Confidence: f.Confidence, CVEIDs: f.CVEIDs, AffectedSoftware: f.AffectedSoftware, References: f.References, ValidationTask: f.ValidationTask, Impact: f.Impact, Steps: f.Steps, Evidence: f.Evidence, Remediation: f.Remediation}
 }
 
 func prioritizeFindings(inputs []analysisFindingInput) []analysisFinding {
@@ -163,29 +226,19 @@ func prioritizeFindings(inputs []analysisFindingInput) []analysisFinding {
 		}
 		seen[key] = struct{}{}
 		score, priority, reason := findingPriority(f)
-		findings = append(findings, analysisFinding{SessionID: input.SessionID, Title: f.Title, Status: f.Status, Severity: f.Severity, Confidence: f.Confidence, Priority: priority, PriorityScore: score, PriorityReason: reason, ValidationTask: f.ValidationTask, Impact: f.Impact, Steps: append([]string(nil), f.Steps...), Evidence: append([]string(nil), f.Evidence...), Remediation: append([]string(nil), f.Remediation...), CVEIDs: append([]string(nil), f.CVEIDs...), AffectedSoftware: append([]string(nil), f.AffectedSoftware...), References: append([]string(nil), f.References...)})
+		findings = append(findings, analysisFinding{SessionID: input.SessionID, Scope: input.Scope, Title: f.Title, Status: f.Status, Severity: f.Severity, Confidence: f.Confidence, Priority: priority, PriorityScore: score, PriorityReason: reason, ValidationTask: f.ValidationTask, Impact: f.Impact, Steps: append([]string(nil), f.Steps...), Evidence: append([]string(nil), f.Evidence...), Remediation: append([]string(nil), f.Remediation...), CVEIDs: append([]string(nil), f.CVEIDs...), AffectedSoftware: append([]string(nil), f.AffectedSoftware...), References: append([]string(nil), f.References...)})
 	}
+	sortAnalysisFindings(findings)
+	return findings
+}
+
+func sortAnalysisFindings(findings []analysisFinding) {
 	sort.SliceStable(findings, func(i, j int) bool {
 		if findings[i].PriorityScore != findings[j].PriorityScore {
 			return findings[i].PriorityScore > findings[j].PriorityScore
 		}
 		return findings[i].Title < findings[j].Title
 	})
-	return findings
-}
-
-func dedupeAnalysisFindings(findings []analysisFinding) []analysisFinding {
-	seen := make(map[string]struct{}, len(findings))
-	result := findings[:0]
-	for _, finding := range findings {
-		key := strings.Join([]string{finding.Title, finding.Status, strings.Join(finding.CVEIDs, "\x00"), strings.Join(finding.Evidence, "\x00")}, "\x00")
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		result = append(result, finding)
-	}
-	return result
 }
 
 func findingPriority(f assessment.Finding) (int, string, string) {
@@ -277,20 +330,60 @@ func uniqueStrings(values []string) []string {
 	return result
 }
 
-func analysisSummary(status string, risk analysisRisk, findings, gaps int) string {
+func unresolvedChallenges(challenges []analysisChallenge) int {
+	count := 0
+	for _, challenge := range challenges {
+		if challenge.Verdict == "inconclusive" {
+			count++
+		}
+	}
+	return count
+}
+
+func analysisSummary(status string, risk analysisRisk, findings, gaps, unresolved int) string {
 	if findings == 0 {
+		if unresolved > 0 {
+			verb := "remain"
+			if unresolved == 1 {
+				verb = "remains"
+			}
+			base := fmt.Sprintf("No confirmed findings. %d independent %s %s inconclusive.", unresolved, countNoun(unresolved, "challenge", "challenges"), verb)
+			if gaps == 0 {
+				return base
+			}
+			return base + fmt.Sprintf(" %d assessment %s need review.", gaps, countNoun(gaps, "gap", "gaps"))
+		}
 		if gaps > 0 {
-			return fmt.Sprintf("No findings are recorded yet; %d assessment gap(s) still need attention.", gaps)
+			return fmt.Sprintf("No findings are recorded yet; %d assessment %s still need attention.", gaps, countNoun(gaps, "gap", "gaps"))
 		}
 		return "No model-authored findings are recorded. This is not evidence that the target is secure."
 	}
 	if risk.Reproduced > 0 {
-		return fmt.Sprintf("%d finding(s) include target validation evidence; %d candidate(s) still need validation or review.", risk.Reproduced, risk.Candidates)
+		verb := "include"
+		if risk.Reproduced == 1 {
+			verb = "includes"
+		}
+		confirmed := fmt.Sprintf("%d %s %s target validation evidence.", risk.Reproduced, countNoun(risk.Reproduced, "finding", "findings"), verb)
+		if risk.Candidates == 0 {
+			return confirmed
+		}
+		return confirmed + fmt.Sprintf(" %d %s still need validation or review.", risk.Candidates, countNoun(risk.Candidates, "candidate", "candidates"))
 	}
-	return fmt.Sprintf("%d candidate finding(s) require operator review and, where warranted, target validation.", findings)
+	verb := "require"
+	if findings == 1 {
+		verb = "requires"
+	}
+	return fmt.Sprintf("%d candidate %s %s operator review and, where warranted, target validation.", findings, countNoun(findings, "finding", "findings"), verb)
 }
 
-func nextActions(findings []analysisFinding, gaps []string) []string {
+func countNoun(count int, one, many string) string {
+	if count == 1 {
+		return one
+	}
+	return many
+}
+
+func nextActions(findings []analysisFinding, challenges []analysisChallenge, gaps []string) []string {
 	var actions []string
 	for _, finding := range findings {
 		action := "Review evidence and decide whether to validate " + finding.Title
@@ -298,6 +391,11 @@ func nextActions(findings []analysisFinding, gaps []string) []string {
 			action = "Triage and remediate " + finding.Title
 		}
 		actions = append(actions, action)
+	}
+	for _, challenge := range challenges {
+		if challenge.Verdict == "inconclusive" {
+			actions = append(actions, "Review the inconclusive check in "+challenge.TaskID+" and resolve its competing explanation before treating the claim as confirmed.")
+		}
 	}
 	if len(gaps) > 0 {
 		actions = append(actions, fmt.Sprintf("Review %d untested or unresolved areas before deciding on follow-up work.", len(gaps)))

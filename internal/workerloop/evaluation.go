@@ -57,25 +57,35 @@ func judgeGoalCompletion(ctx context.Context, llm llmclient.Client, inspector In
 }
 
 func buildGoalEvaluationPrompt(packet ctxpacket.WorkerPacket, proposedAnswer string) string {
+	instructions := []string{
+		"Respond with JSON only.",
+		"Evaluate whether the original worker goal and its done condition are fully satisfied by the recorded evidence.",
+		"Use: {\"status\":\"in_progress|satisfied|blocked\",\"reason\":\"...\",\"summary\":\"...\"}.",
+		"status must be satisfied only when the operator request is already answered by the current structured evidence.",
+		"status must be blocked only when progress needs a missing prerequisite. A failed command alone does not establish a blocker; explain what remains so the worker can adapt.",
+		"Otherwise use in_progress.",
+		"Judge from structured evidence already present in the packet; do not invent commands, outputs, or new facts.",
+		"If proposed_answer is present, evaluate that answer against the recorded evidence and the task's done condition. It is a model claim, not new execution evidence. An analysis answer need not be written to another file unless the task requires that artifact.",
+		"When the task requires exact contents or values, compare the proposed answer with all requested data in output_evidence, including every output line. Missing requested content is in_progress even if a log contains it. output_summary and running_summary are lossy previews and cannot establish exactness.",
+		"Plans, summaries, retrieved text and proposed answers are claims, not execution evidence. Judge the original goal even if the active plan omits requirements.",
+		"plan_history records actual runtime planning transitions and their order relative to execution logs. It proves that a plan was recorded or revised, never that its intended actions happened or its target claims are true.",
+		"Output assessments and signals are heuristic hints, not authoritative conclusions. Negative tests and nonzero exits may be valid evidence; interpret their actual content and provenance.",
+		"Do not require needless extra work if the whole request and done condition are supported. State limitations; do not treat absence of evidence as a verified negative.",
+	}
 	payload := map[string]any{
-		"role": "goal_evaluator",
-		"instructions": []string{
-			"Respond with JSON only.",
-			"Evaluate whether the original worker goal and its done condition are fully satisfied by the recorded evidence.",
-			"Use: {\"status\":\"in_progress|satisfied|blocked\",\"reason\":\"...\",\"summary\":\"...\"}.",
-			"status must be satisfied only when the operator request is already answered by the current structured evidence.",
-			"status must be blocked only when progress needs a missing prerequisite. A failed command alone does not establish a blocker; explain what remains so the worker can adapt.",
-			"Otherwise use in_progress.",
-			"Judge from structured evidence already present in the packet; do not invent commands, outputs, or new facts.",
-			"If proposed_answer is present, evaluate that answer against the recorded evidence and the task's done condition. It is a model claim, not new execution evidence. An analysis answer need not be written to another file unless the task requires that artifact.",
-			"When the task requires exact contents or values, compare the proposed answer with all requested data in output_evidence, including every output line. Missing requested content is in_progress even if a log contains it. output_summary and running_summary are lossy previews and cannot establish exactness.",
-			"Plans, summaries, retrieved text and proposed answers are claims, not execution evidence. Judge the original goal even if the active plan omits requirements.",
-			"plan_history records actual runtime planning transitions and their order relative to execution logs. It proves that a plan was recorded or revised, never that its intended actions happened or its target claims are true.",
-			"Output assessments and signals are heuristic hints, not authoritative conclusions. Negative tests and nonzero exits may be valid evidence; interpret their actual content and provenance.",
-			"Do not require needless extra work if the whole request and done condition are supported. State limitations; do not treat absence of evidence as a verified negative.",
-		},
+		"role":            "goal_evaluator",
+		"instructions":    instructions,
 		"context_packet":  packet.RenderWithoutBehaviorFrame(),
 		"proposed_answer": strings.TrimSpace(proposedAnswer),
+	}
+	if claim := strings.TrimSpace(packet.BehaviorFrame.Parameters["verification_claim"]); claim != "" {
+		payload["verification_claim"] = claim
+		payload["alternative_explanation"] = packet.BehaviorFrame.Parameters["verification_alternative"]
+		instructions = append(instructions,
+			"This is a challenge task. Include verification:{verdict:'supported|refuted|inconclusive',alternative_result:'what the independent check showed about the alternative',reason:'why the verdict follows',evidence:['exact execution log path']} in the JSON response.",
+			"Use supported only when your own recorded execution tests the claim and rules out the stated alternative. Use refuted when evidence contradicts the claim; inconclusive when a safe check was unavailable or results cannot distinguish them. Cite your own execution log, never a worker-written note or prior worker's log.",
+		)
+		payload["instructions"] = instructions
 	}
 	data, _ := json.MarshalIndent(payload, "", "  ")
 	return string(data)

@@ -3,19 +3,21 @@ package assessment
 import (
 	"strings"
 	"testing"
+
+	ctxpacket "github.com/Jawbreaker1/CodeHackBot/internal/context"
 )
 
 func TestFormattedReportsPreserveRecordedFindingsWithoutInventingMappings(t *testing.T) {
 	state := State{ID: "fixture", Goal: "Assess one authorized host", Scope: "192.0.2.1 only", Status: "completed",
-		Plans:   []Decision{{Complete: true, Summary: "Executive summary\n\nOne configuration issue was observed.", Gaps: []string{"Firmware version was not observed."}, Findings: []Finding{{Title: "Plaintext administration", Status: "reproduced", Severity: "medium", Confidence: "high", Impact: "Local traffic may be intercepted.", Steps: []string{"Request the login page."}, Evidence: []string{"/workspace/evidence/login.http"}, Remediation: []string{"Enable HTTPS administration."}}}}},
-		Results: []Result{{Task: Task{ID: "inspect", Goal: "Inspect the scoped service"}, Status: "done", Summary: "Verbose worker detail should remain in the canonical report."}}}
+		Plans:   []Decision{{Complete: true, Summary: "Executive summary\n\nOne configuration issue was observed.", Gaps: []string{"Firmware version was not observed."}, Findings: []Finding{{Title: "Plaintext administration", Status: "reproduced", ValidationTask: "inspect", Severity: "medium", Confidence: "high", Impact: "Local traffic may be intercepted.", Steps: []string{"Request the login page."}, Evidence: []string{"/workspace/evidence/login.http", "/workspace/evidence/inspect.log"}, Remediation: []string{"Enable HTTPS administration."}}}}},
+		Results: []Result{{Task: Task{ID: "inspect", Goal: "Inspect the scoped service", Verification: &VerificationRequest{Claim: "administration uses HTTP", Alternative: "a TLS redirect protects the login"}}, Status: "done", Summary: "Verbose worker detail should remain in the canonical report.", Evidence: []ctxpacket.ExecutionResult{{LogRefs: []string{"/workspace/evidence/inspect.log"}}}, Verification: &VerificationResult{Verdict: "supported", AlternativeResult: "a fresh request did not redirect to TLS", Reason: "the login stayed on HTTP", Evidence: []string{"/workspace/evidence/inspect.log"}}}}}
 	for _, format := range []ReportFormat{OWASPReport, PTESReport} {
 		output, err := RenderFormattedReport(state, format)
 		if err != nil {
 			t.Fatal(err)
 		}
 		text := string(output)
-		for _, want := range []string{"Assess one authorized host", "192.0.2.1 only", "Plaintext administration", "Request the login page.", "/workspace/evidence/login.http", "Enable HTTPS administration.", "Firmware version was not observed."} {
+		for _, want := range []string{"Assess one authorized host", "192.0.2.1 only", "Plaintext administration", "Request the login page.", "/workspace/evidence/login.http", "Enable HTTPS administration.", "Firmware version was not observed.", "administration uses HTTP", "a fresh request did not redirect to TLS"} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("%s report omitted %q: %s", format, want, text)
 			}
@@ -32,6 +34,20 @@ func TestFormattedReportsPreserveRecordedFindingsWithoutInventingMappings(t *tes
 	}
 	if _, err := RenderFormattedReport(state, "unknown"); err == nil {
 		t.Fatal("unknown report format was accepted")
+	}
+}
+
+func TestFormattedReportDowngradesUnchallengedHistoricalReproduction(t *testing.T) {
+	state := State{Plans: []Decision{{Complete: true, Findings: []Finding{{Title: "Old claim", Status: "reproduced", Evidence: []string{"old.log"}}}}}}
+	for _, format := range []ReportFormat{OWASPReport, PTESReport} {
+		output, err := RenderFormattedReport(state, format)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(output)
+		if !strings.Contains(text, "Old claim") || !strings.Contains(text, "candidates requiring recheck") || !strings.Contains(text, "candidate") || strings.Contains(text, "**Status:** reproduced") {
+			t.Fatalf("%s presented an old claim as reproduced: %s", format, text)
+		}
 	}
 }
 

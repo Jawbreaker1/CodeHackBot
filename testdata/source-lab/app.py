@@ -50,8 +50,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(encoded)
 
 
-def create_server(repository, revision):
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+def create_server(repository, revision, port=0):
+    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     server.repository, server.revision = repository, revision
     return server
 
@@ -61,7 +61,8 @@ if __name__ == "__main__":
     parser.add_argument("--ready-file", required=True)
     parser.add_argument("--repository", required=True)
     parser.add_argument("--revision", required=True)
+    parser.add_argument("--port", type=int, default=0)
     args = parser.parse_args()
-    server = create_server(args.repository, args.revision)
+    server = create_server(args.repository, args.revision, args.port)
     Path(args.ready_file).write_text(f"http://127.0.0.1:{server.server_port}\n")
     server.serve_forever()

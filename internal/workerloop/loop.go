@@ -27,8 +27,9 @@ type Loop struct {
 	AskUser   func(context.Context, string) (string, error)
 }
 type Outcome struct {
-	Summary string
-	Packet  ctxpacket.WorkerPacket
+	Summary        string
+	Packet         ctxpacket.WorkerPacket
+	GoalEvaluation *workergoal.Evaluation
 }
 
 func (l *Loop) SetProgressSink(sink ProgressSink) { l.Progress = sink }
@@ -268,6 +269,7 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 			return out, err
 		}
 		if evaluation.Status == workergoal.StatusSatisfied {
+			out.GoalEvaluation = &evaluation
 			current.TaskRuntime.State = "done"
 			current.TaskRuntime.MissingFact = "(none)"
 			if response.Type == "step_complete" {

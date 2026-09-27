@@ -824,7 +824,7 @@ func (s *Server) serveAssessmentArtifact(w http.ResponseWriter, r *http.Request,
 	found := false
 	for _, result := range current.state.Results {
 		for _, evidence := range result.Evidence {
-			for _, ref := range evidence.ArtifactRefs {
+			for _, ref := range append(append([]string(nil), evidence.ArtifactRefs...), evidence.LogRefs...) {
 				if filepath.Clean(ref) == wanted {
 					found = true
 					break
@@ -834,7 +834,7 @@ func (s *Server) serveAssessmentArtifact(w http.ResponseWriter, r *http.Request,
 	}
 	for _, worker := range current.workers {
 		for _, evidence := range worker.Evidence {
-			for _, ref := range evidence.ArtifactRefs {
+			for _, ref := range append(append([]string(nil), evidence.ArtifactRefs...), evidence.LogRefs...) {
 				if filepath.Clean(ref) == wanted {
 					found = true
 				}
@@ -863,6 +863,9 @@ func (s *Server) serveAssessmentArtifact(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	contentType := mime.TypeByExtension(filepath.Ext(wanted))
+	if filepath.Ext(wanted) == ".log" {
+		contentType = "text/plain; charset=utf-8"
+	}
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}

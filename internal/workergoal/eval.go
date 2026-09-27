@@ -16,9 +16,19 @@ const (
 )
 
 type Evaluation struct {
-	Status  Status `json:"status"`
-	Reason  string `json:"reason"`
-	Summary string `json:"summary"`
+	Status       Status        `json:"status"`
+	Reason       string        `json:"reason"`
+	Summary      string        `json:"summary"`
+	Verification *Verification `json:"verification,omitempty"`
+}
+
+// Verification is an evidence-backed challenge verdict for a delegated
+// verification task. It is omitted for ordinary worker goals.
+type Verification struct {
+	Verdict           string   `json:"verdict"`
+	AlternativeResult string   `json:"alternative_result"`
+	Reason            string   `json:"reason"`
+	Evidence          []string `json:"evidence"`
 }
 
 type ValidationIssue struct{ Message string }

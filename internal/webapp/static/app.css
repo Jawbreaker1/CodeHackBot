@@ -36,9 +36,12 @@ svg { flex-shrink: 0; }
 #sidebarSessions { flex: 1; min-height: 0; overflow: auto; }
 .customer-group { margin-bottom: 17px; }
 .customer-group.drag-over { outline: 1px dashed var(--attention); outline-offset: 4px; border-radius: 6px; background: #ffffff05; }
-.customer-heading { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 6px 9px; font-size: 12px; color: var(--muted); }
+.customer-header { display: flex; align-items: center; gap: 5px; }
+.customer-heading { display: flex; align-items: center; justify-content: space-between; flex: 1; min-width: 0; padding: 6px 9px; font-size: 12px; color: var(--muted); }
 .customer-heading span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .customer-count { color: var(--faint); font-size: 10px; }
+.customer-analysis-link { color: var(--muted); font-size: 10px; padding: 5px 7px; border-radius: 5px; text-decoration: none; }
+.customer-analysis-link:hover, .customer-analysis-link:focus-visible { color: var(--text); background: #ffffff0c; }
 .session-row { display: flex; align-items: center; min-width: 0; }
 .draft-session { cursor: grab; }
 .draft-session.dragging { opacity: .45; }

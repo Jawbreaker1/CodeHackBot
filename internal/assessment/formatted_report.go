@@ -37,9 +37,18 @@ type formattedReport struct {
 	Finished          string
 	Summary           string
 	UnreviewedResults bool
+	LegacyClaims      bool
 	Findings          []Finding
 	Gaps              []string
 	Results           []Result
+	Verifications     map[string]*formattedVerification
+}
+
+type formattedVerification struct {
+	Claim             string
+	AlternativeResult string
+	Verdict           string
+	Reason            string
 }
 
 // RenderFormattedReport applies a fixed report structure to the saved
@@ -48,9 +57,15 @@ func RenderFormattedReport(state State, format ReportFormat) ([]byte, error) {
 	if !format.Valid() {
 		return nil, fmt.Errorf("unsupported report format %q", format)
 	}
+	findings, legacyClaims := reviewFindings(state)
 	data := formattedReport{
 		ID: state.ID, Status: state.Status, Goal: state.Goal, Scope: state.Scope,
-		Findings: CurrentFindings(state.Plans), Results: state.Results,
+		Findings: findings, LegacyClaims: legacyClaims, Results: state.Results, Verifications: map[string]*formattedVerification{},
+	}
+	for _, result := range state.Results {
+		if result.Task.Verification != nil && result.Verification != nil {
+			data.Verifications[result.Task.ID] = &formattedVerification{Claim: result.Task.Verification.Claim, AlternativeResult: result.Verification.AlternativeResult, Verdict: result.Verification.Verdict, Reason: result.Verification.Reason}
+		}
 	}
 	if !state.StartedAt.IsZero() {
 		data.Started = state.StartedAt.UTC().Format("2006-01-02 15:04 UTC")

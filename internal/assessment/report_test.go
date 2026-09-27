@@ -55,7 +55,7 @@ func TestReportUsesCurrentFindingRevision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "withdrawn candidate") || !strings.Contains(string(data), "validated issue") {
+	if strings.Contains(string(data), "withdrawn candidate") || !strings.Contains(string(data), "validated issue") || !strings.Contains(string(data), "Earlier reproduction claims without a supported challenge") || !strings.Contains(string(data), "Status: candidate (model assessment") {
 		t.Fatalf("report did not use the current finding revision: %s", data)
 	}
 }
