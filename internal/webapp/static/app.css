@@ -84,6 +84,10 @@ h1 { margin: 0; font-size: 13px; font-weight: 500; text-overflow: ellipsis; whit
 .transcript-entry.system { color: var(--attention); font-size: 12px; }
 .pending-message { display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 12px; }
 .pending-message::before { content: ''; width: 6px; height: 6px; background: var(--muted); border-radius: 50%; animation: breathe 1.3s ease-in-out infinite; }
+.chat-work-progress { margin: 8px 0 22px; padding: 10px 0 10px 15px; border-left: 2px solid #aab9a0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.chat-work-title { color: var(--text); font-weight: 600; margin-bottom: 5px; }
+.chat-work-progress p { margin: 3px 0; overflow-wrap: anywhere; }
+.chat-work-progress strong { color: var(--faint); font-weight: 600; }
 @keyframes breathe { 50% { opacity: .25; } }
 .live-status { width: calc(100% - 48px); max-width: 760px; margin: 0 auto 10px; padding: 10px 12px; border: 1px solid #ffffff20; border-radius: 10px; background: #292928; }
 .live-status-heading { display: block; margin-bottom: 7px; color: var(--faint); font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }

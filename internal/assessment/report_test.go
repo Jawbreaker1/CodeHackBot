@@ -35,11 +35,37 @@ func TestReportReferencesRawEvidenceWithoutCopyingSensitiveInput(t *testing.T) {
 		t.Fatal(err)
 	}
 	report := string(data)
+	index, err := os.ReadFile(filepath.Join(root, "evidence-index.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if strings.Contains(report, secret) || strings.Contains(report, "Authorization: Bearer") {
 		t.Fatal("report copied raw credentials from execution evidence or operator conversation")
 	}
-	if !strings.Contains(report, "tasks/inspect/execution-01.log") || !strings.Contains(report, "The scoped service returned a successful response.") {
-		t.Fatal("report lost the worker conclusion or reference to its local evidence")
+	if strings.Contains(string(index), secret) || !strings.Contains(report, "evidence-index.md") || !strings.Contains(string(index), "tasks/inspect/execution-01.log") || !strings.Contains(string(index), "The scoped service returned a successful response.") {
+		t.Fatal("report and evidence index did not separate the conclusion from raw evidence references")
+	}
+}
+
+func TestReportKeepsRepeatedExecutionReferencesOutOfOverview(t *testing.T) {
+	root := t.TempDir()
+	result := Result{Task: Task{ID: "inspect", Goal: "Inspect the scoped system"}, Status: "done", Summary: "Inspection completed with recorded evidence."}
+	for i := 0; i < 40; i++ {
+		result.Evidence = append(result.Evidence, ctxpacket.ExecutionResult{ExitStatus: "0", LogRefs: []string{"tasks/inspect/logs/command.log", "tasks/inspect/logs/command.log.stdout", "tasks/inspect/logs/command.log.stderr"}})
+	}
+	if err := writeReport(root, State{ID: "fixture", Results: []Result{result}}); err != nil {
+		t.Fatal(err)
+	}
+	report, err := os.ReadFile(filepath.Join(root, "report.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, err := os.ReadFile(filepath.Join(root, "evidence-index.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(report), "command.log.stdout") || len(report) >= len(index) || strings.Count(string(index), "command.log.stdout") != 40 {
+		t.Fatal("overview still contains repetitive execution references or index lost them")
 	}
 }
 

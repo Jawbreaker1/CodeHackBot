@@ -72,8 +72,10 @@ def run_session(base, customer, goal, mode="per_action"):
     assert view["context_window"]["limit_bytes"] > 0 and view["context_window"]["used_bytes"] > 0, view
     assert any(worker.get("context_used_bytes", 0) > 0 for worker in view["workers"]), view
     status, report = call_text(base, view["report_url"])
-    assert status == 200 and "Terminal fixture observed" in report and ".log" in report, report
+    assert status == 200 and "evidence-index.md" in report and ".log.stdout" not in report, report
     assert "web fixture" not in report, "raw fixture output was copied into the review report"
+    status, index = call_text(base, view["evidence_index_url"])
+    assert status == 200 and "Terminal fixture observed" in index and ".log" in index, index
     return view
 
 

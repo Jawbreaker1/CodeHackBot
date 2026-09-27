@@ -17,6 +17,28 @@ type generatedReport struct {
 	Bytes  int64                   `json:"bytes"`
 }
 
+func (r *run) report(w http.ResponseWriter) {
+	r.sessionMarkdown(w, "report.md", "report is not ready")
+}
+
+func (r *run) evidenceIndex(w http.ResponseWriter) {
+	r.sessionMarkdown(w, "evidence-index.md", "evidence index is not ready")
+}
+
+func (r *run) sessionMarkdown(w http.ResponseWriter, name, missing string) {
+	data, err := os.ReadFile(filepath.Join(r.root, name))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			writeError(w, http.StatusNotFound, missing)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	_, _ = w.Write(data)
+}
+
 func (r generatedReport) Label() string {
 	if r.Format == assessment.OWASPReport {
 		return "OWASP WSTG-aligned report.md"

@@ -324,13 +324,12 @@ function renderWorkerPlan(worker, phase, sessionID) {
     const item = node('li', 'worker-plan-step ' + status);
     const body = node('div', 'plan-content');
     body.append(node('p', 'worker-detail', worker.step_purposes?.[step] || step));
-    const statusLabel = status === 'unreported' ? 'not individually marked' : status;
+    const statusLabel = status === 'unreported' ? 'check task result' : status;
     const details = disclosure(`${preview(step, 72)} · ${statusLabel}`, body, sessionID + '-worker-step-' + worker.id + '-' + (worker.plan_revision || 1) + '-' + i);
     item.append(details);
     list.append(item);
   }
   section.append(list);
-  if (finished && current < steps.length - 1) section.append(node('p', 'worker-detail', 'The worker finished its task without marking every planned step. Check its result for what was actually done.'));
   if ((worker.plan_history || []).length > 1) {
     const history = node('ol', 'plan-revisions');
     for (const [index, revision] of worker.plan_history.slice(0, -1).entries()) {

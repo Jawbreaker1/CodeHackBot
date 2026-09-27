@@ -6,7 +6,6 @@ package webapp
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -468,6 +467,7 @@ type assessmentView struct {
 	Messages         []messageView         `json:"messages"`
 	ReportURL        string                `json:"report_url,omitempty"`
 	ReportReady      bool                  `json:"report_ready,omitempty"`
+	EvidenceIndexURL string                `json:"evidence_index_url,omitempty"`
 }
 
 type planApprovalView struct {
@@ -1484,6 +1484,12 @@ func (s *Server) assessmentRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		current.report(w)
+	case "evidence-index":
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w, http.MethodGet)
+			return
+		}
+		current.evidenceIndex(w)
 	case "reports":
 		if len(parts) != 3 || r.Method != http.MethodGet {
 			methodNotAllowed(w, http.MethodGet)
@@ -2183,6 +2189,9 @@ func (r *run) view(after string) assessmentView {
 	if r.status != "draft" && r.status != "running" && r.status != "starting" {
 		if info, err := os.Stat(filepath.Join(r.root, "report.md")); err == nil && info.Mode().IsRegular() {
 			view.ReportReady = true
+			if evidence, err := os.Stat(filepath.Join(r.root, "evidence-index.md")); err == nil && evidence.Mode().IsRegular() {
+				view.EvidenceIndexURL = "/api/v1/assessments/" + r.id + "/evidence-index"
+			}
 		}
 	}
 	view.Limits = r.state.Limits
@@ -2311,20 +2320,6 @@ func aggregateContextWindow(state assessment.State, workers []workerView) contex
 
 func (r *run) writeView(w http.ResponseWriter, after string) {
 	writeJSON(w, http.StatusOK, r.view(after))
-}
-
-func (r *run) report(w http.ResponseWriter) {
-	data, err := os.ReadFile(filepath.Join(r.root, "report.md"))
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			writeError(w, http.StatusNotFound, "report is not ready")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
-	_, _ = w.Write(data)
 }
 
 type runApprover struct {

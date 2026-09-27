@@ -26,7 +26,7 @@ func writeReport(root string, s State) error {
 	summary, unreviewed := reportOutcome(s)
 	fmt.Fprintf(&b, "%s\n\n", summary)
 	b.WriteString("## Method and coverage\n\n")
-	b.WriteString("The sequence records each coordinator round and the tasks proposed, approved, or skipped. A proposed task does not establish coverage; completed work is detailed in the evidence trail.\n\n")
+	b.WriteString("The sequence records each coordinator round and the tasks proposed, approved, or skipped. A proposed task does not establish coverage; completed work and execution references are detailed in the separate evidence index.\n\n")
 	for i, d := range s.Plans {
 		if len(d.Tasks) == 0 {
 			continue
@@ -116,10 +116,38 @@ func writeReport(root string, s State) error {
 	if s.Error == "" && (len(s.Plans) == 0 || len(s.Plans[len(s.Plans)-1].Gaps) == 0) {
 		b.WriteString("No additional gaps were stated by the coordinator; this is not a coverage guarantee.\n")
 	}
-	b.WriteString("\n## Technical evidence trail\n\n")
-	b.WriteString("Worker conclusions and local evidence references below support the findings and record unsuccessful or partial work. Exact invocations and output remain in the local execution logs; they are not copied into this review draft because they may contain credentials or other sensitive data.\n\n")
+	b.WriteString("\n## Work performed and evidence\n\n")
+	b.WriteString("Detailed worker conclusions, unsuccessful attempts, and local evidence references are in `evidence-index.md` beside this report. Raw tool output and approval records remain in the task logs rather than being copied automatically into this overview. Review model-authored text for sensitive content before sharing.\n\n")
 	for _, r := range s.Results {
-		fmt.Fprintf(&b, "### %s — %s\n\n%s\n\nCompletion criterion: %s\n\n%s\n\n", r.Task.ID, r.Status, r.Task.Goal, r.Task.DoneWhen, r.Summary)
+		fmt.Fprintf(&b, "- `%s` — **%s**. %s\n", r.Task.ID, r.Status, r.Task.Goal)
+		if r.Error != "" {
+			fmt.Fprintf(&b, "  - Limitation: %s\n", r.Error)
+		}
+	}
+	b.WriteString("\n")
+	b.WriteString("## Assessment metadata\n\n")
+	fmt.Fprintf(&b, "Model: `%s`. Calls: %d/%d; failed calls: %d; reported tokens: %d; calls without usage: %d.\n\n", s.Model, s.Usage.Calls, s.Limits.ModelCalls, s.Usage.FailedCalls, s.Usage.ReportedTokens, s.Usage.CallsWithoutUsage)
+	if s.ReasoningEffort != "" {
+		fmt.Fprintf(&b, "Requested reasoning effort: `%s`.\n\n", s.ReasoningEffort)
+	}
+	if s.MaxOutputTokens > 0 {
+		fmt.Fprintf(&b, "Output budget per model request: %d tokens.\n\n", s.MaxOutputTokens)
+	}
+	if len(s.OperatorMessages) > 0 {
+		b.WriteString("The operator conversation is retained in local session state and omitted from this review draft.\n\n")
+	}
+	if err := writeEvidenceIndex(root, s); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(root, "report.md"), []byte(b.String()), 0600)
+}
+
+func writeEvidenceIndex(root string, s State) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Evidence index — %s\n\n", s.ID)
+	b.WriteString("Worker-authored conclusions and local references are retained here for review; they may quote commands or results and require sensitive-content review. Full raw invocations, output, and approvals remain in the referenced task logs.\n\n")
+	for _, r := range s.Results {
+		fmt.Fprintf(&b, "## %s — %s\n\n%s\n\nCompletion criterion: %s\n\n%s\n\n", r.Task.ID, r.Status, r.Task.Goal, r.Task.DoneWhen, r.Summary)
 		if r.Error != "" {
 			fmt.Fprintf(&b, "Limitation: %s\n\n", r.Error)
 		}
@@ -136,16 +164,5 @@ func writeReport(root string, s State) error {
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("## Assessment metadata\n\n")
-	fmt.Fprintf(&b, "Model: `%s`. Calls: %d/%d; failed calls: %d; reported tokens: %d; calls without usage: %d.\n\n", s.Model, s.Usage.Calls, s.Limits.ModelCalls, s.Usage.FailedCalls, s.Usage.ReportedTokens, s.Usage.CallsWithoutUsage)
-	if s.ReasoningEffort != "" {
-		fmt.Fprintf(&b, "Requested reasoning effort: `%s`.\n\n", s.ReasoningEffort)
-	}
-	if s.MaxOutputTokens > 0 {
-		fmt.Fprintf(&b, "Output budget per model request: %d tokens.\n\n", s.MaxOutputTokens)
-	}
-	if len(s.OperatorMessages) > 0 {
-		b.WriteString("The operator conversation is retained in local session state and omitted from this review draft.\n\n")
-	}
-	return os.WriteFile(filepath.Join(root, "report.md"), []byte(b.String()), 0600)
+	return os.WriteFile(filepath.Join(root, "evidence-index.md"), []byte(b.String()), 0600)
 }

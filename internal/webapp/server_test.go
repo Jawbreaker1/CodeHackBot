@@ -81,6 +81,35 @@ func TestServerCreatesDraftAndServesUI(t *testing.T) {
 	}
 }
 
+func TestCompletedAssessmentLinksSeparateEvidenceIndex(t *testing.T) {
+	server := NewServer(Config{RepoRoot: t.TempDir()})
+	current, err := server.newRun("customer", "review evidence", "synthetic fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.status = "completed"
+	for name, content := range map[string]string{"report.md": "short report", "evidence-index.md": "full evidence references"} {
+		if err := os.WriteFile(filepath.Join(current.root, name), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	view := current.view("")
+	if !view.ReportReady || view.EvidenceIndexURL == "" {
+		t.Fatalf("completed report links = %+v", view)
+	}
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+	response, err := http.Get(httpServer.URL + view.EvidenceIndexURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	data, err := io.ReadAll(response.Body)
+	if err != nil || response.StatusCode != http.StatusOK || string(data) != "full evidence references" {
+		t.Fatalf("evidence index response: status=%d body=%q error=%v", response.StatusCode, data, err)
+	}
+}
+
 func TestFailedStartRestoresDraftState(t *testing.T) {
 	root := t.TempDir()
 	server := NewServer(Config{RepoRoot: root, LLM: llmclient.Client{BaseURL: "http://127.0.0.1:1/v1", Model: "fixture"}})

@@ -226,13 +226,41 @@ function reportNode(view) {
   analysis.target = '_blank';
   analysis.rel = 'noopener';
   links.append(report, analysis);
+  if (view.evidence_index_url) {
+    const evidence = node('a', '', 'Review execution evidence ↗');
+    evidence.href = view.evidence_index_url;
+    evidence.target = '_blank';
+    evidence.rel = 'noopener';
+    links.append(evidence);
+  }
   card.append(links);
+  return card;
+}
+function workProgressNode(view) {
+  if (!isAssessmentView(view) || !activeStatuses.includes(view.status) || view.pending_plan) return null;
+  const workers = (view.workers || []).filter(worker => !['task_completed', 'done', 'task_failed', 'failed', 'task_blocked', 'blocked', 'aborted'].includes(worker.phase));
+  const card = node('section', 'chat-work-progress');
+  card.setAttribute('role', 'status');
+  card.append(node('div', 'chat-work-title', workers.length ? `Working · ${workers.length} ${workers.length === 1 ? 'worker' : 'workers'}` : 'Coordinator working'));
+  if (!workers.length) {
+    const message = view.pending_approvals?.length ? 'Waiting for your approval.' : view.results?.length ? 'Reviewing results and deciding what comes next.' : view.plans > 0 ? 'Preparing approved workers.' : 'Planning the first test.';
+    card.append(node('p', '', message));
+  } else {
+    for (const worker of workers) {
+      const waiting = (view.pending_approvals || []).some(approval => approval.task_id === worker.id);
+      const purpose = worker.step_purposes?.[worker.active_step] || worker.active_step || worker.goal || phaseLabel(worker.phase);
+      const line = node('p');
+      line.append(node('strong', '', worker.id + ' · '), node('span', '', waiting ? 'Waiting for your approval' : preview(purpose, 180)));
+      card.append(line);
+    }
+  }
   return card;
 }
 function renderTranscript() {
   const messages = [...(current?.messages || [])];
   const records = [...eventRecords.values()];
-  if (!changed('transcript', [messages, records, pendingMessage, current?.pending_tool, current?.pending_approvals, current?.pending_plan, current?.conclusion, current?.conclusion_detail, current?.report_ready, current?.report_url])) return;
+  const activeWork = (current?.workers || []).map(w => [w.id, w.phase, w.active_step, w.step_purposes?.[w.active_step], w.goal]);
+  if (!changed('transcript', [messages, records, activeWork, pendingMessage, current?.pending_tool, current?.pending_approvals, current?.pending_plan, current?.conclusion, current?.conclusion_detail, current?.report_ready, current?.report_url, current?.evidence_index_url])) return;
   const pane = $('chat');
   const follow = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 100;
   const scrollTop = pane.scrollTop;
@@ -255,6 +283,8 @@ function renderTranscript() {
     else { flushTrace(); items.push(messageNode(item.message)); }
   }
   flushTrace();
+  const progress = workProgressNode(current);
+  if (progress) items.push(progress);
   for (const approval of current?.pending_approvals || []) items.push(chatApprovalNode(approval, 'action'));
   if (current?.pending_tool) items.push(chatApprovalNode(current.pending_tool, 'observation'));
   if (current?.pending_plan) items.push(planReviewNode(current.pending_plan));
