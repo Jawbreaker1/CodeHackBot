@@ -13,6 +13,7 @@ import (
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/assessment"
 	"github.com/Jawbreaker1/CodeHackBot/internal/llmclient"
+	"github.com/Jawbreaker1/CodeHackBot/internal/reportexport"
 )
 
 func TestCompletedSessionGeneratesAndRestoresRequestedReports(t *testing.T) {
@@ -50,9 +51,23 @@ func TestCompletedSessionGeneratesAndRestoresRequestedReports(t *testing.T) {
 	}
 	httpServer := httptest.NewServer(server)
 	defer httpServer.Close()
-	originalPDFScript := reportPDFScript
-	reportPDFScript = "import sys; open(sys.argv[1], 'wb').write(b'%PDF-1.4 test\\n' + sys.stdin.buffer.read())"
-	defer func() { reportPDFScript = originalPDFScript }()
+	originalSave := saveFormattedReport
+	saveFormattedReport = func(root string, state assessment.State, format assessment.ReportFormat, output reportexport.Output) (*reportexport.Artifact, error) {
+		if output != reportexport.PDF {
+			return originalSave(root, state, format, output)
+		}
+		content, err := assessment.RenderFormattedReport(state, format)
+		if err != nil {
+			return nil, err
+		}
+		path := filepath.Join(root, "reports", "fixture.pdf")
+		pdf := append([]byte("%PDF-1.4 test\n"), content...)
+		if err := os.WriteFile(path, pdf, 0600); err != nil {
+			return nil, err
+		}
+		return &reportexport.Artifact{Name: "fixture.pdf", Format: format, Output: output, Bytes: int64(len(pdf))}, nil
+	}
+	defer func() { saveFormattedReport = originalSave }()
 	path := httpServer.URL + "/api/v1/assessments/" + current.id
 	for i, format := range []assessment.ReportFormat{assessment.OWASPReport, assessment.PTESReport, assessment.PTESReport} {
 		request := "Create the " + string(format) + " report"

@@ -57,7 +57,7 @@ func TestStoppingAssessmentCancelsLiveCoordinatorChat(t *testing.T) {
 
 func TestPostRunContextMarksWorkerResultAwaitingFinalReview(t *testing.T) {
 	state := assessment.State{Status: "incomplete", Plans: []assessment.Decision{{Gaps: []string{"Retry in progress"}, Tasks: []assessment.Task{{ID: "retry"}}}}, Results: []assessment.Result{{Task: assessment.Task{ID: "retry"}, Status: "done", Summary: "The retry ended with a blocked page."}}}
-	context := postRunFindingsContext(state)
+	context := assessment.PostRunFindingsContext(state)
 	if !strings.Contains(context, `"final_review_pending":true`) || !strings.Contains(context, "retry ended with a blocked page") || strings.Contains(context, "Retry in progress") {
 		t.Fatalf("post-run context reused a stale plan: %s", context)
 	}

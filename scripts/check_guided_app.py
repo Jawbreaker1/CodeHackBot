@@ -52,7 +52,17 @@ class Model(BaseHTTPRequestHandler):
             self.send_json({"choices": [{"message": {"content": json.dumps(result)}}], "usage": {"total_tokens": 10}})
             return
         if "conversational interface" in messages[0]["content"]:
-            self.send_json({"choices": [{"message": {"content": "The worker is waiting for your approval before it runs the proposed action."}}], "usage": {"total_tokens": 10}})
+            if "previous assessment round has ended" in messages[0]["content"]:
+                latest = messages[-1]["content"]
+                if "Inspect fixture again" in latest:
+                    result = {"text": "I will propose another bounded check in this session.", "continue_assessment": True}
+                elif "OWASP report" in latest:
+                    result = {"text": "I will export the saved report.", "report_format": "owasp-wstg", "report_output": "markdown"}
+                else:
+                    result = {"text": "The previous fixture result remains recorded."}
+                self.send_json({"choices": [{"message": {"content": json.dumps(result)}}], "usage": {"total_tokens": 10}})
+            else:
+                self.send_json({"choices": [{"message": {"content": "The worker is waiting for your approval before it runs the proposed action."}}], "usage": {"total_tokens": 10}})
             return
         prompt = messages[1]["content"]
         payload = json.loads(prompt)
@@ -61,7 +71,11 @@ class Model(BaseHTTPRequestHandler):
         if payload.get("role") == "assessment_coordinator":
             state = payload["assessment"]
             tasks = []
-            if not state["results"]:
+            if state.get("continuation_request") and len(state["plans"]) < state["continuation_round"] and len(state["results"]) in (1, 2):
+                number = len(state["results"])
+                task_id = "follow-up" if number == 1 else "follow-up-2"
+                tasks = [{"id": task_id, "goal": "Record another fixture observation", "done_when": "another literal output recorded", "depends_on": []}]
+            elif not state["results"]:
                 if "orchestrate" in state["goal"]:
                     tasks = [
                         {"id": "discover", "goal": "Collect generic discovery evidence from the allowed fixture", "done_when": "discovery evidence recorded", "depends_on": []},
@@ -183,7 +197,7 @@ def run_case(binary, root, endpoint, mode):
         terminal.send("Who are you?")
         terminal.expect("Coordinator: I am the assessment orchestrator.")
         terminal.expect("birdhackbot> ")
-        goal = {"stop": "cancellation fixture", "question": "question fixture", "recovery": "recovery fixture", "orchestration": "orchestrate generic capability checks"}.get(mode, "Print terminal fixture")
+        goal = {"stop": "cancellation fixture", "question": "question fixture", "recovery": "recovery fixture", "orchestration": "orchestrate generic capability checks", "subset": "orchestrate generic capability checks"}.get(mode, "Print terminal fixture")
         terminal.send(goal)
         terminal.expect("Assessment review")
         terminal.expect("Type start")
@@ -193,6 +207,9 @@ def run_case(binary, root, endpoint, mode):
             terminal.finish(0)
             assert not list((root / "sessions").glob("assessment-*"))
             return
+        if mode not in ("auto",):
+            terminal.expect("Run all proposed tasks?")
+            terminal.send("1" if mode == "subset" else "")
         if mode == "question":
             terminal.expect("Question from observe:")
             terminal.send("fixture answer")
@@ -212,6 +229,9 @@ def run_case(binary, root, endpoint, mode):
             terminal.expect("Approval setting: Approve everything")
         approvals = 0 if mode in ("auto", "mode-switch") else 3 if mode == "orchestration" else 1
         for approval_index in range(approvals):
+            if mode == "orchestration" and approval_index == 2:
+                terminal.expect("Run all proposed tasks?")
+                terminal.send("")
             terminal.expect("Allow this action?")
             terminal.send("d")
             before = terminal.expect("Allow this action?")
@@ -230,6 +250,21 @@ def run_case(binary, root, endpoint, mode):
         else:
             terminal.expect("Assessment completed with gaps." if mode == "deny" else "Assessment completed.")
             terminal.expect("Report:")
+            terminal.expect("Session ")
+            if mode == "continuation":
+                terminal.send("Inspect fixture again")
+                terminal.expect("Continuing assessment")
+                terminal.expect("Run all proposed tasks?")
+                terminal.send("")
+                terminal.expect("Allow this action?")
+                terminal.send("y")
+                terminal.expect("Assessment completed.")
+                terminal.expect("Report:")
+                terminal.expect("Session ")
+                terminal.send("Create an OWASP report")
+                terminal.expect("Created the OWASP WSTG-aligned Markdown draft")
+                terminal.expect("Report:")
+            terminal.send("/exit")
             terminal.finish(0)
         runs = sorted((root / "sessions").glob("assessment-*/assessment.json"), key=lambda p: p.stat().st_mtime_ns)
         state = json.loads(runs[-1].read_text())
@@ -253,6 +288,13 @@ def run_case(binary, root, endpoint, mode):
             assert len({item["evidence"][0]["Cwd"] for item in state["results"]}) == 3, state
             assert state["usage"]["calls"] == 12, state
             assert "Generic orchestrator fixture assessment" in (runs[-1].parent / "report.md").read_text()
+        if mode == "subset":
+            assert len(state["results"]) == 1 and state["results"][0]["task"]["id"] == "discover", state
+            assert state["plans"][0]["approved_task_ids"] == ["discover"] and state["plans"][0]["skipped_task_ids"] == ["control"], state
+        if mode == "continuation":
+            assert len(state["results"]) == 2 and state["results"][1]["task"]["id"] == "follow-up", state
+            assert len(state["continuation_requests"]) == 1 and len(state["plans"]) == 4, state
+            assert list((runs[-1].parent / "reports").glob("owasp-wstg-*.md")), state
         assert (runs[-1].parent / "report.md").exists()
         prefs = json.loads((root / ".birdhackbot/preferences.json").read_text())
         assert set(prefs) == {"provider", "base_url", "model", "reasoning_effort", "max_output_tokens", "max_input_bytes"}, prefs
@@ -286,6 +328,76 @@ def run_tui_smoke(binary, root, endpoint):
         terminal.close()
 
 
+def run_completed_resume(binary, root):
+    saved = next((root / "sessions").glob("assessment-*/assessment.json"))
+    original_id = json.loads(saved.read_text())["id"]
+    terminal = Terminal(binary, root)
+    try:
+        terminal.expect("Use saved provider")
+        terminal.send("")
+        terminal.expect("birdhackbot> ")
+        terminal.send("/resume")
+        terminal.expect("Choose a session number")
+        terminal.send("1")
+        terminal.expect("Session " + original_id + " is ready")
+        terminal.send("Inspect fixture again")
+        terminal.expect("Continuing assessment " + original_id)
+        terminal.expect("Run all proposed tasks?")
+        terminal.send("")
+        terminal.expect("Allow this action?")
+        terminal.send("y")
+        terminal.expect("Assessment completed.")
+        terminal.expect("Session " + original_id + " is ready")
+        terminal.send("/exit")
+        terminal.finish(0)
+        state = json.loads(saved.read_text())
+        assert state["id"] == original_id and len(state["results"]) == 3, state
+        assert len(state["continuation_requests"]) == 2 and state["results"][-1]["task"]["id"] == "follow-up-2", state
+    finally:
+        (root / "terminal-completed-resume.txt").write_text(terminal.transcript)
+        terminal.close()
+
+
+def run_tui_completed_continuation(binary, root):
+    session = root / "sessions/assessment-tui-fixture"
+    session.mkdir(parents=True)
+    (session / "assessment.json").write_text(json.dumps({
+        "version": 1,
+        "id": session.name,
+        "goal": "Print terminal fixture",
+        "scope": "Local synthetic commands only; no target network access",
+        "model": "terminal-fixture",
+        "status": "completed",
+        "plans": [{"summary": "Synthetic starting point", "complete": True, "tasks": [], "findings": [], "gaps": []}],
+        "results": [],
+        "usage": {"calls": 0},
+    }))
+    terminal = Terminal(binary, root, plain=False)
+    try:
+        terminal.expect("Use saved provider")
+        terminal.send("")
+        terminal.expect("birdhackbot>")
+        terminal.send("/resume")
+        terminal.expect("Choose a session number")
+        terminal.send("1")
+        terminal.expect("Session assessment-tui-fixture is ready")
+        terminal.send("Inspect fixture again")
+        terminal.expect("Continuing assessment assessment-tui-fixture")
+        terminal.expect("Run all proposed tasks?")
+        terminal.send("")
+        terminal.expect("Allow this action?")
+        terminal.send("y")
+        terminal.expect("Assessment completed.")
+        terminal.expect("Session assessment-tui-fixture is ready")
+        terminal.send("/exit")
+        terminal.finish(0)
+        state = json.loads((session / "assessment.json").read_text())
+        assert state["status"] == "completed" and len(state["results"]) == 1, state
+    finally:
+        (root / "terminal-tui-continuation.txt").write_text(terminal.transcript)
+        terminal.close()
+
+
 def main():
     binary = str(Path(sys.argv[1]).resolve())
     server = ThreadingHTTPServer(("127.0.0.1", 0), Model)
@@ -295,19 +407,29 @@ def main():
         with tempfile.TemporaryDirectory(prefix="birdhackbot-terminal-") as temporary:
             base = Path(temporary)
             endpoint = f"http://127.0.0.1:{server.server_port}/v1"
-            for mode in ["success", "reuse", "auto", "mode-switch", "deny", "stop", "cancel", "provider-error", "question", "recovery", "orchestration"]:
+            for mode in ["success", "reuse", "auto", "mode-switch", "deny", "stop", "cancel", "provider-error", "question", "recovery", "orchestration", "subset", "continuation"]:
                 root = base / ("success" if mode == "reuse" else mode)
                 root.mkdir(exist_ok=True)
                 (root / "AGENTS.md").write_text("Authorized synthetic fixture commands only.\n")
                 (root / "go.mod").write_text("module terminal-fixture\n")
                 run_case(binary, root, endpoint, mode)
                 print(f"guided terminal: {mode} passed", flush=True)
+            run_completed_resume(binary, base / "continuation")
+            print("guided terminal: completed resume passed", flush=True)
             tui_root = base / "tui"
             tui_root.mkdir(exist_ok=True)
             (tui_root / "AGENTS.md").write_text("Authorized synthetic fixture commands only.\n")
             (tui_root / "go.mod").write_text("module terminal-fixture\n")
             run_tui_smoke(binary, tui_root, endpoint)
             print("guided TUI: smoke passed", flush=True)
+            tui_continuation = base / "tui-continuation"
+            tui_continuation.mkdir()
+            (tui_continuation / "AGENTS.md").write_text("Authorized synthetic fixture commands only.\n")
+            (tui_continuation / "go.mod").write_text("module terminal-fixture\n")
+            (tui_continuation / ".birdhackbot").mkdir()
+            (tui_continuation / ".birdhackbot/preferences.json").write_bytes((base / "success/.birdhackbot/preferences.json").read_bytes())
+            run_tui_completed_continuation(binary, tui_continuation)
+            print("guided TUI: completed continuation passed", flush=True)
     finally:
         server.shutdown()
         server.server_close()

@@ -1932,7 +1932,7 @@ func (s *Server) message(ctx context.Context, r *run, text string, refs []attach
 	stateContext := compactRunState(r.state, pending, r.workers, r.permissionMode, availableImages, proposed)
 	system := behavior.CoordinatorConversationPrompt(s.config.Frame) + "\n\n" + webCoordinatorDisplayPrompt
 	if postRun {
-		stateContext += "\nRecorded final findings and gaps: " + postRunFindingsContext(r.state)
+		stateContext += "\nRecorded final findings and gaps: " + assessment.PostRunFindingsContext(r.state)
 		if latestReport != nil {
 			output := latestReport.Output
 			if output == "" {
@@ -1940,7 +1940,7 @@ func (s *Server) message(ctx context.Context, r *run, text string, refs []attach
 			}
 			stateContext += "\nlatest_report: format=" + string(latestReport.Format) + "; output=" + string(output)
 		}
-		system += "\n\n" + webPostRunReportPrompt
+		system += "\n\n" + assessment.PostRunPrompt
 	}
 	r.mu.Unlock()
 

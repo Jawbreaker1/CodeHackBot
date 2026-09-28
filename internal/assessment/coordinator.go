@@ -49,6 +49,12 @@ func LoadState(root string) (State, error) {
 	return state, nil
 }
 
+// SaveState persists terminal conversation and export metadata between
+// planning rounds using the same atomic assessment snapshot as the runtime.
+func SaveState(root string, state State) error {
+	return saveJSON(filepath.Join(root, "assessment.json"), state)
+}
+
 func (c Coordinator) Run(ctx context.Context, root, goal, scope string) (state State, runErr error) {
 	return c.run(ctx, root, State{Version: 1, Goal: goal, Scope: scope, StartedAt: time.Now().UTC()})
 }
@@ -89,6 +95,7 @@ func PrepareContinuation(initial State, request string, increment Limits) (State
 	initial.Limits.ModelCalls += increment.ModelCalls
 	initial.ContinuationRequests = append(append([]string(nil), initial.ContinuationRequests...), request)
 	initial.ContinuationRound = len(initial.Plans) + 1
+	initial.PostRunUsage = Usage{}
 	initial.Status, initial.Error, initial.FinishedAt = "continuing", "", time.Time{}
 	return initial, nil
 }
@@ -550,6 +557,7 @@ type coordinatorPromptState struct {
 	Results             []compactResult   `json:"results"`
 	OperatorMessages    []string          `json:"operator_messages,omitempty"`
 	ContinuationRequest string            `json:"continuation_request,omitempty"`
+	ContinuationRound   int               `json:"continuation_round,omitempty"`
 	Usage               Usage             `json:"usage"`
 	ElapsedSeconds      int64             `json:"elapsed_seconds"`
 	ReportAttention     []string          `json:"report_attention,omitempty"`
@@ -600,7 +608,7 @@ func compactCoordinatorState(state State) coordinatorPromptState {
 		Approach: state.Approach,
 		Model:    state.Model, Status: state.Status, Limits: state.Limits,
 		Plans: plans, Results: compactPriorResults(state.Results),
-		OperatorMessages: messages, ContinuationRequest: continuationRequest, Usage: state.Usage, ElapsedSeconds: elapsedSeconds,
+		OperatorMessages: messages, ContinuationRequest: continuationRequest, ContinuationRound: state.ContinuationRound, Usage: state.Usage, ElapsedSeconds: elapsedSeconds,
 		ReportAttention: reportAttentionChecks(state),
 	}
 }

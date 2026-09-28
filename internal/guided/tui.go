@@ -45,6 +45,7 @@ type guidedTUI struct {
 	busy            bool
 	waiting         bool
 	active          bool
+	sessionReady    bool
 	inputPrompt     string
 	permissionLabel string
 	stopping        bool
@@ -127,18 +128,34 @@ func (m guidedTUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case consolePrompt:
 			m.waiting = true
 			m.busy = false
-			m.inputPrompt = strings.TrimSpace(value.text)
+			prompt := strings.TrimSpace(value.text)
+			if detail, question, found := strings.Cut(prompt, "\n"); found {
+				last := strings.LastIndex(question, "\n")
+				if last >= 0 {
+					detail += "\n" + question[:last]
+					question = question[last+1:]
+				}
+				m.lines = append(m.lines, strings.TrimSpace(detail))
+				prompt = strings.TrimSpace(question)
+			}
+			m.inputPrompt = prompt
 			m.input.Prompt = ""
 			m.input.Placeholder = m.inputPrompt
 		case consolePermissions:
 			m.permissionLabel = value.text
 		case consoleAssessmentStarted:
 			m.active = true
+			m.sessionReady = false
 			m.waiting = false
 			m.busy = false
 			m.inputPrompt = "Talk to the orchestrator"
 			m.input.Prompt = ""
 			m.input.Placeholder = m.inputPrompt
+		case consoleAssessmentFinished:
+			m.sessionReady = true
+			m.busy = false
+			m.waiting = false
+			m.input.Placeholder = "Ask about results or continue the session"
 		case consoleOutput:
 			if text := strings.TrimRight(value.text, "\n"); text != "" {
 				m.lines = append(m.lines, text)
@@ -186,7 +203,7 @@ func (m guidedTUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "enter":
 			line := strings.TrimSpace(m.input.Value())
-			if line == "" || m.busy || (!m.waiting && !m.active) {
+			if m.busy || (!m.waiting && !m.active) || (line == "" && !m.waiting) {
 				return m, nil
 			}
 			m.input.SetValue("")
@@ -248,15 +265,19 @@ func (m guidedTUI) View() string {
 	if permissionLabel == "" {
 		permissionLabel = "Approve every execution"
 	}
+	phase := "phase: live orchestrator"
+	if m.sessionReady {
+		phase = "phase: session ready"
+	}
 	rightBody := strings.Join([]string{
-		"phase: live orchestrator",
+		phase,
 		"workers: delegated by coordinator",
 		"approvals: " + permissionLabel,
 		"",
 		"The coordinator owns intent, planning, and scope questions.",
 		"Worker progress appears in the conversation pane.",
 		"",
-		"/workers /permissions /status /help /stop",
+		"/workers /permissions /status /help /stop /exit",
 	}, "\n")
 	right := pane.Width(maxTUI(24, m.width-m.conversation.Width-9)).Height(m.conversation.Height + 2).Render(title.Render(" Assessment status ") + "\n" + rightBody)
 	inputTitle := " Input "

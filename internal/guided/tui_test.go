@@ -27,6 +27,28 @@ func TestGuidedTUIPromptStaysInInputState(t *testing.T) {
 	}
 }
 
+func TestGuidedTUIAcceptsDefaultPromptChoice(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	model := newGuidedTUI(ctx, cancel, make(chan tuiOutput), make(chan error), nopWriteCloser{})
+	updated, _ := model.Update(tuiOutput{kind: consolePrompt, text: "Press Enter for all tasks"})
+	updated, command := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if command == nil || updated.(guidedTUI).waiting {
+		t.Fatal("empty Enter did not submit the prompt's default choice")
+	}
+}
+
+func TestGuidedTUIShowsApprovalDetailsInConversation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	model := newGuidedTUI(ctx, cancel, make(chan tuiOutput), make(chan error), nopWriteCloser{})
+	updated, _ := model.Update(tuiOutput{kind: consolePrompt, text: "Review this action\nTarget: fixture\nImpact: read-only\nAllow this action? [y/N]"})
+	got := updated.(guidedTUI)
+	if got.input.Placeholder != "Allow this action? [y/N]" || len(got.lines) != 1 || got.lines[0] != "Review this action\nTarget: fixture\nImpact: read-only" {
+		t.Fatalf("approval prompt was not readable: placeholder=%q details=%#v", got.input.Placeholder, got.lines)
+	}
+}
+
 func TestGuidedTUICtrlCWaitsForApplicationShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -36,6 +58,22 @@ func TestGuidedTUICtrlCWaitsForApplicationShutdown(t *testing.T) {
 	got := updated.(guidedTUI)
 	if !got.stopping || !got.busy {
 		t.Fatalf("stop state = stopping:%v busy:%v", got.stopping, got.busy)
+	}
+}
+
+func TestGuidedTUIShowsReadySessionAfterAssessment(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	model := newGuidedTUI(ctx, cancel, make(chan tuiOutput), make(chan error), nopWriteCloser{})
+	updated, _ := model.Update(tuiOutput{kind: consoleAssessmentStarted})
+	updated, _ = updated.Update(tuiOutput{kind: consoleAssessmentFinished})
+	ready := updated.(guidedTUI)
+	if !ready.sessionReady || !ready.active || ready.busy {
+		t.Fatalf("finished session cannot accept chat: %+v", ready)
+	}
+	updated, _ = ready.Update(tuiOutput{kind: consoleAssessmentStarted})
+	if updated.(guidedTUI).sessionReady {
+		t.Fatal("continued assessment still shown as finished")
 	}
 }
 

@@ -23,8 +23,6 @@ type workerProgress struct {
 
 const webCoordinatorDisplayPrompt = `Return one JSON object with "text" (your plain-language reply), optional "display_artifact_refs" (up to three exact paths from available_images), and optional "revise_plan":true. Explain what the recorded evidence establishes, why the current step matters, and the most useful next step when relevant; keep the reply short and respect a different path chosen by the operator. If pending_plan is present and the operator directs a different course before workers start, set revise_plan:true and explain that you are preparing a revised proposal. Do not set it for a question about the plan, or when no plan is awaiting review. A revised proposal still needs the normal plan review and action permissions. Select images only when they help answer the operator; never invent a path. The application validates each reference and displays accepted images beneath your reply. If no image helps, omit display_artifact_refs. Do not put Markdown image syntax in text.`
 
-const webPostRunReportPrompt = `The previous assessment round has ended, but this session can continue. For a new request to investigate or perform work within the recorded scope, set "continue_assessment":true and briefly tell the operator that you will propose a new bounded plan for review. The application reopens the same session and has workers execute only after normal plan review and action approvals. Do not claim work has begun or finished in this chat reply. A question or discussion about saved results does not require continuation. If the operator asks to generate a report, set "report_format" to exactly "owasp-wstg" or "ptes" and "report_output" to "pdf" or "markdown" (the default); do not set continue_assessment for a report export. A PDF follow-up uses the recorded latest_report format. The application renders the selected template from saved findings and links the artifact in chat. Do not claim to have generated a report unless you set the report fields. The template contains an introduction, executive summary, recorded findings, task coverage, limitations, and reporting basis; it does not automatically map each OWASP or PTES test category. Describe only sections and tests actually present. These are reporting structures, not certification or proof that every standard test was performed. Do not invent a WSTG test ID, CVSS score, finding, or validation. If final_review_pending is true, say clearly that the assessment ended before the coordinator reviewed its last worker result.`
-
 type coordinatorChatReply struct {
 	Text                string                  `json:"text"`
 	DisplayArtifactRefs []string                `json:"display_artifact_refs,omitempty"`
@@ -147,25 +145,6 @@ func conversationExcerpt(text string, limit int) string {
 		return text[:limit-3] + "..."
 	}
 	return text
-}
-
-func postRunFindingsContext(state assessment.State) string {
-	var gaps []string
-	lastResult, finalReviewPending := assessment.LatestUnreviewedResult(state)
-	if len(state.Plans) > 0 && !finalReviewPending {
-		gaps = assessment.ReportGaps(state)
-	}
-	latestResult := ""
-	if finalReviewPending {
-		latestResult = lastResult.Task.ID + " — " + lastResult.Status + ": " + conversationExcerpt(lastResult.Summary, 1200)
-	}
-	data, _ := json.Marshal(struct {
-		Findings           []assessment.Finding `json:"current_findings"`
-		Gaps               []string             `json:"unresolved_gaps"`
-		FinalReviewPending bool                 `json:"final_review_pending"`
-		LatestResult       string               `json:"latest_worker_result,omitempty"`
-	}{Findings: assessment.CurrentFindings(state.Plans), Gaps: gaps, FinalReviewPending: finalReviewPending, LatestResult: latestResult})
-	return string(data)
 }
 
 // Project a readable final statement without losing the complete model-authored

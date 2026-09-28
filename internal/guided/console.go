@@ -24,6 +24,7 @@ const (
 	consoleOutput consoleEventKind = iota
 	consolePrompt
 	consoleAssessmentStarted
+	consoleAssessmentFinished
 	consolePermissions
 )
 
@@ -131,6 +132,10 @@ func (c *Console) Ask(ctx context.Context, prompt string) (string, error) {
 // conversation while delegated workers execute.
 func (c *Console) Commands() <-chan line { return c.commands }
 
+// PromptCommand shows a free-form coordinator input prompt while Commands
+// remains the sole receiver, including input typed during a phase change.
+func (c *Console) PromptCommand(prompt string) { c.emit(consolePrompt, prompt) }
+
 func (c *Console) Print(format string, args ...any) {
 	c.emit(consoleOutput, fmt.Sprintf(format, args...))
 }
@@ -177,6 +182,10 @@ func (c *Console) emit(kind consoleEventKind, text string) {
 
 func (c *Console) assessmentStarted() {
 	c.emit(consoleAssessmentStarted, "")
+}
+
+func (c *Console) assessmentFinished() {
+	c.emit(consoleAssessmentFinished, "")
 }
 
 func (c *Console) DashboardSnapshot() []string {

@@ -163,10 +163,6 @@ func chooseSavedAssessment(ctx context.Context, c *Console, base string) (*saved
 		return nil, nil
 	}
 	chosen := sessions[n-1]
-	if chosen.State.Status == "completed" || chosen.State.Status == "completed_with_gaps" {
-		c.Print("That assessment is already finalized; open its report at %s.\n", filepath.Join(chosen.Root, "report.md"))
-		return nil, nil
-	}
 	return &chosen, nil
 }
 
@@ -296,8 +292,7 @@ func (a App) runPlain(ctx context.Context) error {
 			return err
 		}
 		c.Print("\nAssessment directory: %s\n", root)
-		c.assessmentStarted()
-		return a.runAssessmentWithFrame(ctx, c, prefs, client, root, assessment.State{Goal: goal, Scope: scope, Approach: selectedApproach}, frame)
+		return a.runAssessmentSession(ctx, c, prefs, client, root, assessment.State{Goal: goal, Scope: scope, Approach: selectedApproach}, frame)
 	}
 }
 
@@ -354,7 +349,7 @@ func (a App) readGoalOrCommand(ctx context.Context, c *Console, path string, pre
 			chosen, err := chooseSavedAssessment(ctx, c, filepath.Join(a.RepoRoot, "sessions"))
 			return nil, chosen, err
 		case "/help", "help":
-			c.Print("Talk naturally with the orchestrator. It answers questions and asks for missing assessment details. /permissions changes execution approval level; /settings changes provider/model; /resume reopens an unfinished assessment; /help repeats this message.\n")
+			c.Print("Talk naturally with the orchestrator. It answers questions and asks for missing assessment details. /permissions changes execution approval level; /settings changes provider/model; /resume reopens a saved assessment; /help repeats this message.\n")
 		default:
 			if trimmed == "" {
 				continue
@@ -378,8 +373,7 @@ func (a App) runAssessment(ctx context.Context, c *Console, prefs preferences, c
 		return err
 	}
 	c.Print("\nResuming assessment %s with saved evidence using %s / %s. Previously executed commands will not be replayed automatically.\n", saved.ID, prefs.Provider, prefs.Model)
-	c.assessmentStarted()
-	return a.runAssessmentWithFrame(ctx, c, prefs, client, root, saved, frame)
+	return a.runAssessmentSession(ctx, c, prefs, client, root, saved, frame)
 }
 
 func (a App) runAssessmentWithFrame(ctx context.Context, c *Console, prefs preferences, client llmclient.Client, root string, initial assessment.State, frame behavior.Frame) error {
@@ -393,6 +387,9 @@ func (a App) runAssessmentWithFrame(ctx context.Context, c *Console, prefs prefe
 	runner := assessment.Coordinator{LLM: client, Budget: budget, Frame: frame, Limits: limits, Approach: initial.Approach, Emit: c.Progress, Approver: func(task assessment.Task) approval.Approver {
 		return taskApprover{console: c, task: task, scope: scope}
 	}}
+	runner.PlanApproval = func(ctx context.Context, plan assessment.Decision) (assessment.PlanReview, error) {
+		return reviewCoordinatorPlan(ctx, c, plan)
+	}
 	conversation := &assessmentConversation{}
 	for _, note := range initial.OperatorMessages {
 		role, content, ok := strings.Cut(note, ": ")
