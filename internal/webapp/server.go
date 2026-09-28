@@ -433,41 +433,42 @@ type planReviewRequest struct {
 }
 
 type assessmentView struct {
-	PermissionMode   approval.Mode         `json:"permission_mode"`
-	Customer         string                `json:"customer"`
-	ID               string                `json:"id"`
-	Goal             string                `json:"goal"`
-	Scope            string                `json:"scope"`
-	Approach         *assessment.Approach  `json:"approach,omitempty"`
-	Status           string                `json:"status"`
-	Conclusion       string                `json:"conclusion,omitempty"`
-	ConclusionDetail string                `json:"conclusion_detail,omitempty"`
-	Model            string                `json:"model"`
-	ModelProfile     string                `json:"model_profile,omitempty"`
-	ModelBusy        bool                  `json:"model_busy"`
-	CanChangeModel   bool                  `json:"can_change_model"`
-	Resumable        bool                  `json:"resumable"`
-	UpdatedAt        time.Time             `json:"updated_at,omitempty"`
-	Error            string                `json:"error,omitempty"`
-	StartedAt        time.Time             `json:"started_at,omitempty"`
-	FinishedAt       time.Time             `json:"finished_at,omitempty"`
-	Usage            assessment.Usage      `json:"usage"`
-	PostRunUsage     assessment.Usage      `json:"post_run_usage"`
-	ContextWindow    contextWindowView     `json:"context_window"`
-	Plans            int                   `json:"plans"`
-	PlanTimeline     []coordinatorPlanView `json:"plan_timeline,omitempty"`
-	Workers          []workerView          `json:"workers"`
-	Findings         []assessment.Finding  `json:"findings"`
-	Limits           assessment.Limits     `json:"limits"`
-	Results          []assessment.Result   `json:"results"`
-	Events           []eventRecord         `json:"events"`
-	PendingApprovals []approvalView        `json:"pending_approvals"`
-	PendingQuestions []questionView        `json:"pending_questions"`
-	PendingPlan      *planApprovalView     `json:"pending_plan,omitempty"`
-	Messages         []messageView         `json:"messages"`
-	ReportURL        string                `json:"report_url,omitempty"`
-	ReportReady      bool                  `json:"report_ready,omitempty"`
-	EvidenceIndexURL string                `json:"evidence_index_url,omitempty"`
+	PermissionMode   approval.Mode              `json:"permission_mode"`
+	Customer         string                     `json:"customer"`
+	ID               string                     `json:"id"`
+	Goal             string                     `json:"goal"`
+	Scope            string                     `json:"scope"`
+	Approach         *assessment.Approach       `json:"approach,omitempty"`
+	Status           string                     `json:"status"`
+	Conclusion       string                     `json:"conclusion,omitempty"`
+	ConclusionDetail string                     `json:"conclusion_detail,omitempty"`
+	Model            string                     `json:"model"`
+	ModelProfile     string                     `json:"model_profile,omitempty"`
+	ModelBusy        bool                       `json:"model_busy"`
+	CanChangeModel   bool                       `json:"can_change_model"`
+	Resumable        bool                       `json:"resumable"`
+	UpdatedAt        time.Time                  `json:"updated_at,omitempty"`
+	Error            string                     `json:"error,omitempty"`
+	StartedAt        time.Time                  `json:"started_at,omitempty"`
+	FinishedAt       time.Time                  `json:"finished_at,omitempty"`
+	Usage            assessment.Usage           `json:"usage"`
+	PostRunUsage     assessment.Usage           `json:"post_run_usage"`
+	ContextWindow    contextWindowView          `json:"context_window"`
+	ReportReadiness  assessment.ReportReadiness `json:"report_readiness"`
+	Plans            int                        `json:"plans"`
+	PlanTimeline     []coordinatorPlanView      `json:"plan_timeline,omitempty"`
+	Workers          []workerView               `json:"workers"`
+	Findings         []assessment.Finding       `json:"findings"`
+	Limits           assessment.Limits          `json:"limits"`
+	Results          []assessment.Result        `json:"results"`
+	Events           []eventRecord              `json:"events"`
+	PendingApprovals []approvalView             `json:"pending_approvals"`
+	PendingQuestions []questionView             `json:"pending_questions"`
+	PendingPlan      *planApprovalView          `json:"pending_plan,omitempty"`
+	Messages         []messageView              `json:"messages"`
+	ReportURL        string                     `json:"report_url,omitempty"`
+	ReportReady      bool                       `json:"report_ready,omitempty"`
+	EvidenceIndexURL string                     `json:"evidence_index_url,omitempty"`
 }
 
 type planApprovalView struct {
@@ -1922,6 +1923,9 @@ func (s *Server) message(ctx context.Context, r *run, text string, refs []attach
 	var generated *generatedReport
 	if err == nil && postRun && reply.ReportFormat != "" {
 		generated, err = saveFormattedReport(r.root, stateSnapshot, reply.ReportFormat)
+		if err == nil {
+			reply.Text = generated.Confirmation()
+		}
 	}
 	r.mu.Lock()
 	r.chatBusy = false
@@ -2204,6 +2208,7 @@ func (r *run) view(after string) assessmentView {
 	}
 	sort.Slice(view.Workers, func(i, j int) bool { return view.Workers[i].ID < view.Workers[j].ID })
 	view.ContextWindow = aggregateContextWindow(r.state, view.Workers)
+	view.ReportReadiness = assessment.AssessReportReadiness(r.state)
 	for i := range view.Workers {
 		for j := range view.Workers[i].Evidence {
 			view.Workers[i].Evidence[j] = decorateEvidence(view.Workers[i].Evidence[j], r.id)

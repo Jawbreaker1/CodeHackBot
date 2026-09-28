@@ -81,6 +81,12 @@ The table of work below records assigned objectives and outcomes. Consult the ca
 {{end}}{{else}}{{if not .UnreviewedResults}}No additional gaps were stated; this is not a coverage guarantee.
 {{end}}
 {{end}}
-## 6. Reporting basis
+## 6. Report record checks
+
+**Status:** {{inline .Readiness.Status}}. These checks cover recorded fields and evidence references, not the factual accuracy of model-authored claims.
+
+{{range .Readiness.Checks}}- **{{inline .Label}} ({{inline .Status}}):** {{inline .Detail}}
+{{end}}
+## 7. Reporting basis
 
 Format guidance: [OWASP Web Security Testing Guide v4.2 — Reporting](https://wstg.owasp.org/v4.2/5-Reporting/). Refer to the canonical session report and recorded evidence for the full command trail. Standards mappings and risk scores require separate substantiation.

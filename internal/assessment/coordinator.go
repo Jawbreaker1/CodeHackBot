@@ -517,6 +517,7 @@ type coordinatorPromptState struct {
 	OperatorMessages []string          `json:"operator_messages,omitempty"`
 	Usage            Usage             `json:"usage"`
 	ElapsedSeconds   int64             `json:"elapsed_seconds"`
+	ReportAttention  []string          `json:"report_attention,omitempty"`
 }
 
 func compactCoordinatorState(state State) coordinatorPromptState {
@@ -561,7 +562,18 @@ func compactCoordinatorState(state State) coordinatorPromptState {
 		Model:    state.Model, Status: state.Status, Limits: state.Limits,
 		Plans: plans, Results: compactPriorResults(state.Results),
 		OperatorMessages: messages, Usage: state.Usage, ElapsedSeconds: elapsedSeconds,
+		ReportAttention: reportAttentionChecks(state),
 	}
+}
+
+func reportAttentionChecks(state State) []string {
+	var checks []string
+	for _, check := range AssessReportReadiness(state).Checks {
+		if check.Status == "needs_attention" {
+			checks = append(checks, check.ID)
+		}
+	}
+	return checks
 }
 
 func compactPriorResults(results []Result) []compactResult {

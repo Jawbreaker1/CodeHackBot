@@ -379,6 +379,21 @@ function renderOverview(view) {
     const source = context.worker_id ? (context.active ? 'active: ' : 'latest: ') + context.worker_id + ' · ' : '';
     $('contextUsageDetail').textContent = percent + '% used · ' + formatBytes(context.remaining_bytes) + ' remaining · ' + source + 'application input-byte ceiling';
   }
+  const readiness = assessment ? view.report_readiness : null;
+  const checks = readiness?.checks || [];
+  $('reportReadiness').classList.toggle('hidden', !readiness || !checks.length);
+  if (readiness && checks.length) {
+    const attention = checks.filter(check => check.status === 'needs_attention').length;
+    $('reportReadinessStatus').textContent = attention ? attention + ' to review' : readiness.status === 'ready_for_review' ? 'Ready for review' : 'Collecting';
+    $('reportReadiness').dataset.state = attention ? 'needs_attention' : readiness.status;
+    if (changed('report-readiness', [view.id, checks])) {
+      $('reportReadinessChecks').replaceChildren(...checks.map(check => {
+        const item = node('li', '', check.label + ' · ' + check.detail);
+        item.dataset.state = check.status;
+        return item;
+      }));
+    }
+  }
   $('scopeDetails').classList.toggle('hidden', !view.scope);
   $('assessmentScope').textContent = view.scope || '';
   $('assessmentLimits').textContent = view.limits?.workers ? 'Up to ' + view.limits.workers + ' workers · ' + view.limits.tasks + ' tasks · ' + view.limits.model_calls + ' model calls' : '';

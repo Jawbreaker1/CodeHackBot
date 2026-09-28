@@ -45,6 +45,7 @@ def run_session(base, customer, goal, mode="per_action"):
     status, view = call(base, f"/api/v1/intake/{intake['id']}/start", "POST", {"customer": customer})
     assert status == 201 and view["customer"] == customer, view
     assert view["permission_mode"] == mode, view
+    assert view["report_readiness"]["status"] == "collecting", view
     assessment_id = view["id"]
     _, chat = call(base, f"/api/v1/assessments/{assessment_id}/messages", "POST", {"text": "What is the worker doing right now?"})
     assert chat["messages"][-1]["role"] == "assistant" and "waiting" in chat["messages"][-1]["text"], chat
@@ -69,6 +70,7 @@ def run_session(base, customer, goal, mode="per_action"):
             break
         time.sleep(0.05)
     assert view["status"] == "completed" and approved == expect_approval and plan_approved == (mode == "per_action") and len(view["results"]) == 1, view
+    assert view["report_readiness"]["status"] == "ready_for_review", view["report_readiness"]
     assert view["context_window"]["limit_bytes"] > 0 and view["context_window"]["used_bytes"] > 0, view
     assert any(worker.get("context_used_bytes", 0) > 0 for worker in view["workers"]), view
     status, report = call_text(base, view["report_url"])

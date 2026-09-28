@@ -144,6 +144,14 @@ textarea::placeholder { color: #94938d; }
 .context-fill[data-state="warm"] { background: var(--attention); }
 .context-fill[data-state="high"] { background: var(--error); }
 .context-window .muted { margin: 7px 0 0; font-size: 10px; }
+.report-readiness { padding: 9px 10px; border: 1px solid var(--line); border-radius: 7px; }
+.report-readiness summary { display: flex; justify-content: space-between; gap: 8px; }
+.report-readiness summary span { color: var(--faint); }
+.report-readiness[data-state="needs_attention"] summary span { color: var(--attention); }
+.report-readiness ul { padding-left: 16px; margin: 9px 0; }
+.report-readiness li { margin: 5px 0; }
+.report-readiness li[data-state="needs_attention"] { color: var(--attention); }
+.report-readiness p { color: var(--faint); font-size: 10px; }
 .text-button { padding: 4px 6px; font-size: 11px; }
 .danger { color: var(--error); }
 .tabs { display: flex; gap: 17px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: #1d1d1d; z-index: 1; }

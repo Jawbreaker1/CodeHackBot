@@ -42,6 +42,7 @@ type formattedReport struct {
 	Gaps              []string
 	Results           []Result
 	Verifications     map[string]*formattedVerification
+	Readiness         ReportReadiness
 }
 
 type formattedVerification struct {
@@ -61,6 +62,7 @@ func RenderFormattedReport(state State, format ReportFormat) ([]byte, error) {
 	data := formattedReport{
 		ID: state.ID, Status: state.Status, Goal: state.Goal, Scope: state.Scope,
 		Findings: findings, LegacyClaims: legacyClaims, Results: state.Results, Verifications: map[string]*formattedVerification{},
+		Readiness: AssessReportReadiness(state),
 	}
 	for _, result := range state.Results {
 		if result.Task.Verification != nil && result.Verification != nil {

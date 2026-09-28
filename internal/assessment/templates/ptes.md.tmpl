@@ -78,6 +78,12 @@ The methods below reflect only recorded worker activity. No exploitation or acce
 {{end}}{{else}}{{if not .UnreviewedResults}}No additional gaps were stated; this is not a coverage guarantee.
 {{end}}
 {{end}}
-## 3. Reporting basis
+## 3. Report record checks
+
+**Status:** {{inline .Readiness.Status}}. These checks cover recorded fields and evidence references, not the factual accuracy of model-authored claims.
+
+{{range .Readiness.Checks}}- **{{inline .Label}} ({{inline .Status}}):** {{inline .Detail}}
+{{end}}
+## 4. Reporting basis
 
 Format guidance: [Penetration Testing Execution Standard — Reporting](https://www.pentest-standard.org/index.php/Reporting). Refer to the canonical session report and recorded evidence for the full command trail. Threat modeling, exploitation, post-exploitation, risk scores, and standards mappings are included only when the recorded assessment supports them.

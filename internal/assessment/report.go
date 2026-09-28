@@ -130,6 +130,12 @@ func writeReport(root string, s State) error {
 	if s.Error == "" && len(gaps) == 0 {
 		b.WriteString("No additional gaps were stated by the coordinator; this is not a coverage guarantee.\n")
 	}
+	b.WriteString("\n## Report record checks\n\n")
+	readiness := AssessReportReadiness(s)
+	fmt.Fprintf(&b, "**Status:** %s. These checks cover recorded fields and evidence references, not the factual accuracy of model-authored claims.\n\n", readiness.Status)
+	for _, check := range readiness.Checks {
+		fmt.Fprintf(&b, "- **%s (%s):** %s\n", check.Label, check.Status, check.Detail)
+	}
 	b.WriteString("\n## Work performed and evidence\n\n")
 	b.WriteString("Detailed worker conclusions, unsuccessful attempts, and local evidence references are in `evidence-index.md` beside this report. Raw tool output and approval records remain in the task logs rather than being copied automatically into this overview. Review model-authored text for sensitive content before sharing.\n\n")
 	for _, r := range s.Results {

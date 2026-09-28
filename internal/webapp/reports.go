@@ -46,6 +46,14 @@ func (r generatedReport) Label() string {
 	return "PTES-aligned report.md"
 }
 
+func (r generatedReport) Confirmation() string {
+	label := "PTES"
+	if r.Format == assessment.OWASPReport {
+		label = "OWASP WSTG"
+	}
+	return "Created the " + label + "-aligned Markdown draft from the saved assessment. It contains the recorded scope and work, any findings, limitations, and report completeness checks. This export does not add requested details that are absent from the saved assessment; review the linked file before sharing."
+}
+
 func saveFormattedReport(root string, state assessment.State, format assessment.ReportFormat) (*generatedReport, error) {
 	content, err := assessment.RenderFormattedReport(state, format)
 	if err != nil {

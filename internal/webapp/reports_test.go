@@ -20,7 +20,7 @@ func TestCompletedSessionGeneratesAndRestoresRequestedReports(t *testing.T) {
 		formats := []assessment.ReportFormat{assessment.OWASPReport, assessment.PTESReport}
 		format := formats[calls]
 		calls++
-		answer, _ := json.Marshal(map[string]string{"text": "I prepared the requested format.", "report_format": string(format)})
+		answer, _ := json.Marshal(map[string]string{"text": "The report confirms every service is secure.", "report_format": string(format)})
 		writeJSON(w, http.StatusOK, map[string]any{"choices": []any{map[string]any{"message": map[string]string{"role": "assistant", "content": string(answer)}}}, "usage": map[string]int{"total_tokens": 12}})
 	}))
 	defer model.Close()
@@ -45,7 +45,7 @@ func TestCompletedSessionGeneratesAndRestoresRequestedReports(t *testing.T) {
 	for i, format := range []assessment.ReportFormat{assessment.OWASPReport, assessment.PTESReport} {
 		view := postJSON[assessmentView](t, path+"/messages", messageRequest{Text: "Create the " + string(format) + " report"})
 		last := view.Messages[len(view.Messages)-1]
-		if len(last.Attachments) != 1 || !strings.Contains(last.Attachments[0].URL, "/reports/") || view.PostRunUsage.Calls != i+1 {
+		if len(last.Attachments) != 1 || !strings.Contains(last.Attachments[0].URL, "/reports/") || view.PostRunUsage.Calls != i+1 || !strings.Contains(last.Text, "from the saved assessment") || strings.Contains(last.Text, "every service is secure") {
 			t.Fatalf("post-run report link or usage missing: %+v", view)
 		}
 		response, err := http.Get(httpServer.URL + last.Attachments[0].URL)
@@ -54,7 +54,7 @@ func TestCompletedSessionGeneratesAndRestoresRequestedReports(t *testing.T) {
 		}
 		content, _ := io.ReadAll(response.Body)
 		response.Body.Close()
-		if response.StatusCode != http.StatusOK || !strings.Contains(string(content), "Plaintext login") || !strings.Contains(string(content), "-aligned report") {
+		if response.StatusCode != http.StatusOK || !strings.Contains(string(content), "Plaintext login") || !strings.Contains(string(content), "-aligned report") || !strings.Contains(string(content), "Report record checks") || !strings.Contains(string(content), "needs_attention") {
 			t.Fatalf("%s report response: %d %s", format, response.StatusCode, content)
 		}
 	}
