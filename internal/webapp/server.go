@@ -1653,7 +1653,7 @@ func (s *Server) getRun(id string) *run {
 	return s.runs[id]
 }
 
-func (s *Server) start(current *run) error {
+func (s *Server) start(current *run, continuation ...string) error {
 	current.mu.Lock()
 	if current.deleted {
 		current.mu.Unlock()
@@ -1667,7 +1667,22 @@ func (s *Server) start(current *run) error {
 		current.mu.Unlock()
 		return fmt.Errorf("model endpoint and model are required; configure the web server first")
 	}
-	if current.state.Status == "completed" || current.state.Status == "completed_with_gaps" {
+	request := ""
+	if len(continuation) > 0 {
+		request = continuation[0]
+	}
+	previousState, previousResume, previousPostRunUsage, previousPostRunBudget := current.state, current.resume, current.postRunUsage, current.postRunBudget
+	if request != "" {
+		prepared, err := assessment.PrepareContinuation(current.state, request, s.config.Limits)
+		if err != nil {
+			current.mu.Unlock()
+			return err
+		}
+		current.state = prepared
+		current.resume = true
+		current.postRunUsage = assessment.Usage{}
+		current.postRunBudget = nil
+	} else if current.state.Status == "completed" || current.state.Status == "completed_with_gaps" {
 		current.mu.Unlock()
 		return fmt.Errorf("assessment has already been finalized")
 	}
@@ -1681,14 +1696,29 @@ func (s *Server) start(current *run) error {
 	if limits == (assessment.Limits{}) {
 		limits = assessment.DefaultLimits()
 	}
+	preparedState := current.state
 	current.budget = assessment.NewModelBudget(limits.ModelCalls, current.state.Usage)
 	current.started, current.status, current.runCtx, current.cancel, current.failCancel, current.done, current.updatedAt = true, "starting", ctx, cancel, cancelCause, make(chan struct{}), time.Now().UTC()
 	current.mu.Unlock()
+	if request != "" {
+		if err := atomicWriteJSON(filepath.Join(current.root, "assessment.json"), preparedState); err != nil {
+			cancel()
+			current.mu.Lock()
+			current.state, current.resume, current.postRunUsage, current.postRunBudget = previousState, previousResume, previousPostRunUsage, previousPostRunBudget
+			current.started, current.status, current.runCtx, current.cancel, current.failCancel, current.done, current.updatedAt, current.budget = false, previousStatus, nil, nil, nil, previousDone, previousUpdatedAt, previousBudget
+			current.mu.Unlock()
+			return fmt.Errorf("save continued assessment: %w", err)
+		}
+	}
 	if err := current.persist(); err != nil {
 		cancel()
 		current.mu.Lock()
+		current.state, current.resume, current.postRunUsage, current.postRunBudget = previousState, previousResume, previousPostRunUsage, previousPostRunBudget
 		current.started, current.status, current.runCtx, current.cancel, current.failCancel, current.done, current.updatedAt, current.budget = false, previousStatus, nil, nil, nil, previousDone, previousUpdatedAt, previousBudget
 		current.mu.Unlock()
+		if request != "" {
+			_ = atomicWriteJSON(filepath.Join(current.root, "assessment.json"), previousState)
+		}
 		return fmt.Errorf("save assessment session: %w", err)
 	}
 	current.emit(assessment.Event{Kind: "assessment_started", Message: "Assessment accepted; the coordinator is preparing its first plan."})
@@ -1942,8 +1972,9 @@ func (s *Server) message(ctx context.Context, r *run, text string, refs []attach
 			reply.Text = generated.Confirmation()
 		}
 	}
+	continueAssessment := err == nil && postRun && reply.ReportFormat == "" && reply.ContinueAssessment
 	r.mu.Lock()
-	r.chatBusy = false
+	r.chatBusy = continueAssessment
 	if postRun {
 		r.postRunUsage = budget.Usage()
 	} else {
@@ -1986,6 +2017,15 @@ func (s *Server) message(ctx context.Context, r *run, text string, refs []attach
 	r.mu.Unlock()
 	if err := r.persistOrStop(); err != nil {
 		return fmt.Errorf("save coordinator conversation: %w", err)
+	}
+	if continueAssessment {
+		startErr := s.start(r, text)
+		r.mu.Lock()
+		r.chatBusy = false
+		r.mu.Unlock()
+		if startErr != nil {
+			return fmt.Errorf("continue assessment: %w", startErr)
+		}
 	}
 	if revision != nil {
 		revision.result <- assessment.PlanReview{Revision: text}

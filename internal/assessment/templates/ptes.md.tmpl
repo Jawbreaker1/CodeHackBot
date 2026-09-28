@@ -25,6 +25,10 @@
 **Scope:** {{inline .Scope}}  
 **Started:** {{if .Started}}{{.Started}}{{else}}Not recorded{{end}}  
 **Finished:** {{if .Finished}}{{.Finished}}{{else}}Not recorded{{end}}
+{{if .ContinuationRequests}}
+**Additional operator requests in this session:**
+{{range .ContinuationRequests}}- {{inline .}}
+{{end}}{{end}}
 
 The methods below reflect only recorded worker activity. No exploitation or access claim is implied by this template.
 

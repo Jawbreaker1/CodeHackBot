@@ -13,6 +13,10 @@
 **Scope:** {{inline .Scope}}  
 **Started:** {{if .Started}}{{.Started}}{{else}}Not recorded{{end}}  
 **Finished:** {{if .Finished}}{{.Finished}}{{else}}Not recorded{{end}}
+{{if .ContinuationRequests}}
+**Additional operator requests in this session:**
+{{range .ContinuationRequests}}- {{inline .}}
+{{end}}{{end}}
 
 This is a point-in-time report of the recorded work. The OWASP WSTG provides reporting guidance, not certification. No WSTG test ID or CVSS score is asserted unless the assessment evidence explicitly supports one.
 

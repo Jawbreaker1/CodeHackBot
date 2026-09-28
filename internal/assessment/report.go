@@ -18,6 +18,12 @@ func writeReport(root string, s State) error {
 	if !s.FinishedAt.IsZero() {
 		fmt.Fprintf(&b, "**Finished:** %s  \n", s.FinishedAt.UTC().Format("2006-01-02 15:04 UTC"))
 	}
+	if len(s.ContinuationRequests) > 0 {
+		b.WriteString("\n**Additional operator requests in this session:**\n\n")
+		for _, request := range s.ContinuationRequests {
+			fmt.Fprintf(&b, "- %s\n", request)
+		}
+	}
 	b.WriteString("\nThis draft is compiled from model-authored findings and recorded evidence for professional review. A reproduced status means a later worker challenged the claim and recorded a supported verdict with its own execution log; it is not independent professional confirmation that every claim is correct. The operator is responsible for authorization and target boundaries; the runtime does not enforce network scope isolation. Completion does not establish absence of vulnerabilities.\n\n")
 	if legacyClaims {
 		b.WriteString("Earlier reproduction claims without a supported challenge and cited execution log are presented here as candidates requiring recheck. The saved session record is unchanged.\n\n")

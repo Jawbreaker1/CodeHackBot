@@ -63,6 +63,36 @@ func (c Coordinator) RunState(ctx context.Context, root string, initial State) (
 	return c.run(ctx, root, initial)
 }
 
+// PrepareContinuation opens a new bounded planning window in the same
+// assessment. Existing plans, results, evidence, and consumed usage remain.
+func PrepareContinuation(initial State, request string, increment Limits) (State, error) {
+	request = strings.TrimSpace(request)
+	if request == "" {
+		return State{}, fmt.Errorf("a continuation request is required")
+	}
+	switch initial.Status {
+	case "completed", "completed_with_gaps", "incomplete", "aborted":
+	default:
+		return State{}, fmt.Errorf("assessment is not ready to continue")
+	}
+	if increment == (Limits{}) {
+		increment = DefaultLimits()
+	}
+	if increment.Rounds < 1 || increment.Tasks < 1 || increment.ModelCalls < 1 {
+		return State{}, fmt.Errorf("invalid continuation limits")
+	}
+	if initial.Limits == (Limits{}) {
+		initial.Limits = DefaultLimits()
+	}
+	initial.Limits.Rounds += increment.Rounds
+	initial.Limits.Tasks += increment.Tasks
+	initial.Limits.ModelCalls += increment.ModelCalls
+	initial.ContinuationRequests = append(append([]string(nil), initial.ContinuationRequests...), request)
+	initial.ContinuationRound = len(initial.Plans) + 1
+	initial.Status, initial.Error, initial.FinishedAt = "continuing", "", time.Time{}
+	return initial, nil
+}
+
 func (c Coordinator) run(ctx context.Context, root string, initial State) (state State, runErr error) {
 	goal, scope := initial.Goal, initial.Scope
 	if goal == "" || scope == "" || c.Approver == nil {
@@ -138,7 +168,7 @@ func (c Coordinator) run(ctx context.Context, root string, initial State) (state
 	// A saved run may already contain a final plan from an older build. Resume
 	// should reconcile its status and report without asking the model to plan
 	// work that the coordinator has already concluded.
-	if len(state.Plans) > 0 && state.Plans[len(state.Plans)-1].Complete {
+	if len(state.Plans) > 0 && state.Plans[len(state.Plans)-1].Complete && len(state.Plans) >= state.ContinuationRound {
 		state.Status = completionStatus(state.Results)
 		return state, nil
 	}
@@ -408,7 +438,7 @@ func coordinatorPayload(state State) coordinatorModelPacket {
 			refs[r.Task.ID] = append(refs[r.Task.ID], modelEvidenceRefs(e.LogRefs, e.ArtifactRefs)...)
 		}
 	}
-	return coordinatorModelPacket{
+	packet := coordinatorModelPacket{
 		Role: "assessment_coordinator",
 		Instructions: []string{
 			"Return one JSON object only: {phase:\"research\" or \"assessment\", summary, plain_summary, review, tasks:[{id,goal,done_when,depends_on:[],strategy_hints:[],verification:{claim,alternative}}], complete:false, findings:[], gaps:[]}. Omit verification for ordinary tasks. Keep summary to two or three clear sentences about the plan; for completion, give a concise executive conclusion rather than an evidence dump. Put technical detail in tasks, structured findings, gaps, and recorded evidence. plain_summary briefly recommends this round's immediate work and why the evidence makes it useful; for completion, state the main result. review briefly states what the previous round actually established, or is empty in round one. When the operator prefers another path, reconsider the proposal within the same scope; do not defend the old plan merely because it was proposed. Separate a finished worker from a met assessment goal; say plainly when access or a finding was not yet verified.",
@@ -452,6 +482,10 @@ func coordinatorPayload(state State) coordinatorModelPacket {
 		Assessment:       compactCoordinatorState(state),
 		RecordedEvidence: refs,
 	}
+	if len(state.ContinuationRequests) > 0 {
+		packet.Instructions = append(packet.Instructions, "Follow assessment.continuation_request within the recorded scope. Earlier complete plans are history; propose useful new work without repeating finished tasks, and retain supported findings.")
+	}
+	return packet
 }
 
 type compactResult struct {
@@ -504,20 +538,21 @@ type compactDecision struct {
 }
 
 type coordinatorPromptState struct {
-	Version          int               `json:"version"`
-	ID               string            `json:"id"`
-	Goal             string            `json:"goal"`
-	Scope            string            `json:"scope"`
-	Approach         *Approach         `json:"approach,omitempty"`
-	Model            string            `json:"model"`
-	Status           string            `json:"status"`
-	Limits           Limits            `json:"limits"`
-	Plans            []compactDecision `json:"plans"`
-	Results          []compactResult   `json:"results"`
-	OperatorMessages []string          `json:"operator_messages,omitempty"`
-	Usage            Usage             `json:"usage"`
-	ElapsedSeconds   int64             `json:"elapsed_seconds"`
-	ReportAttention  []string          `json:"report_attention,omitempty"`
+	Version             int               `json:"version"`
+	ID                  string            `json:"id"`
+	Goal                string            `json:"goal"`
+	Scope               string            `json:"scope"`
+	Approach            *Approach         `json:"approach,omitempty"`
+	Model               string            `json:"model"`
+	Status              string            `json:"status"`
+	Limits              Limits            `json:"limits"`
+	Plans               []compactDecision `json:"plans"`
+	Results             []compactResult   `json:"results"`
+	OperatorMessages    []string          `json:"operator_messages,omitempty"`
+	ContinuationRequest string            `json:"continuation_request,omitempty"`
+	Usage               Usage             `json:"usage"`
+	ElapsedSeconds      int64             `json:"elapsed_seconds"`
+	ReportAttention     []string          `json:"report_attention,omitempty"`
 }
 
 func compactCoordinatorState(state State) coordinatorPromptState {
@@ -556,12 +591,16 @@ func compactCoordinatorState(state State) coordinatorPromptState {
 		}
 		plans = append(plans, item)
 	}
+	continuationRequest := ""
+	if len(state.ContinuationRequests) > 0 {
+		continuationRequest = state.ContinuationRequests[len(state.ContinuationRequests)-1]
+	}
 	return coordinatorPromptState{
 		Version: state.Version, ID: state.ID, Goal: state.Goal, Scope: state.Scope,
 		Approach: state.Approach,
 		Model:    state.Model, Status: state.Status, Limits: state.Limits,
 		Plans: plans, Results: compactPriorResults(state.Results),
-		OperatorMessages: messages, Usage: state.Usage, ElapsedSeconds: elapsedSeconds,
+		OperatorMessages: messages, ContinuationRequest: continuationRequest, Usage: state.Usage, ElapsedSeconds: elapsedSeconds,
 		ReportAttention: reportAttentionChecks(state),
 	}
 }

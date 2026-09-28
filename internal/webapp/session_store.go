@@ -181,7 +181,7 @@ func (s *Server) restoreRun(customer, root string) error {
 		client.Model = state.Model
 	}
 	status := state.Status
-	if status == "running" || status == "starting" {
+	if status == "running" || status == "starting" || status == "continuing" {
 		status = "interrupted"
 		state.Error = "The web server restarted while this assessment was active; review the saved evidence before resuming."
 	}

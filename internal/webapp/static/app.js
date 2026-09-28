@@ -310,8 +310,8 @@ function updateComposer() {
   $('chatInput').disabled = !current || !canChat;
   $('send').disabled = !current || !canChat || !!pendingMessage || (!$('chatInput').value.trim() && !selectedFiles.length);
   $('newAssessment').disabled = starting;
-  $('conversationState').textContent = current?.pending_plan ? (current.pending_plan.phase === 'research' ? 'Waiting for your research selection · No worker is running' : 'Waiting for your test selection · No worker is running') : current?.pending_tool ? 'Waiting for your approval · No tool is running' : pendingMessage ? 'Coordinator is responding…' : finished ? 'Assessment finished · Discuss results or request a report' : current?.resumable ? 'Session paused · Open Workers to review and resume' : assessment ? 'Workers can run while you discuss the assessment' : 'Ready when you are';
-  $('chatInput').placeholder = finished ? 'Discuss results or ask for an OWASP or PTES report…' : current?.resumable ? 'Resume this session to continue' : 'Ask, investigate, or plan an assessment…';
+  $('conversationState').textContent = current?.pending_plan ? (current.pending_plan.phase === 'research' ? 'Waiting for your research selection · No worker is running' : 'Waiting for your test selection · No worker is running') : current?.pending_tool ? 'Waiting for your approval · No tool is running' : pendingMessage ? 'Coordinator is responding…' : finished ? 'Assessment finished · Ask a question or continue the work here' : current?.resumable ? 'Session paused · Open Workers to review and resume' : assessment ? 'Workers can run while you discuss the assessment' : 'Ready when you are';
+  $('chatInput').placeholder = finished ? 'Ask about results, request a report, or continue the assessment…' : current?.resumable ? 'Resume this session to continue' : 'Ask, investigate, or plan an assessment…';
 }
 function formatBytes(value) {
   const bytes = Number(value) || 0;
