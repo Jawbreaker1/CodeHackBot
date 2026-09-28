@@ -870,8 +870,8 @@ func TestShellRunRollsOlderConversationAfterRecentCap(t *testing.T) {
 		t.Fatalf("session state missing rolled older conversation: %s", text)
 	}
 	last := runner.calls[len(runner.calls)-1]
-	if len(last.RecentConversation) > 20 {
-		t.Fatalf("recent conversation len = %d, want <= 20", len(last.RecentConversation))
+	if len(last.RecentConversation) <= 20 || !strings.Contains(strings.Join(last.RecentConversation, "\n"), "User: first goal") {
+		t.Fatalf("saved conversation was prematurely rolled over: %d turns", len(last.RecentConversation))
 	}
 }
 

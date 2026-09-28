@@ -44,84 +44,32 @@ func (p WorkerPacket) ModelView(maxBytes int) (WorkerPacket, error) {
 			v.PlanHistory[i].Plan.WorkerGoal = "(see session_foundation.goal)"
 		}
 	}
-	// Keep the current plan and newest observations readable. Older full command
-	// bodies and output live in the durable session/log files, so do not resend
-	// them merely because the provider's hard ceiling has not been reached yet.
-	shortened := false
-	if v.OffloadedResultCount > 0 {
-		shortened = true
+	size := func() int { return len(v.Render()) }
+	if size() <= maxBytes {
+		return v, nil
 	}
-	latest := &v.LatestExecutionResult
-	if len(latest.Action) > 1024 || len(latest.ActualExec) > 1024 || len(latest.OutputEvidence) > 4096 || len(latest.OutputSummary) > 1024 {
-		shortened = true
-	}
-	latest.Action = excerpt(latest.Action, 1024)
-	latest.ActualExec = excerpt(latest.ActualExec, 1024)
-	latest.OutputEvidence = excerpt(latest.OutputEvidence, 4096)
-	latest.OutputSummary = excerpt(latest.OutputSummary, 1024)
-	if len(v.RelevantRecentResults) > 0 {
-		r := &v.RelevantRecentResults[0]
-		if len(r.Action) > 512 || len(r.ActualExec) > 512 || len(r.OutputEvidence) > 2048 || len(r.OutputSummary) > 768 {
-			shortened = true
-		}
-		r.Action = excerpt(r.Action, 512)
-		r.ActualExec = excerpt(r.ActualExec, 512)
-		r.OutputEvidence = excerpt(r.OutputEvidence, 2048)
-		r.OutputSummary = excerpt(r.OutputSummary, 768)
-	}
-	for i := 1; i < len(v.RelevantRecentResults); i++ {
-		r := &v.RelevantRecentResults[i]
-		if pinnedResult(v.PinnedResultRefs, *r) {
-			r.Action = excerpt(r.Action, 512)
-			r.ActualExec = excerpt(r.ActualExec, 512)
-			r.OutputEvidence = excerpt(r.OutputEvidence, 2048)
-			r.OutputSummary = excerpt(r.OutputSummary, 768)
-			continue
-		}
-		if len(r.Action) > 160 || len(r.ActualExec) > 160 || len(r.OutputEvidence) > 2048 || len(r.OutputSummary) > 256 || len(r.ArtifactRefs) > 2 {
-			shortened = true
-		}
-		r.Action = excerpt(r.Action, 160)
-		r.ActualExec = excerpt(r.ActualExec, 160)
-		r.OutputEvidence = excerpt(r.OutputEvidence, 2048)
-		r.OutputSummary = excerpt(r.OutputSummary, 256)
-		if len(r.ArtifactRefs) > 2 {
-			r.ArtifactRefs = r.ArtifactRefs[:2]
+	v.ContextNotes = []string{"This request reached its context budget. Older details were shortened or offloaded; full records remain in session state and referenced logs. Use recall_context for exact prior output."}
+	// Only a request that exceeds its allowance starts compaction. Shorten older
+	// results first, preserving their observations and references where possible.
+	for i := len(v.RelevantRecentResults) - 1; i >= 0 && size() > maxBytes; i-- {
+		v.RelevantRecentResults[i].Action = excerpt(v.RelevantRecentResults[i].Action, 512)
+		v.RelevantRecentResults[i].ActualExec = excerpt(v.RelevantRecentResults[i].ActualExec, 512)
+		v.RelevantRecentResults[i].OutputEvidence = excerpt(v.RelevantRecentResults[i].OutputEvidence, 2048)
+		v.RelevantRecentResults[i].OutputSummary = excerpt(v.RelevantRecentResults[i].OutputSummary, 768)
+		if len(v.RelevantRecentResults[i].ArtifactRefs) > 2 {
+			v.RelevantRecentResults[i].ArtifactRefs = v.RelevantRecentResults[i].ArtifactRefs[:2]
 		}
 	}
-	for i := 0; i < len(v.PlanHistory)-1; i++ {
+	for i := 0; i < len(v.PlanHistory)-1 && size() > maxBytes; i++ {
 		revision := &v.PlanHistory[i]
-		if len(revision.Plan.Steps) > 0 || len(revision.Plan.ReplanConditions) > 0 {
-			shortened = true
-		}
 		revision.Plan.Summary = excerpt(revision.Plan.Summary, 256)
 		revision.Plan.Steps = nil
 		revision.Plan.StepPurposes = nil
 		revision.Plan.ReplanConditions = nil
 	}
-	if shortened {
-		v.ContextNotes = []string{"Older results or oversized execution bodies and plan details were omitted from this model view. Complete records remain in the local session and command logs; use recall_context for an exact prior result when needed."}
-	}
-	v.ContextRecall.Content = excerpt(v.ContextRecall.Content, 8192)
-	size := func() int { return len(v.Render()) }
-	if size() <= maxBytes {
-		return v, nil
-	}
-	v.ContextNotes = []string{"Context shortened to fit the request. Full observations remain in session state and referenced logs. Excerpts are not complete evidence or instructions."}
-	// Keep every execution identity and reference; remove older output bodies
-	// first. Command bodies can be large shell scripts too, so retain a bounded
-	// executable excerpt alongside the log references. Repeated commands remain
-	// separate observations, even with equal exits.
 	for i := len(v.RelevantRecentResults) - 1; i >= 0 && size() > maxBytes; i-- {
-		v.RelevantRecentResults[i].Action = excerpt(v.RelevantRecentResults[i].Action, 512)
-		v.RelevantRecentResults[i].ActualExec = excerpt(v.RelevantRecentResults[i].ActualExec, 512)
 		v.RelevantRecentResults[i].OutputEvidence = "(omitted; consult log_refs)"
 		v.RelevantRecentResults[i].OutputSummary = excerpt(v.RelevantRecentResults[i].OutputSummary, 256)
-	}
-	// After shortening bodies, offload the oldest unpinned result cards. A
-	// model-selected pin earns space when possible but never overrides the hard
-	// request ceiling. The result remains searchable in the authoritative packet.
-	for size() > maxBytes && pruneOldestResult(&v, false) {
 	}
 	for len(v.RecentConversation) > 1 && size() > maxBytes {
 		v.RecentConversation = v.RecentConversation[1:]
@@ -144,6 +92,10 @@ func (p WorkerPacket) ModelView(maxBytes int) (WorkerPacket, error) {
 		v.LatestExecutionResult.ActualExec = excerpt(v.LatestExecutionResult.ActualExec, 2048)
 		v.LatestExecutionResult.OutputEvidence = excerpt(v.LatestExecutionResult.OutputEvidence, 4096)
 		v.LatestExecutionResult.OutputSummary = excerpt(v.LatestExecutionResult.OutputSummary, 512)
+	}
+	// Pinned results earn space while it is available; no pin can override the
+	// hard limit. Full results remain in the authoritative packet and logs.
+	for size() > maxBytes && pruneOldestResult(&v, false) {
 	}
 	for size() > maxBytes && pruneOldestResult(&v, true) {
 	}

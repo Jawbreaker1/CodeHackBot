@@ -5,43 +5,42 @@ import (
 	"testing"
 )
 
-func TestAppendConversationKeepsRecentTurnsWithinLimit(t *testing.T) {
+func TestAppendConversationRetainsAllTurnsInAuthoritativePacket(t *testing.T) {
 	recent := make([]string, 0, 25)
 	var older string
 	for i := 1; i <= 25; i++ {
 		entry := "User: turn " + string(rune('A'+i-1))
 		recent, older = AppendConversation(recent, older, entry)
 	}
-	if len(recent) != recentConversationTurnLimit {
-		t.Fatalf("len(recent) = %d, want %d", len(recent), recentConversationTurnLimit)
+	if len(recent) != 25 {
+		t.Fatalf("len(recent) = %d, want 25", len(recent))
 	}
-	if !strings.Contains(older, "User: turn A") || !strings.Contains(older, "User: turn E") {
-		t.Fatalf("older summary missing overflow turns: %q", older)
+	if older != "" {
+		t.Fatalf("unexpected early conversation summary: %q", older)
 	}
-	if strings.Contains(strings.Join(recent, " | "), "User: turn A") {
-		t.Fatalf("oldest turn still in recent: %#v", recent)
+	if !strings.Contains(recent[0], "User: turn A") || !strings.Contains(recent[24], "User: turn Y") {
+		t.Fatalf("authoritative conversation lost turns: %#v", recent)
 	}
 }
 
-func TestAppendConversationRollsOverflowOnTokenLimit(t *testing.T) {
+func TestAppendConversationRetainsLongTurnsUntilProjection(t *testing.T) {
 	huge := "User: " + strings.Repeat("a", 12000)
 	recent, older := AppendConversation(nil, "", huge)
 	for i := 0; i < 6; i++ {
 		recent, older = AppendConversation(recent, older, huge)
 	}
-	if len(recent) >= 7 {
-		t.Fatalf("len(recent) = %d, want rollover after token limit", len(recent))
+	if len(recent) != 7 || recent[0] != huge {
+		t.Fatalf("authoritative conversation lost a long turn: %d", len(recent))
 	}
-	if older == "" {
-		t.Fatalf("older summary empty after token rollover")
+	if older != "" {
+		t.Fatalf("conversation was summarized before budget pressure: %q", older)
 	}
 }
 
 func TestAppendConversationCapsOlderSummaryNotes(t *testing.T) {
-	recent := []string{}
 	older := ""
-	for i := 0; i < 30; i++ {
-		recent, older = AppendConversation(recent, older, "User: overflow note "+strings.Repeat("x", i%3))
+	for i := 0; i < 45; i++ {
+		older = CarryConversationSummary(older, []string{"User: prior task note " + strings.Repeat("x", i%3)})
 	}
 	notes := notesFromSummary(older)
 	if len(notes) > olderSummaryNoteLimit {

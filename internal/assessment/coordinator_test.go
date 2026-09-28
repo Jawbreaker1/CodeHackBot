@@ -262,17 +262,36 @@ func TestCoordinatorModelCatalogIndexesLogsAndDistinctArtifacts(t *testing.T) {
 	}
 }
 
-func TestCoordinatorOlderPlansKeepTaskIndexAndRecentDetails(t *testing.T) {
+func TestCoordinatorKeepsOlderPlanDetailsWithHeadroom(t *testing.T) {
 	state := State{Version: 1, Goal: "long assessment", Scope: "fixture only"}
 	for i := 0; i < 4; i++ {
 		state.Plans = append(state.Plans, Decision{Summary: strings.Repeat("round notes ", 100), Tasks: []Task{{ID: fmt.Sprintf("task-%d", i), Goal: strings.Repeat("specific task goal ", 40), DoneWhen: "evidence recorded"}}})
 	}
 	view := compactCoordinatorState(state)
-	if len(view.Plans) != 4 || view.Plans[0].Tasks[0].ID != "task-0" || view.Plans[0].Tasks[0].Goal != "" || view.Plans[0].Summary == state.Plans[0].Summary {
-		t.Fatalf("older plan was not projected to a short task index: %+v", view.Plans[0])
+	if len(view.Plans) != 4 || view.Plans[0].Tasks[0].ID != "task-0" || view.Plans[0].Tasks[0].Goal != state.Plans[0].Tasks[0].Goal || view.Plans[0].Summary != state.Plans[0].Summary {
+		t.Fatalf("older plan was shortened before budget pressure: %+v", view.Plans[0])
 	}
 	if view.Plans[3].Tasks[0].Goal == "" || view.Plans[3].Tasks[0].DoneWhen == "" || state.Plans[0].Tasks[0].Goal == "" {
 		t.Fatal("recent plan detail or durable historical plan was lost")
+	}
+}
+
+func TestCoordinatorPromptKeepsSameRoleHistoryUntilBudgetPressure(t *testing.T) {
+	state := State{Version: 1, Goal: "review fixture", Scope: "synthetic only"}
+	for i := 0; i < 5; i++ {
+		state.Plans = append(state.Plans, Decision{Summary: fmt.Sprintf("round %d: %s", i, strings.Repeat("decision detail ", 80)), Tasks: []Task{{ID: fmt.Sprintf("task-%d", i), Goal: strings.Repeat("distinct task goal ", 40)}}})
+		state.OperatorMessages = append(state.OperatorMessages, fmt.Sprintf("Operator turn %d: %s", i, strings.Repeat("context ", 80)))
+	}
+	prompt, err := coordinatorPromptBounded(state, 100000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var packet coordinatorModelPacket
+	if err := json.Unmarshal([]byte(prompt), &packet); err != nil {
+		t.Fatal(err)
+	}
+	if len(packet.Assessment.Plans) != 5 || packet.Assessment.Plans[0].Summary != state.Plans[0].Summary || packet.Assessment.Plans[0].Tasks[0].Goal != state.Plans[0].Tasks[0].Goal || len(packet.Assessment.OperatorMessages) != 5 || len(packet.ContextNotes) != 0 {
+		t.Fatal("coordinator history was shortened despite spare capacity")
 	}
 }
 

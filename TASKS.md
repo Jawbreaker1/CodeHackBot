@@ -1,6 +1,6 @@
 # Tasks
 
-Updated 2026-09-28. This file owns immediate implementation order and status.
+Updated 2026-09-29. This file owns immediate implementation order and status.
 
 ## Agreed sequence
 
@@ -237,11 +237,12 @@ watch view is observational, not interactive remote control of the target browse
 ## Current slice: visible plans and active context
 
 - [x] Project coordinator planning rounds and task outcomes into the right inspector; show worker step progress, model-authored step purposes, and previous plan revisions without making the UI a second planner.
-- [x] Offload older worker execution bodies and superseded plan details from model requests before the input ceiling is reached. Keep full session records and log references locally; compact coordinator result cards while preserving the registered evidence catalog.
+- [x] Keep full worker execution bodies, within-task conversation, and plan details while the request fits; only compact the model projection under actual input-budget pressure. Preserve full session records and log references locally; keep cross-worker handoff cards bounded with registered evidence references.
 - [x] Rebuild each worker's result working set on every decision: retain bounded observations while they fit the selected request budget, prioritize up to two model-pinned older references under pressure, leave all original results in the saved packet, and provide read-only search and bounded re-reading of registered command logs. This is explicit rehydration, not semantic summarization.
 - [x] Run a Daybreak Blue/high synthetic retrieval smoke with twenty saved observations. An initial exact-all-terms search produced no matches and hit the worker's no-progress stop; ranked term search then found the old observation, read its registered stdout, and returned the exact marker with its log reference in three decisions. The historical context snapshots show twelve offloaded results initially and eleven after the relevant result was pinned under the previous fixed-eight rule. This tests worker recall, not long-run codebase memory quality.
 - [x] Replace fixed-eight worker result retention with budget-driven offloading, and keep short older evidence excerpts when there is room. Deterministic tests cover roomy and tight budgets; the configured profile ceilings remain byte limits rather than verified token windows.
 - [x] Run one Daybreak Blue/high synthetic context smoke after this change: all forty saved result cards remained in a 30 KiB request, the oldest marker appeared in the captured packet, and the model returned it without a tool call. This verifies retention and bridge acceptance at that size, not the largest safe Daybreak request or pentest effectiveness.
+- [x] Remove unconditional worker result/plan clipping, fixed within-task conversation rollover, fixed coordinator-chat history caps, and unconditional older-plan navigation. Rebuild each request from lossless session state, then compact in stages only if the configured input allowance is exceeded. Roomy/pressured unit tests and full CLI/web CI passed. In one Daybreak Blue/high synthetic smoke, a 31 KiB request retained 25 prior results, 25 conversation turns, an older plan, and an old marker beyond the former excerpt limit; the model returned the marker. This is a context-retention smoke, not a long-session or pentest-effectiveness acceptance result.
 - [x] Verify the revised inspector and context snapshots in a new Astra browser session, including the coordinator's concluding plan revision and switching away from and back to the completed session. A separate broader source-trace diagnostic exhausted two workers' decision budgets and was stopped after its consolidation worker repeated reads; this remains a worker-quality failure to investigate, not an acceptance pass.
 - [ ] Add relevance-based retrieval and independently checked long-run summaries only after a fixture demonstrates which lost fact the current projection fails to carry. Compare prompt growth and decision quality over multiple rounds; do not mistake a smaller byte count for reliable memory.
 

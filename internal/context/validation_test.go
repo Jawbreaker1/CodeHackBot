@@ -60,19 +60,19 @@ func TestValidatePacketWarnsOnMissingSummary(t *testing.T) {
 	}
 }
 
-func TestValidatePacketErrorsOnRecentConversationOverflow(t *testing.T) {
+func TestValidatePacketAllowsLongSavedConversation(t *testing.T) {
 	packet := WorkerPacket{
 		BehaviorFrame:     behavior.Frame{SystemPrompt: "prompt", AgentsText: "rules", RuntimeMode: "worker"},
 		SessionFoundation: session.Foundation{Goal: "inspect target", ReportingRequirement: "owasp"},
 		CurrentStep:       Step{Objective: "inspect target"},
 		RunningSummary:    "summary",
 	}
-	for i := 0; i < recentConversationTurnLimit+1; i++ {
+	for i := 0; i < 25; i++ {
 		packet.RecentConversation = append(packet.RecentConversation, "User: "+strings.Repeat("x", 10))
 	}
 	report := ValidatePacket(packet)
-	if got := report.HighestSeverity(); got != ValidationError {
-		t.Fatalf("HighestSeverity() = %q, want %q", got, ValidationError)
+	if !report.Valid() {
+		t.Fatalf("saved conversation was rejected before projection: %+v", report.Issues)
 	}
 }
 

@@ -80,7 +80,7 @@ func TestModelViewRejectsOversizedProtectedInstructions(t *testing.T) {
 	}
 }
 
-func TestModelViewOffloadsOlderEvidenceBeforeHardLimit(t *testing.T) {
+func TestModelViewPreservesEvidenceAndPlansWithHeadroom(t *testing.T) {
 	p := NewInitialWorkerPacket(behavior.Frame{SystemPrompt: "policy"}, session.Foundation{Goal: "investigate and report"}, "/tmp", "fixture", "per_action", 10)
 	p.LatestExecutionResult = ExecutionResult{Action: "latest check", OutputEvidence: "current decisive observation" + strings.Repeat(" supplemental diagnostics", 1000), LogRefs: []string{"/logs/latest"}}
 	p.RelevantRecentResults = []ExecutionResult{
@@ -96,14 +96,14 @@ func TestModelViewOffloadsOlderEvidenceBeforeHardLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(v.LatestExecutionResult.OutputEvidence, "current decisive observation") || len(v.LatestExecutionResult.OutputEvidence) >= len(p.LatestExecutionResult.OutputEvidence) || v.LatestExecutionResult.LogRefs[0] != "/logs/latest" || v.RelevantRecentResults[0].OutputEvidence != "recent diagnostic" {
+	if v.LatestExecutionResult.OutputEvidence != p.LatestExecutionResult.OutputEvidence || v.LatestExecutionResult.LogRefs[0] != "/logs/latest" || v.RelevantRecentResults[0].OutputEvidence != "recent diagnostic" {
 		t.Fatal("current or recent observations were lost")
 	}
-	if !strings.HasPrefix(v.RelevantRecentResults[1].OutputEvidence, "older output") || v.RelevantRecentResults[1].LogRefs[0] != "/logs/older" || p.RelevantRecentResults[1].OutputEvidence == v.RelevantRecentResults[1].OutputEvidence {
-		t.Fatal("older evidence excerpt or its reference was lost")
+	if v.RelevantRecentResults[1].OutputEvidence != p.RelevantRecentResults[1].OutputEvidence || v.RelevantRecentResults[1].LogRefs[0] != "/logs/older" {
+		t.Fatal("older evidence was shortened despite spare capacity")
 	}
-	if len(v.PlanHistory[0].Plan.Steps) != 0 || v.PlanHistory[0].AfterExecutionLog != "/logs/first" || len(p.PlanHistory[0].Plan.Steps) != 2 || len(v.ContextNotes) == 0 {
-		t.Fatal("plan revision was not compacted transparently")
+	if len(v.PlanHistory[0].Plan.Steps) != 2 || v.PlanHistory[0].AfterExecutionLog != "/logs/first" || len(v.ContextNotes) != 0 {
+		t.Fatal("plan revision was shortened despite spare capacity")
 	}
 }
 
@@ -120,12 +120,13 @@ func TestModelViewKeepsEvidenceIndexWithoutResendingLongHistory(t *testing.T) {
 		p.PlanHistory = append(p.PlanHistory, PlanRevision{Turn: i + 1, Plan: PlanState{Summary: strings.Repeat("plan revision ", 80), Steps: []string{"inspect", "validate"}}})
 	}
 	p.LatestExecutionResult = ExecutionResult{Action: "latest check", ActualExec: strings.Repeat("script ", 400), OutputEvidence: strings.Repeat("decisive observation ", 300), LogRefs: []string{"/logs/latest"}}
-	view, err := p.ModelView(100000)
+	const budget = 55000
+	view, err := p.ModelView(budget)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(view.Render())*2 >= len(p.Render()) {
-		t.Fatalf("worker resent too much settled history: view=%d full=%d", len(view.Render()), len(p.Render()))
+	if len(view.Render()) > budget || len(view.ContextNotes) == 0 {
+		t.Fatalf("worker did not compact under pressure: view=%d budget=%d", len(view.Render()), budget)
 	}
 	if len(view.RelevantRecentResults) != 8 || view.LatestExecutionResult.LogRefs[0] != "/logs/latest" || len(p.RelevantRecentResults[7].OutputEvidence) <= len(view.RelevantRecentResults[7].OutputEvidence) {
 		t.Fatal("context projection lost provenance or altered durable observations")
@@ -171,6 +172,25 @@ func TestModelViewUsesAvailableHeadroomBeforeOffloadingResults(t *testing.T) {
 	}
 }
 
+func TestModelViewPrunesConversationOnlyUnderPressure(t *testing.T) {
+	p := NewInitialWorkerPacket(behavior.Frame{SystemPrompt: "policy"}, session.Foundation{Goal: "review fixture"}, "/tmp", "fixture", "per_action", 10)
+	for i := 0; i < 25; i++ {
+		p.RecentConversation = append(p.RecentConversation, fmt.Sprintf("Operator note %02d: %s", i, strings.Repeat("detail ", 20)))
+	}
+	full, err := p.ModelView(100000)
+	if err != nil || len(full.RecentConversation) != 25 || len(full.ContextNotes) != 0 {
+		t.Fatalf("conversation was shortened with headroom: %v, %d", err, len(full.RecentConversation))
+	}
+	budget := len(full.Render()) - 1000
+	bounded, err := p.ModelView(budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bounded.RecentConversation) >= 25 || bounded.RecentConversation[len(bounded.RecentConversation)-1] != p.RecentConversation[len(p.RecentConversation)-1] || len(p.RecentConversation) != 26 || len(bounded.ContextNotes) == 0 || len(bounded.Render()) > budget {
+		t.Fatal("budget pressure did not preserve the newest turn and durable history")
+	}
+}
+
 func TestModelViewKeepsOneCanonicalGoalAndRecentEvidenceIndex(t *testing.T) {
 	goal := strings.Repeat("long authorized task description ", 80)
 	p := NewInitialWorkerPacket(behavior.Frame{SystemPrompt: "policy", AgentsText: "rules"}, session.Foundation{Goal: goal}, "/tmp", "fixture", "per_action", 10)
@@ -187,8 +207,8 @@ func TestModelViewKeepsOneCanonicalGoalAndRecentEvidenceIndex(t *testing.T) {
 	if count := strings.Count(v.RenderWithoutBehaviorFrame(), goal); count != 1 {
 		t.Fatalf("goal repeated %d times in model view", count)
 	}
-	if v.RelevantRecentResults[1].LogRefs[0] != "/logs/older" || len(v.RelevantRecentResults[1].ArtifactRefs) != 2 || len(p.RelevantRecentResults[1].ArtifactRefs) != 3 {
-		t.Fatal("older evidence index lost its log or changed persisted artifacts")
+	if v.RelevantRecentResults[1].LogRefs[0] != "/logs/older" || len(v.RelevantRecentResults[1].ArtifactRefs) != 3 || len(p.RelevantRecentResults[1].ArtifactRefs) != 3 {
+		t.Fatal("older evidence index was pruned despite spare capacity")
 	}
 }
 
@@ -198,9 +218,9 @@ func TestConversationPreservesStructureAndNewestOversizedAnswer(t *testing.T) {
 	if recent[0] != entry {
 		t.Fatal("answer structure was flattened")
 	}
-	huge := "Operator answer: " + strings.Repeat("x", recentConversationTokenLimit*4+20)
+	huge := "Operator answer: " + strings.Repeat("x", 80020)
 	recent, _ = AppendConversation(recent, "", huge)
-	if len(recent) != 1 || recent[0] != huge {
-		t.Fatal("newest operator answer was silently discarded")
+	if len(recent) != 2 || recent[0] != entry || recent[1] != huge {
+		t.Fatal("saved conversation lost the prior or newest operator answer")
 	}
 }

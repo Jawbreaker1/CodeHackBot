@@ -46,45 +46,42 @@ func BriefPlan(plan Decision) PlanBrief {
 // making the transcript the source of truth for scope, evidence, or budgets.
 // The current state and operator message are protected from history pruning.
 func ConversationRequest(system, state string, prior []llmclient.Message, current llmclient.Message, maxBytes int) ([]llmclient.Message, error) {
-	const maxHistoryMessages = 16
-	const maxHistoryBytes = 24 << 10
-	const maxMessageBytes = 4096
 	const omittedNote = "\nEarlier dialogue was omitted from this model request; the full transcript remains in the saved session."
 	base := len(system) + len(state) + len(current.Content)
 	if base > maxBytes {
 		return nil, fmt.Errorf("coordinator conversation needs %d bytes for current state and message; limit is %d", base, maxBytes)
 	}
-	remaining := min(maxBytes-base-len(omittedNote), maxHistoryBytes)
-	if remaining < 0 {
-		remaining = 0
-	}
-	var recent []llmclient.Message
-	for i := len(prior) - 1; i >= 0 && len(recent) < maxHistoryMessages; i-- {
-		message := prior[i]
+	history := make([]llmclient.Message, 0, len(prior))
+	historyBytes := 0
+	for _, message := range prior {
 		if message.Role != "user" && message.Role != "assistant" {
 			continue
 		}
-		message.Content = strings.TrimSpace(message.Content)
 		message.Attachments = nil // Saved attachments are references, not repeat model input.
-		if message.Content == "" {
+		if strings.TrimSpace(message.Content) == "" {
 			continue
 		}
-		message.Content = promptExcerptEnds(message.Content, maxMessageBytes)
-		if len(message.Content) > remaining {
-			break // Keep an ordered, contiguous tail of the discussion.
+		history = append(history, message)
+		historyBytes += len(message.Content)
+	}
+	if base+historyBytes > maxBytes {
+		if maxBytes-base < len(omittedNote) {
+			return nil, fmt.Errorf("coordinator conversation needs room to mark omitted history; current state uses %d of %d bytes", base, maxBytes)
 		}
-		recent = append(recent, message)
-		remaining -= len(message.Content)
-	}
-	for i, j := 0, len(recent)-1; i < j; i, j = i+1, j-1 {
-		recent[i], recent[j] = recent[j], recent[i]
-	}
-	if len(recent) < len(prior) && base+len(omittedNote) <= maxBytes {
+		// Keep an ordered tail only after the complete conversation no longer
+		// fits. The saved transcript still owns the exact earlier messages.
+		remaining := maxBytes - base - len(omittedNote)
+		start := len(history)
+		for start > 0 && remaining >= len(history[start-1].Content) {
+			start--
+			remaining -= len(history[start].Content)
+		}
+		history = history[start:]
 		state += omittedNote
 	}
-	messages := make([]llmclient.Message, 0, len(recent)+3)
+	messages := make([]llmclient.Message, 0, len(history)+3)
 	messages = append(messages, llmclient.Message{Role: "system", Content: system}, llmclient.Message{Role: "user", Content: state})
-	messages = append(messages, recent...)
+	messages = append(messages, history...)
 	messages = append(messages, current)
 	return messages, nil
 }

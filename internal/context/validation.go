@@ -52,12 +52,6 @@ func ValidatePacket(packet WorkerPacket) ValidationReport {
 	if packet.Budget.Limit < 0 || packet.Budget.Used < 0 || (packet.Budget.Limit > 0 && packet.Budget.Used > packet.Budget.Limit) {
 		report.add(ValidationFatal, "invalid_budget", "worker turn budget is invalid")
 	}
-	if len(packet.RecentConversation) > recentConversationTurnLimit {
-		report.add(ValidationError, "recent_conversation_turn_overflow", fmt.Sprintf("recent_conversation has %d turns; limit is %d", len(packet.RecentConversation), recentConversationTurnLimit))
-	}
-	if approxConversationTokens(packet.RecentConversation) > recentConversationTokenLimit {
-		report.add(ValidationError, "recent_conversation_token_overflow", fmt.Sprintf("recent_conversation exceeds token limit %d", recentConversationTokenLimit))
-	}
 	if hasAnyPendingField(packet.OperatorState) {
 		if strings.TrimSpace(packet.OperatorState.PendingAction) == "" {
 			report.add(ValidationError, "pending_without_action", "operator_state has pending execution fields without pending_action")

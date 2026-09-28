@@ -15,6 +15,16 @@ func coordinatorPromptBounded(state State, maxBytes int) (string, error) {
 		return "", fmt.Errorf("coordinator context has no input allowance")
 	}
 	packet := coordinatorPayload(state)
+	encode := func() string {
+		data, _ := json.Marshal(packet)
+		return string(data)
+	}
+	prompt := encode()
+	if len(prompt) <= maxBytes {
+		return prompt, nil
+	}
+	// The assessment remains complete on disk. Only a planning request that
+	// exceeds its allowance starts shortening older material.
 	protectedEvidence := make(map[string]bool)
 	for _, plan := range state.Plans {
 		for _, finding := range plan.Findings {
@@ -54,11 +64,7 @@ func coordinatorPromptBounded(state State, maxBytes int) (string, error) {
 		packet.Assessment.OperatorMessages = packet.Assessment.OperatorMessages[len(packet.Assessment.OperatorMessages)-12:]
 		packet.ContextNotes = append(packet.ContextNotes, "Only the latest operator conversation excerpts are in this planning view; the durable conversation is retained locally.")
 	}
-	encode := func() string {
-		data, _ := json.Marshal(packet)
-		return string(data)
-	}
-	prompt := encode()
+	prompt = encode()
 	if len(prompt) <= maxBytes {
 		return prompt, nil
 	}
@@ -69,14 +75,20 @@ func coordinatorPromptBounded(state State, maxBytes int) (string, error) {
 		plan := &packet.Assessment.Plans[i]
 		plan.Summary = promptExcerpt(plan.Summary, 160)
 		plan.Gaps = nil
+		for j := range plan.Tasks {
+			plan.Tasks[j].Goal = ""
+			plan.Tasks[j].DoneWhen = ""
+			plan.Tasks[j].StrategyHints = nil
+		}
 	}
 	packet.ContextNotes = append(packet.ContextNotes, "Older plan prose and gaps were shortened to fit the planning request; the saved assessment retains them.")
 	prompt = encode()
 	if len(prompt) <= maxBytes {
 		return prompt, nil
 	}
-	if len(packet.Assessment.OperatorMessages) > 6 {
-		packet.Assessment.OperatorMessages = packet.Assessment.OperatorMessages[len(packet.Assessment.OperatorMessages)-6:]
+	for len(packet.Assessment.OperatorMessages) > 1 && len(prompt) > maxBytes {
+		packet.Assessment.OperatorMessages = packet.Assessment.OperatorMessages[1:]
+		prompt = encode()
 	}
 	for i := 0; i < oldCount; i++ {
 		packet.Assessment.Results[i].Summary = promptExcerptEnds(packet.Assessment.Results[i].Summary, 2048)

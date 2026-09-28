@@ -573,31 +573,29 @@ func compactCoordinatorState(state State) coordinatorPromptState {
 	}
 	messages := make([]string, 0, len(state.OperatorMessages))
 	for _, message := range state.OperatorMessages {
-		messages = append(messages, promptExcerpt(message, 2048))
+		messages = append(messages, message)
 	}
 	plans := make([]compactDecision, 0, len(state.Plans))
-	for i, plan := range state.Plans {
-		older := i < len(state.Plans)-2
-		summaryLimit := 2048
-		if older {
-			summaryLimit = 320
-		}
-		item := compactDecision{Phase: plan.Phase, Summary: promptExcerpt(plan.Summary, summaryLimit), ApprovedTaskIDs: append([]string(nil), plan.ApprovedTaskIDs...), SkippedTaskIDs: append([]string(nil), plan.SkippedTaskIDs...), Complete: plan.Complete}
+	for _, plan := range state.Plans {
+		item := compactDecision{Phase: plan.Phase, Summary: plan.Summary, ApprovedTaskIDs: append([]string(nil), plan.ApprovedTaskIDs...), SkippedTaskIDs: append([]string(nil), plan.SkippedTaskIDs...), Complete: plan.Complete}
 		for _, task := range plan.Tasks {
-			entry := compactTask{ID: task.ID, DependsOn: append([]string(nil), task.DependsOn...), Verification: task.Verification}
-			if !older {
-				entry.Goal, entry.DoneWhen = promptExcerpt(task.Goal, 1200), promptExcerpt(task.DoneWhen, 1200)
-				entry.StrategyHints = append([]string(nil), task.StrategyHints...)
-			}
+			entry := compactTask{ID: task.ID, Goal: task.Goal, DoneWhen: task.DoneWhen, DependsOn: append([]string(nil), task.DependsOn...), Verification: task.Verification, StrategyHints: append([]string(nil), task.StrategyHints...)}
 			item.Tasks = append(item.Tasks, entry)
 		}
 		for _, finding := range plan.Findings {
-			item.Findings = append(item.Findings, compactFinding{Title: promptExcerpt(finding.Title, 400), Status: finding.Status, Severity: finding.Severity, Confidence: finding.Confidence, ValidationTask: finding.ValidationTask, Impact: promptExcerpt(finding.Impact, 800), Evidence: append([]string(nil), finding.Evidence...)})
+			item.Findings = append(item.Findings, compactFinding{Title: finding.Title, Status: finding.Status, Severity: finding.Severity, Confidence: finding.Confidence, ValidationTask: finding.ValidationTask, Impact: finding.Impact, Evidence: append([]string(nil), finding.Evidence...)})
 		}
 		for _, gap := range plan.Gaps {
-			item.Gaps = append(item.Gaps, promptExcerpt(gap, 800))
+			item.Gaps = append(item.Gaps, gap)
 		}
 		plans = append(plans, item)
+	}
+	results := compactPriorResults(state.Results)
+	for i := range results {
+		results[i].Task.Goal = state.Results[i].Task.Goal
+		results[i].Task.DoneWhen = state.Results[i].Task.DoneWhen
+		results[i].Summary = state.Results[i].Summary
+		results[i].Error = state.Results[i].Error
 	}
 	continuationRequest := ""
 	if len(state.ContinuationRequests) > 0 {
@@ -607,7 +605,7 @@ func compactCoordinatorState(state State) coordinatorPromptState {
 		Version: state.Version, ID: state.ID, Goal: state.Goal, Scope: state.Scope,
 		Approach: state.Approach,
 		Model:    state.Model, Status: state.Status, Limits: state.Limits,
-		Plans: plans, Results: compactPriorResults(state.Results),
+		Plans: plans, Results: results,
 		OperatorMessages: messages, ContinuationRequest: continuationRequest, ContinuationRound: state.ContinuationRound, Usage: state.Usage, ElapsedSeconds: elapsedSeconds,
 		ReportAttention: reportAttentionChecks(state),
 	}

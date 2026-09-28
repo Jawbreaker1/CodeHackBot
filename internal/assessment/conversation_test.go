@@ -28,6 +28,20 @@ func TestConversationRequestKeepsRecentDialogueAndProtectsCurrentMessage(t *test
 	}
 }
 
+func TestConversationRequestUsesAvailableSpaceBeforeDroppingHistory(t *testing.T) {
+	prior := make([]llmclient.Message, 0, 30)
+	for i := 0; i < 30; i++ {
+		prior = append(prior, llmclient.Message{Role: "user", Content: strings.Repeat("detail ", 100) + string(rune('A'+i))})
+	}
+	messages, err := ConversationRequest("system", "state", prior, llmclient.Message{Role: "user", Content: "continue"}, 100000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 33 || messages[2].Content != prior[0].Content || messages[31].Content != prior[29].Content || strings.Contains(messages[1].Content, "omitted") {
+		t.Fatal("history was pruned despite available model space")
+	}
+}
+
 func TestPlanBriefCarriesPurposeChoicesAndCoverageLimits(t *testing.T) {
 	brief := BriefPlan(Decision{
 		Phase: "assessment", PlainSummary: "Check access controls because the API exposes record IDs.",

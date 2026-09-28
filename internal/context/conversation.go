@@ -2,15 +2,11 @@ package context
 
 import (
 	"strings"
-
-	"github.com/Jawbreaker1/CodeHackBot/internal/tokenutil"
 )
 
 const (
-	recentConversationTurnLimit  = 20
-	recentConversationTokenLimit = 20000
-	olderSummaryNoteLimit        = 40
-	olderSummaryNoteMaxChars     = 800
+	olderSummaryNoteLimit    = 40
+	olderSummaryNoteMaxChars = 800
 )
 
 func AppendConversation(recent []string, olderSummary, entry string) ([]string, string) {
@@ -19,30 +15,13 @@ func AppendConversation(recent []string, olderSummary, entry string) ([]string, 
 		return recent, olderSummary
 	}
 
-	next := append(append([]string{}, recent...), entry)
-	overflow := make([]string, 0)
-	for len(next) > recentConversationTurnLimit || approxConversationTokens(next) > recentConversationTokenLimit {
-		if len(next) <= 1 {
-			break
-		}
-		overflow = append(overflow, next[0])
-		next = next[1:]
-	}
-	if len(overflow) == 0 {
-		return next, olderSummary
-	}
-	return next, appendOlderConversationSummary(olderSummary, overflow)
+	// The saved worker packet retains exact turns. ModelView, not this
+	// authoritative state, decides when a particular request needs pruning.
+	return append(append([]string{}, recent...), entry), olderSummary
 }
 
 func CarryConversationSummary(olderSummary string, entries []string) string {
 	return appendOlderConversationSummary(olderSummary, entries)
-}
-
-func approxConversationTokens(turns []string) int {
-	if len(turns) == 0 {
-		return 0
-	}
-	return tokenutil.ApproxTokens(strings.Join(turns, "\n"))
 }
 
 func appendOlderConversationSummary(existing string, overflow []string) string {
