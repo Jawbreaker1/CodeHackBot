@@ -5,8 +5,9 @@
 ## Start locally
 
 Use a Kali Linux Rolling host with the baseline from the [Kali installation
-runbook](kali-installation.md). The web binary itself is Go-only; the model
-endpoint and any assessment tools are separate provider/image dependencies.
+runbook](kali-installation.md). The web server is built in Go; requested PDF
+report export uses the Kali Python and Chromium packages. The model endpoint
+and any assessment tools are separate provider/image dependencies.
 
 Build and run it from the checkout:
 
@@ -47,6 +48,8 @@ The customer view at `/api/v1/customers/<customer-id>` combines all sessions cre
 After a session starts, the coordinator's first non-empty plan is shown in the main conversation. It may be a visible research round when strategy, software identity, or advisory knowledge is missing; this is an operator-selectable worker plan, not a silent tool phase. Select the bounded tasks to run or reject the plan; skipped tasks are retained in the report as operator decisions. The coordinator can return to research after new discoveries. Each selected task follows the selected session approval policy. The coordinator and workers receive the versioned [local strategy catalog](../strategies/catalog.md). The coordinator can suggest up to two guides per task; the right-side plan shows them under **Suggested guidance**. A worker may load a suggested or different guide with `load_strategy`; only the selected guide and its provenance remain in that worker's context through later decisions. CVE and advisory references, observed software, validation status, and evidence links are shown in the analysis workspace at `/analysis?assessment=<session-id>`. Use `/analysis?customer=<customer-id>` for the unified customer view. The analysis surface is separate from chat so priorities, gaps, evidence, remediation, and next actions remain visible while the coordinator conversation continues.
 
 The formal Markdown report is generated from the same persisted assessment state and includes scope, the selected test sequence, findings, advisory references, reproduction steps, remediation, evidence references, work logs, and stated gaps. If the coordinator did not finish reviewing the last worker result, the report states that plainly; the formal template does not recycle an older plan as its conclusion or treat its gap list as current. Analysis shows the latest worker result and separates unvalidated candidates from validated risk counts. It is a reviewable draft rather than an automatic assurance document; preserve the local session directory when a customer needs the full execution record.
+
+After completion, ask the coordinator for an OWASP WSTG- or PTES-aligned report in Markdown or PDF. A follow-up PDF request uses the last generated report's template; the new file appears under the same session's `reports/` directory and is linked in chat. PDF rendering requires `python3-markdown-it` and `chromium` from the Kali installation baseline and does not fetch external content embedded in report text. Review the saved report before sharing it.
 
 Set `BIRDHACKBOT_RESEARCH_MODE=air_gapped` before startup to make the product frame prohibit external advisory/documentation fetches and require local snapshots. Connected mode permits workers to use approved `curl`/`wget` actions for advisory/documentation URLs, with URL, status, retrieval time, and saved response recorded in evidence. The fixed intake DNS and page-fetch tools are disabled in this mode. Worker commands still require a deployment network boundary to enforce the air gap; model instructions alone cannot provide it.
 

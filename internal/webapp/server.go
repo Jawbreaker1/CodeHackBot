@@ -243,7 +243,11 @@ func messageViews(messages []intakeMessage, kind, id string) []messageView {
 		}
 		if kind == "assessments" && message.Report != nil {
 			ref := message.Report
-			view.Attachments = append(view.Attachments, attachmentView{ID: ref.Name, Filename: ref.Label(), MIMEType: "text/markdown", Bytes: ref.Bytes, URL: "/api/v1/assessments/" + url.PathEscape(id) + "/reports/" + url.PathEscape(ref.Name)})
+			mime := "text/markdown"
+			if ref.Output == pdfOutput {
+				mime = "application/pdf"
+			}
+			view.Attachments = append(view.Attachments, attachmentView{ID: ref.Name, Filename: ref.Label(), MIMEType: mime, Bytes: ref.Bytes, URL: "/api/v1/assessments/" + url.PathEscape(id) + "/reports/" + url.PathEscape(ref.Name)})
 		}
 		views = append(views, view)
 	}
@@ -1872,8 +1876,12 @@ func (s *Server) message(ctx context.Context, r *run, text string, refs []attach
 	r.chatBusy = true
 	r.messages = append(r.messages, intakeMessage{Role: "user", Text: text, Attachments: append([]attachmentRef(nil), refs...), At: time.Now().UTC()})
 	history := make([]llmclient.Message, 0, len(r.messages)-1)
+	var latestReport *generatedReport
 	for _, previous := range r.messages[:len(r.messages)-1] {
 		history = append(history, llmclient.Message{Role: previous.Role, Content: previous.Text + attachmentSummary(previous.Attachments)})
+		if previous.Report != nil {
+			latestReport = previous.Report
+		}
 	}
 	r.events = append(r.events, eventRecord{Sequence: r.nextSequenceLocked(), At: time.Now().UTC(), Event: assessment.Event{Kind: "operator_message", Message: text}})
 	r.updatedAt = time.Now().UTC()
@@ -1895,6 +1903,13 @@ func (s *Server) message(ctx context.Context, r *run, text string, refs []attach
 	system := behavior.CoordinatorConversationPrompt(s.config.Frame) + "\n\n" + webCoordinatorDisplayPrompt
 	if postRun {
 		stateContext += "\nRecorded final findings and gaps: " + postRunFindingsContext(r.state)
+		if latestReport != nil {
+			output := latestReport.Output
+			if output == "" {
+				output = markdownOutput
+			}
+			stateContext += "\nlatest_report: format=" + string(latestReport.Format) + "; output=" + string(output)
+		}
 		system += "\n\n" + webPostRunReportPrompt
 	}
 	r.mu.Unlock()
@@ -1922,7 +1937,7 @@ func (s *Server) message(ctx context.Context, r *run, text string, refs []attach
 	}
 	var generated *generatedReport
 	if err == nil && postRun && reply.ReportFormat != "" {
-		generated, err = saveFormattedReport(r.root, stateSnapshot, reply.ReportFormat)
+		generated, err = saveFormattedReport(r.root, stateSnapshot, reply.ReportFormat, reply.ReportOutput)
 		if err == nil {
 			reply.Text = generated.Confirmation()
 		}

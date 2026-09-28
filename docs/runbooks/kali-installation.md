@@ -11,7 +11,8 @@ Install the small platform baseline before building the repository:
 
 ```sh
 sudo apt update
-sudo apt install -y git ca-certificates golang-go iproute2 curl wget
+sudo apt install -y git ca-certificates golang-go iproute2 curl wget \
+  python3 python3-markdown-it chromium
 ```
 
 The repository requires Go 1.24.2 or newer and declares the 1.24.13 toolchain.
@@ -99,14 +100,13 @@ go build -buildvcs=false -o birdhackbot-web ./cmd/birdhackbot-web
 go build -buildvcs=false -o birdhackbot-llm-bridge ./cmd/birdhackbot-llm-bridge
 ```
 
-For repository validation, also install Python 3 and run:
+Python 3, `python3-markdown-it`, and Chromium render requested Markdown reports as PDFs locally. Report Markdown is rendered without raw HTML or external images. For repository validation, run:
 
 ```sh
-sudo apt install -y python3
 ./scripts/ci.sh
 ```
 
-The CI helpers use Python's standard library and a Unix PTY; Python is not
-needed to run the compiled application. Keep the web server and subscription
+The CI helpers use Python's standard library and a Unix PTY. PDF export also
+uses the installed Python packages. Keep the web server and subscription
 bridge bound to loopback until authentication, origin protection, and remote
 deployment controls are implemented.
