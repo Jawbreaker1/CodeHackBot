@@ -24,6 +24,24 @@ func (p WorkerPacket) ModelView(maxBytes int) (WorkerPacket, error) {
 	v := p.Clone()
 	v.TaskRuntime.CurrentTarget, v.TaskRuntime.MissingFact = "", ""
 	v.ContextNotes = nil
+	// Rebuild the working set on every request, including when the provider has
+	// spare room. Older results stay in the authoritative packet and log files;
+	// recall_context can search or retrieve them when a later question needs one.
+	const recentResultLimit = 8
+	if len(v.RelevantRecentResults) > recentResultLimit {
+		all := v.RelevantRecentResults
+		selected := append([]ExecutionResult(nil), all[:recentResultLimit]...)
+		for _, ref := range v.PinnedResultRefs {
+			for _, result := range all[recentResultLimit:] {
+				if pinnedResult([]string{ref}, result) {
+					selected = append(selected, result)
+					break
+				}
+			}
+		}
+		v.OffloadedResultCount += len(all) - len(selected)
+		v.RelevantRecentResults = selected
+	}
 	// The authoritative packet retains every copy of the task contract. The
 	// model needs one canonical goal, not the same long assignment repeated in
 	// the current step, plan and first conversation entry on every turn.
@@ -45,6 +63,9 @@ func (p WorkerPacket) ModelView(maxBytes int) (WorkerPacket, error) {
 	// bodies and output live in the durable session/log files, so do not resend
 	// them merely because the provider's hard ceiling has not been reached yet.
 	shortened := false
+	if v.OffloadedResultCount > 0 {
+		shortened = true
+	}
 	latest := &v.LatestExecutionResult
 	if len(latest.Action) > 1024 || len(latest.ActualExec) > 1024 || len(latest.OutputEvidence) > 4096 || len(latest.OutputSummary) > 1024 {
 		shortened = true
@@ -65,6 +86,13 @@ func (p WorkerPacket) ModelView(maxBytes int) (WorkerPacket, error) {
 	}
 	for i := 1; i < len(v.RelevantRecentResults); i++ {
 		r := &v.RelevantRecentResults[i]
+		if pinnedResult(v.PinnedResultRefs, *r) {
+			r.Action = excerpt(r.Action, 512)
+			r.ActualExec = excerpt(r.ActualExec, 512)
+			r.OutputEvidence = excerpt(r.OutputEvidence, 2048)
+			r.OutputSummary = excerpt(r.OutputSummary, 768)
+			continue
+		}
 		if len(r.Action) > 160 || len(r.ActualExec) > 160 || len(r.OutputEvidence) > 0 || len(r.OutputSummary) > 256 || len(r.ArtifactRefs) > 2 {
 			shortened = true
 		}
@@ -89,8 +117,9 @@ func (p WorkerPacket) ModelView(maxBytes int) (WorkerPacket, error) {
 		revision.Plan.ReplanConditions = nil
 	}
 	if shortened {
-		v.ContextNotes = []string{"Oversized execution bodies, artifact lists and older plan details were excerpted or omitted from this model view. Their identities and log references remain here; complete records remain in the local session."}
+		v.ContextNotes = []string{"Older results or oversized execution bodies and plan details were omitted from this model view. Complete records remain in the local session and command logs; use recall_context for an exact prior result when needed."}
 	}
+	v.ContextRecall.Content = excerpt(v.ContextRecall.Content, 8192)
 	size := func() int { return len(v.Render()) }
 	if size() <= maxBytes {
 		return v, nil
@@ -120,6 +149,9 @@ func (p WorkerPacket) ModelView(maxBytes int) (WorkerPacket, error) {
 		v.MemoryBankRetrievals[i] = excerpt(v.MemoryBankRetrievals[i], 1024)
 	}
 	if size() > maxBytes {
+		v.ContextRecall.Content = excerpt(v.ContextRecall.Content, 2048)
+	}
+	if size() > maxBytes {
 		v.LatestExecutionResult.Action = excerpt(v.LatestExecutionResult.Action, 1024)
 		v.LatestExecutionResult.ActualExec = excerpt(v.LatestExecutionResult.ActualExec, 2048)
 		v.LatestExecutionResult.OutputEvidence = excerpt(v.LatestExecutionResult.OutputEvidence, 4096)
@@ -129,6 +161,17 @@ func (p WorkerPacket) ModelView(maxBytes int) (WorkerPacket, error) {
 		return WorkerPacket{}, fmt.Errorf("worker context needs %d bytes after compaction; allowance is %d; shorten the task or supporting material", size(), maxBytes)
 	}
 	return v, nil
+}
+
+func pinnedResult(refs []string, result ExecutionResult) bool {
+	for _, ref := range refs {
+		for _, saved := range result.LogRefs {
+			if saved == ref {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func excerpt(s string, max int) string {

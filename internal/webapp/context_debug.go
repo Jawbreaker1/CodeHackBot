@@ -16,7 +16,7 @@ import (
 
 var workerDebugSections = map[string]bool{
 	"plan_history": true, "recent_conversation": true, "older_conversation_summary": true,
-	"running_summary": true, "relevant_recent_results": true, "memory_bank_retrievals": true,
+	"running_summary": true, "relevant_recent_results": true, "context_recall": true, "memory_bank_retrievals": true,
 	"strategy_guidance": true, "capability_inputs": true, "context_notes": true,
 }
 

@@ -17,18 +17,23 @@ type PlanUpdate struct {
 // A plan may accompany any decision. It never changes the original goal,
 // done condition, scope, permissions or remaining budget.
 type Response struct {
-	Type      string      `json:"type"`
-	Command   string      `json:"command,omitempty"`
-	Args      []string    `json:"args,omitempty"`
-	UseShell  bool        `json:"use_shell,omitempty"`
-	Impact    string      `json:"impact,omitempty"`
-	Target    string      `json:"target,omitempty"`
-	Risk      string      `json:"risk,omitempty"`
-	Artifacts []string    `json:"artifacts,omitempty"`
-	Summary   string      `json:"summary,omitempty"`
-	Question  string      `json:"question,omitempty"`
-	Strategy  string      `json:"strategy,omitempty"`
-	Plan      *PlanUpdate `json:"plan,omitempty"`
+	Type            string      `json:"type"`
+	Command         string      `json:"command,omitempty"`
+	Args            []string    `json:"args,omitempty"`
+	UseShell        bool        `json:"use_shell,omitempty"`
+	Impact          string      `json:"impact,omitempty"`
+	Target          string      `json:"target,omitempty"`
+	Risk            string      `json:"risk,omitempty"`
+	Artifacts       []string    `json:"artifacts,omitempty"`
+	Summary         string      `json:"summary,omitempty"`
+	Question        string      `json:"question,omitempty"`
+	Strategy        string      `json:"strategy,omitempty"`
+	ContextRef      string      `json:"context_ref,omitempty"`
+	ContextQuery    string      `json:"context_query,omitempty"`
+	ContextStream   string      `json:"context_stream,omitempty"`
+	ContextOffset   int64       `json:"context_offset,omitempty"`
+	ContextKeepRefs *[]string   `json:"context_keep_refs,omitempty"`
+	Plan            *PlanUpdate `json:"plan,omitempty"`
 }
 
 func ParseResponse(text string) (Response, error) {
@@ -70,6 +75,16 @@ func ParseResponse(text string) (Response, error) {
 		if strings.TrimSpace(r.Strategy) == "" {
 			return r, fmt.Errorf("load_strategy strategy is required")
 		}
+	case "recall_context":
+		if (strings.TrimSpace(r.ContextRef) == "") == (strings.TrimSpace(r.ContextQuery) == "") {
+			return r, fmt.Errorf("recall_context needs exactly one context_ref or context_query")
+		}
+		if r.ContextOffset < 0 || (r.ContextStream != "" && r.ContextStream != "stdout" && r.ContextStream != "stderr") {
+			return r, fmt.Errorf("recall_context needs a nonnegative offset and stdout or stderr stream")
+		}
+		if r.ContextQuery != "" && (r.ContextOffset != 0 || r.ContextStream != "") {
+			return r, fmt.Errorf("context_query does not take stream or offset")
+		}
 	case "update_plan":
 		if r.Plan == nil {
 			return r, fmt.Errorf("update_plan requires plan")
@@ -85,6 +100,21 @@ func ParseResponse(text string) (Response, error) {
 	}
 	if r.Type != "load_strategy" && r.Strategy != "" {
 		return r, fmt.Errorf("only load_strategy may name a strategy")
+	}
+	if r.Type != "recall_context" && (r.ContextRef != "" || r.ContextQuery != "" || r.ContextStream != "" || r.ContextOffset != 0) {
+		return r, fmt.Errorf("only recall_context may use context retrieval fields")
+	}
+	if r.ContextKeepRefs != nil {
+		if len(*r.ContextKeepRefs) > 2 {
+			return r, fmt.Errorf("context_keep_refs may retain at most two prior results")
+		}
+		seen := map[string]bool{}
+		for _, ref := range *r.ContextKeepRefs {
+			if strings.TrimSpace(ref) == "" || seen[ref] {
+				return r, fmt.Errorf("context_keep_refs must contain distinct nonempty references")
+			}
+			seen[ref] = true
+		}
 	}
 	if len(r.Artifacts) > 8 {
 		return r, fmt.Errorf("bash declares %d artifacts; maximum is 8, so keep the most useful references", len(r.Artifacts))

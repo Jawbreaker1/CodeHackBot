@@ -137,6 +137,36 @@ func TestModelViewKeepsEvidenceIndexWithoutResendingLongHistory(t *testing.T) {
 	}
 }
 
+func TestModelViewOffloadsOldResultsOnEveryTurn(t *testing.T) {
+	p := NewInitialWorkerPacket(behavior.Frame{SystemPrompt: "policy"}, session.Foundation{Goal: "inspect source"}, "/tmp", "fixture", "per_action", 40)
+	for i := 0; i < 40; i++ {
+		p.RelevantRecentResults = append(p.RelevantRecentResults, ExecutionResult{
+			Action: fmt.Sprintf("inspection %d", i), LogRefs: []string{fmt.Sprintf("/logs/%d", i)},
+		})
+	}
+	view, err := p.ModelView(100000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(view.RelevantRecentResults) != 8 || view.OffloadedResultCount != 32 {
+		t.Fatalf("working set contains %d results, offloaded %d", len(view.RelevantRecentResults), view.OffloadedResultCount)
+	}
+	if len(p.RelevantRecentResults) != 40 || p.OffloadedResultCount != 0 {
+		t.Fatal("model projection changed the authoritative history")
+	}
+	if view.RelevantRecentResults[0].LogRefs[0] != "/logs/0" || !strings.Contains(view.Render(), "recall_context") {
+		t.Fatal("working set lost recent provenance or the retrieval instruction")
+	}
+	p.PinnedResultRefs = []string{"/logs/39"}
+	view, err = p.ModelView(100000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(view.RelevantRecentResults) != 9 || view.OffloadedResultCount != 31 || view.RelevantRecentResults[8].LogRefs[0] != "/logs/39" {
+		t.Fatal("the model-selected older result was not restored to the next working set")
+	}
+}
+
 func TestModelViewKeepsOneCanonicalGoalAndRecentEvidenceIndex(t *testing.T) {
 	goal := strings.Repeat("long authorized task description ", 80)
 	p := NewInitialWorkerPacket(behavior.Frame{SystemPrompt: "policy", AgentsText: "rules"}, session.Foundation{Goal: goal}, "/tmp", "fixture", "per_action", 10)

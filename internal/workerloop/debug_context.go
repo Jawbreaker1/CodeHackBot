@@ -17,6 +17,8 @@ func applyDebugOmissions(packet *ctxpacket.WorkerPacket, sections []string) {
 			packet.RunningSummary = ""
 		case "relevant_recent_results":
 			packet.RelevantRecentResults = nil
+		case "context_recall":
+			packet.ContextRecall = ctxpacket.ContextRecall{}
 		case "memory_bank_retrievals":
 			packet.MemoryBankRetrievals = nil
 		case "strategy_guidance":

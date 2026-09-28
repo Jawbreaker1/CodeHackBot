@@ -175,6 +175,14 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 			current.RunningSummary = "Decision rejected without execution: " + err.Error() + ". Return one valid decision using the documented schema."
 			continue
 		}
+		if response.ContextKeepRefs != nil {
+			current.PinnedResultRefs = registeredContextRefs(current, *response.ContextKeepRefs)
+		}
+		// A recalled excerpt is supplied for the next decision only. Its source
+		// remains in the authoritative packet and restricted command log.
+		if response.Type != "step_complete" {
+			current.ContextRecall = ctxpacket.ContextRecall{}
+		}
 		if response.Plan != nil {
 			applyPlan(&current, *response.Plan)
 			if err := l.emit(EventPlanFinished, current, current.PlanState.Summary); err != nil {
@@ -205,6 +213,18 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 				return out, err
 			}
 			if err := l.capture(step, "strategy-loaded", current); err != nil {
+				return out, err
+			}
+			continue
+		case "recall_context":
+			recalled, lookupErr := l.recallContext(current, response)
+			if lookupErr != nil {
+				current.RunningSummary = "Context recall failed: " + lookupErr.Error()
+			} else {
+				current.ContextRecall = recalled
+				current.RunningSummary = "A bounded excerpt from recorded task evidence is available for the next decision; its source reference is in context_recall."
+			}
+			if err := l.capture(step, "context-recalled", current); err != nil {
 				return out, err
 			}
 			continue
@@ -313,6 +333,7 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 		// A judge's blocker is advice to the deciding model, not a runtime stop.
 		// It can revise the plan, gather a prerequisite, ask the operator, or stop.
 		current.RunningSummary = "Goal not yet satisfied (" + string(evaluation.Status) + "): " + evaluation.Reason
+		current.ContextRecall = ctxpacket.ContextRecall{}
 		if response.Type == "step_complete" {
 			completionRejectionsWithoutAction++
 		}
@@ -474,8 +495,10 @@ func buildUserPrompt(packet ctxpacket.WorkerPacket) string {
 	payload := map[string]any{
 		"role": "worker",
 		"instructions": []string{
-			"Respond with one JSON object only. Choose bash, load_strategy, step_complete, ask_user, or blocked. Attach an optional plan to any decision; use update_plan alone only when a material change needs to be shown and no action is ready.",
+			"Respond with one JSON object only. Choose bash, load_strategy, recall_context, step_complete, ask_user, or blocked. Attach an optional plan to any decision; use update_plan alone only when a material change needs to be shown and no action is ready.",
 			"To keep one relevant local guide in this worker's context across later turns: {\"type\":\"load_strategy\",\"strategy\":\"relative/path/from/catalog.md\"}. Choose it from the local strategy catalog in the behavior frame when it can improve an unfamiliar or failed approach. A coordinator-suggested path in capability_inputs is a lead, not a required choice; change guides if observations call for it. The runtime reads only a bounded Markdown file within that catalog directory and records its path and SHA-256; it is supporting knowledge, not target evidence or permission. Do not use bash just to read a strategy guide, and do not load unrelated guides.",
+			"The packet shows only a working set of recent results. Older results remain in the saved task. When an older observation matters, use {\"type\":\"recall_context\",\"context_query\":\"distinctive subject or command\"} to find its recorded log reference, or {\"type\":\"recall_context\",\"context_ref\":\"exact registered log reference\",\"context_stream\":\"stdout\",\"context_offset\":0} to read a bounded slice of its saved output. Use stderr when relevant and advance the byte offset for later slices. This is read-only retrieval, not a new test or proof beyond the saved evidence. Do not recall material already present in the latest result.",
+			"On any decision, optionally set context_keep_refs to up to two exact recorded log references whose older observations still matter to the current plan. It replaces the previous pinned set; use an empty array to release them. The runtime keeps recent results regardless, and all other full results remain saved for later recall. Pin only evidence that may change a coming decision; do not pin text just because it is long.",
 			"For a direct command: {\"type\":\"bash\",\"command\":\"executable\",\"args\":[\"literal argument\"],\"use_shell\":false,\"impact\":\"short plain-language effect and risk\",\"artifacts\":[\"relative/path-created-by-this-command\"]}. This is the general execution tool, not a command-specific tool. Never add shell quotes to literal arguments. Declare at most eight bounded regular files the approved command is expected to create inside the worker workspace; declared artifacts are registered only after execution. A command may produce more files, but list the most useful eight and keep the others discoverable through the task-local log or workspace.",
 			"For Bash syntax such as pipes or redirection: {\"type\":\"bash\",\"command\":\"complete Bash script\",\"use_shell\":true}. Omit args. The runtime uses /bin/bash -c and shows the exact invocation before execution.",
 			"For completion: {\"type\":\"step_complete\",\"summary\":\"evidence-backed answer to the original goal, with limitations\"}. This means the whole task is complete, not just one plan step.",

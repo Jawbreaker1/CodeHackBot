@@ -65,6 +65,19 @@ type StrategyDocument struct {
 	Content string
 }
 
+// ContextRecall is a bounded, one-turn view of previously recorded evidence.
+// The authoritative execution record and stdout/stderr files remain unchanged.
+type ContextRecall struct {
+	Ref        string
+	Query      string
+	Stream     string
+	Offset     int64
+	TotalBytes int64
+	Action     string
+	ExitStatus string
+	Content    string
+}
+
 // OperatorState is the visible operator/runtime state in the context packet.
 type OperatorState struct {
 	ScopeState    string
@@ -109,6 +122,9 @@ type WorkerPacket struct {
 	DeniedExecution          *DeniedExecution
 	RunningSummary           string
 	RelevantRecentResults    []ExecutionResult
+	PinnedResultRefs         []string
+	OffloadedResultCount     int
+	ContextRecall            ContextRecall
 	MemoryBankRetrievals     []string
 	StrategyGuidance         []StrategyDocument
 	CapabilityInputs         []string
@@ -221,6 +237,9 @@ func (p WorkerPacket) RenderSections() []RenderedSection {
 		{Name: "latest_execution_result", Content: renderExecutionResult(p.LatestExecutionResult)},
 		{Name: "running_summary", Content: blankOrValue(p.RunningSummary)},
 		{Name: "relevant_recent_results", Content: renderExecutionResults(p.RelevantRecentResults)},
+		{Name: "pinned_result_refs", Content: renderList(p.PinnedResultRefs)},
+		{Name: "offloaded_result_count", Content: strconv.Itoa(p.OffloadedResultCount)},
+		{Name: "context_recall", Content: renderContextRecall(p.ContextRecall)},
 		{Name: "memory_bank_retrievals", Content: renderList(p.MemoryBankRetrievals)},
 		{Name: "strategy_guidance", Content: renderStrategyGuidance(p.StrategyGuidance)},
 		{Name: "capability_inputs", Content: renderList(p.CapabilityInputs)},
@@ -228,6 +247,22 @@ func (p WorkerPacket) RenderSections() []RenderedSection {
 		{Name: "work_progress", Content: renderWorkProgress(p.WorkProgress)},
 		{Name: "context_notes", Content: renderList(p.ContextNotes)},
 	}
+}
+
+func renderContextRecall(r ContextRecall) string {
+	if r.Content == "" {
+		return "(none)"
+	}
+	return strings.Join([]string{
+		"ref: " + blankOrValue(r.Ref),
+		"query: " + strconv.Quote(r.Query),
+		"stream: " + blankOrValue(r.Stream),
+		"offset: " + strconv.FormatInt(r.Offset, 10),
+		"total_bytes: " + strconv.FormatInt(r.TotalBytes, 10),
+		"action: " + strconv.Quote(r.Action),
+		"exit_status: " + blankOrValue(r.ExitStatus),
+		"content: " + strconv.Quote(r.Content),
+	}, "\n")
 }
 
 func renderWorkProgress(p WorkProgress) string {
