@@ -25,6 +25,7 @@ const webCoordinatorDisplayPrompt = `Return one JSON object with "text" (your pl
 
 type coordinatorChatReply struct {
 	Text                string                  `json:"text"`
+	Message             string                  `json:"message,omitempty"`
 	DisplayArtifactRefs []string                `json:"display_artifact_refs,omitempty"`
 	ReportFormat        assessment.ReportFormat `json:"report_format,omitempty"`
 	ReportOutput        reportOutput            `json:"report_output,omitempty"`
@@ -37,6 +38,9 @@ func parseCoordinatorChatReply(raw string) (coordinatorChatReply, error) {
 	if err := json.Unmarshal([]byte(raw), &reply); err != nil {
 		// Providers that do not honor structured control still return usable prose.
 		reply.Text = strings.TrimSpace(raw)
+	}
+	if strings.TrimSpace(reply.Text) == "" {
+		reply.Text = reply.Message
 	}
 	reply.Text = strings.TrimSpace(reply.Text)
 	if reply.Text == "" {

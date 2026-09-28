@@ -16,6 +16,13 @@ import (
 	"github.com/Jawbreaker1/CodeHackBot/internal/llmclient"
 )
 
+func TestParseCoordinatorChatReplyKeepsMessageField(t *testing.T) {
+	reply, err := parseCoordinatorChatReply(`{"continue_assessment":true,"message":"I will prepare a bounded plan."}`)
+	if err != nil || !reply.ContinueAssessment || reply.Text != "I will prepare a bounded plan." {
+		t.Fatalf("lost a valid continuation: %+v, %v", reply, err)
+	}
+}
+
 func TestStoppingAssessmentCancelsLiveCoordinatorChat(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})

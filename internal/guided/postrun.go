@@ -17,9 +17,22 @@ import (
 
 type postRunReply struct {
 	Text               string                  `json:"text"`
+	Message            string                  `json:"message,omitempty"`
 	ReportFormat       assessment.ReportFormat `json:"report_format,omitempty"`
 	ReportOutput       reportexport.Output     `json:"report_output,omitempty"`
 	ContinueAssessment bool                    `json:"continue_assessment,omitempty"`
+}
+
+func parsePostRunReply(raw string) postRunReply {
+	var reply postRunReply
+	if err := json.Unmarshal([]byte(raw), &reply); err != nil {
+		reply.Text = strings.TrimSpace(raw)
+	}
+	if strings.TrimSpace(reply.Text) == "" {
+		reply.Text = reply.Message
+	}
+	reply.Text = strings.TrimSpace(reply.Text)
+	return reply
 }
 
 func terminalState(status string) bool {
@@ -137,11 +150,7 @@ func (a App) postRunConversation(ctx context.Context, c *Console, client llmclie
 			c.Print("Coordinator chat unavailable: %v\n", err)
 			continue
 		}
-		var reply postRunReply
-		if err := json.Unmarshal([]byte(raw), &reply); err != nil {
-			reply.Text = strings.TrimSpace(raw)
-		}
-		reply.Text = strings.TrimSpace(reply.Text)
+		reply := parsePostRunReply(raw)
 		if reply.Text == "" {
 			c.Print("Coordinator response was empty; please try again.\n")
 			continue
