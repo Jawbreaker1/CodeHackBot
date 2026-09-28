@@ -28,12 +28,13 @@ func TestRecallContextFindsOffloadedResultAndReadsRegisteredLog(t *testing.T) {
 		t.Fatal(err)
 	}
 	packet := ctxpacket.WorkerPacket{RelevantRecentResults: results}
-	view, err := packet.ModelView(100000)
+	const budget = 4500
+	view, err := packet.ModelView(budget)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(view.RelevantRecentResults) != 8 || view.OffloadedResultCount != 22 {
-		t.Fatal("old result was not removed from the per-turn model view")
+	if len(view.RelevantRecentResults) >= 30 || len(view.RelevantRecentResults)+view.OffloadedResultCount != 30 || len(view.Render()) > budget {
+		t.Fatal("tight model view did not offload older results")
 	}
 	loop := Loop{Executor: execx.Executor{LogDir: logDir}}
 	index, err := loop.recallContext(packet, Response{Type: "recall_context", ContextQuery: "find the older command result showing tenant boundary in the authorization source"})

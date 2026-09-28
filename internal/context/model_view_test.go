@@ -50,10 +50,10 @@ func TestModelViewBoundsHistoryWithoutChangingEvidenceOrTask(t *testing.T) {
 	if !strings.Contains(v.Render(), "first line\n  keep indentation\nlast line") {
 		t.Fatal("operator answer lost")
 	}
-	if len(v.RelevantRecentResults) != 8 || len(p.RelevantRecentResults[7].OutputEvidence) != 20000 {
-		t.Fatal("persisted observations changed or identity dropped")
+	if len(v.RelevantRecentResults)+v.OffloadedResultCount != 8 || len(p.RelevantRecentResults[7].OutputEvidence) != 20000 {
+		t.Fatal("persisted observations changed or offloaded count is wrong")
 	}
-	if len(v.RelevantRecentResults[7].ActualExec) >= len(p.RelevantRecentResults[7].ActualExec) {
+	if len(v.RelevantRecentResults) > 0 && len(v.RelevantRecentResults[len(v.RelevantRecentResults)-1].ActualExec) >= len(p.RelevantRecentResults[7].ActualExec) {
 		t.Fatal("large command body was not compacted")
 	}
 	if len(v.LatestExecutionResult.ActualExec) >= len(p.LatestExecutionResult.ActualExec) {
@@ -99,8 +99,8 @@ func TestModelViewOffloadsOlderEvidenceBeforeHardLimit(t *testing.T) {
 	if !strings.HasPrefix(v.LatestExecutionResult.OutputEvidence, "current decisive observation") || len(v.LatestExecutionResult.OutputEvidence) >= len(p.LatestExecutionResult.OutputEvidence) || v.LatestExecutionResult.LogRefs[0] != "/logs/latest" || v.RelevantRecentResults[0].OutputEvidence != "recent diagnostic" {
 		t.Fatal("current or recent observations were lost")
 	}
-	if strings.Contains(v.RelevantRecentResults[1].OutputEvidence, "older output") || v.RelevantRecentResults[1].LogRefs[0] != "/logs/older" || p.RelevantRecentResults[1].OutputEvidence == v.RelevantRecentResults[1].OutputEvidence {
-		t.Fatal("older evidence was not offloaded with its reference retained")
+	if !strings.HasPrefix(v.RelevantRecentResults[1].OutputEvidence, "older output") || v.RelevantRecentResults[1].LogRefs[0] != "/logs/older" || p.RelevantRecentResults[1].OutputEvidence == v.RelevantRecentResults[1].OutputEvidence {
+		t.Fatal("older evidence excerpt or its reference was lost")
 	}
 	if len(v.PlanHistory[0].Plan.Steps) != 0 || v.PlanHistory[0].AfterExecutionLog != "/logs/first" || len(p.PlanHistory[0].Plan.Steps) != 2 || len(v.ContextNotes) == 0 {
 		t.Fatal("plan revision was not compacted transparently")
@@ -137,7 +137,7 @@ func TestModelViewKeepsEvidenceIndexWithoutResendingLongHistory(t *testing.T) {
 	}
 }
 
-func TestModelViewOffloadsOldResultsOnEveryTurn(t *testing.T) {
+func TestModelViewUsesAvailableHeadroomBeforeOffloadingResults(t *testing.T) {
 	p := NewInitialWorkerPacket(behavior.Frame{SystemPrompt: "policy"}, session.Foundation{Goal: "inspect source"}, "/tmp", "fixture", "per_action", 40)
 	for i := 0; i < 40; i++ {
 		p.RelevantRecentResults = append(p.RelevantRecentResults, ExecutionResult{
@@ -148,22 +148,26 @@ func TestModelViewOffloadsOldResultsOnEveryTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(view.RelevantRecentResults) != 8 || view.OffloadedResultCount != 32 {
-		t.Fatalf("working set contains %d results, offloaded %d", len(view.RelevantRecentResults), view.OffloadedResultCount)
+	if len(view.RelevantRecentResults) != 40 || view.OffloadedResultCount != 0 {
+		t.Fatalf("working set discarded results despite ample room: retained %d, offloaded %d", len(view.RelevantRecentResults), view.OffloadedResultCount)
 	}
 	if len(p.RelevantRecentResults) != 40 || p.OffloadedResultCount != 0 {
 		t.Fatal("model projection changed the authoritative history")
 	}
-	if view.RelevantRecentResults[0].LogRefs[0] != "/logs/0" || !strings.Contains(view.Render(), "recall_context") {
-		t.Fatal("working set lost recent provenance or the retrieval instruction")
+	if view.RelevantRecentResults[0].LogRefs[0] != "/logs/0" {
+		t.Fatal("working set lost recent provenance")
 	}
+	budget := len(view.Render()) - 1500
 	p.PinnedResultRefs = []string{"/logs/39"}
-	view, err = p.ModelView(100000)
+	view, err = p.ModelView(budget)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(view.RelevantRecentResults) != 9 || view.OffloadedResultCount != 31 || view.RelevantRecentResults[8].LogRefs[0] != "/logs/39" {
-		t.Fatal("the model-selected older result was not restored to the next working set")
+	if view.OffloadedResultCount == 0 || len(view.RelevantRecentResults)+view.OffloadedResultCount != 40 || len(view.Render()) > budget {
+		t.Fatalf("working set did not use the tight budget correctly: retained=%d offloaded=%d bytes=%d budget=%d", len(view.RelevantRecentResults), view.OffloadedResultCount, len(view.Render()), budget)
+	}
+	if !pinnedResult([]string{"/logs/39"}, view.RelevantRecentResults[len(view.RelevantRecentResults)-1]) {
+		t.Fatal("model-selected older result was dropped before unpinned results")
 	}
 }
 

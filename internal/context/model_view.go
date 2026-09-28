@@ -24,24 +24,9 @@ func (p WorkerPacket) ModelView(maxBytes int) (WorkerPacket, error) {
 	v := p.Clone()
 	v.TaskRuntime.CurrentTarget, v.TaskRuntime.MissingFact = "", ""
 	v.ContextNotes = nil
-	// Rebuild the working set on every request, including when the provider has
-	// spare room. Older results stay in the authoritative packet and log files;
-	// recall_context can search or retrieve them when a later question needs one.
-	const recentResultLimit = 8
-	if len(v.RelevantRecentResults) > recentResultLimit {
-		all := v.RelevantRecentResults
-		selected := append([]ExecutionResult(nil), all[:recentResultLimit]...)
-		for _, ref := range v.PinnedResultRefs {
-			for _, result := range all[recentResultLimit:] {
-				if pinnedResult([]string{ref}, result) {
-					selected = append(selected, result)
-					break
-				}
-			}
-		}
-		v.OffloadedResultCount += len(all) - len(selected)
-		v.RelevantRecentResults = selected
-	}
+	// Rebuild the working set on every request. Retain all bounded result cards
+	// while the selected model's request budget has room; age alone is not a
+	// reason to discard evidence. The authoritative packet and logs remain full.
 	// The authoritative packet retains every copy of the task contract. The
 	// model needs one canonical goal, not the same long assignment repeated in
 	// the current step, plan and first conversation entry on every turn.
@@ -93,14 +78,12 @@ func (p WorkerPacket) ModelView(maxBytes int) (WorkerPacket, error) {
 			r.OutputSummary = excerpt(r.OutputSummary, 768)
 			continue
 		}
-		if len(r.Action) > 160 || len(r.ActualExec) > 160 || len(r.OutputEvidence) > 0 || len(r.OutputSummary) > 256 || len(r.ArtifactRefs) > 2 {
+		if len(r.Action) > 160 || len(r.ActualExec) > 160 || len(r.OutputEvidence) > 2048 || len(r.OutputSummary) > 256 || len(r.ArtifactRefs) > 2 {
 			shortened = true
 		}
 		r.Action = excerpt(r.Action, 160)
 		r.ActualExec = excerpt(r.ActualExec, 160)
-		if r.OutputEvidence != "" {
-			r.OutputEvidence = "(omitted from model view; consult log_refs)"
-		}
+		r.OutputEvidence = excerpt(r.OutputEvidence, 2048)
 		r.OutputSummary = excerpt(r.OutputSummary, 256)
 		if len(r.ArtifactRefs) > 2 {
 			r.ArtifactRefs = r.ArtifactRefs[:2]
@@ -135,6 +118,11 @@ func (p WorkerPacket) ModelView(maxBytes int) (WorkerPacket, error) {
 		v.RelevantRecentResults[i].OutputEvidence = "(omitted; consult log_refs)"
 		v.RelevantRecentResults[i].OutputSummary = excerpt(v.RelevantRecentResults[i].OutputSummary, 256)
 	}
+	// After shortening bodies, offload the oldest unpinned result cards. A
+	// model-selected pin earns space when possible but never overrides the hard
+	// request ceiling. The result remains searchable in the authoritative packet.
+	for size() > maxBytes && pruneOldestResult(&v, false) {
+	}
 	for len(v.RecentConversation) > 1 && size() > maxBytes {
 		v.RecentConversation = v.RecentConversation[1:]
 	}
@@ -157,10 +145,24 @@ func (p WorkerPacket) ModelView(maxBytes int) (WorkerPacket, error) {
 		v.LatestExecutionResult.OutputEvidence = excerpt(v.LatestExecutionResult.OutputEvidence, 4096)
 		v.LatestExecutionResult.OutputSummary = excerpt(v.LatestExecutionResult.OutputSummary, 512)
 	}
+	for size() > maxBytes && pruneOldestResult(&v, true) {
+	}
 	if size() > maxBytes {
 		return WorkerPacket{}, fmt.Errorf("worker context needs %d bytes after compaction; allowance is %d; shorten the task or supporting material", size(), maxBytes)
 	}
 	return v, nil
+}
+
+func pruneOldestResult(view *WorkerPacket, includePinned bool) bool {
+	for i := len(view.RelevantRecentResults) - 1; i >= 0; i-- {
+		if !includePinned && pinnedResult(view.PinnedResultRefs, view.RelevantRecentResults[i]) {
+			continue
+		}
+		view.RelevantRecentResults = append(view.RelevantRecentResults[:i], view.RelevantRecentResults[i+1:]...)
+		view.OffloadedResultCount++
+		return true
+	}
+	return false
 }
 
 func pinnedResult(refs []string, result ExecutionResult) bool {
