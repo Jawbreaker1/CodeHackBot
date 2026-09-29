@@ -1,6 +1,7 @@
 package workerloop
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,6 +51,71 @@ func TestRecallContextFindsOffloadedResultAndReadsRegisteredLog(t *testing.T) {
 	}
 	if refs := registeredContextRefs(packet, []string{oldRef, filepath.Join(logDir, "unrecorded")}); len(refs) != 1 || refs[0] != oldRef {
 		t.Fatalf("pinned an unregistered result: %v", refs)
+	}
+}
+
+func TestRecallContextRecoversOffloadedConversationAndPlan(t *testing.T) {
+	packet := ctxpacket.WorkerPacket{}
+	for i := 0; i < 60; i++ {
+		packet.RecentConversation = append(packet.RecentConversation, fmt.Sprintf("User: routine-%02d %s", i, strings.Repeat("ordinary context ", 20)))
+		packet.PlanHistory = append(packet.PlanHistory, ctxpacket.PlanRevision{Turn: i + 1, Plan: ctxpacket.PlanState{Summary: fmt.Sprintf("routine plan %02d", i)}})
+	}
+	const earlyOperator = "Operator answer: Preserve the original source labels and compare only the supplied records."
+	packet.RecentConversation[2] = earlyOperator
+	packet.PlanHistory[2].Plan.Summary = "Early plan: compare the original source labels"
+	view, err := packet.ModelView(7000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(view.Render(), earlyOperator) || view.OffloadedPlanCount == 0 {
+		t.Fatal("fixture did not offload early conversation and plan content")
+	}
+	loop := Loop{Executor: execx.Executor{LogDir: t.TempDir()}}
+	index, err := loop.recallContext(packet, Response{Type: "recall_context", ContextQuery: "original source labels"})
+	if err != nil || !index.Matched || !strings.Contains(index.Content, `ref="conversation:2"`) || !strings.Contains(index.Content, `ref="plan:2"`) {
+		t.Fatalf("saved context index did not find both sources: %+v, %v", index, err)
+	}
+	conversation, err := loop.recallContext(packet, Response{Type: "recall_context", ContextRef: "conversation:2"})
+	if err != nil || conversation.Content != earlyOperator || conversation.NextOffset != int64(len(earlyOperator)) {
+		t.Fatalf("operator direction could not be recovered exactly: %+v, %v", conversation, err)
+	}
+	plan, err := loop.recallContext(packet, Response{Type: "recall_context", ContextRef: "plan:2"})
+	if err != nil || !strings.Contains(plan.Content, "Early plan: compare the original source labels") {
+		t.Fatalf("saved plan could not be recovered: %+v, %v", plan, err)
+	}
+	if _, err := loop.recallContext(packet, Response{Type: "recall_context", ContextRef: "conversation:60"}); err == nil {
+		t.Fatal("unregistered conversation reference was accepted")
+	}
+}
+
+func TestRecallContextUTF8PagesHaveExactOffsets(t *testing.T) {
+	logDir := t.TempDir()
+	ref := filepath.Join(logDir, "text")
+	saved := strings.Repeat("a", recallChunkBytes-1) + "å" + strings.Repeat("b", 20)
+	if err := os.WriteFile(ref+".stdout", []byte(saved), 0600); err != nil {
+		t.Fatal(err)
+	}
+	packet := ctxpacket.WorkerPacket{LatestExecutionResult: ctxpacket.ExecutionResult{Action: "read saved text", LogRefs: []string{ref}}}
+	loop := Loop{Executor: execx.Executor{LogDir: logDir}}
+	first, err := loop.recallContext(packet, Response{Type: "recall_context", ContextRef: ref})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := loop.recallContext(packet, Response{Type: "recall_context", ContextRef: ref, ContextOffset: first.NextOffset})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Content+second.Content != saved || first.NextOffset != recallChunkBytes-1 || second.NextOffset != int64(len(saved)) {
+		t.Fatalf("page boundary changed saved UTF-8 text: first=%+v second=%+v", first, second)
+	}
+	packet.RecentConversation = []string{"Operator answer: " + saved}
+	first, err = loop.recallContext(packet, Response{Type: "recall_context", ContextRef: "conversation:0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err = loop.recallContext(packet, Response{Type: "recall_context", ContextRef: "conversation:0", ContextOffset: first.NextOffset})
+	if err != nil || first.Content+second.Content != packet.RecentConversation[0] {
+		t.Fatalf("saved conversation pagination changed UTF-8 text: first=%+v second=%+v err=%v", first, second, err)
 	}
 }
 

@@ -48,10 +48,13 @@ func (p WorkerPacket) ModelView(maxBytes int) (WorkerPacket, error) {
 	if size() <= maxBytes {
 		return v, nil
 	}
-	v.ContextNotes = []string{"This request reached its context budget. Older details were shortened or offloaded; full records remain in session state and referenced logs. Use recall_context for exact prior output."}
+	v.ContextNotes = []string{"This request reached its context budget. Older details were shortened or offloaded; full records remain in session state and referenced logs. Use recall_context to search and read prior output, conversation, or plan revisions."}
 	// Only a request that exceeds its allowance starts compaction. Shorten older
 	// results first, preserving their observations and references where possible.
 	for i := len(v.RelevantRecentResults) - 1; i >= 0 && size() > maxBytes; i-- {
+		if pinnedResult(v.PinnedResultRefs, v.RelevantRecentResults[i]) {
+			continue
+		}
 		v.RelevantRecentResults[i].Action = excerpt(v.RelevantRecentResults[i].Action, 512)
 		v.RelevantRecentResults[i].ActualExec = excerpt(v.RelevantRecentResults[i].ActualExec, 512)
 		v.RelevantRecentResults[i].OutputEvidence = excerpt(v.RelevantRecentResults[i].OutputEvidence, 2048)
@@ -68,11 +71,36 @@ func (p WorkerPacket) ModelView(maxBytes int) (WorkerPacket, error) {
 		revision.Plan.ReplanConditions = nil
 	}
 	for i := len(v.RelevantRecentResults) - 1; i >= 0 && size() > maxBytes; i-- {
+		if pinnedResult(v.PinnedResultRefs, v.RelevantRecentResults[i]) {
+			continue
+		}
 		v.RelevantRecentResults[i].OutputEvidence = "(omitted; consult log_refs)"
 		v.RelevantRecentResults[i].OutputSummary = excerpt(v.RelevantRecentResults[i].OutputSummary, 256)
 	}
+	// The most recent operator direction remains authoritative even when an
+	// assistant response follows it in the transcript.
+	protectedTurn := -1
+	for i := len(v.RecentConversation) - 1; i >= 0; i-- {
+		if strings.HasPrefix(v.RecentConversation[i], "User: ") || strings.HasPrefix(v.RecentConversation[i], "Operator answer: ") {
+			protectedTurn = i
+			break
+		}
+	}
 	for len(v.RecentConversation) > 1 && size() > maxBytes {
-		v.RecentConversation = v.RecentConversation[1:]
+		remove := -1
+		for i := range v.RecentConversation {
+			if i != protectedTurn {
+				remove = i
+				break
+			}
+		}
+		if remove < 0 {
+			break
+		}
+		v.RecentConversation = append(v.RecentConversation[:remove], v.RecentConversation[remove+1:]...)
+		if protectedTurn > remove {
+			protectedTurn--
+		}
 	}
 	if size() > maxBytes {
 		v.OlderConversationSummary = "(omitted for context budget; retained in session state)"
@@ -85,17 +113,38 @@ func (p WorkerPacket) ModelView(maxBytes int) (WorkerPacket, error) {
 		v.MemoryBankRetrievals[i] = excerpt(v.MemoryBankRetrievals[i], 1024)
 	}
 	if size() > maxBytes {
-		v.ContextRecall.Content = excerpt(v.ContextRecall.Content, 2048)
-	}
-	if size() > maxBytes {
 		v.LatestExecutionResult.Action = excerpt(v.LatestExecutionResult.Action, 1024)
 		v.LatestExecutionResult.ActualExec = excerpt(v.LatestExecutionResult.ActualExec, 2048)
 		v.LatestExecutionResult.OutputEvidence = excerpt(v.LatestExecutionResult.OutputEvidence, 4096)
 		v.LatestExecutionResult.OutputSummary = excerpt(v.LatestExecutionResult.OutputSummary, 512)
 	}
-	// Pinned results earn space while it is available; no pin can override the
+	// Historical plan revisions have a fixed-size floor after field pruning.
+	// Keep the latest revision and count earlier ones omitted from this view.
+	for size() > maxBytes && len(v.PlanHistory) > 1 {
+		v.PlanHistory = v.PlanHistory[1:]
+		v.OffloadedPlanCount++
+	}
+	// Pinned results earn space before unpinned cards; no pin overrides the
 	// hard limit. Full results remain in the authoritative packet and logs.
 	for size() > maxBytes && pruneOldestResult(&v, false) {
+	}
+	if size() > maxBytes {
+		v.ContextRecall.Content = excerpt(v.ContextRecall.Content, 2048)
+	}
+	for i := len(v.RelevantRecentResults) - 1; i >= 0 && size() > maxBytes; i-- {
+		if !pinnedResult(v.PinnedResultRefs, v.RelevantRecentResults[i]) {
+			continue
+		}
+		v.RelevantRecentResults[i].Action = excerpt(v.RelevantRecentResults[i].Action, 512)
+		v.RelevantRecentResults[i].ActualExec = excerpt(v.RelevantRecentResults[i].ActualExec, 512)
+		v.RelevantRecentResults[i].OutputEvidence = excerpt(v.RelevantRecentResults[i].OutputEvidence, 2048)
+		v.RelevantRecentResults[i].OutputSummary = excerpt(v.RelevantRecentResults[i].OutputSummary, 768)
+	}
+	for i := len(v.RelevantRecentResults) - 1; i >= 0 && size() > maxBytes; i-- {
+		if pinnedResult(v.PinnedResultRefs, v.RelevantRecentResults[i]) {
+			v.RelevantRecentResults[i].OutputEvidence = "(omitted; consult log_refs)"
+			v.RelevantRecentResults[i].OutputSummary = excerpt(v.RelevantRecentResults[i].OutputSummary, 256)
+		}
 	}
 	for size() > maxBytes && pruneOldestResult(&v, true) {
 	}

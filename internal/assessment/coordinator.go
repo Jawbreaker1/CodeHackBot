@@ -412,9 +412,6 @@ func (c Coordinator) syncConversation(state *State) {
 		return
 	}
 	values := c.Conversation()
-	if len(values) > 24 {
-		values = values[len(values)-24:]
-	}
 	state.OperatorMessages = append([]string(nil), values...)
 }
 
@@ -435,6 +432,9 @@ type coordinatorModelPacket struct {
 	Instructions     []string               `json:"instructions"`
 	Assessment       coordinatorPromptState `json:"assessment"`
 	RecordedEvidence map[string][]string    `json:"recorded_evidence"`
+	OmittedMessages  int                    `json:"omitted_messages,omitempty"`
+	OmittedPlans     int                    `json:"omitted_plans,omitempty"`
+	OmittedResults   int                    `json:"omitted_results,omitempty"`
 	ContextNotes     []string               `json:"context_notes,omitempty"`
 }
 
@@ -524,13 +524,7 @@ type compactTask struct {
 }
 
 type compactFinding struct {
-	Title          string   `json:"title"`
-	Status         string   `json:"status"`
-	Severity       string   `json:"severity,omitempty"`
-	Confidence     string   `json:"confidence,omitempty"`
-	ValidationTask string   `json:"validation_task,omitempty"`
-	Impact         string   `json:"impact,omitempty"`
-	Evidence       []string `json:"evidence,omitempty"`
+	Finding
 }
 
 type compactDecision struct {
@@ -583,7 +577,7 @@ func compactCoordinatorState(state State) coordinatorPromptState {
 			item.Tasks = append(item.Tasks, entry)
 		}
 		for _, finding := range plan.Findings {
-			item.Findings = append(item.Findings, compactFinding{Title: finding.Title, Status: finding.Status, Severity: finding.Severity, Confidence: finding.Confidence, ValidationTask: finding.ValidationTask, Impact: finding.Impact, Evidence: append([]string(nil), finding.Evidence...)})
+			item.Findings = append(item.Findings, compactFinding{Finding: finding})
 		}
 		for _, gap := range plan.Gaps {
 			item.Gaps = append(item.Gaps, gap)

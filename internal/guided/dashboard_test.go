@@ -40,15 +40,18 @@ func TestDashboardTextCompactsMultilineMessages(t *testing.T) {
 	}
 }
 
-func TestAssessmentConversationRetainsBoundedOperatorHistory(t *testing.T) {
+func TestAssessmentConversationRetainsFullOperatorHistory(t *testing.T) {
 	c := &assessmentConversation{}
-	for i := 0; i < 20; i++ {
+	for i := 0; i < 100; i++ {
 		c.Add("user", fmt.Sprintf("message-%02d", i))
 	}
-	if got := len(c.Messages()); got != 12 {
-		t.Fatalf("conversation length = %d, want 12", got)
+	if got := len(c.Messages()); got != 100 {
+		t.Fatalf("conversation length = %d, want 100", got)
 	}
-	if got := c.Messages()[0].Content; got != "message-08" {
+	if got := c.Messages()[0].Content; got != "message-00" {
 		t.Fatalf("oldest retained message = %q", got)
+	}
+	if got := c.Transcript()[99]; got != "user: message-99" {
+		t.Fatalf("latest transcript entry = %q", got)
 	}
 }

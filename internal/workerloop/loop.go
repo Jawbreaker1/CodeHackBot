@@ -116,6 +116,9 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 	}
 
 	completionRejectionsWithoutAction := 0
+	// Reading a new recorded excerpt is progress even though it does not run a
+	// command. Repeating the same read still counts toward the no-progress gate.
+	recalledKeys := map[string]bool{}
 	for current.Budget.Used < current.Budget.Limit {
 		current.WorkProgress.ElapsedSeconds = int64(time.Since(current.WorkProgress.StartedAt).Seconds())
 		if current.WorkProgress.DecisionsSinceExecution >= 4 {
@@ -134,6 +137,9 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 		}
 		current.CurrentStep.RemainingBudget = fmt.Sprintf("%d steps", current.Budget.Limit-current.Budget.Used)
 		input := current.Clone()
+		input.Budget.Used++
+		input.WorkProgress.DecisionsSinceExecution++
+		input.CurrentStep.RemainingBudget = fmt.Sprintf("%d steps", input.Budget.Limit-input.Budget.Used)
 		if reader, ok := l.Inspector.(interface{ ReadOmissions() ([]string, error) }); ok {
 			omissions, readErr := reader.ReadOmissions()
 			if readErr != nil {
@@ -150,7 +156,6 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 		current.WorkProgress.DecisionsSinceExecution++
 		current.CurrentStep.RemainingBudget = fmt.Sprintf("%d steps", current.Budget.Limit-current.Budget.Used)
 		step := current.Budget.Used
-		view.Budget = current.Budget
 		if err := l.emit(EventDecisionStarted, current, "worker deciding next step"); err != nil {
 			return out, err
 		}
@@ -222,7 +227,15 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 				current.RunningSummary = "Context recall failed: " + lookupErr.Error()
 			} else {
 				current.ContextRecall = recalled
-				current.RunningSummary = "A bounded excerpt from recorded task evidence is available for the next decision; its source reference is in context_recall."
+				current.RunningSummary = "A bounded excerpt from saved task context is available for the next decision; its source reference is in context_recall."
+				key := fmt.Sprintf("%q:%q:%s:%d", response.ContextQuery, response.ContextRef, response.ContextStream, response.ContextOffset)
+				if !recalledKeys[key] && recalled.Matched {
+					current.WorkProgress.DecisionsSinceExecution = 0
+					if recalled.Stream != "index" {
+						completionRejectionsWithoutAction = 0
+					}
+					recalledKeys[key] = true
+				}
 			}
 			if err := l.capture(step, "context-recalled", current); err != nil {
 				return out, err
@@ -410,10 +423,14 @@ func (l Loop) modelView(p *ctxpacket.WorkerPacket, prompt func(ctxpacket.WorkerP
 			p.OperatorState = view.OperatorState
 			return view, nil
 		}
-		// ModelView bounds the packet render, while the client enforces the
-		// complete message text. Tighten the packet allowance by the observed
-		// excess and leave a small margin for JSON escaping changes.
-		allowance -= used - limit
+		// The prompt adds instructions and JSON escaping to the packet. Reduce
+		// the packet allowance by that measured overhead, not just by the tiny
+		// final excess: whole conversation turns can make projection sizes jump.
+		nextAllowance := limit - (used - len(view.Render())) - 256
+		if nextAllowance >= allowance {
+			nextAllowance = allowance - max(used-limit+256, 256)
+		}
+		allowance = nextAllowance
 		if allowance <= 0 {
 			break
 		}
@@ -497,7 +514,7 @@ func buildUserPrompt(packet ctxpacket.WorkerPacket) string {
 		"instructions": []string{
 			"Respond with one JSON object only. Choose bash, load_strategy, recall_context, step_complete, ask_user, or blocked. Attach an optional plan to any decision; use update_plan alone only when a material change needs to be shown and no action is ready.",
 			"To keep one relevant local guide in this worker's context across later turns: {\"type\":\"load_strategy\",\"strategy\":\"relative/path/from/catalog.md\"}. Choose it from the local strategy catalog in the behavior frame when it can improve an unfamiliar or failed approach. A coordinator-suggested path in capability_inputs is a lead, not a required choice; change guides if observations call for it. The runtime reads only a bounded Markdown file within that catalog directory and records its path and SHA-256; it is supporting knowledge, not target evidence or permission. Do not use bash just to read a strategy guide, and do not load unrelated guides.",
-			"The packet shows only a working set of recent results. Older results remain in the saved task. When an older observation matters, use {\"type\":\"recall_context\",\"context_query\":\"distinctive subject or command\"} to find its recorded log reference, or {\"type\":\"recall_context\",\"context_ref\":\"exact registered log reference\",\"context_stream\":\"stdout\",\"context_offset\":0} to read a bounded slice of its saved output. Use stderr when relevant and advance the byte offset for later slices. This is read-only retrieval, not a new test or proof beyond the saved evidence. Do not recall material already present in the latest result.",
+			"The packet is a working set. For an older observation, operator message, or plan revision, use {\"type\":\"recall_context\",\"context_query\":\"distinctive subject\"} to find a saved reference. A search result is navigation; read the exact returned reference before making a precise quotation or claim about omitted material. Read a registered log with context_ref, context_stream stdout or stderr, and context_offset; read a conversation:N or plan:N reference with context_ref and context_offset only. Each result gives next_offset for another slice. Retrieval is read-only and does not establish new evidence. Do not recall material already present in the latest result.",
 			"On any decision, optionally set context_keep_refs to up to two exact recorded log references whose older observations still matter to the current plan. It replaces the previous pinned set; use an empty array to release them. The runtime keeps recent results regardless, and all other full results remain saved for later recall. Pin only evidence that may change a coming decision; do not pin text just because it is long.",
 			"For a direct command: {\"type\":\"bash\",\"command\":\"executable\",\"args\":[\"literal argument\"],\"use_shell\":false,\"impact\":\"short plain-language effect and risk\",\"artifacts\":[\"relative/path-created-by-this-command\"]}. This is the general execution tool, not a command-specific tool. Never add shell quotes to literal arguments. Declare at most eight bounded regular files the approved command is expected to create inside the worker workspace; declared artifacts are registered only after execution. A command may produce more files, but list the most useful eight and keep the others discoverable through the task-local log or workspace.",
 			"For Bash syntax such as pipes or redirection: {\"type\":\"bash\",\"command\":\"complete Bash script\",\"use_shell\":true}. Omit args. The runtime uses /bin/bash -c and shows the exact invocation before execution.",

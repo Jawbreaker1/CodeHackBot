@@ -71,7 +71,9 @@ type ContextRecall struct {
 	Ref        string
 	Query      string
 	Stream     string
+	Matched    bool
 	Offset     int64
+	NextOffset int64
 	TotalBytes int64
 	Action     string
 	ExitStatus string
@@ -124,6 +126,7 @@ type WorkerPacket struct {
 	RelevantRecentResults    []ExecutionResult
 	PinnedResultRefs         []string
 	OffloadedResultCount     int
+	OffloadedPlanCount       int
 	ContextRecall            ContextRecall
 	MemoryBankRetrievals     []string
 	StrategyGuidance         []StrategyDocument
@@ -239,6 +242,7 @@ func (p WorkerPacket) RenderSections() []RenderedSection {
 		{Name: "relevant_recent_results", Content: renderExecutionResults(p.RelevantRecentResults)},
 		{Name: "pinned_result_refs", Content: renderList(p.PinnedResultRefs)},
 		{Name: "offloaded_result_count", Content: strconv.Itoa(p.OffloadedResultCount)},
+		{Name: "offloaded_plan_count", Content: strconv.Itoa(p.OffloadedPlanCount)},
 		{Name: "context_recall", Content: renderContextRecall(p.ContextRecall)},
 		{Name: "memory_bank_retrievals", Content: renderList(p.MemoryBankRetrievals)},
 		{Name: "strategy_guidance", Content: renderStrategyGuidance(p.StrategyGuidance)},
@@ -257,7 +261,9 @@ func renderContextRecall(r ContextRecall) string {
 		"ref: " + blankOrValue(r.Ref),
 		"query: " + strconv.Quote(r.Query),
 		"stream: " + blankOrValue(r.Stream),
+		"matched: " + strconv.FormatBool(r.Matched),
 		"offset: " + strconv.FormatInt(r.Offset, 10),
+		"next_offset: " + strconv.FormatInt(r.NextOffset, 10),
 		"total_bytes: " + strconv.FormatInt(r.TotalBytes, 10),
 		"action: " + strconv.Quote(r.Action),
 		"exit_status: " + blankOrValue(r.ExitStatus),

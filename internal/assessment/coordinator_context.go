@@ -31,6 +31,9 @@ func coordinatorPromptBounded(state State, maxBytes int) (string, error) {
 			for _, ref := range finding.Evidence {
 				protectedEvidence[ref] = true
 			}
+			for _, ref := range finding.References {
+				protectedEvidence[ref] = true
+			}
 		}
 	}
 	oldCount := len(packet.Assessment.Results) - 2
@@ -60,10 +63,6 @@ func coordinatorPromptBounded(state State, maxBytes int) (string, error) {
 	if oldCount > 0 {
 		packet.ContextNotes = append(packet.ContextNotes, "Older workers are compact navigation entries. Full results and evidence remain under tasks/<task-id>/; delegate a focused evidence read when an older detail matters.")
 	}
-	if len(packet.Assessment.OperatorMessages) > 12 {
-		packet.Assessment.OperatorMessages = packet.Assessment.OperatorMessages[len(packet.Assessment.OperatorMessages)-12:]
-		packet.ContextNotes = append(packet.ContextNotes, "Only the latest operator conversation excerpts are in this planning view; the durable conversation is retained locally.")
-	}
 	prompt = encode()
 	if len(prompt) <= maxBytes {
 		return prompt, nil
@@ -86,8 +85,30 @@ func coordinatorPromptBounded(state State, maxBytes int) (string, error) {
 	if len(prompt) <= maxBytes {
 		return prompt, nil
 	}
+	protectedMessage := -1
+	for i := len(packet.Assessment.OperatorMessages) - 1; i >= 0; i-- {
+		message := strings.ToLower(strings.TrimSpace(packet.Assessment.OperatorMessages[i]))
+		if strings.HasPrefix(message, "user:") || strings.HasPrefix(message, "operator answer:") {
+			protectedMessage = i
+			break
+		}
+	}
 	for len(packet.Assessment.OperatorMessages) > 1 && len(prompt) > maxBytes {
-		packet.Assessment.OperatorMessages = packet.Assessment.OperatorMessages[1:]
+		remove := -1
+		for i := range packet.Assessment.OperatorMessages {
+			if i != protectedMessage {
+				remove = i
+				break
+			}
+		}
+		if remove < 0 {
+			break
+		}
+		packet.Assessment.OperatorMessages = append(packet.Assessment.OperatorMessages[:remove], packet.Assessment.OperatorMessages[remove+1:]...)
+		packet.OmittedMessages++
+		if protectedMessage > remove {
+			protectedMessage--
+		}
 		prompt = encode()
 	}
 	for i := 0; i < oldCount; i++ {
@@ -123,6 +144,30 @@ func coordinatorPromptBounded(state State, maxBytes int) (string, error) {
 		}
 		packet.ContextNotes = append(packet.ContextNotes, "Recent worker prose was shortened at both ends; exact observations remain in the evidence index and saved task records.")
 		prompt = encode()
+	}
+	if len(prompt) > maxBytes {
+		for len(packet.Assessment.Plans) > 1 && len(prompt) > maxBytes {
+			packet.Assessment.Plans = packet.Assessment.Plans[1:]
+			packet.OmittedPlans++
+			prompt = encode()
+		}
+	}
+	if len(prompt) > maxBytes {
+		for len(packet.Assessment.Results) > 2 && len(prompt) > maxBytes {
+			remove := -1
+			for i, result := range packet.Assessment.Results[:len(packet.Assessment.Results)-2] {
+				if len(packet.RecordedEvidence[result.Task.ID]) == 0 {
+					remove = i
+					break
+				}
+			}
+			if remove < 0 {
+				break
+			}
+			packet.Assessment.Results = append(packet.Assessment.Results[:remove], packet.Assessment.Results[remove+1:]...)
+			packet.OmittedResults++
+			prompt = encode()
+		}
 	}
 	if len(prompt) > maxBytes {
 		return "", fmt.Errorf("coordinator context needs %d bytes after compaction; allowance is %d; narrow the planning question or use a larger model profile", len(prompt), maxBytes)

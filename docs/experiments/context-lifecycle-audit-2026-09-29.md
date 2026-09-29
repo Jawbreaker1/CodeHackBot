@@ -1,0 +1,28 @@
+# Context lifecycle audit — 2026-09-29
+
+The saved assessment and each worker packet are the source of truth. A request to a model is a bounded projection of that state. This audit followed information from CLI conversation capture and coordinator synchronization through worker planning, projection, recall, exact model messages, and session persistence. The fixture used synthetic text only.
+
+## Reproduced problems and changes
+
+- CLI conversation capture discarded every message older than the last 12, and coordinator synchronization discarded every message older than the last 24, before checking available model space. Both fixed caps were removed. The CLI transcript and coordinator state now retain the full local history; a particular request still compacts under its configured byte ceiling.
+- Under pressure, both projections could keep an assistant reply while dropping the latest user direction. They now protect the newest operator turn regardless of a later assistant message. A protected item that cannot fit produces a visible budget error.
+- The coordinator always omitted CVE IDs, affected software, research references, reproduction steps, and remediation from finding drafts. Current findings now carry those fields. Registered research references are protected alongside finding evidence when older result indexes shrink.
+- Hundreds of small plan revisions could make a worker request impossible even when its active plan was small. Historical revisions now leave the model view with an omission count; the saved packet remains complete. Coordinator planning can similarly omit old plans and unreferenced result cards after other pressure relief, retaining the current round and referenced sources.
+- Pinned older evidence was shortened before routine unpinned evidence. The projection now sheds routine history first. A pin still cannot exceed the hard request limit.
+- `recall_context` previously reached only command logs. It now searches saved worker conversation and plan revisions as well as result previews. Exact returned `conversation:N` and `plan:N` references support bounded, read-only page retrieval. Pages provide the next byte offset and preserve valid UTF-8 across a boundary. Search previews are navigation; precise claims should use an exact source read.
+- Four distinct read-only recall decisions were treated as no progress. New successful reads now advance progress, while repeated identical reads still reach the existing stop. An exact new source read also clears completion rejections from an earlier insufficient proposal.
+- The worker request could fail near its byte limit even though a smaller view would fit: the renderer and JSON prompt had different overhead, and the retry repeatedly landed on the same whole-turn boundary. The retry now uses measured full-request overhead. The model-facing step budget is also updated before projection.
+
+## Regression evidence
+
+`internal/context/context_lifecycle_test.go` runs 48 turns for each of two workers. It changes goals and scopes, appends plans and results, alternates roomy and pressured requests, saves and reloads both states, checks byte limits and provenance, and verifies that a later roomy request restores the full view. Additional tests check latest operator direction after an assistant reply, 400 plan revisions, and pinned decisive evidence.
+
+`internal/assessment/context_lifecycle_test.go` exercises 100 conversation messages through synchronization and Save/Load, a pressured coordinator request with the latest user turn followed by an assistant reply, all fields of a current finding, and 160 planning/result rounds at a fixed budget. The original state must remain byte-for-byte stable across projections.
+
+Worker-loop tests record the exact messages sent to a local fake model. They require several distinct recall pages and the final page in the next model request, catch repeated identical reads, verify that actual message text fits its ceiling after recall, and reconstruct UTF-8 from saved logs and conversation. `./scripts/ci.sh` and race checks for the affected packages passed.
+
+Three Daybreak Blue/high smoke runs on the corrected worker completed a synthetic task requiring an early operator label that was absent from the initial request. The model searched, read `conversation:1`, and answered with the exact label and reference. The inspected requests stayed below the test's 48 KiB ceiling. Runs `r4` and `r5` saved the packet with all 402 conversation turns; neither performed a new command. Run `r3` retained exact request snapshots but preceded the added session-state capture. The initial diagnostic failed when the model answered from a search preview without reading the source; a second failed because request-size accounting got stuck at a truncation boundary. Failed and successful traces remain under `sessions/context-live-20260929*/` locally.
+
+## Remaining limits
+
+The 48- and 160-round deterministic fixtures establish state and request-content invariants, not that a model makes good decisions over a long customer assessment. Retrieval is lexical over saved worker text and result previews, not semantic search over all raw logs or cross-worker history. Coordinator history is durable, but it has no equivalent interactive recall tool for every omitted old turn; it can delegate a focused read of saved task records. The application ceilings are bytes, not verified provider token counts. Larger real sessions, Qwen 3.8 at its configured window, cross-worker handoff, and report quality still need separate measurements against fixed tasks and independent evidence.

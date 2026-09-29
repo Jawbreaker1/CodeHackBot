@@ -46,9 +46,6 @@ func (c *assessmentConversation) Add(role, content string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.messages = append(c.messages, llmclient.Message{Role: role, Content: content})
-	if len(c.messages) > 12 {
-		c.messages = c.messages[len(c.messages)-12:]
-	}
 }
 
 func (c *assessmentConversation) Snapshot(s assessment.State) {

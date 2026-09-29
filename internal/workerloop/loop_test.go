@@ -84,6 +84,90 @@ func TestPlanOnlyLoopReturnsControlWithoutExecuting(t *testing.T) {
 	}
 }
 
+func TestWorkerUsesSeveralDistinctContextReadsBeforeFinishing(t *testing.T) {
+	loop, packet, calls := fixtureWorker(t, 7)
+	ref := filepath.Join(loop.Executor.LogDir, "saved-text")
+	saved := strings.Repeat("x", recallChunkBytes*2) + "FINAL_RECALLED_MARKER"
+	if err := os.WriteFile(ref+".stdout", []byte(saved), 0600); err != nil {
+		t.Fatal(err)
+	}
+	packet.LatestExecutionResult = ctxpacket.ExecutionResult{Action: "read saved text", ExitStatus: "0", LogRefs: []string{ref}, OutputSummary: "saved text is available"}
+	packet.WorkProgress.ExecutedActions = 1
+	replies := []string{
+		`{"type":"recall_context","context_query":"saved text"}`,
+		fmt.Sprintf(`{"type":"recall_context","context_ref":%q,"context_offset":0}`, ref),
+		fmt.Sprintf(`{"type":"recall_context","context_ref":%q,"context_offset":8192}`, ref),
+		fmt.Sprintf(`{"type":"recall_context","context_ref":%q,"context_offset":16384}`, ref),
+		`{"type":"step_complete","summary":"The saved text ended with FINAL_RECALLED_MARKER"}`,
+		completeEval,
+	}
+	// Keep the existing fixture model and its request recorder, but replace its
+	// scripted replies with a server for this longer deterministic sequence.
+	serverCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serverCalls >= len(replies) {
+			t.Error("unexpected model request")
+			http.Error(w, "unexpected request", 500)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"content": replies[serverCalls]}, "finish_reason": "stop"}}})
+		serverCalls++
+	}))
+	defer server.Close()
+	loop.LLM.BaseURL = server.URL
+	out, err := loop.Run(context.Background(), packet, 7)
+	if err != nil || out.Packet.TaskRuntime.State != "done" || serverCalls != 6 || *calls != 0 {
+		t.Fatalf("distinct saved reads were blocked: state=%s calls=%d err=%v", out.Packet.TaskRuntime.State, serverCalls, err)
+	}
+	recorder := loop.Inspector.(contextinspect.Recorder)
+	request, err := os.ReadFile(filepath.Join(recorder.Dir, "step-005-request.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(request), "FINAL_RECALLED_MARKER") || !strings.Contains(string(request), "next_offset: 16405") {
+		t.Fatal("the exact model request did not contain the final recovered page and its next byte offset")
+	}
+	if !strings.Contains(string(request), "remaining_budget: 2 steps") {
+		t.Fatal("model request showed a stale turn budget")
+	}
+}
+
+func TestRepeatedIdenticalContextReadStillStops(t *testing.T) {
+	read := `{"type":"recall_context","context_query":"saved text"}`
+	loop, packet, calls := fixtureWorker(t, 10, read, read, read, read, read)
+	packet.LatestExecutionResult = ctxpacket.ExecutionResult{Action: "read saved text", ExitStatus: "0", OutputSummary: "saved text is available", LogRefs: []string{filepath.Join(loop.Executor.LogDir, "saved-text")}}
+	out, err := loop.Run(context.Background(), packet, 10)
+	if err == nil || !strings.Contains(err.Error(), "four worker decisions produced no execution") || out.Packet.TaskRuntime.State != "blocked" || *calls != 5 {
+		t.Fatalf("repeated read bypassed the no-progress gate: state=%s calls=%d err=%v", out.Packet.TaskRuntime.State, *calls, err)
+	}
+}
+
+func TestModelRequestFitsAfterRecallWithLongConversation(t *testing.T) {
+	goal := "Find the exact synthetic report label from the early operator message about report labels. Quote the label and its saved conversation reference. Use read-only context recall; do not run commands."
+	packet := ctxpacket.NewInitialWorkerPacket(
+		behavior.Frame{SystemPrompt: "You are a worker reviewing saved synthetic notes. Use only recorded context. Do not run commands.", AgentsText: "Read only the saved synthetic fixture context.", Parameters: map[string]string{"scope": "saved synthetic notes only"}},
+		session.Foundation{Goal: goal, ReportingRequirement: "cite the saved message"}, t.TempDir(), "fixture", "denied", 6,
+	)
+	packet.CurrentStep.DoneCondition = "Give the exact label and the saved conversation reference"
+	packet.RecentConversation = append(packet.RecentConversation, "Operator answer: report label instruction: use LABEL-COPPER-17 for the final synthetic record.")
+	for i := 0; i < 200; i++ {
+		packet.RecentConversation = append(packet.RecentConversation, "User: ordinary note about section order "+strings.Repeat("neutral fixture detail ", 9))
+		packet.RecentConversation = append(packet.RecentConversation, "Assistant: recorded the section order without changing the report label")
+	}
+	packet.LatestExecutionResult = ctxpacket.ExecutionResult{Action: "read synthetic observation", ExitStatus: "0", OutputSummary: "Synthetic prior observation recorded", LogRefs: []string{"/fixture/observation"}}
+	packet.ContextRecall = ctxpacket.ContextRecall{Query: "early operator message exact synthetic report label report labels", Stream: "index", Matched: true, Content: strings.Repeat(`ref="conversation:1" preview="Operator answer: report label instruction: use LABEL-COPPER-17 for the final synthetic record."`+"\n", 6)}
+	packet.Budget.Used = 1
+	packet.RunningSummary = "A bounded excerpt from saved task context is available for the next decision; its source reference is in context_recall."
+	loop := Loop{LLM: llmclient.Client{MaxInputBytes: 48 * 1024}}
+	view, err := loop.modelView(&packet, buildUserPrompt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if modelInputBytes(view, buildUserPrompt) > loop.LLM.InputByteLimit() || !strings.Contains(view.Render(), "LABEL-COPPER-17") {
+		t.Fatal("pressure dropped a requested recall or exceeded the actual model request budget")
+	}
+}
+
 func TestProgressReviewReachesWorkerAndExecutionResetsIt(t *testing.T) {
 	plan := `{"type":"update_plan","plan":{"summary":"Review the fixture","steps":["inspect"],"active_step":"inspect"}}`
 	loop, packet, _ := fixtureWorker(t, 4, plan, plan, printAction, `{"type":"step_complete","summary":"Fixture observed"}`, completeEval)
