@@ -1,12 +1,20 @@
 package webapp
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 )
+
+type browserPreview struct {
+	URL       string `json:"url"`
+	Step      string `json:"step"`
+	Phase     string `json:"phase"`
+	UpdatedAt string `json:"updated_at"`
+}
 
 // Watch reads only runtime-recorded execution streams and declared image
 // artifacts. It does not execute commands or infer progress from output text.
@@ -24,22 +32,64 @@ func (r *run) watch(w http.ResponseWriter, request *http.Request) {
 		return
 	}
 	images := []string{}
+	var browser *browserPreview
+	browserImage := ""
 	for _, ref := range worker.ExpectedArtifacts {
 		if filepath.Ext(ref) == ".png" || filepath.Ext(ref) == ".jpg" || filepath.Ext(ref) == ".webp" {
 			if resolvedWithin(filepath.Join(root, "tasks", worker.ID, "work"), ref) {
 				if info, err := os.Stat(ref); err == nil && info.Mode().IsRegular() && info.Size() <= maxArtifactServeBytes {
-					images = append(images, "/api/v1/assessments/"+url.PathEscape(id)+"/artifact?path="+url.QueryEscape(ref))
+					imageURL := "/api/v1/assessments/" + url.PathEscape(id) + "/artifact?path=" + url.QueryEscape(ref)
+					images = append(images, imageURL)
+					if filepath.Base(ref) == "browser-live.png" {
+						browserImage = imageURL
+					}
 				}
 			}
 		}
+		if filepath.Base(ref) == "browser-live.png" && browser == nil {
+			browser = readBrowserPreview(filepath.Join(root, "tasks", worker.ID, "work"), filepath.Join(filepath.Dir(ref), "browser-live.json"))
+		}
+	}
+	var action, stdout, stderr string
+	if request.URL.Query().Get("browser") != "1" {
+		action = worker.Action
+		stdout = outputTail(root, worker.ExecutionLog, ".stdout")
+		stderr = outputTail(root, worker.ExecutionLog, ".stderr")
 	}
 	writeJSON(w, http.StatusOK, struct {
-		Phase  string   `json:"phase"`
-		Action string   `json:"action"`
-		Stdout string   `json:"stdout"`
-		Stderr string   `json:"stderr"`
-		Images []string `json:"images"`
-	}{worker.Phase, worker.Action, outputTail(root, worker.ExecutionLog, ".stdout"), outputTail(root, worker.ExecutionLog, ".stderr"), images})
+		Phase        string          `json:"phase"`
+		Action       string          `json:"action"`
+		Stdout       string          `json:"stdout"`
+		Stderr       string          `json:"stderr"`
+		Images       []string        `json:"images"`
+		Browser      *browserPreview `json:"browser,omitempty"`
+		BrowserImage string          `json:"browser_image,omitempty"`
+	}{worker.Phase, action, stdout, stderr, images, browser, browserImage})
+}
+
+func readBrowserPreview(work, path string) *browserPreview {
+	if !resolvedWithin(work, path) {
+		return nil
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 4096 {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var preview browserPreview
+	if json.Unmarshal(data, &preview) != nil {
+		return nil
+	}
+	parsed, err := url.Parse(preview.URL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		preview.URL = ""
+	} else {
+		preview.URL = (&url.URL{Scheme: parsed.Scheme, Host: parsed.Host, Path: parsed.Path}).String()
+	}
+	return &preview
 }
 
 func outputTail(root, log, suffix string) string {

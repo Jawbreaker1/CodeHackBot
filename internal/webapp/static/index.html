@@ -31,12 +31,24 @@
         <div class="heading"><span id="headerCustomer" class="breadcrumb">Workspace</span><h1 id="sessionTitle">New session</h1></div>
         <a id="analysisLink" class="subtle-button analysis-link hidden" href="/analysis" aria-label="Open assessment analysis">Analysis</a>
         <a id="contextLink" class="subtle-button analysis-link hidden" href="/context" aria-label="Open context debugger">Context</a>
+        <button id="toggleBrowser" class="subtle-button hidden" type="button" aria-controls="browserPanel" aria-expanded="false">Browser</button>
         <button id="toggleInspector" class="subtle-button" aria-controls="inspector" aria-expanded="true"><svg class="icon"><use href="#icon-panel"/></svg><span>Workers</span><span id="workerCount" class="count">0</span><span id="attentionDot" class="attention-dot hidden"></span></button>
       </header>
       <div id="errorBanner" class="error-banner hidden" role="alert"></div>
-      <section id="chat" aria-label="Coordinator conversation" aria-live="polite">
-        <div class="welcome"><img class="welcome-icon brand-mark" src="/logo-small.svg" alt=""><h2>What are we investigating?</h2><p>Explore a question. Follow the evidence.<br>Work with your coordinator.</p></div>
-      </section>
+      <div id="workArea" class="work-area">
+        <section id="chat" aria-label="Coordinator conversation" aria-live="polite">
+          <div class="welcome"><img class="welcome-icon brand-mark" src="/logo-small.svg" alt=""><h2>What are we investigating?</h2><p>Explore a question. Follow the evidence.<br>Work with your coordinator.</p></div>
+        </section>
+        <section id="browserPanel" class="browser-panel hidden" aria-label="Worker browser preview">
+          <header class="browser-panel-header"><div><strong>Browser</strong><span id="browserPhase" class="muted">Waiting for page</span></div><div class="browser-panel-actions"><button id="expandBrowser" class="text-button" type="button" aria-pressed="false">Expand</button><button id="closeBrowser" class="icon-button" type="button" aria-label="Close browser preview"><svg class="icon"><use href="#icon-close"/></svg></button></div></header>
+          <label class="browser-worker-label" for="browserWorker">Worker <select id="browserWorker" aria-label="Select web worker"></select></label>
+          <div id="browserURL" class="browser-address">Waiting for navigation</div>
+          <div class="browser-viewport"><img id="browserImage" class="hidden" alt="Latest captured view of the worker browser"><p id="browserEmpty" class="muted">The worker has not captured a page yet.</p></div>
+          <a id="browserOpenImage" class="browser-open-image hidden" target="_blank" rel="noopener">Open full capture ↗</a>
+          <div class="browser-step"><span>Current step</span><strong id="browserStep">Waiting for browser activity</strong></div>
+          <p class="browser-note">Read-only preview of the worker's browser. Chat and approvals remain available.</p>
+        </section>
+      </div>
       <div id="liveStatus" class="live-status hidden" role="status" aria-live="polite" aria-label="Current coordinator and worker activity"><span class="live-status-heading">In progress</span><div id="liveStatusItems" class="live-status-items"></div></div>
       <div class="compose-area">
         <button id="reviewProposal" class="review-notice hidden" type="button">Assessment ready for review <span>Open details ↗</span></button>

@@ -60,6 +60,7 @@ svg { flex-shrink: 0; }
 .sidebar-footer button:hover { color: var(--text); }
 .sidebar-footer .icon { width: 16px; height: 16px; }
 .main-column { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.work-area { display: flex; flex: 1; min-width: 0; min-height: 0; }
 .main-header { height: 62px; min-height: 62px; padding: 0 22px; display: flex; align-items: center; gap: 12px; }
 .heading { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; }
 h1 { margin: 0; font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; overflow: hidden; }
@@ -73,6 +74,27 @@ h1 { margin: 0; font-size: 13px; font-weight: 500; text-overflow: ellipsis; whit
 .count { font-size: 10px; padding: 1px 5px; border-radius: 4px; background: #ffffff09; }
 .attention-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--attention); }
 #chat { flex: 1; min-height: 0; overflow: auto; padding: 24px max(24px, calc((100% - 760px) / 2)) 36px; scroll-behavior: smooth; }
+.browser-panel { display: flex; flex-direction: column; flex: 0 0 min(46%, 560px); min-width: 320px; min-height: 0; border-left: 1px solid var(--line); background: #1d1d1d; }
+.browser-panel-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 15px 16px 8px; }
+.browser-panel-header > div { display: flex; flex-direction: column; gap: 3px; }
+.browser-panel-header .browser-panel-actions { flex-direction: row; align-items: center; gap: 4px; }
+.browser-panel-header strong { font-size: 13px; font-weight: 600; }
+.browser-panel-header .muted { font-size: 11px; }
+.browser-worker-label { display: flex; align-items: center; gap: 9px; padding: 8px 16px; color: var(--faint); font-size: 11px; }
+.browser-worker-label select { min-width: 0; flex: 1; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; color: var(--text); background: var(--surface); }
+.browser-address { margin: 5px 16px 12px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; color: var(--muted); background: #151515; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.browser-viewport { display: grid; place-items: center; flex: 1; min-height: 120px; margin: 0 16px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: #131313; }
+.browser-viewport img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.browser-viewport p { padding: 16px; text-align: center; font-size: 12px; }
+.browser-open-image { align-self: flex-end; padding: 8px 16px 0; color: var(--muted); font-size: 11px; text-decoration: none; }
+.browser-open-image:hover { color: var(--text); }
+.work-area.browser-expanded .browser-panel { flex-basis: 60%; max-width: none; }
+.browser-step { display: flex; flex-direction: column; gap: 4px; padding: 14px 16px 6px; font-size: 12px; }
+.browser-step span { color: var(--faint); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
+.browser-step strong { font-weight: 500; line-height: 1.45; overflow-wrap: anywhere; }
+.browser-note { margin: 0; padding: 9px 16px 16px; color: var(--faint); font-size: 10px; line-height: 1.5; }
+@media (max-width: 1450px) { .browser-panel { flex-basis: 42%; min-width: 280px; } }
+@media (max-width: 850px) { .work-area { position: relative; } .browser-panel { position: absolute; z-index: 4; inset: 0 0 0 auto; width: min(100%, 540px); box-shadow: -12px 0 32px #0008; } }
 .welcome { margin: max(24px, 13vh) auto 0; max-width: 480px; }
 .welcome-icon { width: 32px; height: 32px; margin-bottom: 17px; }
 .welcome h2 { font-size: 26px; font-weight: 500; letter-spacing: -.8px; margin: 0 0 12px; }

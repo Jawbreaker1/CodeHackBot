@@ -37,6 +37,17 @@ any other tool action.
 
 The console keeps customer workspaces and their sessions in a persistent left navigation rail while the coordinator transcript stays in the center. A persistent strip above the composer shows the coordinator and every active worker separately, including their current phase and any wait for operator input. Runtime annotations between turns are collapsed by default and can be expanded to inspect planning, delegation, proposed actions, approvals, execution transitions, and evidence references. The right inspector separates each coordinator round's planned work from its observed result. A worker marked *Finished* has ended its assigned task; that label alone never means that the assessment goal was met. The round outcome instead distinguishes work still awaiting review, an unconfirmed goal, a possible finding, and an independently verified finding. The coordinator supplies short operator-facing purpose and review sentences for new rounds; full technical plans and worker reports remain expandable. The inspector also shows each worker's current step, purpose, progress, plan revisions, action, approval state, context usage, remaining budget, evidence, and findings. Plan review and execution approvals still appear in the main conversation. Selecting a session restores its live view without opening a separate chat surface; at narrow widths the inspector is available from the `Workers` control instead of disappearing.
 
+When a Playwright worker declares `browser-live.png`, the **Browser** control
+opens a separate, optional preview beside the coordinator conversation. It
+shows the latest captured page, a query-free page address, and the helper's
+named step and state; multiple web workers can be selected from the panel.
+The preview starts closed, can be enlarged or closed, and links to the full
+capture. On medium-width screens opening it temporarily folds away the worker
+inspector to keep the chat readable. The inspector returns when the preview
+closes, and the operator can reopen it at any time. This is a read-only view
+of the worker's browser, not an interactive second browser or a replacement
+for execution approvals.
+
 Each start request produces a separate assessment session below `sessions/web/<customer>/<session-id>`. Intake conversations are kept separately below `sessions/web/intake/<session-id>`. Both directories contain an atomic `session.json` navigation/transcript record beside the assessment authority and evidence files. Workers show progress and pending approvals in the browser; the operator can approve, deny, answer a coordinator question, ask the live coordinator about progress or discoveries, or stop the assessment.
 
 The server discovers these records on startup. A run that was active when the process stopped is shown as interrupted with a **Resume** action; resuming uses the assessment's saved results and consumed model-call budget. Unknown external effects are never replayed automatically. The left rail keeps draft intake conversations as well as customer sessions, and the selected session is restored in the browser after a reload. Each row has an explicit delete action protected by a confirmation prompt; deleting removes the session transcript, evidence, report, and linked intake record from the local session store. A running assessment must be stopped and finalized before it can be deleted. For A/B testing across providers, copy `config/model-profiles.example.json` to the ignored `config/model-profiles.local.json` and configure the endpoints and bridge token path. The server loads that file on startup. Clicking the model name opens the configured profile list; the choice switches the entire provider client and is saved with the session. After a conversation starts, selecting another model creates a new draft session and keeps the original conversation intact. Without a profile file, the existing single-provider model-ID picker remains available.
@@ -79,6 +90,9 @@ execution. In the terminal, use `/permissions` for the same choices.
 Approval cards show the action's purpose, target and expected impact first.
 Expand **Command details** to inspect the exact invocation. While a worker runs,
 choose **Watch execution** to see live tool output and its declared browser
-preview. **Stop all workers** remains available in that view. The Playwright
-helper's named `step` calls describe what the scenario is doing, and its trace
-preserves the detailed interaction history locally.
+preview. For Playwright work, choose **Browser** or **View browser** to follow
+the page visually without covering the chat; raw invocation and tool output
+remain under **Watch execution**. **Stop all workers** remains available in
+that view. The Playwright helper's named `step` calls describe what the
+scenario is doing, and its trace preserves the detailed interaction history
+locally.

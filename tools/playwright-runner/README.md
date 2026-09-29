@@ -13,8 +13,10 @@ The assessment image must also provide a browser. Set
 `BIRDHACKBOT_BROWSER_EXECUTABLE` to an approved binary such as
 `/usr/bin/chromium`; the helper never downloads a browser at task time.
 
-Workers create a task-local scenario module and run it only after the normal
-action approval:
+Workers create a real, task-local `.mjs` scenario file and run it only after
+the normal action approval. The first argument is a filesystem path; an
+in-memory pipe is not a scenario file. One approved invocation may contain
+several named browser steps, and the live preview shows those steps:
 
 ```sh
 node /absolute/path/to/tools/playwright-runner/run.mjs scenario.mjs browser-artifacts
@@ -41,11 +43,15 @@ page-open/navigation/close events. These are visible in the worker's **Watch
 execution** view alongside its exact invocation and live stdout/stderr.
 
 The helper refreshes `browser-live.png` in `artifactDir` about once per second
-and after named steps. Declare that path in the worker action's `artifacts`
-array to make the preview available while running. Keep a separately named
-final screenshot when it is needed as report evidence. The live preview shows
-the most recently opened page; it is observation, not remote browser control.
-The Playwright trace retains the detailed interaction history for local review.
+and after named steps. It also writes `browser-live.json` with the current page
+address, named step, and step state. Query parameters and fragments are removed
+from the displayed address. Declare `browser-live.png` in the worker action's
+`artifacts` array to make the optional **Browser** panel available while
+running; the status file stays in the same task workspace. Keep a separately
+named final screenshot when it is needed as report evidence. The preview shows
+the most recently opened page and does not control the target browser. Never
+put a password or other secret in a step label. The Playwright trace retains
+the detailed interaction history for local review.
 
 Example:
 

@@ -442,8 +442,9 @@ function renderView(view) {
   renderOverview(view);
   if (changed('plans', [view.id, view.plan_timeline, view.pending_plan])) renderCoordinatorPlans(view);
   if (changed('workers', [view.id, view.workers, view.context_window, view.pending_approvals, view.pending_questions, view.pending_tool, view.model])) {
-    $('workerCount').textContent = renderWorkers(view, act, openWatch);
+    $('workerCount').textContent = renderWorkers(view, act, openWatch, openBrowser);
   }
+  syncBrowserWorkers(view);
   if (changed('findings', view.findings)) renderFindings(view);
   const records = [...eventRecords.values()];
   if (changed('activity', records)) {
@@ -582,6 +583,7 @@ async function refreshSidebar() {
 }
 async function navigate(path) {
   closeWatch();
+  closeBrowser();
   const token = ++selection;
   current = null;
   pendingMessage = null;
@@ -807,6 +809,92 @@ function openWatch(workerID) {
   }
   update();
 }
+let browserTimer = null;
+let browserGeneration = 0;
+let browserWorker = '';
+let browserAutoHidInspector = false;
+function browserWorkers(view) {
+  if (!isAssessmentView(view)) return [];
+  return (view.workers || []).filter(worker => (worker.expected_artifacts || []).some(ref => ref.split('/').at(-1) === 'browser-live.png'));
+}
+function closeBrowser() {
+  browserGeneration++;
+  clearTimeout(browserTimer);
+  $('browserPanel').classList.add('hidden');
+  $('toggleBrowser').setAttribute('aria-expanded', 'false');
+  $('workArea').classList.remove('browser-expanded');
+  $('expandBrowser').textContent = 'Expand';
+  $('expandBrowser').setAttribute('aria-pressed', 'false');
+  if (browserAutoHidInspector) setInspector(true);
+  browserAutoHidInspector = false;
+}
+function syncBrowserWorkers(view) {
+  const workers = browserWorkers(view);
+  $('toggleBrowser').classList.toggle('hidden', !workers.length);
+  if (!workers.length) { closeBrowser(); return; }
+  if (!workers.some(worker => worker.id === browserWorker)) browserWorker = workers[0].id;
+  const picker = $('browserWorker');
+  const ids = workers.map(worker => worker.id);
+  if (JSON.stringify([...picker.options].map(option => option.value)) !== JSON.stringify(ids)) {
+    picker.replaceChildren(...workers.map(worker => {
+      const option = document.createElement('option'); option.value = worker.id; option.textContent = worker.id; return option;
+    }));
+  }
+  picker.value = browserWorker;
+  picker.parentElement.classList.toggle('hidden', workers.length < 2);
+}
+function openBrowser(workerID) {
+  const workers = browserWorkers(current);
+  if (!workers.length) return;
+  if ($('browserPanel').classList.contains('hidden') && !narrow.matches && innerWidth < 1600 && !$('shell').classList.contains('inspector-hidden')) {
+    browserAutoHidInspector = true;
+    setInspector(false);
+  }
+  browserWorker = workers.some(worker => worker.id === workerID) ? workerID : workers[0].id;
+  $('browserPanel').classList.remove('hidden');
+  $('toggleBrowser').setAttribute('aria-expanded', 'true');
+  syncBrowserWorkers(current);
+  browserGeneration++;
+  clearTimeout(browserTimer);
+  updateBrowser(selection, browserGeneration);
+}
+async function updateBrowser(sessionToken, generation) {
+  if (sessionToken !== selection || generation !== browserGeneration || $('browserPanel').classList.contains('hidden')) return;
+  try {
+    const data = await api(sessionPath(current) + '/watch?worker=' + encodeURIComponent(browserWorker) + '&browser=1');
+    if (sessionToken !== selection || generation !== browserGeneration || $('browserPanel').classList.contains('hidden')) return;
+    const phaseLabels = {ready: 'Ready', running: 'Running', completed: 'Step complete', failed: 'Step failed', finished: 'Finished'};
+    $('browserPhase').textContent = phaseLabels[data.browser?.phase] || (data.phase === 'execution_started' ? 'Running' : 'Last captured view');
+    $('browserURL').textContent = data.browser?.url || 'Waiting for navigation';
+    $('browserURL').title = data.browser?.url || '';
+    $('browserStep').textContent = data.browser?.step || 'Waiting for browser activity';
+    const image = $('browserImage');
+    if (data.browser_image) {
+      image.src = data.browser_image + '&preview=' + Date.now();
+      image.classList.remove('hidden');
+      $('browserEmpty').classList.add('hidden');
+      $('browserOpenImage').href = data.browser_image;
+      $('browserOpenImage').classList.remove('hidden');
+    } else {
+      image.removeAttribute('src');
+      image.classList.add('hidden');
+      $('browserEmpty').classList.remove('hidden');
+      $('browserOpenImage').classList.add('hidden');
+    }
+  } catch (error) {
+    $('browserPhase').textContent = 'Preview unavailable';
+    $('browserStep').textContent = error.message;
+  }
+  browserTimer = setTimeout(() => updateBrowser(sessionToken, generation), 1000);
+}
+$('toggleBrowser').onclick = () => $('browserPanel').classList.contains('hidden') ? openBrowser(browserWorker) : closeBrowser();
+$('closeBrowser').onclick = closeBrowser;
+$('expandBrowser').onclick = () => {
+  const expanded = $('workArea').classList.toggle('browser-expanded');
+  $('expandBrowser').textContent = expanded ? 'Split view' : 'Expand';
+  $('expandBrowser').setAttribute('aria-pressed', String(expanded));
+};
+$('browserWorker').onchange = () => openBrowser($('browserWorker').value);
 const savedSession = localStorage.getItem('birdhackbot.selectedSession');
 await navigate(savedSession && /^\/api\/v1\/(intake|assessments)\//.test(savedSession) ? savedSession : '/api/v1/intake');
 

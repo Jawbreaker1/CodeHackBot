@@ -64,3 +64,51 @@ func TestWatchUsesLiveRuntimePathsAndRejectsEscapingArtifacts(t *testing.T) {
 		t.Fatal("watch promoted a preview to a completed result")
 	}
 }
+
+func TestWatchBrowserPreviewUsesDeclaredCaptureAndHidesURLSecrets(t *testing.T) {
+	s := NewServer(Config{RepoRoot: t.TempDir()})
+	r, err := s.newRun("fixture", "inspect local browser", "local only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := filepath.Join(r.root, "tasks", "web-worker", "work", "browser-artifacts")
+	if err := os.MkdirAll(work, 0700); err != nil {
+		t.Fatal(err)
+	}
+	image := filepath.Join(work, "browser-live.png")
+	if err := os.WriteFile(image, []byte("synthetic capture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	status := filepath.Join(work, "browser-live.json")
+	if err := os.WriteFile(status, []byte(`{"url":"https://example.test/login?token=private#section","step":"Submit sign-in form","phase":"running"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(work, "run.log")
+	if err := os.WriteFile(log+".stdout", []byte("private-output"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	r.updateWorker(assessment.Event{TaskID: "web-worker", Kind: "execution_started", ExecutionLog: log, ExpectedArtifacts: []string{image}})
+	w := httptest.NewRecorder()
+	r.watch(w, httptest.NewRequest("GET", "/watch?worker=web-worker&browser=1", nil))
+	var view struct {
+		BrowserImage string          `json:"browser_image"`
+		Browser      *browserPreview `json:"browser"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	if view.Browser == nil || view.Browser.URL != "https://example.test/login" || view.Browser.Step != "Submit sign-in form" || view.BrowserImage == "" || strings.Contains(w.Body.String(), "private") {
+		t.Fatalf("incorrect or sensitive browser preview: %s", w.Body.String())
+	}
+	if err := os.Remove(status); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(t.TempDir(), "outside.json"), status); err != nil {
+		t.Fatal(err)
+	}
+	w = httptest.NewRecorder()
+	r.watch(w, httptest.NewRequest("GET", "/watch?worker=web-worker", nil))
+	if strings.Contains(w.Body.String(), "Submit sign-in form") {
+		t.Fatal("browser preview followed an escaping status symlink")
+	}
+}

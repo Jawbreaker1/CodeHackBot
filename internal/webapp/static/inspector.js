@@ -339,7 +339,7 @@ function renderWorkerPlan(worker, phase, sessionID) {
   }
   return section;
 }
-export function renderWorkers(view, act, watch) {
+export function renderWorkers(view, act, watch, showBrowser) {
   const workers = new Map((view.workers || []).map(w => [w.id, w]));
   // An approval can arrive just before the first progress snapshot.
   for (const item of [...(view.pending_approvals || []), ...(view.pending_questions || [])]) {
@@ -367,6 +367,10 @@ export function renderWorkers(view, act, watch) {
     if (w.execution_log && watch) {
       const button = node('button', 'watch-button', w.phase === 'execution_started' ? 'Watch execution' : 'Inspect last execution');
       button.type = 'button'; button.onclick = () => watch(w.id); card.append(button);
+    }
+    if ((w.expected_artifacts || []).some(ref => ref.split('/').at(-1) === 'browser-live.png') && showBrowser) {
+      const button = node('button', 'watch-button', 'View browser');
+      button.type = 'button'; button.onclick = () => showBrowser(w.id); card.append(button);
     }
     if (approvals.length) card.append(node('div', 'worker-approval-note', 'Approval requested in the conversation'));
     for (const q of questions) card.append(questionNode(q, act));
