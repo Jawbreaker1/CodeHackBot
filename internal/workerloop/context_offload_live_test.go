@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -68,7 +69,15 @@ func TestLiveOffloadedResultRecall(t *testing.T) {
 		OutputSummary: "Earlier source-status observation stored in the registered stdout log; exact tag is not in this preview.",
 		LogRefs:       []string{oldRef},
 	})
-	client := llmclient.Client{BaseURL: "http://127.0.0.1:8787/v1", Model: "gpt-daybreak-blue-latest", AuthTokenFile: tokenFile, ReasoningEffort: "high", MaxInputBytes: 48 * 1024}
+	inputBytes := 48 * 1024
+	if configured := os.Getenv("BHB_CONTEXT_INPUT_BYTES"); configured != "" {
+		value, err := strconv.Atoi(configured)
+		if err != nil || value <= 0 {
+			t.Fatalf("invalid BHB_CONTEXT_INPUT_BYTES %q", configured)
+		}
+		inputBytes = value
+	}
+	client := llmclient.Client{BaseURL: "http://127.0.0.1:8787/v1", Model: "gpt-daybreak-blue-latest", AuthTokenFile: tokenFile, ReasoningEffort: "high", MaxInputBytes: inputBytes}
 	initial, err := packet.ModelView(client.InputByteLimit() - 8192)
 	if err != nil {
 		t.Fatal(err)
