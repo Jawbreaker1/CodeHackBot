@@ -46,6 +46,8 @@ Astra is the development/review model. The intended OpenAI pentest runtime is Da
 
 The Daybreak web profile and guided subscription setup request **high reasoning**. The local bridge forwards this to the subscription backend; a live probe confirmed the request completes. This may increase latency and model usage. Existing running processes need a restart to load the updated bridge and profile.
 
+Analysis starts with the decisions an operator needs to make: risk totals link directly to matching findings, and each finding shows its impact and proposed fix before technical evidence. Browser sessions can show the pages workers actually visited, observed navigation, and saved screenshots. Analysts can add session-local comments to those pages; a browser journey is not a claim that the entire site was mapped or tested. Older browser sessions may show only their last saved preview.
+
 ## Build and run
 
 The supported host is Kali Linux Rolling. Install the platform baseline and

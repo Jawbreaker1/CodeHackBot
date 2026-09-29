@@ -1,6 +1,7 @@
 package webapp
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/assessment"
@@ -43,7 +44,7 @@ func TestInconclusiveChallengeVisibleWithoutFinding(t *testing.T) {
 	first := assessment.State{Scope: "https://app.example.test", Status: "completed", Plans: []assessment.Decision{{Complete: true}}, Results: []assessment.Result{{Task: assessment.Task{ID: "verify", Verification: &assessment.VerificationRequest{Claim: "cross-tenant response violates policy", Alternative: "legacy route permits sharing"}}, Status: "done", Verification: &assessment.VerificationResult{Verdict: "inconclusive", AlternativeResult: "policy not established", Reason: "both explanations remain possible", Evidence: []string{"verify.log"}}}}}
 	second := assessment.State{Scope: "https://app.example.test", Status: "completed", Plans: []assessment.Decision{{Complete: true}}, Results: []assessment.Result{{Task: assessment.Task{ID: "retest", Goal: "Retest report access"}, Status: "done"}}}
 	view := buildCustomerAnalysis("project", []analysisView{buildAnalysis("one", "project", first, nil), buildAnalysis("two", "project", second, nil)})
-	if len(view.Findings) != 0 || len(view.Challenges) != 1 || len(view.Coverage) != 1 || len(view.Coverage[0].Challenges) != 1 || view.Challenges[0].Verdict != "inconclusive" || view.Challenges[0].Evidence[0] != "verify.log" || len(view.NextActions) == 0 || view.Summary != "No confirmed findings. 1 independent challenge remains inconclusive." {
+	if len(view.Findings) != 0 || len(view.Challenges) != 1 || len(view.Coverage) != 1 || len(view.Coverage[0].Challenges) != 1 || view.Challenges[0].Verdict != "inconclusive" || view.Challenges[0].Evidence[0] != "verify.log" || len(view.NextActions) == 0 || !strings.Contains(view.Summary, "could not settle") {
 		t.Fatalf("unresolved challenge lost from customer exploration: %+v", view)
 	}
 }

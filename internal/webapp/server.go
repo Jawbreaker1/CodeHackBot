@@ -826,6 +826,7 @@ func (s *Server) serveAssessmentArtifact(w http.ResponseWriter, r *http.Request,
 	}
 	current.mu.RLock()
 	root := current.root
+	anchors := browserAnchors(current.state)
 	found := false
 	for _, result := range current.state.Results {
 		for _, evidence := range result.Evidence {
@@ -852,6 +853,15 @@ func (s *Server) serveAssessmentArtifact(w http.ResponseWriter, r *http.Request,
 		}
 	}
 	current.mu.RUnlock()
+	if !found {
+		pages, _ := browserAnalysis(root, current.id, anchors)
+		for _, page := range pages {
+			if page.ScreenshotPath == wanted {
+				found = true
+				break
+			}
+		}
+	}
 	if !found || !resolvedWithin(root, wanted) {
 		writeError(w, http.StatusNotFound, "artifact not found")
 		return
@@ -1373,6 +1383,22 @@ func (s *Server) assessmentRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(parts) == 2 && parts[1] == "artifact" {
 		s.serveAssessmentArtifact(w, r, current)
+		return
+	}
+	if len(parts) == 3 && parts[1] == "analysis" && parts[2] == "notes" {
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w, http.MethodPost)
+			return
+		}
+		var input webNote
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+		if err := current.saveWebNote(input); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, current.analysis())
 		return
 	}
 	if len(parts) == 3 && parts[1] == "context" {

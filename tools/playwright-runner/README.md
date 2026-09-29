@@ -53,6 +53,17 @@ the most recently opened page and does not control the target browser. Never
 put a password or other secret in a step label. The Playwright trace retains
 the detailed interaction history for local review.
 
+The helper also records `browser-pages.json`: a bounded list of main-frame
+HTTP(S) pages actually visited and transitions observed within a page. It
+saves one `browser-page-NNN.png` screenshot per visited page after named steps
+and at the end of the run, up to 40 pages. The Analysis view shows this
+observed journey and lets an analyst add a local page comment. A page without
+a completed screenshot remains listed without an image. These observations
+are not a complete site map or a claim that every route was tested. The saved
+images can contain customer data; review them before including them in a
+deliverable. The registered `browser-live.png` artifact anchors access to
+these sibling files in the same task workspace.
+
 Example:
 
 ```js

@@ -35,6 +35,8 @@ type analysisView struct {
 	NextActions      []string                 `json:"next_actions"`
 	Gaps             []string                 `json:"gaps"`
 	Sessions         []analysisSessionSummary `json:"sessions,omitempty"`
+	WebPages         []analysisWebPage        `json:"web_pages,omitempty"`
+	WebTransitions   []analysisWebTransition  `json:"web_transitions,omitempty"`
 	GeneratedAt      time.Time                `json:"generated_at"`
 }
 
@@ -116,8 +118,11 @@ type analysisFindingInput struct {
 
 func (r *run) analysis() analysisView {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return buildAnalysis(r.id, r.customer, r.state, nil)
+	view := buildAnalysis(r.id, r.customer, r.state, nil)
+	root, anchors := r.root, browserAnchors(r.state)
+	r.mu.RUnlock()
+	view.WebPages, view.WebTransitions = browserAnalysis(root, view.ID, anchors)
+	return view
 }
 
 func buildAnalysis(id, customer string, state assessment.State, inputs []analysisFindingInput) analysisView {
@@ -195,6 +200,8 @@ func buildCustomerAnalysis(id string, sessions []analysisView) analysisView {
 		}
 		view.Findings = append(view.Findings, session.Findings...)
 		view.Challenges = append(view.Challenges, session.Challenges...)
+		view.WebPages = append(view.WebPages, session.WebPages...)
+		view.WebTransitions = append(view.WebTransitions, session.WebTransitions...)
 	}
 	view.SessionCount = len(sessions)
 	if len(sessions) == 0 {
@@ -334,27 +341,19 @@ func unresolvedChallenges(challenges []analysisChallenge) int {
 func analysisSummary(status string, risk analysisRisk, findings, gaps, unresolved int) string {
 	if findings == 0 {
 		if unresolved > 0 {
-			verb := "remain"
-			if unresolved == 1 {
-				verb = "remains"
-			}
-			base := fmt.Sprintf("No confirmed findings. %d independent %s %s inconclusive.", unresolved, countNoun(unresolved, "challenge", "challenges"), verb)
+			base := fmt.Sprintf("No confirmed findings. %d follow-up %s could not settle the claim.", unresolved, countNoun(unresolved, "check", "checks"))
 			if gaps == 0 {
 				return base
 			}
-			return base + fmt.Sprintf(" %d assessment %s need review.", gaps, countNoun(gaps, "gap", "gaps"))
+			return base + " Review the test limits and open questions before drawing conclusions."
 		}
 		if gaps > 0 {
-			return fmt.Sprintf("No findings are recorded yet; %d assessment %s still need attention.", gaps, countNoun(gaps, "gap", "gaps"))
+			return "No findings are recorded yet. Review what was tested and the remaining questions before drawing conclusions."
 		}
-		return "No model-authored findings are recorded. This is not evidence that the target is secure."
+		return "No findings are recorded. Check test coverage before drawing conclusions about the target."
 	}
 	if risk.Reproduced > 0 {
-		verb := "include"
-		if risk.Reproduced == 1 {
-			verb = "includes"
-		}
-		confirmed := fmt.Sprintf("%d %s %s target validation evidence.", risk.Reproduced, countNoun(risk.Reproduced, "finding", "findings"), verb)
+		confirmed := fmt.Sprintf("%d %s passed a recorded follow-up check.", risk.Reproduced, countNoun(risk.Reproduced, "finding", "findings"))
 		if risk.Candidates == 0 {
 			return confirmed
 		}
@@ -364,7 +363,7 @@ func analysisSummary(status string, risk analysisRisk, findings, gaps, unresolve
 	if findings == 1 {
 		verb = "requires"
 	}
-	return fmt.Sprintf("%d candidate %s %s operator review and, where warranted, target validation.", findings, countNoun(findings, "finding", "findings"), verb)
+	return fmt.Sprintf("%d possible %s %s confirmation before it can be treated as verified.", findings, countNoun(findings, "finding", "findings"), verb)
 }
 
 func countNoun(count int, one, many string) string {
@@ -377,19 +376,19 @@ func countNoun(count int, one, many string) string {
 func nextActions(findings []analysisFinding, challenges []analysisChallenge, gaps []string) []string {
 	var actions []string
 	for _, finding := range findings {
-		action := "Review evidence and decide whether to validate " + finding.Title
+		action := "Check whether " + finding.Title + " affects the current target before assigning a fix."
 		if finding.Status == "reproduced" {
-			action = "Triage and remediate " + finding.Title
+			action = "Prioritize a fix for " + finding.Title + ", then retest it."
 		}
 		actions = append(actions, action)
 	}
 	for _, challenge := range challenges {
 		if challenge.Verdict == "inconclusive" {
-			actions = append(actions, "Review the inconclusive check in "+challenge.TaskID+" and resolve its competing explanation before treating the claim as confirmed.")
+			actions = append(actions, "Review why the follow-up check could not settle: "+challenge.Claim)
 		}
 	}
 	if len(gaps) > 0 {
-		actions = append(actions, fmt.Sprintf("Review %d untested or unresolved areas before deciding on follow-up work.", len(gaps)))
+		actions = append(actions, "Review the recorded limits of this test before deciding what to check next.")
 	}
 	return uniqueStrings(actions)
 }

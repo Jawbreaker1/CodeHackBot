@@ -2,6 +2,7 @@ const app = document.getElementById('app');
 const params = new URLSearchParams(location.search);
 let selectedScope = -1;
 let selectedFinding = 0;
+let selectedRisk = 'all';
 
 const displayStatus = value => String(value ?? '').replaceAll('_', ' ');
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -16,7 +17,7 @@ const evidenceList = (items, sessionID) => items?.length
     const href = '/api/v1/assessments/' + encodeURIComponent(sessionID) + '/artifact?path=' + encodeURIComponent(value);
     return '<li><a href="' + escapeHTML(href) + '" target="_blank" rel="noopener">Open ' + escapeHTML(value.split('/').pop() || 'evidence') + ' ↗</a></li>';
   }).join('') + '</ul>' : '<p>None recorded</p>';
-const metric = (value, label, tone = '') => '<div class="metric ' + tone + '"><strong>' + escapeHTML(value) + '</strong><span>' + escapeHTML(label) + '</span></div>';
+const metric = (value, label, risk) => '<button type="button" class="metric ' + risk + (selectedRisk === risk ? ' selected' : '') + '" data-risk="' + risk + '" aria-pressed="' + (selectedRisk === risk) + '" aria-label="Show ' + escapeHTML(label) + ' findings"' + (Number(value) ? '' : ' disabled') + '><strong>' + escapeHTML(value) + '</strong><span>' + escapeHTML(label) + (Number(value) ? ' <b>↗</b>' : '') + '</span></button>';
 const sessionURL = id => '/analysis?assessment=' + encodeURIComponent(id);
 
 function findingCard(f) {
@@ -27,13 +28,17 @@ function findingCard(f) {
     ? '<details><summary>Independent challenge · ' + escapeHTML(f.verification.verdict) + '</summary><p><strong>Claim:</strong> ' + escapeHTML(f.verification.claim) + '</p><p><strong>Alternative:</strong> ' + escapeHTML(f.verification.alternative) + '</p><p><strong>Check:</strong> ' + escapeHTML(f.verification.alternative_result) + '</p><p><strong>Why:</strong> ' + escapeHTML(f.verification.reason) + '</p><strong>Execution logs</strong>' + evidenceList(f.verification.evidence, f.session_id) + '</details>'
     : (f.recorded_status ? '<p class="review-note">Earlier session called this reproduced; no structured challenge verdict was recorded. Review before treating it as confirmed.</p>' : '');
   const session = f.session_id ? '<a href="' + sessionURL(f.session_id) + '">Open session ↗</a>' : '';
-  return '<article class="finding" data-priority="' + escapeHTML(f.priority) + '"><div class="finding-head"><h3>' + escapeHTML(f.title) + '</h3><span class="tag ' + escapeHTML(f.priority) + '">' + escapeHTML(f.priority) + '</span></div><p>' + escapeHTML(f.impact) + '</p><div class="finding-meta"><span><strong>Status</strong> ' + escapeHTML(f.status) + '</span><span><strong>Confidence</strong> ' + escapeHTML(f.confidence || 'not rated') + '</span><span><strong>Why here</strong> ' + escapeHTML(f.priority_reason) + '</span>' + (f.scope ? '<span><strong>Scope</strong> ' + escapeHTML(compactText(f.scope, 90)) + '</span>' : '') + '</div>' + cve + software + verification + '<details><summary>Evidence, reproduction, and remediation</summary><strong>Reproduction</strong>' + list(f.steps) + '<strong>Evidence</strong>' + evidenceList(f.evidence, f.session_id) + '<strong>Remediation</strong>' + list(f.remediation) + '</details>' + refs + (session ? '<div class="finding-session">' + session + '</div>' : '') + '</article>';
+  const action = f.remediation?.length ? escapeHTML(f.remediation[0]) : 'A specific fix has not been recorded yet; review the evidence before assigning work.';
+  const confirmed = f.status === 'reproduced';
+  const actionText = confirmed ? action : 'Verify this on the current system first. If confirmed, consider this fix: ' + action;
+  const label = confirmed ? f.priority : 'Needs confirmation';
+  return '<article class="finding" data-priority="' + escapeHTML(f.priority) + '"><div class="finding-head"><h3>' + escapeHTML(f.title) + '</h3><span class="tag ' + escapeHTML(f.priority) + '">' + escapeHTML(label) + '</span></div><div class="finding-answer"><strong>Why it matters</strong><p>' + escapeHTML(f.impact || 'Impact has not been recorded yet.') + '</p></div><div class="finding-answer"><strong>What to do</strong><p>' + actionText + '</p></div><div class="finding-meta"><span><strong>Check</strong> ' + (confirmed ? 'reproduced' : 'not yet verified') + '</span><span><strong>Confidence</strong> ' + escapeHTML(f.confidence || 'not rated') + '</span>' + (f.scope ? '<span><strong>Scope</strong> ' + escapeHTML(compactText(f.scope, 90)) + '</span>' : '') + '</div>' + cve + software + verification + '<details><summary>See how this was tested and how to fix it</summary><strong>Why this priority</strong><p>' + escapeHTML(f.priority_reason) + '</p><strong>Reproduction</strong>' + list(f.steps) + '<strong>Evidence</strong>' + evidenceList(f.evidence, f.session_id) + '<strong>Full remediation</strong>' + list(f.remediation) + '</details>' + refs + (session ? '<div class="finding-session">' + session + '</div>' : '') + '</article>';
 }
 
 function findingExplorer(findings) {
-  if (!findings.length) return '<p class="empty">No findings are recorded for this scope. This is not evidence that it is secure.</p>';
+  if (!findings.length) return '<p class="empty">No findings match this view. Check the test coverage before drawing conclusions.</p>';
   if (selectedFinding >= findings.length) selectedFinding = 0;
-  const rows = findings.map((finding, index) => '<button type="button" class="finding-select' + (selectedFinding === index ? ' selected' : '') + '" data-finding-index="' + index + '" aria-pressed="' + (selectedFinding === index) + '"><span class="finding-select-title">' + escapeHTML(finding.title) + '</span><span class="finding-select-meta"><span class="tag ' + escapeHTML(finding.priority) + '">' + escapeHTML(finding.priority) + '</span>' + escapeHTML(displayStatus(finding.status)) + ' · ' + escapeHTML(compactText(finding.scope || finding.session_id, 70)) + '</span></button>').join('');
+  const rows = findings.map((finding, index) => '<button type="button" class="finding-select' + (selectedFinding === index ? ' selected' : '') + '" data-finding-index="' + index + '" aria-pressed="' + (selectedFinding === index) + '"><span class="finding-select-title">' + escapeHTML(finding.title) + '</span><span class="finding-select-meta"><span class="tag ' + escapeHTML(finding.priority) + '">' + escapeHTML(finding.status === 'reproduced' ? finding.priority : 'Needs confirmation') + '</span>' + escapeHTML(compactText(finding.scope || finding.session_id, 70)) + '</span></button>').join('');
   return '<div class="finding-explorer"><nav class="finding-picker" aria-label="Findings">' + rows + '</nav><div class="finding-inspector">' + findingCard(findings[selectedFinding]) + '</div></div>';
 }
 
@@ -74,6 +79,26 @@ function coverageSection(data) {
   return '<section class="section exploration"><div class="section-heading"><div><h2>Coverage map</h2><p>Declared scopes, recorded worker tests, and reported weak points. Connections and unobserved components are not inferred.</p></div>' + (selectedScope >= 0 ? '<button type="button" class="clear-filter" id="clear-scope">Show all scopes</button>' : '') + '</div><div class="coverage-map"><div class="map-root">' + escapeHTML(root) + '</div><div class="scope-grid">' + entries.map(coverageCard).join('') + '</div></div></section>';
 }
 
+function webPagesSection(data, visibleSessions) {
+  const pages = (data.web_pages || []).filter(page => !visibleSessions || visibleSessions.includes(page.session_id));
+  if (!pages.length) return '';
+  const edges = (data.web_transitions || []).filter(edge => !visibleSessions || visibleSessions.includes(edge.session_id));
+  const cards = pages.map((page, index) => {
+    const image = page.screenshot_url ? '<a class="web-shot" href="' + escapeHTML(page.screenshot_url) + '" target="_blank" rel="noopener"><img src="' + escapeHTML(page.screenshot_url) + '" alt="Recorded screenshot of ' + escapeHTML(page.url) + '" loading="lazy"><span>Open full screenshot ↗</span></a>' : '<div class="web-no-shot">No screenshot recorded for this page</div>';
+    return '<article class="web-page" id="web-page-' + index + '"><div class="web-page-head"><span class="web-page-index">' + (index + 1) + '</span><div><strong>' + escapeHTML(page.url) + '</strong><small>Observed by ' + escapeHTML(page.task_id) + ' · <a href="' + sessionURL(page.session_id) + '">session ↗</a></small></div></div>' + image + '<div class="web-note"><label for="web-note-' + index + '">Page assessment / comment <span>Analyst note, separate from verified findings</span></label><textarea id="web-note-' + index + '" maxlength="2000" rows="3" placeholder="What did you observe? What should be checked next?">' + escapeHTML(page.comment || '') + '</textarea><div class="web-note-actions"><button type="button" data-web-note="' + index + '">Save note</button><span aria-live="polite"></span></div></div></article>';
+  }).join('');
+  const key = page => page.session_id + '\n' + page.task_id + '\n' + page.url;
+  const indices = new Map(pages.map((page, index) => [key(page), index]));
+  const routeRows = edges.map(edge => {
+    const from = indices.get(key({session_id:edge.session_id, task_id:edge.task_id, url:edge.from}));
+    const to = indices.get(key({session_id:edge.session_id, task_id:edge.task_id, url:edge.to}));
+    if (from === undefined || to === undefined) return '';
+    return '<div class="web-route"><a href="#web-page-' + from + '">' + escapeHTML(edge.from) + '</a><span aria-label="navigated to">→</span><a href="#web-page-' + to + '">' + escapeHTML(edge.to) + '</a></div>';
+  }).filter(Boolean);
+  const routes = routeRows.slice(0, 8).join('') + (routeRows.length > 8 ? '<details><summary>Show ' + (routeRows.length - 8) + ' more observed transitions</summary>' + routeRows.slice(8).join('') + '</details>' : '');
+  return '<section class="section exploration web-exploration"><div class="section-heading"><div><h2>Observed web pages</h2><p>Pages and transitions recorded by browser workers. This shows the paths actually visited, not the full application or a claim that unvisited pages were tested.</p></div><span class="workspace-count">' + pages.length + ' page(s)</span></div>' + (routes ? '<div class="web-journey"><div class="eyebrow">Navigation path</div>' + routes + '</div>' : '') + '<div class="web-page-grid">' + cards + '</div></section>';
+}
+
 function correlationSection(data, visibleSessions) {
   if (data.kind !== 'customer') return '';
   const shared = (data.coverage || []).filter(entry => (entry.session_ids || []).length > 1 && (selectedScope < 0 || visibleSessions.includes(entry.session_ids[0])));
@@ -110,9 +135,10 @@ function render(data) {
   const coverage = data.coverage || [];
   if (selectedScope >= coverage.length) selectedScope = -1;
   const visibleSessions = selectedScope < 0 ? null : coverage[selectedScope].session_ids;
-  const findings = (data.findings || []).filter(finding => !visibleSessions || visibleSessions.includes(finding.session_id));
-  const risk = visibleSessions ? filteredRisk(findings) : (data.risk || {});
-  const title = data.kind === 'customer' ? 'Customer analysis' : 'Assessment analysis';
+  const allFindings = (data.findings || []).filter(finding => !visibleSessions || visibleSessions.includes(finding.session_id));
+  const findings = allFindings.filter(finding => selectedRisk === 'all' || (selectedRisk === 'candidates' ? finding.status !== 'reproduced' : selectedRisk === 'reproduced' ? finding.status === 'reproduced' : finding.status === 'reproduced' && finding.severity === selectedRisk));
+  const risk = visibleSessions ? filteredRisk(allFindings) : (data.risk || {});
+  const title = data.kind === 'customer' ? 'Customer security analysis' : 'Security analysis';
   const goal = data.goal ? '<p class="goal-description">' + escapeHTML(compactText(data.goal, 185)) + '</p>' : '';
   const gaps = data.gaps || [];
   const hasLegacyClaims = (data.findings || []).some(finding => finding.recorded_status);
@@ -121,13 +147,28 @@ function render(data) {
   const latestResult = data.review_pending ? '<section class="section"><h2>Latest worker result · awaiting review</h2><p>' + escapeHTML(data.latest_result || 'No summary recorded.') + '</p></section>' : '';
   const gapItems = items => items.map(item => '<li>' + escapeHTML(item) + '</li>').join('');
   const gapList = '<ul class="gap-list">' + gapItems(gaps.slice(0, 4)) + '</ul>' + (gaps.length > 4 ? '<details><summary>Show ' + (gaps.length - 4) + ' more gaps</summary><ul class="gap-list">' + gapItems(gaps.slice(4)) + '</ul></details>' : '');
-  const findingHeading = selectedScope < 0 ? 'Prioritized findings' : 'Findings for selected scope';
+  const findingHeading = selectedRisk === 'all' ? 'Findings to review' : selectedRisk === 'candidates' ? 'Findings that need confirmation' : selectedRisk === 'reproduced' ? 'Reproduced findings' : selectedRisk[0].toUpperCase() + selectedRisk.slice(1) + ' findings';
+  const actions = (data.next_actions || []);
+  const actionSection = actions.length ? '<section class="section priority-actions"><div class="section-heading"><div><h2>What to do next</h2><p>Start with these actions, then open a finding to see why it matters and how it was checked.</p></div></div><ol class="action-list">' + actions.slice(0, 3).map(item => '<li>' + escapeHTML(item) + '</li>').join('') + '</ol>' + (actions.length > 3 ? '<details><summary>Show ' + (actions.length - 3) + ' more actions</summary><ol class="action-list">' + actions.slice(3).map(item => '<li>' + escapeHTML(item) + '</li>').join('') + '</ol></details>' : '') + (gaps.length ? '<button type="button" class="subtle-action" id="show-details">See test coverage and remaining questions ↓</button>' : '') + '</section>' : '';
   app.innerHTML =
-    '<header class="analysis-head"><div><div class="eyebrow">' + escapeHTML(data.kind === 'customer' ? 'Unified customer view' : 'Evidence review') + '</div><h1>' + escapeHTML(title) + '</h1>' + goal + '<p>' + escapeHTML(data.summary || '') + '</p>' + (data.report_url ? '<p><a class="report-link" href="' + escapeHTML(data.report_url) + '" target="_blank" rel="noopener">Open formal Markdown report ↗</a></p>' : '') + '</div><span class="status" data-state="' + escapeHTML(data.status) + '">' + escapeHTML(displayStatus(data.status)) + '</span></header>' +
-    '<section class="summary-grid">' + metric(risk.critical || 0,'Critical','critical') + metric(risk.high || 0,'High','high') + metric(risk.medium || 0,'Medium','medium') + metric(risk.low || 0,'Low','low') + metric(risk.reproduced || 0,'Reproduced') + metric(risk.candidates || 0,'Candidates') + '</section><p class="metric-note">Severity totals count reproduced findings; candidates remain separate.</p>' +
-    coverageSection(data) + sessionComparisonSection(data) + challengeSection(data, visibleSessions) + correlationSection(data, visibleSessions || []) +
-    '<section class="section finding-workspace"><div class="section-heading"><div><h2>' + findingHeading + '</h2><p>Select a finding to inspect its claim, independent check, evidence, and remediation.</p></div><span class="workspace-count">' + findings.length + ' recorded</span></div>' + findingExplorer(findings) + '</section>' +
-    '<div class="columns"><div>' + conclusion + latestResult + '</div><aside><section class="side-card"><h2>Next actions</h2><ul class="action-list">' + (data.next_actions || []).map(item => '<li>' + escapeHTML(item) + '</li>').join('') + '</ul></section><section class="side-card"><h2>' + (data.review_pending ? 'Gaps from last plan' : 'Assessment gaps') + ' · ' + gaps.length + '</h2>' + gapList + '</section><section class="side-card"><h2>Evidence boundary</h2><p>Map nodes are declared scopes, not inferred systems. Cross-session signals show recorded overlaps only. Reproduced findings have a worker challenge verdict and cited execution log, but every model-authored claim still needs professional review.</p></section></aside></div>';
+    '<header class="analysis-head"><div><div class="eyebrow">' + escapeHTML(data.kind === 'customer' ? 'Across customer sessions' : 'Assessment evidence') + '</div><h1>' + escapeHTML(title) + '</h1>' + goal + '<p>' + escapeHTML(data.summary || '') + '</p></div><div class="head-side"><span class="status" data-state="' + escapeHTML(data.status) + '">' + escapeHTML(displayStatus(data.status)) + '</span>' + (data.report_url ? '<a class="report-link" href="' + escapeHTML(data.report_url) + '" target="_blank" rel="noopener">Open formal report ↗</a>' : '') + '</div></header>' +
+    '<section class="summary-grid" aria-label="Filter findings by risk">' + metric(risk.critical || 0,'Critical','critical') + metric(risk.high || 0,'High','high') + metric(risk.medium || 0,'Medium','medium') + metric(risk.low || 0,'Low','low') + metric(risk.reproduced || 0,'Reproduced','reproduced') + metric(risk.candidates || 0,'Need checking','candidates') + '</section><p class="metric-note">Select a number to see those findings. Severity counts include only reproduced findings.</p>' +
+    actionSection +
+    '<section class="section finding-workspace" id="findings"><div class="section-heading"><div><h2>' + findingHeading + '</h2><p>For each finding, see the impact, recommended fix, and supporting checks.</p></div><div class="finding-controls"><span class="workspace-count">' + findings.length + ' shown</span>' + (selectedRisk !== 'all' ? '<button type="button" class="clear-filter" id="clear-risk">Show all findings</button>' : '') + '</div></div>' + findingExplorer(findings) + '</section>' +
+    webPagesSection(data, visibleSessions) +
+    '<details class="analysis-more" id="analysis-details"><summary>Explore tests, open questions, and session history <span>↘</span></summary><div class="analysis-more-body">' + coverageSection(data) + sessionComparisonSection(data) + challengeSection(data, visibleSessions) + correlationSection(data, visibleSessions || []) + '<div class="columns"><div>' + conclusion + latestResult + '</div><aside><section class="side-card"><h2>Recorded limits and open questions · ' + gaps.length + '</h2>' + gapList + '</section></aside></div></div></details><p class="analysis-caveat">Only recorded work is shown. Review the evidence before sharing a conclusion; untested areas may still contain weaknesses.</p>';
+  app.querySelector('#show-details')?.addEventListener('click', () => {
+    const details = app.querySelector('#analysis-details');
+    details.open = true;
+    details.scrollIntoView({block:'start', behavior:'smooth'});
+  });
+  app.querySelectorAll('[data-risk]').forEach(button => button.addEventListener('click', () => {
+    selectedRisk = button.dataset.risk;
+    selectedFinding = 0;
+    render(data);
+    app.querySelector('#findings')?.scrollIntoView({block:'start', behavior:'smooth'});
+  }));
+  app.querySelector('#clear-risk')?.addEventListener('click', () => { selectedRisk = 'all'; selectedFinding = 0; render(data); });
   app.querySelectorAll('[data-scope-index]').forEach(button => button.addEventListener('click', () => {
     const index = Number(button.dataset.scopeIndex);
     selectedScope = selectedScope === index ? -1 : index;
@@ -137,6 +178,22 @@ function render(data) {
   app.querySelectorAll('[data-finding-index]').forEach(button => button.addEventListener('click', () => {
     selectedFinding = Number(button.dataset.findingIndex);
     render(data);
+  }));
+  const shownPages = (data.web_pages || []).filter(page => !visibleSessions || visibleSessions.includes(page.session_id));
+  app.querySelectorAll('[data-web-note]').forEach(button => button.addEventListener('click', async () => {
+    const index = Number(button.dataset.webNote);
+    const page = shownPages[index];
+    const textarea = app.querySelector('#web-note-' + index);
+    const feedback = button.nextElementSibling;
+    button.disabled = true;
+    feedback.textContent = 'Saving…';
+    try {
+      const response = await fetch('/api/v1/assessments/' + encodeURIComponent(page.session_id) + '/analysis/notes', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({task_id:page.task_id, url:page.url, comment:textarea.value})});
+      if (!response.ok) throw new Error((await response.json()).error || 'Could not save note');
+      page.comment = textarea.value.trim();
+      feedback.textContent = 'Saved locally';
+    } catch (error) { feedback.textContent = error.message; }
+    button.disabled = false;
   }));
 }
 
