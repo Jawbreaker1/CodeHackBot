@@ -326,6 +326,17 @@ func TestCoordinatorBoundedViewKeepsRecentLeadAndFindingEvidence(t *testing.T) {
 	if len(state.Results[0].Evidence) != 1 || len(state.OperatorMessages[0]) < 1000 {
 		t.Fatal("model projection mutated durable assessment state")
 	}
+	restored, err := coordinatorPromptBounded(state, 200000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restoredPacket coordinatorModelPacket
+	if err := json.Unmarshal([]byte(restored), &restoredPacket); err != nil {
+		t.Fatal(err)
+	}
+	if len(restoredPacket.ContextNotes) != 0 || len(restoredPacket.Assessment.OperatorMessages) != 2 || restoredPacket.Assessment.OperatorMessages[0] != state.OperatorMessages[0] || len(restoredPacket.RecordedEvidence["task-1"]) == 0 {
+		t.Fatal("coordinator could not restore history after a tight projection")
+	}
 }
 
 func TestCoordinatorBoundedViewHandlesManyWorkerRounds(t *testing.T) {

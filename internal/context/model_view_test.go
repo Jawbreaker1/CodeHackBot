@@ -170,6 +170,13 @@ func TestModelViewUsesAvailableHeadroomBeforeOffloadingResults(t *testing.T) {
 	if !pinnedResult([]string{"/logs/39"}, view.RelevantRecentResults[len(view.RelevantRecentResults)-1]) {
 		t.Fatal("model-selected older result was dropped before unpinned results")
 	}
+	restored, err := p.ModelView(100000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(restored.RelevantRecentResults) != 40 || restored.OffloadedResultCount != 0 || restored.RelevantRecentResults[39].LogRefs[0] != "/logs/39" || len(restored.ContextNotes) != 0 {
+		t.Fatal("a tight projection permanently removed saved result cards")
+	}
 }
 
 func TestModelViewPrunesConversationOnlyUnderPressure(t *testing.T) {

@@ -1,6 +1,12 @@
 # Acceptance gates
 
-Updated 2026-09-19. Gates distinguish implemented contract checks from future product acceptance.
+Updated 2026-09-29. Gates distinguish implemented contract checks from future product acceptance.
+
+## Context regression gate — required for every context change
+
+Keep the saved assessment and each worker packet authoritative. A model view may shorten or omit material only when the complete request exceeds the selected profile's input allowance; it must mark omissions and retain the protected goal, scope, latest operator direction, and registered evidence references. A later request with sufficient room must recover the original history from the same saved state. Offloaded command output must remain readable from its registered log, without repeating the target action. Run the existing roomy/pressured worker, coordinator, conversation, and recall tests through `./scripts/ci.sh` for every context change; update those tests when the contract changes, not merely when output formatting changes.
+
+For a material context-flow change, add a focused real-model smoke and inspect the exact saved request and durable state. Compare retained facts, omitted sections, provider-reported tokens when available, latency, and completion quality against a previous run on the same fixture and model. A smoke confirms that one path works; it does not prove long-session reliability or allow a regression in evidence, safety, or operator control to be dismissed as a smaller prompt.
 
 ## Current core cleanup gate
 
