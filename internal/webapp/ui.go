@@ -14,7 +14,7 @@ var analysisHTML string
 //go:embed static/context.html
 var contextHTML string
 
-//go:embed static/*.css static/*.js static/*.svg
+//go:embed static/*.css static/*.js static/*.svg static/*.png
 var uiAssets embed.FS
 
 func serveUI(w http.ResponseWriter, r *http.Request) bool {
@@ -28,6 +28,8 @@ func serveUI(w http.ResponseWriter, r *http.Request) bool {
 		kind = "text/css; charset=utf-8"
 	case "/logo.svg", "/logo-small.svg", "/wordmark.svg":
 		kind = "image/svg+xml"
+	case "/birdhackbot-hero.png":
+		kind = "image/png"
 	default:
 		return false
 	}

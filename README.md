@@ -1,7 +1,7 @@
 # BirdHackBot
 
 <p align="center">
-  <img src="docs/assets/birdhackbot-hero.png" alt="Cybernetic raven with a red optical eye, the BirdHackBot emblem" width="900">
+  <img src="internal/webapp/static/birdhackbot-hero.png" alt="Cybernetic raven with a red optical eye, the BirdHackBot emblem" width="900">
 </p>
 
 BirdHackBot is System Verification's security testing platform for authorized assessments. Its supported deployment platform is Kali Linux Rolling, where the model-led multi-agent orchestrator coordinates investigation, source analysis, target validation, and reproducible reporting.
