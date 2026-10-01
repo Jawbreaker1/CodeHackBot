@@ -51,10 +51,11 @@ svg { flex-shrink: 0; }
 .session-link { min-width: 0; flex: 1; text-align: left; padding: 8px 4px 8px 21px; font-size: 12px; display: flex; align-items: center; gap: 8px; color: var(--muted); }
 .session-link.active { background: var(--surface); color: var(--text); }
 .session-link-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-.session-delete { width: 28px; height: 28px; margin-right: 3px; display: grid; place-items: center; flex: 0 0 auto; color: var(--faint); border-radius: 6px; }
+.session-delete { width: 28px; height: 28px; margin-right: 3px; display: grid; place-items: center; flex: 0 0 auto; color: var(--faint); border-radius: 6px; opacity: 0; pointer-events: none; }
+.session-row:hover .session-delete, .session-row:focus-within .session-delete { opacity: 1; pointer-events: auto; }
 .session-delete:hover:not(:disabled) { color: var(--error); background: #ffffff0d; }
 .session-delete .icon { width: 14px; height: 14px; }
-@media (hover: none) { .session-delete { opacity: 1; } }
+@media (hover: none) { .session-delete { opacity: 1; pointer-events: auto; } }
 .session-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--faint); }
 .session-dot.running, .session-dot.starting { background: var(--attention); }
 .sidebar-footer { padding: 12px 0 15px; border-top: 1px solid var(--line); }
