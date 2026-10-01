@@ -1,12 +1,10 @@
-# BirdHackBot / CodeHackBot
-
-BirdHackBot is System Verification's security testing platform for authorized assessments. Its supported deployment platform is Kali Linux Rolling, where the model-led multi-agent orchestrator coordinates investigation, source analysis, target validation, and reproducible reporting.
+# BirdHackBot
 
 <p align="center">
-  <img src="docs/assets/birdhackbot-logo.svg" alt="BirdHackBot. full raven wordmark" width="420">
+  <img src="docs/assets/birdhackbot-hero.png" alt="Cybernetic raven with a red optical eye, the BirdHackBot emblem" width="900">
 </p>
 
-The full raven wordmark is used for larger presentation; the web console switches to a compact raven-head mark at favicon and small-header sizes so the eye and silhouette remain legible.
+BirdHackBot is System Verification's security testing platform for authorized assessments. Its supported deployment platform is Kali Linux Rolling, where the model-led multi-agent orchestrator coordinates investigation, source analysis, target validation, and reproducible reporting.
 
 The product is organized around a conversation with a coordinator. Explain the situation in plain language, review preliminary focused/balanced/thorough investigation choices and time ranges, then let the coordinator build and adapt a test sequence. Choose which bounded tasks may run, or tell the coordinator in chat to propose another path before execution. Follow parallel workers as they collect evidence; the chat shows their current purpose and approval waits. After each round, the coordinator briefly explains what the evidence established and why it recommends the next step. Chat is the control surface; analysis and reporting are separate review surfaces.
 
