@@ -1,4 +1,4 @@
-import {$, node, badge, disclosure, richText, eventNode, phaseLabel, preview, replacePreservingDetails, renderWorkers, renderCoordinatorPlans, renderFindings} from './inspector.js';
+import {$, node, badge, disclosure, richText, eventNode, phaseLabel, preview, replacePreservingDetails, renderWorkers, renderCoordinatorPlans, renderFindings, renderArtifacts} from './inspector.js';
 
 let current = null;
 let selection = 0;
@@ -496,6 +496,7 @@ function renderView(view) {
   }
   syncBrowserWorkers(view);
   if (changed('findings', [view.id, view.findings])) renderFindings(view);
+  if (changed('artifacts', [view.id, view.artifacts])) renderArtifacts(view);
   const records = [...eventRecords.values()];
   if (changed('activity', records)) {
     if (records.length) $('activity').replaceChildren(...records.map(eventNode));

@@ -411,3 +411,38 @@ export function renderFindings(view) {
   replacePreservingDetails($('findings'), items);
   $('findingCount').textContent = (view.findings || []).length;
 }
+
+export function renderArtifacts(view) {
+  const artifacts = view.artifacts || [];
+  const items = [];
+  for (const [kind, heading] of [['image', 'Screenshots'], ['file', 'Files']]) {
+    const group = artifacts.filter(artifact => artifact.kind === kind);
+    if (!group.length) continue;
+    const section = node('section', 'artifact-group');
+    section.append(node('h3', '', heading));
+    for (const artifact of group) {
+      const card = node('article', 'artifact-card');
+      const link = node('a', 'artifact-link');
+      link.href = artifact.url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      if (kind === 'image') {
+        const image = node('img', 'artifact-preview');
+        image.src = artifact.url;
+        image.alt = '';
+        image.loading = 'lazy';
+        link.append(image);
+      }
+      link.append(node('strong', '', artifact.name));
+      card.append(link);
+      const details = [artifact.task_id, formatBytes(artifact.bytes)].filter(Boolean).join(' · ');
+      if (details) card.append(node('div', 'artifact-meta', details));
+      if (artifact.description) card.append(node('div', 'artifact-description', artifact.description));
+      section.append(card);
+    }
+    items.push(section);
+  }
+  if (!items.length) items.push(node('p', 'empty', 'No saved files or screenshots yet. Artifacts created by workers will appear here.'));
+  $('artifacts').replaceChildren(...items);
+  $('artifactCount').textContent = artifacts.length;
+}

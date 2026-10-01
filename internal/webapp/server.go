@@ -465,6 +465,7 @@ type assessmentView struct {
 	PlanTimeline     []coordinatorPlanView      `json:"plan_timeline,omitempty"`
 	Workers          []workerView               `json:"workers"`
 	Findings         []assessment.Finding       `json:"findings"`
+	Artifacts        []artifactView             `json:"artifacts"`
 	Limits           assessment.Limits          `json:"limits"`
 	Results          []assessment.Result        `json:"results"`
 	Events           []eventRecord              `json:"events"`
@@ -892,7 +893,11 @@ func (s *Server) serveAssessmentArtifact(w http.ResponseWriter, r *http.Request,
 		contentType = "application/octet-stream"
 	}
 	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Content-Disposition", `inline; filename="`+strings.ReplaceAll(filepath.Base(wanted), `"`, "")+`"`)
+	disposition := "attachment"
+	if imageMIME(wanted) != "" {
+		disposition = "inline"
+	}
+	w.Header().Set("Content-Disposition", disposition+`; filename="`+strings.ReplaceAll(filepath.Base(wanted), `"`, "")+`"`)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	http.ServeContent(w, r, filepath.Base(wanted), info.ModTime(), file)
 }
@@ -2351,6 +2356,7 @@ func (r *run) view(after string) assessmentView {
 		}
 	}
 	view.Findings = assessment.CurrentFindings(r.state.Plans)
+	view.Artifacts = assessmentArtifacts(r.root, r.id, r.state, r.workers)
 	view.PlanTimeline = coordinatorPlans(r.state, r.workers)
 	if n, err := strconv.ParseUint(strings.TrimSpace(after), 10, 64); err == nil {
 		for _, event := range r.events {

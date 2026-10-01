@@ -545,6 +545,9 @@ func TestServerServesOnlyRegisteredWorkerArtifactsAndLogs(t *testing.T) {
 	if body, _ := io.ReadAll(logResponse.Body); logResponse.StatusCode != http.StatusOK || string(body) != "GET /fixture 200" {
 		t.Fatalf("registered log status=%d body=%q", logResponse.StatusCode, body)
 	}
+	if disposition := logResponse.Header.Get("Content-Disposition"); !strings.HasPrefix(disposition, "attachment;") {
+		t.Fatalf("non-image artifact disposition=%q; want download", disposition)
+	}
 	response, err = http.Get(httpServer.URL + "/api/v1/assessments/assessment/artifact?path=" + url.QueryEscape(filepath.Join(runRoot, "tasks", "browser", "work", "missing.png")))
 	if err != nil {
 		t.Fatal(err)

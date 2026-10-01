@@ -73,7 +73,7 @@ For a fully air-gapped deployment, use a local model and block external network 
 
 ## Work with sessions and results
 
-A new session starts as a conversation, without an assessment form. Describe what you know; the coordinator can suggest focused, balanced, or thorough work and rough time ranges. You choose which proposed tasks to run and may ask for a different plan. During execution, the chat shows approvals and short progress updates. Expand activity for commands and evidence, or open a worker in the right panel for its current task and browser preview. You can continue talking to the coordinator while workers run.
+A new session starts as a conversation, without an assessment form. Describe what you know; the coordinator can suggest focused, balanced, or thorough work and rough time ranges. You choose which proposed tasks to run and may ask for a different plan. During execution, the chat shows approvals and short progress updates. The right panel separates worker progress, findings, saved files and screenshots, and activity. Open Artifacts for the evidence files you want to inspect; command logs stay in Activity. You can continue talking to the coordinator while workers run.
 
 Create customer folders from the left sidebar and drag sessions into them. You can reopen or delete sessions there. A completed assessment stays conversational: ask follow-up questions, request another in-scope round, or export a report without losing its earlier evidence. Reports and raw logs remain in that session's local folder.
 
