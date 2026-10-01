@@ -6,6 +6,8 @@
 
 BirdHackBot is System Verification's security testing platform for authorized assessments. Its supported deployment platform is Kali Linux Rolling, where the model-led multi-agent orchestrator coordinates investigation, source analysis, target validation, and reproducible reporting.
 
+The matching [compact bird-head icon](internal/webapp/static/logo-small.svg) carries the red-eye mark into the favicon and web navigation.
+
 The product is organized around a conversation with a coordinator. Explain the situation in plain language, review preliminary focused/balanced/thorough investigation choices and time ranges, then let the coordinator build and adapt a test sequence. Choose which bounded tasks may run, or tell the coordinator in chat to propose another path before execution. Follow parallel workers as they collect evidence; the chat shows their current purpose and approval waits. After each round, the coordinator briefly explains what the evidence established and why it recommends the next step. Chat is the control surface; analysis and reporting are separate review surfaces.
 
 ## Screenshots

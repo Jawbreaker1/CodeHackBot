@@ -1,8 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
-  <title id="title">BirdHackBot raven head</title>
-  <desc id="desc">A compact raven head mark with a red signal eye</desc>
-  <path fill="#f6f2e9" stroke="#242424" stroke-width="2" stroke-linejoin="round" d="M7 36c7-11 17-19 28-23 8-3 16-1 22 4l-7 4c6 2 10 7 13 13l-15 2c-4 0-8 2-12 6l-8 10-8-7-10 5 4-8-7-6Z"/>
-  <path fill="#242424" d="m39 31 21 3-15 7-10-5 4-5Z"/>
-  <path fill="#e5484d" d="M34 19c5-2 9-1 12 2-2 4-5 6-8 6-3-2-5-5-4-8Z"/>
-  <circle cx="38" cy="23" r="1.8" fill="#171717"/>
+  <title id="title">BirdHackBot icon</title>
+  <desc id="desc">Cybernetic raven head with a red optical eye</desc>
+  <rect x="1" y="1" width="62" height="62" rx="11" fill="#111318"/>
+  <path fill="#343840" d="M8 20 21 22 15 15 26 19 22 12c12 2 22 7 25 16l6 2c7 4 10 10 6 16l-3 3c-2-6-6-9-13-10-5 4-7 9-8 14-7-6-15-10-24-9 1-8 6-14 12-17L7 32l13-4L8 20Z"/>
+  <path fill="#262a31" d="M12 23 25 25l-6-6 13 5c7 2 11 6 13 11l4 2-7 1c-4 3-7 8-9 14-6-5-12-8-19-8 2-7 7-13 14-17l-17 5 11-5Z"/>
+  <path fill="#b8bfc7" d="m22 16 17 4c5 2 8 6 9 10l-3 2-15-6Z"/>
+  <path fill="#e0e3e7" d="m23 16 16 5 6 6-14-5Z"/>
+  <path fill="#505760" d="m23 30 12 1 8 9-5 7-11-8Z"/>
+  <path fill="#d0d5da" d="M47 30c7 1 12 5 13 10 1 4 0 7-3 10-1-6-5-10-10-12l-6-2Z"/>
+  <path fill="#111318" d="M32 28c5-2 10-1 14 2l2 4-4 5H34l-4-5Z"/>
+  <path fill="#ed3038" d="M35 29c4-1 7 0 9 3-1 4-4 6-8 5-3-2-4-5-1-8Z"/>
+  <circle cx="40" cy="33" r="1.3" fill="#111318"/>
 </svg>
