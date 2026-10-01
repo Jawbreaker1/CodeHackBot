@@ -347,7 +347,7 @@ function renderTranscript() {
     const welcome = node('div', 'welcome');
     const mark = document.createElement('img');
     mark.src = '/birdhackbot-hero.png'; mark.alt = 'Detailed BirdHackBot cybernetic raven'; mark.className = 'welcome-artwork';
-    welcome.append(mark, node('h2', '', 'What are we investigating?'), node('p', '', 'Explore a question. Follow the evidence.\nWork with your coordinator.'));
+    welcome.append(mark, node('h2', '', 'What are we investigating?'), node('p', '', "Tell us what you're testing.\nLet's find out what holds up—and what doesn't."));
     items.push(welcome);
   }
   replacePreservingDetails(pane, items);

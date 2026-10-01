@@ -4,6 +4,8 @@
   <img src="internal/webapp/static/birdhackbot-hero.png" alt="Detailed cybernetic raven with a red eye, the BirdHackBot emblem" width="520">
 </p>
 
+*Tell us what you're testing. Let's find out what holds up—and what doesn't.*
+
 BirdHackBot is a penetration-testing tool built for Kali Linux. Tell the coordinator what you want to investigate. It suggests a sensible route, sends independent tasks to workers in parallel, and changes the plan when new evidence calls for it. You can ask questions, choose which tests to run, and follow the work as it happens.
 
 The operator sets the target boundaries and is responsible for authorization. BirdHackBot records those boundaries and offers three execution-approval levels: review every action, review risky actions, or approve everything within the session. You can stop all workers at any time.
