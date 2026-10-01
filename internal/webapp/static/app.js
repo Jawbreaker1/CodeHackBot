@@ -343,7 +343,7 @@ function renderTranscript() {
   if (!items.length) {
     const welcome = node('div', 'welcome');
     const mark = document.createElement('img');
-    mark.src = '/birdhackbot-hero.png'; mark.alt = 'BirdHackBot cybernetic raven'; mark.className = 'welcome-artwork';
+    mark.src = '/birdhackbot-hero.png'; mark.alt = 'Detailed BirdHackBot cybernetic raven'; mark.className = 'welcome-artwork';
     welcome.append(mark, node('h2', '', 'What are we investigating?'), node('p', '', 'Explore a question. Follow the evidence.\nWork with your coordinator.'));
     items.push(welcome);
   }
@@ -492,7 +492,7 @@ function renderView(view) {
     $('workerCount').textContent = renderWorkers(view, act, openWatch, openBrowser);
   }
   syncBrowserWorkers(view);
-  if (changed('findings', view.findings)) renderFindings(view);
+  if (changed('findings', [view.id, view.findings])) renderFindings(view);
   const records = [...eventRecords.values()];
   if (changed('activity', records)) {
     if (records.length) $('activity').replaceChildren(...records.map(eventNode));

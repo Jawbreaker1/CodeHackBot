@@ -1,138 +1,107 @@
 # BirdHackBot
 
 <p align="center">
-  <img src="internal/webapp/static/birdhackbot-hero.png" alt="Cybernetic raven with a red optical eye, the BirdHackBot emblem" width="900">
+  <img src="internal/webapp/static/birdhackbot-hero.png" alt="Detailed cybernetic raven with a red eye, the BirdHackBot emblem" width="520">
 </p>
 
-BirdHackBot is System Verification's security testing platform for authorized assessments. Its supported deployment platform is Kali Linux Rolling, where the model-led multi-agent orchestrator coordinates investigation, source analysis, target validation, and reproducible reporting.
+BirdHackBot is a penetration-testing tool built for Kali Linux. Tell the coordinator what you want to investigate. It suggests a sensible route, sends independent tasks to workers in parallel, and changes the plan when new evidence calls for it. You can ask questions, choose which tests to run, and follow the work as it happens.
 
-The matching [compact bird-head icon](internal/webapp/static/logo-small.svg) carries the red-eye mark into the favicon and web navigation.
+The operator sets the target boundaries and is responsible for authorization. BirdHackBot records those boundaries and offers three execution-approval levels: review every action, review commands and risky actions, or approve everything within the session. You can stop all workers at any time.
 
-The product is organized around a conversation with a coordinator. Explain the situation in plain language, review preliminary focused/balanced/thorough investigation choices and time ranges, then let the coordinator build and adapt a test sequence. Choose which bounded tasks may run, or tell the coordinator in chat to propose another path before execution. Follow parallel workers as they collect evidence; the chat shows their current purpose and approval waits. After each round, the coordinator briefly explains what the evidence established and why it recommends the next step. Chat is the control surface; analysis and reporting are separate review surfaces.
+## See it in action
 
-## Screenshots
+These screenshots come from the current local web app. The new-session view shows the detailed raven; the smaller [bird-head icon](internal/webapp/static/logo-small.svg) stays in the navigation and favicon.
 
-These captures show the two primary operator surfaces from the loopback web application: the live coordinator console and the customer-level analysis workspace. Both are real application views from a controlled lab workflow.
+![A new BirdHackBot session with the detailed raven above the conversation](docs/screenshots/new-session.png)
 
-![BirdHackBot coordinator console — chat-first orchestration, plan review, approvals, worker activity, and evidence](docs/screenshots/coordinator-console.png)
+The coordinator conversation stays in the center, with plans and worker progress alongside it. This example uses a synthetic local test service.
 
-![BirdHackBot customer analysis — unified sessions, prioritized findings, evidence gaps, and next actions](docs/screenshots/customer-analysis.png)
+![Coordinator conversation with a changing plan, worker details, and the approval setting](docs/screenshots/coordinator-console.png)
 
-## What works today
+The Analysis view shows what was tested, where weaknesses were found, what still needs checking, and what to fix first. A customer folder can bring results from several sessions together.
 
-The core agentic workflow is operational. The coordinator receives a plain-language objective, reasons over the declared scope and observed evidence, proposes bounded tests, and adapts the next round from worker results. One shared adaptive worker loop powers both standalone and delegated tasks; each delegated task gets its own worker run, workspace, context packet, approvals, evidence, and session snapshot. The coordinator can run up to two independent worker runs concurrently and schedule dependent validation in a later round. The [worker audit](docs/worker-foundation-audit-2026-09-20.md) records the rebuild evidence and remaining acceptance limits.
+![Analysis of a synthetic test service with a verified finding, evidence, and recommended fix](docs/screenshots/assessment-analysis.png)
 
-The coordinator and workers receive a compact [local strategy catalog](docs/strategies/catalog.md) covering discovery, services, source, web/API, identity, configuration, recovery, validation, and reporting. The coordinator can propose a visible research round when knowledge is missing and suggest up to two relevant guides for each worker task. The worker decides whether to load a guide and may change its choice as evidence develops; only selected guides enter that worker's durable context with source and checksum. These guides frame decisions, while [runbooks](docs/runbooks/) offer more procedural help; neither replaces target-side evidence. The [archive baseline](docs/experiments/codex-archive-baseline-2026-09-23.md) shows why this matters: a standard Kali John rule recovered a local archive quickly after an earlier search omitted common mutations.
+## What you can do
 
-A local authenticated REST bridge provides subscription-backed OpenAI inference, including bounded screenshot/PDF input for the model-led coordinator and workers. Launching without flags opens an interactive guided assessment with a coordinator, up to two concurrent workers, serialized action approvals, saved evidence, resumable assessment state, and a formal report draft. Kali tooling, adaptive task planning, CVE/advisory research, task-local helper construction, evidence capture, and dependent verification are part of the operating model. A reproduced finding now requires a later worker to challenge the claim against a plausible alternative and cite its own execution log; professional claim-to-evidence review remains necessary. Source-to-deployment correlation remains a planned validation slice. The runtime does not enforce target allowlists or provide its own network sandbox; the operator is responsible for authorization, target boundaries, and the execution environment, as described in [AGENTS.md](AGENTS.md).
+- **Investigate interactively.** Ask about a system, explore an idea, or request a full assessment. The coordinator explains useful next tests and lets you choose before workers run them.
+- **Run independent work in parallel.** The coordinator can send separate tasks to two workers at once. It brings their results together, changes the plan when a test fails or reveals something new, and asks another worker to verify important findings.
+- **Find the right knowledge for the job.** The coordinator can research a product, look up relevant vulnerabilities, and suggest practical guides for each task. A worker loads the guidance it needs as the investigation develops. Guides inform the test; observations from the target decide the result.
+- **Use Kali's tools and source code.** Workers can run approved commands, inspect available source, and write a small helper when standard tools are insufficient. They check which tools and data are actually installed before relying on them.
+- **Examine web applications.** A delegated Playwright worker can follow pages and user flows, capture screenshots and traces, and expose an optional live browser preview beside the chat.
+- **See what happened.** Each test saves the command, result, timing, and supporting files. The interface separates possible weaknesses from findings that another worker has checked against the target.
+- **Explore the results.** Analysis compares sessions in the same customer folder. It links findings to evidence, shows tested areas and gaps, and puts suggested fixes beside each risk.
+- **Create formal reports.** Ask for an OWASP WSTG- or PTES-aligned report in Markdown or PDF. Templates check that scope, test results, evidence, limitations, and review details are present. The report is saved with the session and linked directly in chat.
+- **Continue long investigations.** The coordinator and each worker keep track of their own work. Older details can be saved and brought back when needed. A local debug view shows exactly what information each model received.
 
-The initial browser surface is available through `birdhackbot-web`. It is chat-first and multimodal: the shared intake protocol lets the coordinator explain the harness, resolve exploratory discovery with bounded read-only observations (including fixed host identity metadata), clarify the requested target and work when genuinely ambiguous, and propose an assessment before the operator sees a compact review card. The operator owns authorization; the app does not demand proof, an RoE form, or a fixed checklist before a run. Formal customer reports can record authorization and RoE details supplied by the operator. The conversation and proposal are saved with the session. After starting, the coordinator proposes a bounded test sequence in the main conversation; the operator can select tasks, ask about the plan, or direct the coordinator to revise it before workers execute. A revision consumes model budget but does not run the rejected tasks or spend an assessment round. Workers remain visible while the operator continues talking to the coordinator; a direction during active work is considered at the next planning boundary unless the operator stops the run. The chat shows short conclusions and compact activity summaries, with technical plans, commands, and evidence available in expandable detail and the report. The browser uses the same coordinator and worker runtime as the terminal UI and keeps scope and approval levels visible. Use **+** beside **Folders & sessions** to create a named customer/project folder, then drag a draft or assessment into it. Reloading the app reopens an existing session; **New session** explicitly creates a blank one. Every session row has a visible delete control. Deleting the selected session opens another saved session, or leaves the workspace empty when none remain.
+The web app and terminal UI share the same coordinator, workers, approvals, and saved evidence. The browser is the main place to explore a session; the CLI remains available for terminal use.
 
-In connected mode, an ordinary question about a public domain can be answered in the conversation using approved DNS lookup and one bounded HTTP/HTTPS page fetch. The coordinator reports what those observations establish without starting an assessment; scans and deeper testing still use a reviewed worker plan. Air-gapped mode disables these external observation tools.
+## Start on Kali Linux
 
-The composer accepts bounded screenshots and PDFs. Images are sent as typed multimodal input; the subscription bridge forwards images and PDFs to the Responses model path, while local endpoints must advertise their own multimodal support. During an assessment, the coordinator can select a recorded worker screenshot to display directly beneath its chat reply. The runtime accepts only exact image references already registered in that assessment; the preview links to the original local artifact. The transcript renders Markdown emphasis, headings, lists, links, tables, quotes, and code with a locally bundled parser, and turns explicit Mermaid flowchart blocks into expandable diagrams. Raw HTML is disabled and Markdown image URLs do not auto-load; screenshots use the registered artifact path instead. The parser and license notices are recorded in [third_party/](third_party/).
-
-Web assessments can optionally use the pinned [Playwright worker helper](tools/playwright-runner/README.md) for JavaScript route traversal, role flows, screenshots, traces, and browser-visible network evidence. It runs inside a delegated worker and never downloads browser binaries during an assessment. Open **Watch execution** on a worker to see its live tool output, named browser steps, and declared screenshot preview; detailed traces stay in the local evidence register.
-
-The dedicated analysis workspace is available at `/analysis?assessment=<session-id>` and from each customer folder's **Analysis** link. It has an interactive coverage map of declared scopes, recorded worker tests, weak points, independent challenges, and gaps. Unresolved challenge verdicts remain explorable even when the coordinator declines to call an observation a confirmed vulnerability; registered execution logs open from the view. Customer analysis compares every session’s test and finding counts, highlights work on the same exact scope, and flags shared-scope, CVE, and recorded-software overlaps without merging evidence or inventing an attack chain. A finding picker keeps the selected item’s claim, validation, evidence, and remediation together for comparison across the customer’s sessions. Findings link to session evidence and formal Markdown reports. An older reproduced claim without the newer challenge verdict appears as a candidate needing recheck in Analysis and newly rendered reports. Software observations can lead to model-directed CVE/advisory research through permitted online sources or local Kali resources. Advisory references, observed software, and evidence paths are retained as structured provenance; a CVE match remains a candidate until a separate verification task produces target evidence. In connected research mode, workers can use approved `curl`/`wget` actions to fetch advisory and product documentation with URL/status/time provenance. Set `BIRDHACKBOT_RESEARCH_MODE=air_gapped` to tell every model role that external fetch is prohibited and local snapshots are required; the deployment network boundary must still enforce the air gap. The current deployment is intentionally loopback-bound; authentication and remote deployment controls are still required before exposing it beyond the lab.
-
-The assessment header also opens a local **Context** debugger. It displays each coordinator and worker decision turn as an ordered, size-coded stack of model input sections, with the exact recorded request available for new worker turns. Older worker sessions show their recorded packet sections when exact requests were not captured. For a controlled experiment you can omit optional worker sections from future model inputs and restore them later; the underlying packet and evidence are preserved. Scope, safety, current-step, and latest-execution sections cannot be omitted. The debugger is served only to loopback clients because model context may contain sensitive assessment material.
-
-Current implementation status: **core foundation, subscription API wrapper, multi-agent orchestration, browser workflow, session analysis, and evidence-backed reporting are implemented; source-assisted assessment and air-gapped acceptance are next validation slices**. [TASKS.md](TASKS.md) records actual progress.
-
-Required product capabilities include Kali tooling, adaptable playbooks, reusable custom tools, discovery-driven vulnerability research, and fully air-gapped assessments. Local-model access works today; full offline operation and a competitive discovery advantage remain unvalidated. See the [architecture](docs/architecture.md) and [acceptance gates](docs/runbooks/acceptance-gates.md).
-
-Astra is the development/review model. The intended OpenAI pentest runtime is Daybreak on GPT-5.6 Sol, alongside local models. The subscription bridge has called `gpt-daybreak-blue-latest` successfully; the backend reports `gpt-5.6-sol`. Access remains account-dependent.
-
-The Daybreak web profile and guided subscription setup request **high reasoning**. The local bridge forwards this to the subscription backend; a live probe confirmed the request completes. This may increase latency and model usage. Existing running processes need a restart to load the updated bridge and profile.
-
-Analysis starts with the decisions an operator needs to make: risk totals link directly to matching findings, and each finding shows its impact and proposed fix before technical evidence. Browser sessions can show the pages workers actually visited, observed navigation, and saved screenshots. Analysts can add session-local comments to those pages; a browser journey is not a claim that the entire site was mapped or tested. Older browser sessions may show only their last saved preview.
-
-## Build and run
-
-The supported host is Kali Linux Rolling. Install the platform baseline and
-optional assessment capability packs using the [Kali installation runbook](docs/runbooks/kali-installation.md).
-
-```sh
-go build -buildvcs=false -o birdhackbot ./cmd/birdhackbot
-./birdhackbot
-```
-
-For local lab operation, run from the repository checkout. Guided setup offers a local model server or an existing Codex ChatGPT sign-in, then asks for a goal and explicit scope before starting. Provider preferences are remembered locally; scope and permissions are reviewed for each assessment. Subscription bridge startup and its temporary local credential are managed by the application. In the web UI, first-time ChatGPT sign-in starts from Settings; the [subscription setup guide](docs/runbooks/subscription-bridge.md) covers CLI and standalone bridge use.
-
-The saved-provider prompt accepts `s` to open model settings. In a real terminal, the default launch uses a two-pane Bubble Tea surface with conversation/activity and assessment-status panes. In automation or redirected output, set `BIRDHACKBOT_PLAIN=1` to use the line adapter. Once the model is ready, the CLI presents a conversational intake managed by the selected LLM; it answers ordinary questions, asks for missing objective or scope details, and proposes an assessment only when the operator has supplied enough information. `/settings` switches the provider/model before starting and `/resume` lists saved assessment sessions, including completed ones. The proposed goal and exact scope are shown for review and require an explicit start confirmation. During a run, the CLI presents each coordinator plan for task selection under per-action approval; the other approval levels follow the same automatic plan-selection rule as the web UI. A running assessment accepts plain-language coordinator messages plus `/workers`, `/status`, `/help`, and `/stop`; messages are retained for the next planning turn and are not execution approvals. When a run finishes, the same terminal conversation stays open for questions, OWASP/PTES Markdown or PDF exports, and new in-scope work using the same saved session and a newly reviewed plan. Use `/exit` to close it. Resuming uses recorded results and budgets and never replays an action whose external outcome is unknown.
-
-Local setup also saves an explicit reasoning choice. The guided local profile allows 32,768 output tokens and up to ten minutes per request; Ctrl-C cancels an active request. The saved Qwen 3.8 27B Q6_K profile uses low reasoning and allows up to 96 KiB of input text; that byte ceiling is not a token count. One small loaded-instance smoke check observed a 70,144-token server window and two parallel slots, but long-context stability remains unvalidated. Daybreak remains the default web model, and Qwen testing is paused at the operator’s request while another project uses the model server. Server load settings remain managed in LM Studio. The standalone development CLI does not yet expose these guided inference settings.
-
-Each proposed action follows your session approval setting: approve every execution (default), approve dangerous or uncertain executions, or approve everything. Use `/permissions` in the CLI or the approval label below the web composer; the web sidebar also has a Settings button for model and approval choices. Automatic modes require an explicit acknowledgement, release pending executions covered by the new setting, and do not broaden scope. The browser also releases pending plans when switching to an automatic mode. Ctrl-C stops all workers and saves an aborted result. Reports, coordinator decisions, worker state, and evidence live under the displayed session directory. Reports are model-authored drafts for operator review, not claims of independent vulnerability verification. `birdhackbot-orchestrator` opens the same guided surface.
-
-The standalone worker remains available for development:
-
-```sh
-./birdhackbot --llm-base-url http://127.0.0.1:1234/v1 --llm-model YOUR_LOCAL_MODEL_ID
-```
-
-Use the exact model ID exposed by your local server. Execution requires per-action approval by default. The no-flag guided application owns the terminal UI; advanced flags remain the diagnosis and automation surface.
-
-To start the browser UI, configure an OpenAI-compatible local or bridge endpoint and open the printed URL:
+Install the baseline packages in the [Kali installation guide](docs/runbooks/kali-installation.md), then build from the repository checkout:
 
 ```sh
 go build -buildvcs=false -o birdhackbot-web ./cmd/birdhackbot-web
-./birdhackbot-web --llm-base-url http://127.0.0.1:1234/v1 --llm-model YOUR_LOCAL_MODEL_ID
+go build -buildvcs=false -o birdhackbot ./cmd/birdhackbot
 ```
 
-For one-click A/B sessions across providers, copy [the model profile example](config/model-profiles.example.json) to `config/model-profiles.local.json` and set your bridge token path and local model endpoint once. The web server loads that local file automatically. Click the model name beneath the composer to select Daybreak or Qwen; the choice includes its endpoint, reasoning setting, and local context budget. Local-model profiles can request an output limit; the subscription endpoint sets its own output ceiling. **Settings → ChatGPT plan → Continue with ChatGPT** starts a one-time code sign-in in the web UI and reports connection state. Credentials stay in Codex's file store on the Kali host; the browser only sees the verification link and one-time code. The local subscription bridge still needs to be running, as described in the [subscription setup guide](docs/runbooks/subscription-bridge.md). Once a conversation begins, choosing another model opens a new session so A/B histories stay separate. The local profile file is ignored by Git.
-
-The web server defaults to `127.0.0.1:8080`. Keep it on loopback until authentication, origin protection, and deployment controls are added. The browser is a presentation and lifecycle adapter; it never executes a tool or calls the model directly.
-
-The [tool capability guide](docs/runbooks/tool-capabilities.md) lists what the intake conversation, coordinator, and workers can actually invoke. Intake observations are read-only; scoped assessment workers use the general `bash` tool for approved Kali commands and file changes. A requested one-file-at-a-time cleanup uses a separate logged invocation and approval for each file.
-
-When an assessment finishes, the coordinator conversation stays open for questions about the recorded results or more work in the same scoped session. A new investigation request starts another coordinator plan for review; the existing worker evidence and earlier report exports remain available. Ask it to generate an **OWASP WSTG-aligned** or **PTES-aligned** report in Markdown or PDF. A follow-up such as “Can I have that as a PDF?” keeps the most recent report format. The selected template creates a new file in that session's `reports/` folder and attaches a direct link in chat. PDF export requires Kali's `python3-markdown-it` and `chromium` packages; see the [installation runbook](docs/runbooks/kali-installation.md). The canonical `report.md` keeps the test sequence, findings, gaps, and concise task outcomes. A separate `evidence-index.md`, also linked in chat, retains full worker conclusions and execution references; raw output and approval records remain in local task logs. A compact report-record check in the worker panel tracks saved scope, test times and outcomes, finding evidence, limitations, and coordinator review during the run. The same checks appear in both formatted reports; missing information stays visible in a draft rather than being filled in or blocking exploratory work. Review model-authored text for sensitive content before sharing. The unified customer report is linked from the customer analysis view. The [reporting guide](docs/strategies/evidence-reporting/SKILL.md) describes the templates and evidence rules. Formatting is deterministic, while findings remain model-authored drafts for professional review.
-
-For a bounded headless task:
+Start the browser app and open the URL it prints:
 
 ```sh
-./birdhackbot --goal "Show the current directory"   --llm-base-url http://127.0.0.1:1234/v1 --llm-model YOUR_LOCAL_MODEL_ID   --session-dir sessions/example --max-steps 4 --inspect-context
+./birdhackbot-web
 ```
 
-Use a fresh session directory per independent run. `--resume --session-dir PATH` loads a version 2 worker snapshot and preserves its consumed turn budget. Unknown pending execution is never replayed automatically. Older version 1 snapshots remain inspectable files but cannot be resumed with this worker; they lack reliable budget accounting. The guided assessment path uses `/resume` for coordinator sessions and preserves its shared model-call budget and operator conversation excerpts.
+It listens on `127.0.0.1:8080` by default. Run one web server at a time; stop the existing process before starting a replacement. The server is intended for local use and has no authentication or remote-deployment controls yet.
 
-For subscription access, follow the [bridge setup guide](docs/runbooks/subscription-bridge.md). It uses your Codex ChatGPT sign-in, keeps tool execution in BirdHackBot, and never falls back to API-key billing. Selected worker context is sent to OpenAI.
+For the terminal UI, run:
 
-## Inspect a session
+```sh
+./birdhackbot
+```
 
-Interactive commands include `/status`, `/plan`, `/stats`, `/packet`, `/lastlog`, and `/fulloutput`. Use `--inspect-context` to save model-facing snapshots.
+The first conversation can be exploratory. When you want workers to act, review the proposed target, tasks, and approval level. The terminal supports saved sessions, model settings, worker status, and stopping active work. See the [web application guide](docs/runbooks/web-application.md) and [tool capability guide](docs/runbooks/tool-capabilities.md) for the full workflows.
 
-Each execution records its prepared invocation, working directory, times, exit status, and output references. Stdout/stderr stream to `.stdout` and `.stderr` files alongside the command log. Model previews are bounded; full output stays available locally. Ctrl-C/SIGTERM cancels active work and records an aborted state.
+## Choose a model
 
-Evidence and session data are ignored by Git and remain local. Testing scope and allowed operations are defined in [AGENTS.md](AGENTS.md); publicly designated test targets have their own [restrictions](docs/roe/public-test-targets.md).
+The web Settings panel can start a ChatGPT subscription sign-in. A local bridge connects BirdHackBot to the model; BirdHackBot still runs the tools and saves the evidence. This uses your Codex sign-in rather than an API key. The connection depends on your account access and may need updates if the provider changes its service. See the [subscription setup guide](docs/runbooks/subscription-bridge.md).
 
-## Development
+For local models, configure an OpenAI-compatible endpoint. To switch between saved model profiles from the web UI, copy [the profile example](config/model-profiles.example.json) to `config/model-profiles.local.json` and set the endpoint and model ID there. Click the model name below the composer to choose a profile. Starting a new model opens a new session so the histories remain separate. The saved Qwen 3.8 profile requests low reasoning; the Daybreak profile requests high. The model server's actual context and concurrency settings remain its own configuration.
+
+For a fully air-gapped deployment, use a local model and block external network access in the deployment environment. Setting `BIRDHACKBOT_RESEARCH_MODE=air_gapped` disables the app's external observation tools and tells the coordinator and workers to use local sources; that setting alone cannot block network traffic.
+
+## Work with sessions and results
+
+A new session starts as a conversation, without an assessment form. Describe what you know; the coordinator can suggest focused, balanced, or thorough work and rough time ranges. You choose which proposed tasks to run and may ask for a different plan. During execution, the chat shows approvals and short progress updates. Expand activity for commands and evidence, or open a worker in the right panel for its current task and browser preview. You can continue talking to the coordinator while workers run.
+
+Create customer folders from the left sidebar and drag sessions into them. You can reopen or delete sessions there. A completed assessment stays conversational: ask follow-up questions, request another in-scope round, or export a report without losing its earlier evidence. Reports and raw logs remain in that session's local folder.
+
+Analysis is separate from the chat. Open it from a session or customer folder to compare risks across assessments, inspect the pages workers visited, view screenshots, and see which areas still need testing. Open a finding to see why it matters, how it was checked, its supporting evidence, and the proposed fix. A software or CVE match is a lead to investigate, not proof that a target is vulnerable. Reports remain drafts for professional review; if a required detail is missing, the report shows the gap instead of inventing an answer.
+
+## Where the project stands
+
+The coordinator and worker workflow, model connection, browser and terminal interfaces, saved sessions, long-session memory, evidence capture, Analysis, and report export are implemented. We have exercised them in local lab assessments. We still need broader tests on unfamiliar systems, stronger checks that available source matches the running software, and full validation of air-gapped operation. Those goals are tracked in [TASKS.md](TASKS.md) and the [acceptance gates](docs/runbooks/acceptance-gates.md).
+
+The current web server is loopback-only. It does not provide its own target network sandbox or enforce a target allowlist. The operator's selected scope and approvals govern execution; protect the Kali environment accordingly. The [operating rules](AGENTS.md) explain authorization, evidence handling, and safety boundaries.
+
+## Development and documentation
 
 ```sh
 ./scripts/ci.sh
 go test -race ./...
 ```
 
-The repeat harness accepts an explicit local model endpoint and captures each run in its own session directory. Focused live checks and full product acceptance have different claims; see the [acceptance gates](docs/runbooks/acceptance-gates.md).
+Keep changes tied to a demonstrated problem or agreed capability, and validate both the underlying logic and the operator path through the app.
 
-Keep changes small and tied to demonstrated failures or agreed requirements. Define done and stop after required validation passes. Avoid speculative frameworks, hidden fallback planners, and scenario-specific runtime fixes.
-
-## Documentation
-
-| Document | Owns |
+| Document | Purpose |
 | --- | --- |
-| [AGENTS.md](AGENTS.md) | Authorization and operating rules |
-| [PROJECT.md](PROJECT.md) | Repository conventions and implementation discipline |
-| [Architecture](docs/architecture.md) | Current contracts and clearly labeled planned boundaries |
-| [TASKS.md](TASKS.md) | Immediate sequence and actual implementation status |
-| [ROADMAP.md](ROADMAP.md) | Future product milestones |
-| [DISCOVERIES.md](DISCOVERIES.md) | Decisions, findings, and validation references |
-| [Subscription bridge](docs/runbooks/subscription-bridge.md) | Subscription setup, compatibility contract, and limits |
-| [Kali installation](docs/runbooks/kali-installation.md) | Supported platform baseline, model paths, and optional capability packs |
-| [Web application](docs/runbooks/web-application.md) | Local browser startup, customer/session workflow, and deterministic check |
-| [Acceptance gates](docs/runbooks/acceptance-gates.md) | What validation establishes |
-| [Baseline assessment](docs/code-assessment-2026-09-19.md) | Historical evidence behind the cleanup |
-| [Competitive assessment](docs/competitive-assessment-2026-09-19.md) | Current competitor research, evidence limits, and recommended priorities |
+| [PROJECT.md](PROJECT.md) | Repository structure, conventions, and build commands |
+| [Architecture](docs/architecture.md) | Coordinator, worker, context, and evidence design |
+| [TASKS.md](TASKS.md) | Current work and validation status |
+| [ROADMAP.md](ROADMAP.md) | Longer-term product goals |
+| [DISCOVERIES.md](DISCOVERIES.md) | Decisions and findings from development |
+| [Kali installation](docs/runbooks/kali-installation.md) | Required platform packages and optional tools |
+| [Subscription setup](docs/runbooks/subscription-bridge.md) | ChatGPT sign-in and local bridge |
+| [Web application](docs/runbooks/web-application.md) | Session workflow and browser features |
+| [Acceptance gates](docs/runbooks/acceptance-gates.md) | What testing has and has not established |
 
-Earlier plans are archived under `docs/archive/`; old code is under `legacy/`. Neither is current design authority. The pre-implementation checkpoint is `checkpoint/pre-core-rebuild-2026-09-19` (`95edae1`).
+Earlier plans live under `docs/archive/`; old code is under `legacy/`. Neither defines the current implementation.
