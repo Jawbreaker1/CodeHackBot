@@ -918,13 +918,18 @@ let browserWorker = '';
 let browserAutoHidInspector = false;
 function browserWorkers(view) {
   if (!isAssessmentView(view)) return [];
-  return (view.workers || []).filter(worker => (worker.expected_artifacts || []).some(ref => ref.split('/').at(-1) === 'browser-live.png'));
+  return (view.workers || []).filter(worker => [
+    ...(worker.expected_artifacts || []),
+    ...(worker.evidence || []).flatMap(evidence => evidence.artifact_refs || []),
+  ].some(ref => ref.split('/').at(-1) === 'browser-live.png'));
 }
 function closeBrowser() {
   browserGeneration++;
   clearTimeout(browserTimer);
   $('browserPanel').classList.add('hidden');
   $('toggleBrowser').setAttribute('aria-expanded', 'false');
+  $('workArea').parentElement.classList.remove('browser-open', 'browser-expanded');
+  $('toggleBrowser').textContent = 'View browser';
   $('workArea').classList.remove('browser-expanded');
   $('expandBrowser').textContent = 'Expand';
   $('expandBrowser').setAttribute('aria-pressed', 'false');
@@ -935,6 +940,9 @@ function syncBrowserWorkers(view) {
   const workers = browserWorkers(view);
   $('toggleBrowser').classList.toggle('hidden', !workers.length);
   if (!workers.length) { closeBrowser(); return; }
+  $('toggleBrowser').textContent = $('browserPanel').classList.contains('hidden')
+    ? (workers.some(worker => worker.phase === 'execution_started') ? 'Watch browser' : 'View browser')
+    : 'Hide browser';
   if (!workers.some(worker => worker.id === browserWorker)) browserWorker = workers[0].id;
   const picker = $('browserWorker');
   const ids = workers.map(worker => worker.id);
@@ -955,6 +963,7 @@ function openBrowser(workerID) {
   }
   browserWorker = workers.some(worker => worker.id === workerID) ? workerID : workers[0].id;
   $('browserPanel').classList.remove('hidden');
+  $('workArea').parentElement.classList.add('browser-open');
   $('toggleBrowser').setAttribute('aria-expanded', 'true');
   syncBrowserWorkers(current);
   browserGeneration++;
@@ -994,6 +1003,7 @@ $('toggleBrowser').onclick = () => $('browserPanel').classList.contains('hidden'
 $('closeBrowser').onclick = closeBrowser;
 $('expandBrowser').onclick = () => {
   const expanded = $('workArea').classList.toggle('browser-expanded');
+  $('workArea').parentElement.classList.toggle('browser-expanded', expanded);
   $('expandBrowser').textContent = expanded ? 'Split view' : 'Expand';
   $('expandBrowser').setAttribute('aria-pressed', String(expanded));
 };

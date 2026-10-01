@@ -34,7 +34,16 @@ func (r *run) watch(w http.ResponseWriter, request *http.Request) {
 	images := []string{}
 	var browser *browserPreview
 	browserImage := ""
-	for _, ref := range worker.ExpectedArtifacts {
+	refs := append([]string(nil), worker.ExpectedArtifacts...)
+	for _, evidence := range worker.Evidence {
+		refs = append(refs, evidence.ArtifactRefs...)
+	}
+	seen := make(map[string]bool)
+	for _, ref := range refs {
+		if seen[ref] {
+			continue
+		}
+		seen[ref] = true
 		if filepath.Ext(ref) == ".png" || filepath.Ext(ref) == ".jpg" || filepath.Ext(ref) == ".webp" {
 			if resolvedWithin(filepath.Join(root, "tasks", worker.ID, "work"), ref) {
 				if info, err := os.Stat(ref); err == nil && info.Mode().IsRegular() && info.Size() <= maxArtifactServeBytes {

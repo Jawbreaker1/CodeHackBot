@@ -100,6 +100,13 @@ func TestWatchBrowserPreviewUsesDeclaredCaptureAndHidesURLSecrets(t *testing.T) 
 	if view.Browser == nil || view.Browser.URL != "https://example.test/login" || view.Browser.Step != "Submit sign-in form" || view.BrowserImage == "" || strings.Contains(w.Body.String(), "private") {
 		t.Fatalf("incorrect or sensitive browser preview: %s", w.Body.String())
 	}
+	r.updateWorker(assessment.Event{TaskID: "web-worker", Kind: "execution_finished", Evidence: &assessment.EvidenceView{ArtifactRefs: []string{image}}})
+	r.updateWorker(assessment.Event{TaskID: "web-worker", Kind: "execution_started", ExecutionLog: filepath.Join(work, "later-command.log")})
+	w = httptest.NewRecorder()
+	r.watch(w, httptest.NewRequest("GET", "/watch?worker=web-worker&browser=1", nil))
+	if err := json.Unmarshal(w.Body.Bytes(), &view); err != nil || view.BrowserImage == "" {
+		t.Fatalf("browser capture disappeared after a later command: %s (%v)", w.Body.String(), err)
+	}
 	if err := os.Remove(status); err != nil {
 		t.Fatal(err)
 	}

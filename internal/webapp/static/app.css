@@ -62,7 +62,8 @@ svg { flex-shrink: 0; }
 .sidebar-footer button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px; text-align: left; color: var(--muted); font-size: 12px; }
 .sidebar-footer button:hover { color: var(--text); }
 .sidebar-footer .icon { width: 16px; height: 16px; }
-.main-column { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.main-column { display: flex; flex-direction: column; min-width: 0; min-height: 0; --browser-panel-width: clamp(320px, 46%, 560px); }
+.main-column.browser-expanded { --browser-panel-width: clamp(320px, 60%, calc(100% - 480px)); }
 .work-area { display: flex; flex: 1; min-width: 0; min-height: 0; }
 .main-header { height: 62px; min-height: 62px; padding: 0 22px; display: flex; align-items: center; gap: 12px; }
 .heading { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; }
@@ -76,8 +77,9 @@ h1 { margin: 0; font-size: 13px; font-weight: 500; text-overflow: ellipsis; whit
 .analysis-link { text-decoration: none; }
 .count { font-size: 10px; padding: 1px 5px; border-radius: 4px; background: #ffffff09; }
 .attention-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--attention); }
-#chat { flex: 1; min-height: 0; overflow: auto; padding: 24px max(24px, calc((100% - 760px) / 2)) 36px; scroll-behavior: smooth; }
-.browser-panel { display: flex; flex-direction: column; flex: 0 0 min(46%, 560px); min-width: 320px; min-height: 0; border-left: 1px solid var(--line); background: #1d1d1d; }
+#chat { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: 24px max(24px, calc((100% - 760px) / 2)) 36px; scroll-behavior: smooth; }
+.main-column.browser-open #chat { padding-inline: 24px; }
+.browser-panel { display: flex; flex-direction: column; flex: 0 0 var(--browser-panel-width); min-width: 320px; min-height: 0; border-left: 1px solid var(--line); background: #1d1d1d; }
 .browser-panel-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 15px 16px 8px; }
 .browser-panel-header > div { display: flex; flex-direction: column; gap: 3px; }
 .browser-panel-header .browser-panel-actions { flex-direction: row; align-items: center; gap: 4px; }
@@ -91,13 +93,15 @@ h1 { margin: 0; font-size: 13px; font-weight: 500; text-overflow: ellipsis; whit
 .browser-viewport p { padding: 16px; text-align: center; font-size: 12px; }
 .browser-open-image { align-self: flex-end; padding: 8px 16px 0; color: var(--muted); font-size: 11px; text-decoration: none; }
 .browser-open-image:hover { color: var(--text); }
-.work-area.browser-expanded .browser-panel { flex-basis: 60%; max-width: none; }
 .browser-step { display: flex; flex-direction: column; gap: 4px; padding: 14px 16px 6px; font-size: 12px; }
 .browser-step span { color: var(--faint); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
 .browser-step strong { font-weight: 500; line-height: 1.45; overflow-wrap: anywhere; }
 .browser-note { margin: 0; padding: 9px 16px 16px; color: var(--faint); font-size: 10px; line-height: 1.5; }
-@media (max-width: 1450px) { .browser-panel { flex-basis: 42%; min-width: 280px; } }
-@media (max-width: 850px) { .work-area { position: relative; } .browser-panel { position: absolute; z-index: 4; inset: 0 0 0 auto; width: min(100%, 540px); box-shadow: -12px 0 32px #0008; } }
+@media (max-width: 1450px) { .main-column { --browser-panel-width: clamp(320px, 42%, 560px); } }
+@media (max-width: 850px) {
+  .work-area { position: relative; }
+  .browser-panel { position: absolute; z-index: 4; inset: 0 0 0 auto; width: min(100%, 540px); box-shadow: -12px 0 32px #0008; }
+}
 .welcome { margin: 10px auto 0; max-width: 600px; text-align: center; }
 .welcome-artwork { display: block; width: min(100%, 40vh, 420px); height: auto; margin: 0 auto 20px; }
 .welcome h2 { font-size: 26px; font-weight: 500; letter-spacing: -.8px; margin: 0 0 12px; }
@@ -115,6 +119,7 @@ h1 { margin: 0; font-size: 13px; font-weight: 500; text-overflow: ellipsis; whit
 .chat-work-progress strong { color: var(--faint); font-weight: 600; }
 @keyframes breathe { 50% { opacity: .25; } }
 .live-status { width: calc(100% - 48px); max-width: 760px; margin: 0 auto 10px; padding: 10px 12px; border: 1px solid #ffffff20; border-radius: 10px; background: #292928; }
+.main-column.browser-open .live-status { width: calc(100% - var(--browser-panel-width) - 48px); max-width: 760px; margin: 0 calc(var(--browser-panel-width) + 24px) 10px auto; }
 .live-status-heading { display: block; margin-bottom: 7px; color: var(--faint); font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
 .live-status-items { display: flex; flex-wrap: wrap; gap: 7px; }
 .live-status-item { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; padding: 6px 9px; border: 1px solid #ffffff13; border-radius: 7px; background: #ffffff08; font-size: 12px; line-height: 1.35; }
@@ -124,6 +129,7 @@ h1 { margin: 0; font-size: 13px; font-weight: 500; text-overflow: ellipsis; whit
 .live-status-item strong { font-weight: 600; white-space: nowrap; }
 .live-status-item span { color: var(--muted); overflow-wrap: anywhere; }
 .compose-area { width: 100%; max-width: 808px; padding: 0 24px 19px; margin: 0 auto; }
+.main-column.browser-open .compose-area { width: calc(100% - var(--browser-panel-width)); margin: 0 var(--browser-panel-width) 0 auto; }
 .composer { border: 1px solid #ffffff18; background: var(--surface); border-radius: 14px; padding: 14px 14px 10px; box-shadow: 0 3px 16px #00000012; }
 .composer:focus-within { border-color: #ffffff30; }
 .attachment-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 7px 0 2px; }
@@ -306,6 +312,10 @@ input:focus { border-color: #aaaa9e; }
   .app-shell.inspector-open .inspector { display: flex; position: fixed; right: 0; top: 0; bottom: 0; width: min(390px, 100vw); z-index: 4; box-shadow: -16px 0 60px #0005; }
   .app-shell.inspector-open .drawer-backdrop { display: block; position: fixed; inset: 0; z-index: 3; background: #0003; border-radius: 0; }
   .heading .breadcrumb { display: none; }
+}
+@media (max-width: 850px) {
+  .main-column.browser-open .compose-area { width: 100%; max-width: 808px; margin: 0 auto; }
+  .main-column.browser-open .live-status { width: calc(100% - 28px); max-width: 760px; margin: 0 auto 10px; }
 }
 @media (max-width: 680px) {
   .app-shell, .app-shell.inspector-hidden { display: flex; }
