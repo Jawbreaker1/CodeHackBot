@@ -2,10 +2,23 @@ package guided
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+func TestGuidedTUIShowsASCIIBranding(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	model := newGuidedTUI(ctx, cancel, make(chan tuiOutput), make(chan error), nopWriteCloser{})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	updated, _ = updated.Update(tuiOutput{kind: consoleOutput, text: cliLogo + "\n\n"})
+	view := updated.(guidedTUI).View()
+	if !strings.Contains(view, "BIRDHACKBOT.") || !strings.Contains(view, "/  o   \\") {
+		t.Fatal("terminal UI did not render the ASCII raven")
+	}
+}
 
 func TestGuidedTUIPromptStaysInInputState(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

@@ -197,8 +197,8 @@ func (a App) runPlain(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	c := newConsole(ctx, a.Reader, a.Writer, a.events)
-	c.Print("BirdHackBot — interactive assessment console\n\n")
-	c.Print("The orchestrator is ready. Talk naturally about what you want to do. The selected model will answer questions, ask for missing assessment details, and propose work for your review. Scope and action approval remain explicit before any worker runs. During an assessment, type a message to talk to the coordinator; /workers, /status, /help, and /stop are available. Ctrl-C stops setup or broadcasts stop to every active worker.\n\n")
+	c.Print(cliLogo + "\n\n")
+	c.Print("Talk to the coordinator about what you want to investigate. You choose the scope and approval level before workers act.\nUse /workers, /status, /help, or /stop during a session. Ctrl-C stops active work.\n\n")
 
 	preferencesPath := filepath.Join(a.RepoRoot, ".birdhackbot", "preferences.json")
 	prefs, err := configureProvider(ctx, c, preferencesPath)

@@ -34,7 +34,7 @@ The Analysis view shows what was tested, where weaknesses were found, what still
 - **Create formal reports.** Ask for an OWASP WSTG- or PTES-aligned report in Markdown or PDF. Templates check that scope, test results, evidence, limitations, and review details are present. The report is saved with the session and linked directly in chat.
 - **Continue long investigations.** The coordinator and each worker keep track of their own work. Older details can be saved and brought back when needed. A local debug view shows exactly what information each model received.
 
-The web app and terminal UI share the same coordinator, workers, approvals, and saved evidence. The browser is the main place to explore a session; the CLI remains available for terminal use.
+The web app and terminal UI share the same coordinator, workers, approvals, and saved evidence. The browser is the main place to explore a session; the CLI opens with a compact ASCII version of the raven for terminal use.
 
 ## Start on Kali Linux
 
