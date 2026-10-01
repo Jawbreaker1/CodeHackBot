@@ -213,7 +213,11 @@ func (a taskApprover) Approve(ctx context.Context, r approval.Request) (approval
 	if purpose == "" {
 		purpose = a.task.Goal
 	}
-	prompt := fmt.Sprintf("\n%s — %s\nTarget: %s\nImpact: %s\nAllow this action? [y/N, d=command details, p=approval settings]", a.task.ID, purpose, r.Target, impact)
+	review := ""
+	if r.ReviewReason != "" {
+		review = "\nRisk review: " + r.ReviewReason
+	}
+	prompt := fmt.Sprintf("\n%s — %s\nTarget: %s\nImpact: %s%s\nAllow this action? [y/N, d=command details, p=approval settings]", a.task.ID, purpose, r.Target, impact, review)
 	for {
 		answer, err := a.console.Ask(ctx, prompt)
 		if err != nil {

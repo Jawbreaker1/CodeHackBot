@@ -15,7 +15,7 @@ func (c *Console) approvalMode() approval.Mode {
 func (a taskApprover) ApprovalMode() approval.Mode { return a.console.approvalMode() }
 
 func (c *Console) choosePermissions(ctx context.Context) error {
-	choice, err := c.Ask(ctx, "Approval settings for this session\n1. Approve every execution\n2. Review commands and risky actions (built-in read-only observations run automatically)\n3. Approve everything (no execution prompts)\nChoose 1–3, or Enter to keep "+c.approvalMode().Label())
+	choice, err := c.Ask(ctx, "Approval settings for this session\n1. Approve every execution\n2. Review risky actions (independently reviewed low-risk commands run automatically)\n3. Approve everything (no execution prompts)\nChoose 1–3, or Enter to keep "+c.approvalMode().Label())
 	if err != nil {
 		return err
 	}

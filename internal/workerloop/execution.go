@@ -32,6 +32,7 @@ func (l Loop) execute(ctx context.Context, current *ctxpacket.WorkerPacket, resp
 		return false, err
 	}
 	request := approval.Request{Command: plan.ActualExec, UseShell: plan.Action.UseShell, Cwd: plan.Action.Cwd, Impact: response.Impact, Summary: response.Summary, Target: response.Target, Risk: response.Risk}
+	request = l.reviewExecutionRisk(ctx, request)
 	decision, err := l.Approver.Approve(ctx, request)
 	if err != nil {
 		return false, fmt.Errorf("approval failed: %w", err)

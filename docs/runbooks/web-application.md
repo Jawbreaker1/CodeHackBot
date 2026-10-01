@@ -79,13 +79,15 @@ The check creates and completes two approved sessions for one customer, verifies
 ### Approval settings and watching workers
 
 Click the approval label below the composer to choose **Approve every execution**,
-**Review commands and risky actions**, or **Approve everything** for that session.
-Automatic modes require explicit acknowledgement. The middle mode auto-approves
-only validated built-in read-only observations; arbitrary worker commands always
-ask, even when the model labels them low risk. Full access skips execution prompts for the session;
-it does not silently change the target or purpose stated by the operator. Existing pending requests
-still need an explicit decision. New sessions start with approval for every
-execution. In the terminal, use `/permissions` for the same choices.
+**Review risky actions**, or **Approve everything** for that session.
+Automatic modes require explicit acknowledgement. The middle mode runs validated
+read-only observations automatically. It also runs worker commands when a separate
+review of the exact invocation finds them low risk; risky or uncertain actions ask
+first. A worker's own low-risk label is never enough. Full access skips execution
+prompts for the session; it does not silently change the target or purpose stated
+by the operator. Changing modes releases pending actions already covered by the
+new setting; unresolved requests still need a decision. New sessions start with
+approval for every execution. In the terminal, use `/permissions` for the same choices.
 
 Approval cards show the action's purpose, target and expected impact first.
 Expand **Command details** to inspect the exact invocation. While a worker runs,

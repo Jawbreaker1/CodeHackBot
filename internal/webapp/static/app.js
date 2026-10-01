@@ -190,7 +190,10 @@ function chatApprovalNode(item, kind) {
   const impact = observation ? item.impact || 'Read-only observation; review its exact target below.' : item.impact || 'The worker has not explained the effects. Review the command before approving.';
   if (item.target) box.append(node('p', 'approval-target', item.target));
   box.append(node('p', 'worker-detail', impact));
-  if (!observation && item.risk !== 'low') box.append(node('p', 'approval-risk', item.risk === 'dangerous' ? 'Potentially dangerous · review before running' : 'Risk uncertain · review before running'));
+  if (!observation && item.risk !== 'low') {
+    const warning = item.risk === 'dangerous' ? 'Potentially dangerous · review before running' : 'Risk uncertain · review before running';
+    box.append(node('p', 'approval-risk', item.review_reason ? warning + ' · ' + item.review_reason : warning));
+  }
   const technical = node('div');
   technical.append(node('pre', 'command', observation ? JSON.stringify(item.tool, null, 2) : item.command));
   if (item.cwd) technical.append(node('code', 'evidence-ref', item.cwd));
@@ -831,7 +834,7 @@ narrow.addEventListener('change', () => { closePanels(); setInspector(!narrow.ma
 setInspector(!narrow.matches);
 selectTab($('workersTab'));
 $('toggleSidebar').setAttribute('aria-expanded', String(!mobile.matches));
-const permissionLabels = {per_action: 'Approve every execution', dangerous_only: 'Review commands and risky actions', full_access: 'Approve everything'};
+const permissionLabels = {per_action: 'Approve every execution', dangerous_only: 'Review risky actions', full_access: 'Approve everything'};
 $('settings').onclick = () => {
   $('settingsModelValue').textContent = current?.model || 'Choose a model';
   $('settingsPermissionsValue').textContent = permissionLabels[current?.permission_mode] || permissionLabels.per_action;

@@ -511,15 +511,16 @@ type customerFinding struct {
 }
 
 type approvalView struct {
-	Summary  string `json:"summary"`
-	Target   string `json:"target"`
-	Risk     string `json:"risk"`
-	ID       string `json:"id"`
-	TaskID   string `json:"task_id"`
-	Command  string `json:"command"`
-	UseShell bool   `json:"use_shell"`
-	Cwd      string `json:"cwd"`
-	Impact   string `json:"impact,omitempty"`
+	Summary      string `json:"summary"`
+	Target       string `json:"target"`
+	Risk         string `json:"risk"`
+	ReviewReason string `json:"review_reason,omitempty"`
+	ID           string `json:"id"`
+	TaskID       string `json:"task_id"`
+	Command      string `json:"command"`
+	UseShell     bool   `json:"use_shell"`
+	Cwd          string `json:"cwd"`
+	Impact       string `json:"impact,omitempty"`
 }
 
 type questionView struct {
@@ -2367,7 +2368,7 @@ func (r *run) view(after string) assessmentView {
 		}
 	}
 	for _, pending := range r.approvals {
-		view.PendingApprovals = append(view.PendingApprovals, approvalView{ID: pending.ID, TaskID: pending.taskID, Command: pending.request.Command, UseShell: pending.request.UseShell, Cwd: pending.request.Cwd, Impact: pending.request.Impact, Summary: pending.request.Summary, Target: pending.request.Target, Risk: pending.request.Risk})
+		view.PendingApprovals = append(view.PendingApprovals, approvalView{ID: pending.ID, TaskID: pending.taskID, Command: pending.request.Command, UseShell: pending.request.UseShell, Cwd: pending.request.Cwd, Impact: pending.request.Impact, Summary: pending.request.Summary, Target: pending.request.Target, Risk: pending.request.Risk, ReviewReason: pending.request.ReviewReason})
 	}
 	for _, question := range r.questions {
 		view.PendingQuestions = append(view.PendingQuestions, questionView{ID: question.ID, TaskID: question.taskID, Text: question.text})

@@ -46,4 +46,12 @@ func TestApprovalModes(t *testing.T) {
 			t.Errorf("worker command %q bypassed review from model risk label", command)
 		}
 	}
+	reviewed := ReviewedLowRiskRequest(low, "A bounded read-only check")
+	if DangerousOnly.RequiresApproval(reviewed) || !EveryExecution.RequiresApproval(reviewed) {
+		t.Fatal("independently reviewed low-risk action did not follow the session mode")
+	}
+	reviewed.Risk = "dangerous"
+	if !DangerousOnly.RequiresApproval(reviewed) {
+		t.Fatal("dangerous action bypassed review despite an earlier low-risk mark")
+	}
 }

@@ -34,6 +34,10 @@ func TestSessionPermissionsPersistAndDefaultIndependently(t *testing.T) {
 	if d != approval.DecisionDeny {
 		t.Fatalf("model-labeled low-risk command bypassed review: %s", d)
 	}
+	d, err = a.Approve(context.Background(), approval.ReviewedLowRiskRequest(approval.Request{Summary: "read title", Target: "local fixture", Impact: "read only", Risk: "low", Command: "uname -a"}, "Read-only host metadata"))
+	if err != nil || d != approval.DecisionApproveSession || len(current.approvals) != 0 {
+		t.Fatalf("independently reviewed read-only command was not auto-approved: %s %v", d, err)
+	}
 	d, _ = a.Approve(ctx, approval.Request{Risk: "dangerous"})
 	if d != approval.DecisionDeny {
 		t.Fatalf("dangerous execution bypassed operator: %s", d)

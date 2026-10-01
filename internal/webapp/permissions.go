@@ -99,7 +99,7 @@ func (s *Server) changeIntakePermissions(w http.ResponseWriter, r *http.Request,
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if mode == approval.FullAccess {
+	if mode != approval.EveryExecution {
 		current.mu.Lock()
 		if pending := current.pendingTool; pending != nil {
 			current.pendingTool = nil

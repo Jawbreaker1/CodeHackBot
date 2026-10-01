@@ -19,18 +19,31 @@ const (
 
 // Request is a minimal execution approval request.
 type Request struct {
-	Summary  string
-	Target   string
-	Risk     string
-	Command  string
-	UseShell bool
-	Cwd      string
+	Summary string
+	Target  string
+	Risk    string
+	// WorkerRisk is the worker's original label when an independent risk review
+	// has examined an execution. Risk then holds the reviewer's effective label.
+	WorkerRisk   string
+	ReviewReason string
+	Command      string
+	UseShell     bool
+	Cwd          string
 	// trustedReadOnlyObservation is set only by the fixed observation path.
 	// A worker's model-authored risk label cannot grant this capability.
-	trustedReadOnlyObservation bool
+	trustedReadOnlyObservation   bool
+	independentlyReviewedLowRisk bool
 	// Impact is model-authored context about what the action is expected to do.
 	// It never grants permission; the exact invocation remains authoritative.
 	Impact string
+}
+
+// ReviewedLowRiskRequest records that a separate pre-execution review found
+// the exact invocation low risk. The worker's own label cannot set this mark.
+func ReviewedLowRiskRequest(r Request, reason string) Request {
+	r.independentlyReviewedLowRisk = true
+	r.ReviewReason = reason
+	return r
 }
 
 // ReadOnlyObservationRequest marks a validated built-in observation as eligible
