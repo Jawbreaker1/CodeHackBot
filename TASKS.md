@@ -41,6 +41,10 @@ A 2026-09-27 Daybreak browser smoke on the synthetic tenant-reporting service ex
 
 Operator review of that smoke found its round update too compressed to follow. Coordinator planning and conversation guidance now lead with observed behavior and consequence before technical labels, and allow two short sentences instead of forcing the round result into one. Full deterministic CI passes. A completed-session Daybreak browser question returned the account-level observation, the authorization flaw, impact, fixed-v2 comparison, and testing limit in readable paragraphs; a fresh assessment round has not yet verified the revised plan-update wording.
 
+A 2026-09-29 intake usability fix removed automatic shortening of long coordinator messages in the main web chat. The full saved `opensverige.se` depth explanation is now visible with its list and final estimate. Intake and active coordinator-chat prompts follow an explicit operator language preference, or otherwise the latest operator message, rather than inferring language from a target domain. A fresh Daybreak browser smoke returned an English proposal and complete English Balanced explanation without starting an assessment; one initial attempt returned malformed model JSON and was retried successfully. This is a focused UI and language smoke, not general model-protocol acceptance.
+
+The web transcript now uses a pinned, locally bundled Markdown parser for common formatting while retaining the existing expandable Mermaid viewer. A browser fixture exercised bold, italics, strikethrough, inline/fenced code, headings, nested/numbered lists, links, tables, quotes, and diagrams. It also confirmed that raw HTML did not execute, JavaScript links did not become anchors, and Markdown images did not load. The saved `opensverige.se` Balanced response now displays its bold emphasis and inline code without literal markers. This validates the chat renderer, not Markdown styling in every structured Analysis field.
+
 Objective: prove one shared worker can carry a bounded multi-step task from goal to evidence-backed completion, adapt when observations invalidate its plan, and return an honest blocked/aborted result when appropriate.
 
 - [x] Audit and replace competing worker control paths. One decision loop now owns model-authored plan changes, approved actions, questions, explicit blockers, and whole-goal completion. Removed keyword mode selection, startup-only planner, action reviewer, separate step judge, target/prerequisite inference, synthetic facts, failure ranking, and ambiguous response aliases.
@@ -110,7 +114,7 @@ Objective: make one real subscription-backed structured model request usable by 
 
 Done: deterministic CI and affected-package race checks passed; 3/3 real subscription worker checks completed through `gpt-daybreak-blue-latest`, with local execution/context/evidence inspected. Setup, comparison sources, and compatibility limits are in `docs/runbooks/subscription-bridge.md`.
 
-Defer native OAuth UI, broader REST surface area, and client streaming until needed. Orchestrator scheduling belongs to the next slice, not to the inference bridge.
+The web UI shows the ChatGPT plan connection state and starts Codex's structured device-code login from **Settings → ChatGPT plan → Continue with ChatGPT**. The browser receives only a one-time code and verification URL; Codex stores credentials locally on Kali. This works when a host browser cannot reach a VM-local OAuth callback. The local subscription bridge must still run. A direct [Sign in with ChatGPT integration](https://developers.openai.com/siwc/token-sharing-open-source), independent of Codex CLI's credential store, remains a separate migration. Broader REST surface area and client streaming remain separate work. Orchestrator scheduling belongs to the next slice, not to the inference bridge.
 
 ## Implemented: first guided lab assessment
 
@@ -192,7 +196,8 @@ User requirement, 2026-09-19: usability and application assistance must reduce s
 
 - [x] Open a guided application with `birdhackbot` and no mandatory flags; support provider setup and reuse of preferences from the checkout.
 - [x] Manage bridge startup and temporary local credentials through the application for an existing sign-in.
-- [ ] Complete first-time provider sign-in and packaged operation outside the checkout.
+- [x] Start first-time ChatGPT sign-in from web Settings through Codex's device-code flow.
+- [ ] Package operation outside the checkout and implement native Sign in with ChatGPT token management.
 - [x] Guide goal/scope entry, review per-action permissions before starting, and show progress, stop, report location, and actionable errors.
 - [x] Add an in-application model settings flow, guided `/resume` selection, and coordinator conversation while delegated workers are active. Resume preserves saved results and model-call budgets and does not replay unknown actions.
 - [ ] Complete the usability acceptance check with an operator unfamiliar with the implementation.

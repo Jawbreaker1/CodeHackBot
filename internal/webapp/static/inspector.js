@@ -36,47 +36,43 @@ export function disclosure(title, content, key) {
   return details;
 }
 
-// richText is a presentation renderer for model-authored prose. It treats all
-// input as text and only gives special treatment to explicit fenced code and
-// Mermaid flowchart blocks; it never executes markup or infers security facts.
+// Markdown is rendered locally with raw HTML and automatic image loading off.
+// Screenshots use validated artifact references instead of model-authored URLs.
+const markdown = typeof window.markdownit === 'function'
+  ? window.markdownit({html:false, linkify:true, typographer:false, breaks:false})
+  : null;
+if (markdown) {
+  const fence = markdown.renderer.rules.fence;
+  markdown.validateLink = url => {
+    if (url.startsWith('//')) return false;
+    try { return ['http:', 'https:', 'mailto:'].includes(new URL(url, document.baseURI).protocol); }
+    catch (_) { return false; }
+  };
+  markdown.renderer.rules.link_open = (tokens, index, options, env, self) => {
+    tokens[index].attrSet('target', '_blank');
+    tokens[index].attrSet('rel', 'noopener noreferrer');
+    return self.renderToken(tokens, index, options);
+  };
+  markdown.renderer.rules.image = (tokens, index) => markdown.utils.escapeHtml('Image: ' + (tokens[index].content || 'untitled'));
+  markdown.renderer.rules.fence = (tokens, index, options, env, self) => {
+    const token = tokens[index];
+    if (token.info.trim().toLowerCase() !== 'mermaid') return fence(tokens, index, options, env, self);
+    const position = env.diagrams.push(token.content) - 1;
+    return `<div data-bhb-diagram="${position}"></div>`;
+  };
+}
+
+// richText formats model-authored prose without executing HTML or inferring
+// security facts. The existing bounded Mermaid viewer handles diagram fences.
 export function richText(value, key = '') {
   const root = node('div', 'rich-text');
-  const lines = String(value || '').replaceAll('\r\n', '\n').split('\n');
-  let paragraph = [];
-  let index = 0;
-  const flush = () => {
-    const text = paragraph.join('\n').trim();
-    if (text) root.append(node('p', 'rich-paragraph', text));
-    paragraph = [];
-  };
-  while (index < lines.length) {
-    const line = lines[index];
-    const fence = line.trimStart();
-    if (fence.startsWith('```')) {
-      flush();
-      const language = fence.slice(3).trim().toLowerCase();
-      const content = [];
-      index++;
-      while (index < lines.length && !lines[index].trimStart().startsWith('```')) content.push(lines[index++]);
-      if (index < lines.length) index++;
-      root.append(language === 'mermaid' ? mermaidNode(content.join('\n'), key + '-' + index) : codeBlock(content.join('\n'), language));
-      continue;
-    }
-    if (!line.trim()) { flush(); index++; continue; }
-    if (line.startsWith('# ')) { flush(); root.append(node('h3', 'rich-heading', line.slice(2).trim())); index++; continue; }
-    if (line.startsWith('## ')) { flush(); root.append(node('h4', 'rich-heading', line.slice(3).trim())); index++; continue; }
-    if (line.startsWith('- ') || line.startsWith('* ')) {
-      flush();
-      const list = node('ul', 'rich-list');
-      while (index < lines.length && (lines[index].startsWith('- ') || lines[index].startsWith('* '))) {
-        list.append(node('li', '', lines[index].slice(2).trim())); index++;
-      }
-      root.append(list); continue;
-    }
-    paragraph.push(line);
-    index++;
+  if (!markdown) { root.textContent = String(value || ''); return root; }
+  const env = {diagrams: []};
+  root.innerHTML = markdown.render(String(value || ''), env);
+  for (const placeholder of root.querySelectorAll('[data-bhb-diagram]')) {
+    const index = Number(placeholder.dataset.bhbDiagram);
+    placeholder.replaceWith(mermaidNode(env.diagrams[index], key + '-' + index));
   }
-  flush();
   if (!root.children.length) root.append(node('p', 'rich-paragraph', ''));
   return root;
 }

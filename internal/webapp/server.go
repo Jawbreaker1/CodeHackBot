@@ -26,6 +26,7 @@ import (
 	"github.com/Jawbreaker1/CodeHackBot/internal/behavior"
 	"github.com/Jawbreaker1/CodeHackBot/internal/intake"
 	"github.com/Jawbreaker1/CodeHackBot/internal/llmclient"
+	"github.com/Jawbreaker1/CodeHackBot/internal/subscription"
 )
 
 type Config struct {
@@ -45,6 +46,7 @@ type Server struct {
 	intakes map[string]*intakeRun
 	seq     atomic.Uint64
 	loadErr error
+	login   *subscription.LoginManager
 }
 
 type intakeRun struct {
@@ -544,7 +546,7 @@ func NewServer(config Config) *Server {
 	if config.Limits == (assessment.Limits{}) {
 		config.Limits = assessment.DefaultLimits()
 	}
-	server := &Server{config: config, runs: make(map[string]*run), intakes: make(map[string]*intakeRun)}
+	server := &Server{config: config, runs: make(map[string]*run), intakes: make(map[string]*intakeRun), login: &subscription.LoginManager{Home: codexHome()}}
 	server.loadErr = server.restoreSessions()
 	return server
 }
@@ -590,6 +592,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/api/v1/models" {
 		s.models(w, r)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/api/v1/subscription/login/") {
+		s.subscriptionLogin(w, r)
 		return
 	}
 	if r.URL.Path == "/api/v1/intake" || strings.HasPrefix(r.URL.Path, "/api/v1/intake/") {
@@ -1258,10 +1264,18 @@ func (s *Server) assessments(w http.ResponseWriter, r *http.Request) {
 }
 
 type customerIndexView struct {
-	ID       string            `json:"id"`
-	Status   string            `json:"status"`
-	Sessions []assessmentView  `json:"sessions"`
-	Drafts   []intakeIndexView `json:"drafts,omitempty"`
+	ID       string                `json:"id"`
+	Title    string                `json:"title"`
+	Status   string                `json:"status"`
+	Sessions []assessmentIndexView `json:"sessions"`
+	Drafts   []intakeIndexView     `json:"drafts,omitempty"`
+}
+
+type assessmentIndexView struct {
+	ID        string    `json:"id"`
+	Goal      string    `json:"goal"`
+	Status    string    `json:"status"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type intakeIndexView struct {
@@ -1274,53 +1288,77 @@ type intakeIndexView struct {
 }
 
 func (s *Server) customers(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		methodNotAllowed(w, http.MethodGet)
+	if r.Method == http.MethodPost {
+		var input folderRecord
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+		id, err := s.createFolder(input.Title)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]string{"id": id, "title": strings.TrimSpace(input.Title)})
 		return
 	}
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet, http.MethodPost)
+		return
+	}
+	folderTitles := s.folderTitles()
 	s.mu.RLock()
-	ids := make(map[string]struct{})
+	groups := make(map[string]*customerIndexView)
+	ensureGroup := func(id string) *customerIndexView {
+		if group := groups[id]; group != nil {
+			return group
+		}
+		title := folderTitles[id]
+		if title == "" {
+			title = id
+		}
+		group := &customerIndexView{ID: id, Title: title, Status: "no_sessions"}
+		groups[id] = group
+		return group
+	}
+	for id := range folderTitles {
+		ensureGroup(id)
+	}
 	for _, current := range s.runs {
 		current.mu.RLock()
-		ids[current.customer] = struct{}{}
+		group := ensureGroup(current.customer)
+		group.Sessions = append(group.Sessions, assessmentIndexView{ID: current.id, Goal: current.goal, Status: current.status, UpdatedAt: current.updatedAt})
+		if current.status == "running" || current.status == "starting" {
+			group.Status = "active"
+		} else if group.Status == "no_sessions" {
+			group.Status = current.status
+		}
 		current.mu.RUnlock()
 	}
-	drafts := make([]intakeIndexView, 0, len(s.intakes))
+	intakes := make([]intakeIndexView, 0, len(s.intakes))
 	for _, current := range s.intakes {
 		view := current.view()
 		if view.AssessmentID != "" {
 			continue
 		}
-		draft := intakeIndexView{ID: view.ID, Customer: view.Customer, Title: view.Title, Status: view.Status, Model: view.Model}
+		current.mu.RLock()
+		updatedAt := current.updatedAt
+		current.mu.RUnlock()
+		draft := intakeIndexView{ID: view.ID, Customer: view.Customer, Title: view.Title, Status: view.Status, Model: view.Model, UpdatedAt: updatedAt}
 		if view.Customer != "" {
-			ids[view.Customer] = struct{}{}
+			ensureGroup(view.Customer).Drafts = append(ensureGroup(view.Customer).Drafts, draft)
+		} else {
+			intakes = append(intakes, draft)
 		}
-		drafts = append(drafts, draft)
 	}
 	s.mu.RUnlock()
-	views := make([]customerIndexView, 0, len(ids))
-	for id := range ids {
-		view := s.customerView(id)
-		views = append(views, customerIndexView{ID: view.ID, Status: view.Status, Sessions: view.Sessions})
+	views := make([]customerIndexView, 0, len(groups))
+	for _, group := range groups {
+		sort.Slice(group.Sessions, func(a, b int) bool { return group.Sessions[a].ID < group.Sessions[b].ID })
+		sort.Slice(group.Drafts, func(a, b int) bool { return group.Drafts[a].ID < group.Drafts[b].ID })
+		views = append(views, *group)
 	}
-	sort.Slice(views, func(i, j int) bool { return views[i].ID < views[j].ID })
-	intakes := make([]intakeIndexView, 0, len(drafts))
-	for _, draft := range drafts {
-		if draft.Customer == "" {
-			intakes = append(intakes, draft)
-			continue
-		}
-		for i := range views {
-			if views[i].ID == draft.Customer {
-				views[i].Drafts = append(views[i].Drafts, draft)
-				break
-			}
-		}
-	}
+	sort.Slice(views, func(i, j int) bool { return views[i].Title < views[j].Title })
 	sort.Slice(intakes, func(i, j int) bool { return intakes[i].ID < intakes[j].ID })
-	for i := range views {
-		sort.Slice(views[i].Drafts, func(a, b int) bool { return views[i].Drafts[a].ID < views[i].Drafts[b].ID })
-	}
 	writeJSON(w, http.StatusOK, map[string]any{"customers": views, "intakes": intakes})
 }
 
@@ -1372,6 +1410,22 @@ func (s *Server) assessmentRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		current.writeView(w, r.URL.Query().Get("after"))
+		return
+	}
+	if len(parts) == 2 && parts[1] == "customer" {
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w, http.MethodPost)
+			return
+		}
+		var input intakeCustomerRequest
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+		if err := s.assignRunCustomer(current, input.Customer); err != nil {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, current.view(""))
 		return
 	}
 	if len(parts) == 3 && parts[1] == "attachments" {

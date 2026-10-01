@@ -81,10 +81,9 @@ func (p *Provider) Complete(ctx context.Context, input Request) (map[string]any,
 	if input.ReasoningEffort != "" {
 		request["reasoning"] = map[string]string{"effort": input.ReasoningEffort}
 	}
-	includeOutputLimit := input.MaxTokens > 0
-	if input.MaxTokens > 0 {
-		request["max_output_tokens"] = input.MaxTokens
-	}
+	// The ChatGPT subscription endpoint rejects max_output_tokens. Keep the
+	// bridge's request field for local client compatibility, but let the
+	// subscription backend choose its own output ceiling.
 	body, err := json.Marshal(request)
 	if err != nil {
 		return nil, err
@@ -130,31 +129,17 @@ func (p *Provider) Complete(ctx context.Context, input Request) (map[string]any,
 			}
 			continue
 		}
-		// Some subscription backend revisions reject the optional output limit
-		// even though they accept the same model and messages. Retry once without
-		// that optional field; the backend then owns its configured output ceiling.
-		if resp.StatusCode == http.StatusBadRequest && includeOutputLimit {
-			_, _ = io.Copy(io.Discard, resp.Body)
-			_ = resp.Body.Close()
-			delete(request, "max_output_tokens")
-			body, err = json.Marshal(request)
-			if err != nil {
-				return nil, err
-			}
-			includeOutputLimit = false
-			attempt--
-			continue
-		}
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			return nil, upstreamError(resp.StatusCode, resp.Header.Get("Retry-After"))
+			return nil, upstreamError(resp)
 		}
 		return readCompletion(resp.Body, input.Model)
 	}
 	return nil, errors.New("subscription authentication failed")
 }
 
-func upstreamError(status int, retryAfter string) error {
+func upstreamError(resp *http.Response) error {
+	status := resp.StatusCode
 	message := "subscription backend request failed"
 	switch status {
 	case 400:
@@ -170,7 +155,45 @@ func upstreamError(status int, retryAfter string) error {
 			status = 502
 		}
 	}
-	return &APIError{Status: status, Message: message, RetryAfter: retryAfter}
+	// Admission errors from this backend commonly use {"detail":"..."}
+	// instead of a Responses API error object. Preserve a short diagnostic so
+	// an operator can distinguish an unsupported field from model access.
+	var failure struct {
+		Detail string `json:"detail"`
+		Error  struct {
+			Message string `json:"message"`
+			Code    string `json:"code"`
+			Param   string `json:"param"`
+		} `json:"error"`
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if json.Unmarshal(body, &failure) == nil {
+		switch {
+		case failure.Detail != "":
+			message += ": " + compactDiagnostic(failure.Detail)
+		case failure.Error.Message != "":
+			message += ": " + compactDiagnostic(failure.Error.Message)
+		case failure.Error.Code != "":
+			message += ": " + compactDiagnostic(failure.Error.Code)
+			if failure.Error.Param != "" {
+				message += " (field " + compactDiagnostic(failure.Error.Param) + ")"
+			}
+		}
+	}
+	if requestID := resp.Header.Get("x-request-id"); requestID != "" {
+		message += " (request ID " + compactDiagnostic(requestID) + ")"
+	}
+	return &APIError{Status: status, Message: message, RetryAfter: resp.Header.Get("Retry-After")}
+}
+
+func compactDiagnostic(value string) string {
+	value = strings.Join(strings.Fields(value), " ")
+	const maxRunes = 240
+	runes := []rune(value)
+	if len(runes) > maxRunes {
+		return string(runes[:maxRunes]) + "…"
+	}
+	return value
 }
 
 type outputItem struct {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -12,14 +13,17 @@ import (
 	"time"
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/llmclient"
+	"github.com/Jawbreaker1/CodeHackBot/internal/localauth"
+	"github.com/Jawbreaker1/CodeHackBot/internal/subscription"
 )
 
 type modelOption struct {
-	ID       string `json:"id"`
-	Label    string `json:"label,omitempty"`
-	Provider string `json:"provider,omitempty"`
-	Model    string `json:"model,omitempty"`
-	Current  bool   `json:"current"`
+	ID         string `json:"id"`
+	Label      string `json:"label,omitempty"`
+	Provider   string `json:"provider,omitempty"`
+	Model      string `json:"model,omitempty"`
+	Current    bool   `json:"current"`
+	Connection string `json:"connection,omitempty"`
 }
 
 // ModelProfile binds a visible choice to its endpoint and request limits.
@@ -124,7 +128,11 @@ func (s *Server) models(w http.ResponseWriter, r *http.Request) {
 	if len(s.config.Profiles) > 0 {
 		options := make([]modelOption, 0, len(s.config.Profiles))
 		for _, profile := range s.config.Profiles {
-			options = append(options, modelOption{ID: profile.ID, Label: profile.Label, Provider: profile.Provider, Model: profile.Model, Current: profile.ID == s.config.DefaultProfile})
+			option := modelOption{ID: profile.ID, Label: profile.Label, Provider: profile.Provider, Model: profile.Model, Current: profile.ID == s.config.DefaultProfile}
+			if profile.Provider == "subscription" {
+				option.Connection = subscriptionConnection(profile)
+			}
+			options = append(options, option)
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"models": options, "current": s.config.DefaultProfile, "profiles_enabled": true})
 		return
@@ -166,6 +174,47 @@ func (s *Server) models(w http.ResponseWriter, r *http.Request) {
 		result["catalog_error"] = err.Error()
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// Connection state is diagnostic only; no account or bridge credential reaches
+// the browser, and model entitlement is established by a completed request.
+func subscriptionConnection(profile ModelProfile) string {
+	if _, err := (&subscription.CodexAuth{Home: codexHome()}).Read(); err != nil {
+		return "sign_in_required"
+	}
+	token, err := localauth.Read(profile.TokenFile)
+	if err != nil {
+		return "bridge_token_missing"
+	}
+	u, err := url.Parse(profile.BaseURL)
+	if err != nil {
+		return "bridge_unavailable"
+	}
+	host := u.Hostname()
+	if !localauth.LoopbackHost(host) {
+		return "external_bridge"
+	}
+	if _, _, err := net.SplitHostPort(u.Host); err != nil {
+		return "bridge_unavailable"
+	}
+	client := &http.Client{Timeout: time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	request, err := http.NewRequest(http.MethodGet, strings.TrimRight(profile.BaseURL, "/")+"/chat/completions", nil)
+	if err != nil {
+		return "bridge_unavailable"
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	response, err := client.Do(request)
+	if err != nil {
+		return "bridge_unavailable"
+	}
+	defer response.Body.Close()
+	if response.StatusCode == http.StatusMethodNotAllowed {
+		return "ready"
+	}
+	if response.StatusCode == http.StatusUnauthorized {
+		return "bridge_token_mismatch"
+	}
+	return "bridge_unavailable"
 }
 
 func (s *Server) changeIntakeProfile(current *intakeRun, id string) error {

@@ -51,8 +51,8 @@ func TestWorkerClientThroughBridge(t *testing.T) {
 		if _, exists := payload["temperature"]; exists {
 			t.Error("unsupported temperature sent upstream")
 		}
-		if payload["max_output_tokens"] != float64(1234) {
-			t.Errorf("max output was not forwarded: %v", payload["max_output_tokens"])
+		if _, exists := payload["max_output_tokens"]; exists {
+			t.Errorf("subscription endpoint does not accept max_output_tokens: %v", payload)
 		}
 		if reasoning, ok := payload["reasoning"].(map[string]any); !ok || reasoning["effort"] != "high" {
 			t.Errorf("reasoning effort was not forwarded: %v", payload["reasoning"])
@@ -108,30 +108,55 @@ func TestProviderMapsVisualAttachmentsToResponsesInputParts(t *testing.T) {
 	}
 }
 
-func TestOutputLimitFallbackForBackendWithoutOptionalField(t *testing.T) {
+func TestUnsupportedOutputLimitIsOmittedWithoutRetry(t *testing.T) {
 	var calls atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var payload map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Fatal(err)
 		}
-		if calls.Add(1) == 1 {
-			if _, ok := payload["max_output_tokens"]; !ok {
-				t.Fatal("fixture did not receive the optional output limit")
-			}
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
+		calls.Add(1)
 		if _, ok := payload["max_output_tokens"]; ok {
-			t.Fatal("fallback retained the rejected optional output limit")
+			t.Fatal("subscription request included unsupported output limit")
 		}
 		fmt.Fprint(w, completedEvent)
 	}))
 	defer upstream.Close()
 	provider := Provider{Auth: &testAuth{}, endpoint: upstream.URL}
 	got, err := provider.Complete(context.Background(), Request{Model: "test", MaxTokens: 128, Messages: []llmclient.Message{{Role: "user", Content: "hello"}}})
-	if err != nil || got == nil || calls.Load() != 2 {
-		t.Fatalf("fallback completion failed: calls=%d response=%v err=%v", calls.Load(), got, err)
+	if err != nil || got == nil || calls.Load() != 1 {
+		t.Fatalf("completion failed: calls=%d response=%v err=%v", calls.Load(), got, err)
+	}
+}
+
+func TestBridgeReportsAdmissionDetailWithoutRetry(t *testing.T) {
+	var calls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		calls.Add(1)
+		if _, ok := payload["max_output_tokens"]; ok {
+			t.Fatal("subscription request included unsupported output limit")
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"detail":"Model is unavailable for this request"}`)
+	}))
+	defer upstream.Close()
+	bridge := httptest.NewServer(Handler(&Provider{Auth: &testAuth{}, endpoint: upstream.URL}, "local-token"))
+	defer bridge.Close()
+	// Use the handler token directly to exercise the user-facing bridge error.
+	req, _ := http.NewRequest(http.MethodPost, bridge.URL+"/v1/chat/completions", strings.NewReader(`{"model":"test","messages":[{"role":"user","content":"hi"}],"max_tokens":128}`))
+	req.Header.Set("Authorization", "Bearer local-token")
+	resp, err := bridge.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 400 || calls.Load() != 1 || !strings.Contains(string(body), "Model is unavailable for this request") {
+		t.Fatalf("bridge did not report admission error: status=%d calls=%d body=%s", resp.StatusCode, calls.Load(), body)
 	}
 }
 

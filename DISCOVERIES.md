@@ -1,5 +1,12 @@
 # Discoveries
 
+## Held-out source-assisted web smoke — 2026-10-01
+
+- A fresh four-file synthetic ticket service, outside the repository at `/tmp/bhb-heldout-20261001/HarborDesk`, was assessed through the browser with `gpt-daybreak-blue-latest` at high reasoning. Session `web-assessment-20261001-071816.988801676-000002` ran from 07:18–07:30 UTC with 23 model calls, no failed calls, and 339,884 reported tokens. This was one smoke run, not three-run capability acceptance.
+- The coordinator assigned parallel source and HTTP baseline workers. The baseline's 11 requests did not test the source-identified object/project mismatch and correctly reported no bypass in its tested routes. The coordinator noticed that gap, proposed a second round, and delegated eight bounded GET controls to a third worker. V1 returned another project's synthetic ticket in both directions; equivalent v2 requests returned 404. The report recorded one reproduced finding and kept unverified header observations as limitations.
+- The saved report and evidence index omitted the synthetic bearer values. All recorded packet validation files for the three workers reported `ok`; their latest pre-model packet snapshots were about 60–62 KiB each. This run did not reach a compaction threshold and cannot validate long-session compaction. Source-to-running-service revision identity was unavailable because the fixture had no Git metadata.
+- The analysis view exposed a readability issue: each finding's short row repeated a long engagement scope. It now shows the affected software there and moves the full scope into the expandable finding details. The rebuilt UI was checked in a browser, deployed to the existing `8123` service, and checked there again.
+
 ## Worker foundation rebuild — 2026-09-20
 
 The [worker audit](docs/worker-foundation-audit-2026-09-20.md) records the replacement of competing planner/reviewer/step-evaluator paths with one adaptive worker, removal of inferred target/prerequisite facts and failure ranking, bounded context views, persisted turn budgets and single-owner progress writes. Obsolete modules and tests were removed rather than retained as fallback behavior.

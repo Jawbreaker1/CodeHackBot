@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -52,9 +53,10 @@ const Qwen38LabInputByteLimit = 96 * 1024
 // context window.
 const SubscriptionInputByteLimit = 128 * 1024
 
-// SubscriptionMaxOutputTokens is passed through the bridge to the Responses
-// backend when the subscription profile is active. Provider-side limits still
-// win; this is a request ceiling, not a guarantee.
+// SubscriptionMaxOutputTokens is retained in the bridge's local request
+// contract. The current subscription endpoint rejects max_output_tokens, so
+// the bridge does not forward this value upstream; the provider sets the
+// effective output ceiling.
 const SubscriptionMaxOutputTokens = 128000
 
 // Message is a chat message.
@@ -373,7 +375,11 @@ func (c Client) Complete(ctx context.Context, messages []Message, opts ChatOptio
 				} `json:"error"`
 			}
 			if json.Unmarshal(respBody, &failure) == nil && failure.Error.Type == "subscription_bridge_error" {
-				return Completion{}, fmt.Errorf("subscription bridge %s: %s (Retry-After: %s)", resp.Status, failure.Error.Message, resp.Header.Get("Retry-After"))
+				message := fmt.Sprintf("subscription bridge %s: %s", resp.Status, failure.Error.Message)
+				if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
+					message += " (Retry-After: " + retryAfter + ")"
+				}
+				return Completion{}, errors.New(message)
 			}
 		}
 		return Completion{}, fmt.Errorf("chat request returned status %s", resp.Status)

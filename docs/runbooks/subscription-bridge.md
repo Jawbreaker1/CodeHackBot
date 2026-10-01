@@ -23,7 +23,7 @@ the [Kali installation runbook](kali-installation.md) before building. The
 Codex CLI is additionally required for subscription sign-in and token refresh;
 local-model users do not need the subscription bridge or Codex credentials.
 
-For normal use, build `birdhackbot`, run it without flags from the checkout, and select **ChatGPT subscription**. With an existing file-based Codex sign-in, the application starts and stops its own loopback bridge and removes its temporary client credential on exit. No separate bridge command or manual local token is needed. First sign-in still uses Codex as described below. The remaining commands document standalone bridge/development use.
+For normal CLI use, build `birdhackbot`, run it without flags from the checkout, and select **ChatGPT subscription**. With an existing file-based Codex sign-in, the application starts and stops its own loopback bridge and removes its temporary client credential on exit. No separate bridge command or manual local token is needed. In the web UI, **Settings → ChatGPT plan → Continue with ChatGPT** starts first-time sign-in and displays a one-time code with its ChatGPT verification link. This uses Codex's structured device-code flow, so the browser need not reach a callback inside the Kali VM. The remaining commands document CLI sign-in and standalone bridge/development use.
 
 Build from the repository root:
 
@@ -32,7 +32,7 @@ go build -buildvcs=false -o birdhackbot ./cmd/birdhackbot
 go build -buildvcs=false -o birdhackbot-llm-bridge ./cmd/birdhackbot-llm-bridge
 ```
 
-Use a ChatGPT subscription login in Codex CLI. An existing file-based ChatGPT login works directly. If you need to sign in, run:
+Use a ChatGPT subscription login in Codex CLI. An existing file-based ChatGPT login works directly. For a CLI-only installation, run:
 
 ```sh
 codex -c 'cli_auth_credentials_store="file"' login
@@ -80,6 +80,8 @@ Cloud inference sends the selected worker context, including tool evidence in th
 The signed-in Codex catalog exposed `gpt-daybreak-blue-latest`; a real request using that alias reported resolved model `gpt-5.6-sol`. This verifies this account's route, not universal availability or a separate audit of provider-side safety settings.
 
 A 2026-09-27 loopback bridge probe sent `reasoning_effort: high` to Daybreak Blue and received a completed response. The bridge test also verifies that the upstream request contains `reasoning: {"effort":"high"}`. The subscription backend is a compatibility endpoint rather than a documented public API, and its completion did not echo the effective effort; acceptance and forwarding are verified, but provider-internal allocation is not observable here. Higher effort can increase latency and token usage.
+
+On 2026-10-01 the subscription endpoint rejected `max_output_tokens` with HTTP 400 (`Unsupported parameter: max_output_tokens`). The bridge now omits that field from upstream requests; the provider determines the output ceiling even if a local profile carries a nominal `max_output_tokens` value. Other upstream admission errors preserve a short diagnostic in the local error response so the operator can distinguish an unsupported request from model or account access problems.
 
 The first live transport probe found that the terminal event could omit output already delivered through completed-item events. The parser was corrected and this exact behavior has a regression test. Mock tests cover the client-to-bridge-to-provider path, auth rejection/refresh, rate/access errors, redirects, cancellation, and incomplete/tool output. Expired credentials and exhausted quotas are simulated; the account was not deliberately expired or exhausted.
 

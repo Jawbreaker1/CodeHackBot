@@ -23,6 +23,10 @@ func TestConfiguredProfilesRouteAndRestoreEntireClient(t *testing.T) {
 	qwenCalls := make(chan request, 2)
 	fixture := func(calls chan request) *httptest.Server {
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
 			var body request
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Error(err)
@@ -113,6 +117,49 @@ func TestConfiguredProfilesRouteAndRestoreEntireClient(t *testing.T) {
 	run.status = "running"
 	if err := active.changeRunProfile(run, "daybreak"); err == nil || run.client.BaseURL != qwen.URL+"/v1" {
 		t.Fatal("active assessment changed provider in place")
+	}
+}
+
+func TestSubscriptionConnectionReportsSetupWithoutExposingCredentials(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	tokenPath := filepath.Join(t.TempDir(), "bridge-token")
+	if err := localauth.Create(tokenPath); err != nil {
+		t.Fatal(err)
+	}
+	token, err := localauth.Read(tokenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bridge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+token {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}))
+	profile := ModelProfile{Provider: "subscription", BaseURL: bridge.URL + "/v1", TokenFile: tokenPath}
+	if state := subscriptionConnection(profile); state != "sign_in_required" {
+		t.Fatalf("unsigned connection state = %s", state)
+	}
+	if err := os.WriteFile(filepath.Join(home, "auth.json"), []byte(`{"auth_mode":"chatgpt","tokens":{"access_token":"synthetic-access","account_id":"synthetic-account"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if state := subscriptionConnection(profile); state != "ready" {
+		t.Fatalf("ready connection state = %s", state)
+	}
+	bridge.Close()
+	if state := subscriptionConnection(profile); state != "bridge_unavailable" {
+		t.Fatalf("stopped connection state = %s", state)
+	}
+	redirected := false
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { redirected = true }))
+	defer target.Close()
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, target.URL, http.StatusFound) }))
+	defer redirect.Close()
+	profile.BaseURL = redirect.URL + "/v1"
+	if state := subscriptionConnection(profile); state != "bridge_unavailable" || redirected {
+		t.Fatalf("redirected bridge probe = %s; followed redirect = %t", state, redirected)
 	}
 }
 

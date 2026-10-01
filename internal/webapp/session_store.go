@@ -148,6 +148,9 @@ func (s *Server) restoreIntakes(root string) error {
 func (s *Server) restoreRun(customer, root string) error {
 	state, err := assessment.LoadState(root)
 	record, recordErr := readSessionRecord(root)
+	if recordErr == nil && validCustomerID(record.Customer) {
+		customer = record.Customer
+	}
 	if recordErr != nil && !os.IsNotExist(recordErr) {
 		return fmt.Errorf("restore session metadata %s: %w", filepath.Base(root), recordErr)
 	}

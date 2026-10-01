@@ -8,7 +8,52 @@ let starting = false;
 let eventRecords = new Map();
 let signatures = {};
 let modelCatalog = [];
+let folderNames = new Map();
 let profileMode = false;
+let loginPoll = null;
+let subscriptionReady = false;
+const subscriptionStates = {
+  ready: ['Bridge ready', 'Codex ChatGPT sign-in and the local subscription bridge are available on this host. The selected model is verified when a request completes.'],
+  sign_in_required: ['Sign-in needed', 'Use Continue with ChatGPT below to connect this Kali host.'],
+  bridge_token_missing: ['Bridge setup needed', 'The private local bridge token is missing. Finish the subscription bridge setup on this Kali host.'],
+  bridge_token_mismatch: ['Bridge token mismatch', 'The web server and the local bridge have different client tokens. Restart the bridge with the configured token file.'],
+  bridge_unavailable: ['Bridge stopped', 'The local subscription bridge is not reachable. Start it before selecting Daybreak for a model request.'],
+  external_bridge: ['External bridge configured', 'This subscription endpoint is managed outside the local web server; BirdHackBot has not verified its connection.']
+};
+function showSubscriptionState(models) {
+  const selected = models.find(item => item.id === current?.model_profile && item.provider === 'subscription') || models.find(item => item.provider === 'subscription');
+  subscriptionReady = selected?.connection === 'ready';
+  const [label, detail] = selected ? subscriptionStates[selected.connection] || ['Connection unknown', 'Check the configured ChatGPT subscription bridge.'] : ['Not configured', 'Add a ChatGPT subscription model profile on this Kali host.'];
+  $('settingsSubscriptionValue').textContent = label;
+  $('subscriptionDetail').textContent = detail;
+  if ($('startChatGPTLogin')) $('startChatGPTLogin').textContent = subscriptionReady ? 'Switch ChatGPT account' : 'Continue with ChatGPT';
+}
+async function refreshSubscriptionState() {
+  try { const data = await api('/api/v1/models'); showSubscriptionState(data.models || []); }
+  catch (error) { $('settingsSubscriptionValue').textContent = 'Unavailable'; $('subscriptionDetail').textContent = error.message; }
+}
+function showChatGPTLogin(state) {
+  const status = state?.status || 'idle';
+  const active = status === 'starting' || status === 'awaiting_user';
+  $('startChatGPTLogin').classList.toggle('hidden', active);
+  $('startChatGPTLogin').textContent = status === 'connected' || subscriptionReady ? 'Switch ChatGPT account' : 'Continue with ChatGPT';
+  $('cancelChatGPTLogin').classList.toggle('hidden', !active);
+  $('chatGPTLoginInstructions').classList.toggle('hidden', status === 'idle');
+  $('chatGPTLoginMessage').textContent = state?.message || '';
+  $('chatGPTLoginCode').classList.toggle('hidden', status !== 'awaiting_user');
+  $('chatGPTLoginCode').textContent = status === 'awaiting_user' ? state.user_code || '' : '';
+  $('chatGPTLoginLink').classList.toggle('hidden', status !== 'awaiting_user');
+  if (status === 'awaiting_user') $('chatGPTLoginLink').href = state.verification_url;
+  else $('chatGPTLoginLink').removeAttribute('href');
+  if (status === 'connected') refreshSubscriptionState();
+  if (!active && loginPoll) { clearInterval(loginPoll); loginPoll = null; }
+  if (active && !loginPoll) loginPoll = setInterval(refreshChatGPTLogin, 1500);
+}
+async function refreshChatGPTLogin() {
+  if (!$('subscriptionDialog').open) return;
+  try { showChatGPTLogin(await api('/api/v1/subscription/login/status')); }
+  catch (error) { showChatGPTLogin({status: 'failed', message: error.message}); }
+}
 let deletingSession = null;
 const narrow = matchMedia('(max-width: 1150px)');
 const mobile = matchMedia('(max-width: 680px)');
@@ -41,7 +86,10 @@ function renderModelOptions(models, selected) {
     const radio = document.createElement('input');
     radio.type = 'radio'; radio.name = 'model-choice'; radio.value = item.id; radio.checked = item.id === selected;
 		const copy = node('span', '', item.label || item.id);
-		if (profileMode) copy.append(node('small', '', `${item.provider === 'subscription' ? 'OpenAI subscription' : 'Local model'} · ${item.model}`));
+		if (profileMode) {
+      copy.append(node('small', '', `${item.provider === 'subscription' ? 'ChatGPT plan' : 'Local model'} · ${item.model}`));
+      if (item.provider === 'subscription') copy.append(node('small', 'model-connection', (subscriptionStates[item.connection] || ['Connection unknown'])[0]));
+    }
 		else if (item.current) copy.append(node('small', '', 'Configured provider model'));
     label.append(radio, copy);
     return label;
@@ -56,6 +104,7 @@ async function openModelPicker() {
 	try {
 		const data = await api('/api/v1/models');
 		modelCatalog = data.models || [];
+		showSubscriptionState(modelCatalog);
 		profileMode = !!data.profiles_enabled;
 		$('modelCustom').parentElement.classList.toggle('hidden', profileMode);
 		$('modelApply').textContent = current?.can_change_model === false ? 'Use in new session' : 'Use model';
@@ -101,11 +150,9 @@ function selectTab(button) {
 function messageNode(message) {
   const entry = node('article', 'transcript-entry ' + message.role);
   const complete = String(message.text || '');
-  const compact = message.role === 'assistant' && complete.length > 600;
-  const rich = richText(compact ? preview(complete, 440) : complete, 'message-' + (message.at || ''));
+  const rich = richText(complete, 'message-' + (message.at || ''));
   rich.classList.add('transcript-text');
   entry.append(node('div', 'transcript-role', message.role === 'user' ? 'You' : message.role === 'assistant' ? 'Coordinator' : 'System'), rich);
-  if (compact) entry.append(disclosure('Read full response', richText(complete, 'full-message-' + (message.at || '')), 'full-message-' + (message.at || '')));
   if (message.attachments?.length || message.images?.length) {
     const files = node('div', 'message-attachments');
     for (const attachment of [...(message.attachments || []), ...(message.images || [])]) {
@@ -433,7 +480,7 @@ function renderView(view) {
   for (const record of view.events || []) eventRecords.set(record.sequence, record);
   $('sessionTitle').textContent = view.title || view.goal || 'New session';
   $('sessionTitle').title = view.title || view.goal || 'New session';
-  $('headerCustomer').textContent = view.customer || 'Workspace';
+  $('headerCustomer').textContent = folderNames.get(view.customer) || view.customer || 'Workspace';
   $('model').textContent = view.model || 'Model not configured';
   $('permissions').textContent = permissionLabels[view.permission_mode] || permissionLabels.per_action;
   $('permissions').disabled = !isAssessmentView(view) && view.model_busy;
@@ -468,17 +515,14 @@ function markSelection() {
 function sessionRow(session, isIntake) {
   const label = session.title || session.goal || 'Untitled session';
   const row = node('div', 'session-row');
-  if (isIntake) {
-    row.draggable = true;
-    row.classList.add('draft-session');
-    row.title = 'Drag this draft into a customer folder';
-    row.addEventListener('dragstart', event => {
-      event.dataTransfer.effectAllowed = 'move';
-      event.dataTransfer.setData('text/plain', session.id);
-      row.classList.add('dragging');
-    });
-    row.addEventListener('dragend', () => row.classList.remove('dragging'));
-  }
+  row.draggable = true;
+  row.title = 'Drag into a folder';
+  row.addEventListener('dragstart', event => {
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', JSON.stringify({id:session.id, isIntake}));
+    row.classList.add('dragging');
+  });
+  row.addEventListener('dragend', () => row.classList.remove('dragging'));
   const button = node('button', 'session-link');
   button.dataset.session = session.id;
   button.title = isIntake ? label : label + ' · ' + displayStatus(session.status);
@@ -501,17 +545,47 @@ function sessionRow(session, isIntake) {
   row.append(button, remove);
   return row;
 }
-let movingDraft = null;
-async function assignDraft(id, customer) {
-  if (movingDraft) return;
-  movingDraft = id;
+let movingSession = null;
+async function assignSession(id, customer, isIntake) {
+  if (movingSession) return;
+  movingSession = id;
   try {
-    const view = await api('/api/v1/intake/' + encodeURIComponent(id) + '/customer', {method:'POST', body: JSON.stringify({customer})});
+    const prefix = isIntake ? '/api/v1/intake/' : '/api/v1/assessments/';
+    const view = await api(prefix + encodeURIComponent(id) + '/customer', {method:'POST', body: JSON.stringify({customer})});
     if (current?.id === id) renderView(view);
     clearError();
     await refreshSidebar();
   } catch (error) { showError(error); }
-  finally { movingDraft = null; }
+  finally { movingSession = null; }
+}
+function sessionPathFromIndex(data, exclude = '') {
+  const candidates = [...(data.intakes || []).map(s => ({...s, kind:'intake'}))];
+  for (const group of data.customers || []) {
+    candidates.push(...(group.drafts || []).map(s => ({...s, kind:'intake'})));
+    candidates.push(...(group.sessions || []).map(s => ({...s, kind:'assessments'})));
+  }
+  candidates.sort((a, b) => (Date.parse(b.updated_at) || 0) - (Date.parse(a.updated_at) || 0) || b.id.localeCompare(a.id));
+  const selected = candidates.find(s => s.id !== exclude);
+  return selected ? '/api/v1/' + selected.kind + '/' + encodeURIComponent(selected.id) : null;
+}
+async function openExistingSession(exclude = '') {
+  const data = await api('/api/v1/customers');
+  const path = sessionPathFromIndex(data, exclude);
+  if (path) return navigate(path);
+  current = null;
+  clearError();
+  localStorage.removeItem('birdhackbot.selectedSession');
+  $('sessionTitle').textContent = 'No session selected';
+  $('headerCustomer').textContent = 'Workspace';
+  $('chat').replaceChildren(node('div', 'welcome', 'Create a session to start a conversation.'));
+  $('proposalReview').classList.add('hidden');
+  $('reviewProposal').classList.add('hidden');
+  $('workers').replaceChildren();
+  $('activity').replaceChildren();
+  $('workerCount').textContent = '0';
+  updateComposer();
+  await refreshSidebar();
+  return false;
 }
 async function deleteSession(session, isIntake) {
   if (deletingSession) return;
@@ -525,7 +599,7 @@ async function deleteSession(session, isIntake) {
     clearError();
     if (current?.id === session.id) {
       localStorage.removeItem('birdhackbot.selectedSession');
-      await navigate('/api/v1/intake');
+      await openExistingSession(session.id);
     } else {
       await refreshSidebar();
     }
@@ -535,7 +609,9 @@ async function deleteSession(session, isIntake) {
 async function refreshSidebar() {
   try {
     const data = await api('/api/v1/customers');
-    const groups = (data.customers || []).map(g => ({id:g.id, sessions:g.sessions.map(s => ({id:s.id, goal:s.goal, title:s.goal, status:s.status})), drafts:(g.drafts || []).map(s => ({id:s.id, title:s.title || 'New session', status:s.status}))}));
+    folderNames = new Map((data.customers || []).map(group => [group.id, group.title || group.id]));
+    if (current) $('headerCustomer').textContent = folderNames.get(current.customer) || current.customer || 'Workspace';
+    const groups = (data.customers || []).map(g => ({id:g.id, title:g.title || g.id, sessions:(g.sessions || []).map(s => ({id:s.id, goal:s.goal, title:s.goal, status:s.status})), drafts:(g.drafts || []).map(s => ({id:s.id, title:s.title || 'New session', status:s.status}))}));
     const intakes = (data.intakes || []).map(s => ({id:s.id, goal:s.title || 'New session', title:s.title || 'New session', status:s.status}));
     if (!changed('sidebar', [groups, intakes])) { markSelection(); return; }
     const collapsed = new Set([...$('sidebarSessions').querySelectorAll('[data-customer][aria-expanded="false"]')].map(e => e.dataset.customer));
@@ -553,14 +629,14 @@ async function refreshSidebar() {
     for (const group of groups) {
       const section = node('section', 'customer-group');
       section.dataset.customer = group.id;
-      section.title = 'Drop a draft conversation here to place it in ' + group.id;
+      section.title = 'Drop a session here to place it in ' + group.title;
       section.addEventListener('dragover', event => { if (event.dataTransfer.types.includes('text/plain')) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; section.classList.add('drag-over'); } });
       section.addEventListener('dragleave', event => { if (!section.contains(event.relatedTarget)) section.classList.remove('drag-over'); });
-      section.addEventListener('drop', event => { event.preventDefault(); section.classList.remove('drag-over'); const id = event.dataTransfer.getData('text/plain'); if (id) assignDraft(id, group.id); });
+      section.addEventListener('drop', event => { event.preventDefault(); section.classList.remove('drag-over'); try { const item = JSON.parse(event.dataTransfer.getData('text/plain')); if (item?.id) assignSession(item.id, group.id, !!item.isIntake); } catch { /* Ignore unrelated drops. */ } });
       const heading = node('button', 'customer-heading');
       heading.dataset.customer = group.id;
       heading.setAttribute('aria-expanded', String(!collapsed.has(group.id)));
-      heading.append(node('span', '', group.id), node('span', 'customer-count', group.sessions.length + group.drafts.length));
+      heading.append(node('span', '', group.title), node('span', 'customer-count', group.sessions.length + group.drafts.length));
       const analysis = node('a', 'customer-analysis-link', 'Analysis');
       analysis.href = '/analysis?customer=' + encodeURIComponent(group.id);
       analysis.target = '_blank';
@@ -602,7 +678,8 @@ async function navigate(path) {
     $('shell').classList.remove('sidebar-open');
     $('drawerBackdrop').classList.add('hidden');
     refreshSidebar();
-  } catch (error) { if (token === selection) showError(error); }
+    return true;
+  } catch (error) { if (token === selection) showError(error); return false; }
 }
 function selectSession(id) { return navigate('/api/v1/assessments/' + encodeURIComponent(id)); }
 function selectIntake(id) { return navigate('/api/v1/intake/' + encodeURIComponent(id)); }
@@ -695,6 +772,15 @@ $('startForm').onsubmit = async event => {
 $('stop').onclick = () => act('stop', {}, $('assessmentStatus').parentElement);
 $('resume').onclick = () => act('start', {}, $('assessmentStatus').parentElement);
 $('newAssessment').onclick = () => navigate('/api/v1/intake');
+$('newFolder').onclick = () => { $('folderTitle').value = ''; $('folderError').textContent = ''; $('folderDialog').showModal(); $('folderTitle').focus(); };
+$('closeFolder').onclick = $('cancelFolder').onclick = () => $('folderDialog').close();
+$('folderForm').onsubmit = async event => {
+  event.preventDefault();
+  try {
+    await api('/api/v1/customers', {method:'POST', body: JSON.stringify({title:$('folderTitle').value.trim()})});
+    $('folderDialog').close(); clearError(); await refreshSidebar();
+  } catch (error) { $('folderError').textContent = error.message; }
+};
 $('model').onclick = openModelPicker;
 for (const button of document.querySelectorAll('[data-close-model]')) button.onclick = () => $('modelDialog').close();
 $('modelForm').onsubmit = async event => {
@@ -751,9 +837,22 @@ $('settings').onclick = () => {
   $('settingsPermissionsValue').textContent = permissionLabels[current?.permission_mode] || permissionLabels.per_action;
   $('settingsPermissions').disabled = $('permissions').disabled;
   $('appSettingsDialog').showModal();
+  refreshSubscriptionState();
 };
 $('closeAppSettings').onclick = () => $('appSettingsDialog').close();
 $('settingsModel').onclick = () => { $('appSettingsDialog').close(); openModelPicker(); };
+$('settingsSubscription').onclick = () => { $('appSettingsDialog').close(); $('subscriptionDialog').showModal(); refreshSubscriptionState(); refreshChatGPTLogin(); };
+$('closeSubscription').onclick = () => $('subscriptionDialog').close();
+$('subscriptionDialog').addEventListener('close', () => { if (loginPoll) { clearInterval(loginPoll); loginPoll = null; } });
+$('startChatGPTLogin').onclick = async () => {
+  showChatGPTLogin({status: 'starting', message: 'Preparing ChatGPT sign-in…'});
+  try { showChatGPTLogin(await api('/api/v1/subscription/login/start', {method: 'POST'})); }
+  catch (error) { showChatGPTLogin({status: 'failed', message: error.message}); }
+};
+$('cancelChatGPTLogin').onclick = async () => {
+  try { showChatGPTLogin(await api('/api/v1/subscription/login/cancel', {method: 'POST'})); }
+  catch (error) { showChatGPTLogin({status: 'failed', message: error.message}); }
+};
 $('settingsPermissions').onclick = () => { $('appSettingsDialog').close(); $('permissions').click(); };
 $('permissions').onclick = () => {
   const selected = current?.permission_mode || 'per_action';
@@ -896,7 +995,9 @@ $('expandBrowser').onclick = () => {
 };
 $('browserWorker').onchange = () => openBrowser($('browserWorker').value);
 const savedSession = localStorage.getItem('birdhackbot.selectedSession');
-await navigate(savedSession && /^\/api\/v1\/(intake|assessments)\//.test(savedSession) ? savedSession : '/api/v1/intake');
+if (!savedSession || !/^\/api\/v1\/(intake|assessments)\//.test(savedSession) || !(await navigate(savedSession))) {
+  await openExistingSession();
+}
 
 async function poll() {
   const token = selection;

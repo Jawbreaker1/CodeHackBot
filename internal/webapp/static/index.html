@@ -6,6 +6,7 @@
   <title>BirdHackBot</title>
   <link rel="icon" type="image/svg+xml" href="/logo-small.svg">
   <link rel="stylesheet" href="/app.css">
+  <script src="/markdown-it.min.js"></script>
   <script type="module" src="/app.js"></script>
 </head>
 <body>
@@ -21,7 +22,7 @@
     <aside id="sidebar" class="sidebar" aria-label="Assessment sessions">
       <div class="brand"><img class="brand-mark" src="/logo-small.svg" alt=""><strong>BirdHackBot<span class="brand-period">.</span></strong></div>
       <button id="newAssessment" class="new-session"><svg class="icon"><use href="#icon-plus"/></svg>New session</button>
-      <div class="nav-label">Customers & sessions</div>
+      <div class="sidebar-section-title"><span>Folders & sessions</span><button id="newFolder" type="button" title="Create folder" aria-label="Create folder"><svg class="icon"><use href="#icon-plus"/></svg></button></div>
       <nav id="sidebarSessions" aria-label="Customer sessions"><p class="empty">Your assessments will appear here.</p></nav>
       <footer class="sidebar-footer"><button id="settings" type="button" aria-haspopup="dialog"><svg class="icon" aria-hidden="true"><use href="#icon-settings"/></svg><span>Settings</span></button></footer>
     </aside>
@@ -100,8 +101,30 @@
     <div class="settings-panel">
       <div class="dialog-heading"><h2 id="appSettingsTitle">Settings</h2><button id="closeAppSettings" class="icon-button" type="button" aria-label="Close settings"><svg class="icon"><use href="#icon-close"/></svg></button></div>
       <button id="settingsModel" class="settings-option" type="button"><span>Language model<small id="settingsModelValue"></small></span><span aria-hidden="true">›</span></button>
+      <button id="settingsSubscription" class="settings-option" type="button"><span>ChatGPT plan<small id="settingsSubscriptionValue">Checking connection…</small></span><span aria-hidden="true">›</span></button>
       <button id="settingsPermissions" class="settings-option" type="button"><span>Execution approvals<small id="settingsPermissionsValue"></small></span><span aria-hidden="true">›</span></button>
     </div>
+  </dialog>
+  <dialog id="subscriptionDialog" class="model-dialog" aria-labelledby="subscriptionDialogTitle">
+    <div class="dialog-heading"><h2 id="subscriptionDialogTitle">ChatGPT plan</h2><button id="closeSubscription" class="icon-button" type="button" aria-label="Close ChatGPT connection"><svg class="icon"><use href="#icon-close"/></svg></button></div>
+    <p id="subscriptionDetail" class="muted">Checking connection…</p>
+    <p class="muted">Connect your ChatGPT account on this Kali host. Your password and tokens never enter BirdHackBot's web UI.</p>
+    <div class="dialog-actions"><button id="startChatGPTLogin" class="primary-button" type="button">Continue with ChatGPT</button><button id="cancelChatGPTLogin" class="text-button hidden" type="button">Cancel sign-in</button></div>
+    <div id="chatGPTLoginInstructions" class="hidden" aria-live="polite">
+      <p id="chatGPTLoginMessage" class="muted"></p>
+      <p id="chatGPTLoginCode" class="login-code"></p>
+      <a id="chatGPTLoginLink" class="text-button" href="#" target="_blank" rel="noopener noreferrer">Open ChatGPT sign-in ↗</a>
+    </div>
+    <p class="muted">After sign-in, a local subscription bridge must be available. Model access is confirmed when a request completes.</p>
+  </dialog>
+  <dialog id="folderDialog" class="model-dialog" aria-labelledby="folderDialogTitle">
+    <form id="folderForm">
+      <div class="dialog-heading"><h2 id="folderDialogTitle">New folder</h2><button id="closeFolder" class="icon-button" type="button" aria-label="Close folder dialog"><svg class="icon"><use href="#icon-close"/></svg></button></div>
+      <p class="muted">Keep related conversations and assessments together. Drag sessions into the folder after creating it.</p>
+      <label class="model-custom" for="folderTitle">Folder name<input id="folderTitle" maxlength="80" required autocomplete="off" placeholder="Customer or project name"></label>
+      <p id="folderError" class="danger" role="alert"></p>
+      <div class="dialog-actions"><button class="text-button" id="cancelFolder" type="button">Cancel</button><button class="primary-button" type="submit">Create folder</button></div>
+    </form>
   </dialog>
   <dialog id="modelDialog" class="model-dialog" aria-labelledby="modelDialogTitle">
     <form id="modelForm">

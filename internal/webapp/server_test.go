@@ -37,7 +37,7 @@ func TestServerCreatesDraftAndServesUI(t *testing.T) {
 		t.Fatalf("GET / status = %d", response.StatusCode)
 	}
 	body, err := io.ReadAll(response.Body)
-	if err != nil || !strings.Contains(string(body), "What are we investigating?") || !strings.Contains(string(body), "Customers & sessions") || !strings.Contains(string(body), "liveStatus") || !strings.Contains(string(body), "collapseWorkers") || !strings.Contains(string(body), "icon-trash") {
+	if err != nil || !strings.Contains(string(body), "What are we investigating?") || !strings.Contains(string(body), "Folders & sessions") || !strings.Contains(string(body), "newFolder") || !strings.Contains(string(body), "liveStatus") || !strings.Contains(string(body), "collapseWorkers") || !strings.Contains(string(body), "icon-trash") {
 		t.Fatal("embedded operator console UI is missing")
 	}
 	css, err := http.Get(httpServer.URL + "/app.css")
@@ -235,6 +235,49 @@ func TestAssigningDraftToCustomerFolderPersistsAndIndexesIt(t *testing.T) {
 	if restarted.loadErr != nil || restored == nil || restored.customer != "example-lab" {
 		t.Fatalf("restored assigned draft = %v, %+v", restarted.loadErr, restored)
 	}
+}
+
+func TestNamedFolderGroupsDraftAndAssessmentAcrossRestart(t *testing.T) {
+	root := t.TempDir()
+	server := NewServer(Config{RepoRoot: root})
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+
+	folder := postJSON[struct {
+		ID    string `json:"id"`
+		Title string `json:"title"`
+	}](t, httpServer.URL+"/api/v1/customers", folderRecord{Title: "Client Alpha review"})
+	if !validCustomerID(folder.ID) || folder.Title != "Client Alpha review" {
+		t.Fatalf("created folder = %+v", folder)
+	}
+	draft := getJSON[intakeView](t, httpServer.URL+"/api/v1/intake")
+	run := postJSON[assessmentView](t, httpServer.URL+"/api/v1/assessments", createRequest{Customer: "original", Goal: "Review fixture", Scope: "synthetic only"})
+	postJSON[intakeView](t, httpServer.URL+"/api/v1/intake/"+draft.ID+"/customer", intakeCustomerRequest{Customer: folder.ID})
+	postJSON[assessmentView](t, httpServer.URL+"/api/v1/assessments/"+run.ID+"/customer", intakeCustomerRequest{Customer: folder.ID})
+
+	check := func(s *Server) {
+		t.Helper()
+		endpoint := httptest.NewServer(s)
+		defer endpoint.Close()
+		index := getJSON[struct {
+			Customers []customerIndexView `json:"customers"`
+		}](t, endpoint.URL+"/api/v1/customers")
+		var selected *customerIndexView
+		for i := range index.Customers {
+			if index.Customers[i].ID == folder.ID {
+				selected = &index.Customers[i]
+			}
+		}
+		if selected == nil || selected.Title != folder.Title || len(selected.Drafts) != 1 || len(selected.Sessions) != 1 || selected.Sessions[0].ID != run.ID {
+			t.Fatalf("named folder index = %+v", selected)
+		}
+	}
+	check(server)
+	restored := NewServer(server.config)
+	if restored.loadErr != nil {
+		t.Fatal(restored.loadErr)
+	}
+	check(restored)
 }
 
 func TestDeleteAssessmentRemovesLinkedConversationAndPreservesSibling(t *testing.T) {
