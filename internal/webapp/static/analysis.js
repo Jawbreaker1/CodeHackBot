@@ -1,3 +1,5 @@
+import {webPagesSection, bindWebPages} from './web-map.js';
+
 const app = document.getElementById('app');
 const params = new URLSearchParams(location.search);
 let selectedScope = -1;
@@ -79,26 +81,6 @@ function coverageSection(data) {
   return '<section class="section exploration"><div class="section-heading"><div><h2>Coverage map</h2><p>Declared scopes, recorded worker tests, and reported weak points. Connections and unobserved components are not inferred.</p></div>' + (selectedScope >= 0 ? '<button type="button" class="clear-filter" id="clear-scope">Show all scopes</button>' : '') + '</div><div class="coverage-map"><div class="map-root">' + escapeHTML(root) + '</div><div class="scope-grid">' + entries.map(coverageCard).join('') + '</div></div></section>';
 }
 
-function webPagesSection(data, visibleSessions) {
-  const pages = (data.web_pages || []).filter(page => !visibleSessions || visibleSessions.includes(page.session_id));
-  if (!pages.length) return '';
-  const edges = (data.web_transitions || []).filter(edge => !visibleSessions || visibleSessions.includes(edge.session_id));
-  const cards = pages.map((page, index) => {
-    const image = page.screenshot_url ? '<a class="web-shot" href="' + escapeHTML(page.screenshot_url) + '" target="_blank" rel="noopener"><img src="' + escapeHTML(page.screenshot_url) + '" alt="Recorded screenshot of ' + escapeHTML(page.url) + '" loading="lazy"><span>Open full screenshot ↗</span></a>' : '<div class="web-no-shot">No screenshot recorded for this page</div>';
-    return '<article class="web-page" id="web-page-' + index + '"><div class="web-page-head"><span class="web-page-index">' + (index + 1) + '</span><div><strong>' + escapeHTML(page.url) + '</strong><small>Observed by ' + escapeHTML(page.task_id) + ' · <a href="' + sessionURL(page.session_id) + '">session ↗</a></small></div></div>' + image + '<div class="web-note"><label for="web-note-' + index + '">Page assessment / comment <span>Analyst note, separate from verified findings</span></label><textarea id="web-note-' + index + '" maxlength="2000" rows="3" placeholder="What did you observe? What should be checked next?">' + escapeHTML(page.comment || '') + '</textarea><div class="web-note-actions"><button type="button" data-web-note="' + index + '">Save note</button><span aria-live="polite"></span></div></div></article>';
-  }).join('');
-  const key = page => page.session_id + '\n' + page.task_id + '\n' + page.url;
-  const indices = new Map(pages.map((page, index) => [key(page), index]));
-  const routeRows = edges.map(edge => {
-    const from = indices.get(key({session_id:edge.session_id, task_id:edge.task_id, url:edge.from}));
-    const to = indices.get(key({session_id:edge.session_id, task_id:edge.task_id, url:edge.to}));
-    if (from === undefined || to === undefined) return '';
-    return '<div class="web-route"><a href="#web-page-' + from + '">' + escapeHTML(edge.from) + '</a><span aria-label="navigated to">→</span><a href="#web-page-' + to + '">' + escapeHTML(edge.to) + '</a></div>';
-  }).filter(Boolean);
-  const routes = routeRows.slice(0, 8).join('') + (routeRows.length > 8 ? '<details><summary>Show ' + (routeRows.length - 8) + ' more observed transitions</summary>' + routeRows.slice(8).join('') + '</details>' : '');
-  return '<section class="section exploration web-exploration"><div class="section-heading"><div><h2>Observed web pages</h2><p>Pages and transitions recorded by browser workers. This shows the paths actually visited, not the full application or a claim that unvisited pages were tested.</p></div><span class="workspace-count">' + pages.length + ' page(s)</span></div>' + (routes ? '<div class="web-journey"><div class="eyebrow">Navigation path</div>' + routes + '</div>' : '') + '<div class="web-page-grid">' + cards + '</div></section>';
-}
-
 function correlationSection(data, visibleSessions) {
   if (data.kind !== 'customer') return '';
   const shared = (data.coverage || []).filter(entry => (entry.session_ids || []).length > 1 && (selectedScope < 0 || visibleSessions.includes(entry.session_ids[0])));
@@ -155,7 +137,7 @@ function render(data) {
     '<section class="summary-grid" aria-label="Filter findings by risk">' + metric(risk.critical || 0,'Critical','critical') + metric(risk.high || 0,'High','high') + metric(risk.medium || 0,'Medium','medium') + metric(risk.low || 0,'Low','low') + metric(risk.reproduced || 0,'Reproduced','reproduced') + metric(risk.candidates || 0,'Need checking','candidates') + '</section><p class="metric-note">Select a number to see those findings. Severity counts include only reproduced findings.</p>' +
     actionSection +
     '<section class="section finding-workspace" id="findings"><div class="section-heading"><div><h2>' + findingHeading + '</h2><p>For each finding, see the impact, recommended fix, and supporting checks.</p></div><div class="finding-controls"><span class="workspace-count">' + findings.length + ' shown</span>' + (selectedRisk !== 'all' ? '<button type="button" class="clear-filter" id="clear-risk">Show all findings</button>' : '') + '</div></div>' + findingExplorer(findings) + '</section>' +
-    webPagesSection(data, visibleSessions) +
+    webPagesSection(data, visibleSessions, escapeHTML) +
     '<details class="analysis-more" id="analysis-details"><summary>Explore tests, open questions, and session history <span>↘</span></summary><div class="analysis-more-body">' + coverageSection(data) + sessionComparisonSection(data) + challengeSection(data, visibleSessions) + correlationSection(data, visibleSessions || []) + '<div class="columns"><div>' + conclusion + latestResult + '</div><aside><section class="side-card"><h2>Recorded limits and open questions · ' + gaps.length + '</h2>' + gapList + '</section></aside></div></div></details><p class="analysis-caveat">Only recorded work is shown. Review the evidence before sharing a conclusion; untested areas may still contain weaknesses.</p>';
   app.querySelector('#show-details')?.addEventListener('click', () => {
     const details = app.querySelector('#analysis-details');
@@ -179,22 +161,12 @@ function render(data) {
     selectedFinding = Number(button.dataset.findingIndex);
     render(data);
   }));
-  const shownPages = (data.web_pages || []).filter(page => !visibleSessions || visibleSessions.includes(page.session_id));
-  app.querySelectorAll('[data-web-note]').forEach(button => button.addEventListener('click', async () => {
-    const index = Number(button.dataset.webNote);
-    const page = shownPages[index];
-    const textarea = app.querySelector('#web-note-' + index);
-    const feedback = button.nextElementSibling;
-    button.disabled = true;
-    feedback.textContent = 'Saving…';
-    try {
-      const response = await fetch('/api/v1/assessments/' + encodeURIComponent(page.session_id) + '/analysis/notes', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({task_id:page.task_id, url:page.url, comment:textarea.value})});
-      if (!response.ok) throw new Error((await response.json()).error || 'Could not save note');
-      page.comment = textarea.value.trim();
-      feedback.textContent = 'Saved locally';
-    } catch (error) { feedback.textContent = error.message; }
-    button.disabled = false;
-  }));
+  bindWebPages(app, data, visibleSessions, escapeHTML, index => {
+    selectedRisk = 'all';
+    selectedFinding = index;
+    render(data);
+    app.querySelector('#findings')?.scrollIntoView({block:'start', behavior:'smooth'});
+  });
 }
 
 async function load() {

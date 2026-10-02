@@ -22,6 +22,7 @@ type analysisWebPage struct {
 	ScreenshotURL  string `json:"screenshot_url,omitempty"`
 	ScreenshotPath string `json:"-"`
 	Comment        string `json:"comment,omitempty"`
+	FindingRefs    []int  `json:"finding_refs,omitempty"`
 }
 
 type analysisWebTransition struct {
@@ -76,7 +77,11 @@ func observedURL(raw string) string {
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 		return ""
 	}
-	return (&url.URL{Scheme: parsed.Scheme, Host: parsed.Host, Path: parsed.Path}).String()
+	path := parsed.Path
+	if path == "" {
+		path = "/"
+	}
+	return (&url.URL{Scheme: parsed.Scheme, Host: parsed.Host, Path: path}).String()
 }
 
 func readBrowserManifest(work, anchor string) *browserManifest {
@@ -148,6 +153,29 @@ func browserAnalysis(root, sessionID string, anchors []browserAnchor) ([]analysi
 		}
 	}
 	return pages, transitions
+}
+
+// A page is linked to a finding only when that finding cites the exact saved
+// screenshot for the observed page. A matching URL in prose or a shared task
+// is not enough to establish that the finding concerns this page.
+func linkPageFindings(pages []analysisWebPage, findings []analysisFinding) {
+	for i := range pages {
+		pages[i].FindingRefs = nil
+		if pages[i].ScreenshotPath == "" {
+			continue
+		}
+		for index, finding := range findings {
+			if finding.SessionID != pages[i].SessionID {
+				continue
+			}
+			for _, ref := range finding.Evidence {
+				if ref == pages[i].ScreenshotPath {
+					pages[i].FindingRefs = append(pages[i].FindingRefs, index)
+					break
+				}
+			}
+		}
+	}
 }
 
 func artifactURL(sessionID, path string) string {

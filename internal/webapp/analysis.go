@@ -122,6 +122,7 @@ func (r *run) analysis() analysisView {
 	root, anchors := r.root, browserAnchors(r.state)
 	r.mu.RUnlock()
 	view.WebPages, view.WebTransitions = browserAnalysis(root, view.ID, anchors)
+	linkPageFindings(view.WebPages, view.Findings)
 	return view
 }
 
@@ -209,6 +210,7 @@ func buildCustomerAnalysis(id string, sessions []analysisView) analysisView {
 		return view
 	}
 	sortAnalysisFindings(view.Findings)
+	linkPageFindings(view.WebPages, view.Findings)
 	view.Coverage = mergeCoverage(sessions)
 	view.Correlations = correlateFindings(view.Findings)
 	view.Risk = summarizeRisk(view.Findings)

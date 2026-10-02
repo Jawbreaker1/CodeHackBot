@@ -22,7 +22,7 @@ func serveUI(w http.ResponseWriter, r *http.Request) bool {
 	switch r.URL.Path {
 	case "/app.css":
 		kind = "text/css; charset=utf-8"
-	case "/app.js", "/inspector.js", "/analysis.js", "/context.js", "/markdown-it.min.js":
+	case "/app.js", "/inspector.js", "/analysis.js", "/web-map.js", "/context.js", "/markdown-it.min.js":
 		kind = "text/javascript; charset=utf-8"
 	case "/analysis.css", "/context.css":
 		kind = "text/css; charset=utf-8"

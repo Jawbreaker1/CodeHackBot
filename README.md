@@ -77,7 +77,7 @@ A new session starts as a conversation, without an assessment form. Describe wha
 
 Create customer folders from the left sidebar and drag sessions into them. You can reopen or delete sessions there. A completed assessment stays conversational: ask follow-up questions, request another in-scope round, or export a report without losing its earlier evidence. Reports and raw logs remain in that session's local folder.
 
-Analysis is separate from the chat. Open it from a session or customer folder to compare risks across assessments, inspect the pages workers visited, view screenshots, and see which areas still need testing. Open a finding to see why it matters, how it was checked, its supporting evidence, and the proposed fix. A software or CVE match is a lead to investigate, not proof that a target is vulnerable. Reports remain drafts for professional review; if a required detail is missing, the report shows the gap instead of inventing an answer.
+Analysis is separate from the chat. Open it from a session or customer folder to compare risks across assessments, explore the observed web navigation map and captured pages, and see which areas still need testing. Large maps start with nearby pages; you can focus another page or expand the whole map. A page shows a finding only when that finding explicitly cites its screenshot. Open a finding to see why it matters, how it was checked, its supporting evidence, and the proposed fix. A software or CVE match is a lead to investigate, not proof that a target is vulnerable. Reports remain drafts for professional review; if a required detail is missing, the report shows the gap instead of inventing an answer.
 
 ## Where the project stands
 
