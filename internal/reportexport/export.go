@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -85,7 +86,7 @@ func Save(root string, state assessment.State, format assessment.ReportFormat, o
 			os.Remove(file.Name())
 			return nil, fmt.Errorf("close PDF report: %w", err)
 		}
-		if err := renderReportPDF(content, file.Name()); err != nil {
+		if err := renderReportPDF(content, file.Name(), state, format); err != nil {
 			os.Remove(file.Name())
 			return nil, err
 		}
@@ -111,10 +112,18 @@ func Save(root string, state assessment.State, format assessment.ReportFormat, o
 	return &Artifact{Name: filepath.Base(file.Name()), Format: format, Output: output, Bytes: int64(len(content))}, nil
 }
 
-func renderReportPDF(markdown []byte, path string) error {
+func renderReportPDF(markdown []byte, path string, state assessment.State, format assessment.ReportFormat) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "/usr/bin/python3", "-c", reportPDFScript, path)
+	metadata, err := json.Marshal(map[string]string{
+		"assessment": state.ID,
+		"format":     string(format),
+		"exported":   time.Now().UTC().Format("2 Jan 2006"),
+	})
+	if err != nil {
+		return fmt.Errorf("prepare PDF metadata: %w", err)
+	}
+	cmd := exec.CommandContext(ctx, "/usr/bin/python3", "-c", reportPDFScript, path, string(metadata))
 	cmd.Stdin = bytes.NewReader(markdown)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

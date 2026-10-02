@@ -18,6 +18,14 @@
 {{if .Findings}}{{range .Findings}}{{range .Remediation}}- {{inline .}}
 {{end}}{{end}}{{else}}Review the recorded coverage and unresolved gaps before deciding on further testing.{{end}}
 
+### 1.1 Findings at a glance
+
+{{if .Findings}}| ID | Finding | Severity | State |
+| --- | --- | --- | --- |
+{{range $i, $f := .Findings}}| F-{{inc $i}} | {{cell $f.Title}} | {{if $f.Severity}}{{cell $f.Severity}}{{else}}Not rated{{end}} | {{cell $f.Status}} |
+{{end}}{{else}}No current findings were recorded.
+{{end}}
+
 ## 2. Technical report
 
 ### 2.1 Engagement parameters

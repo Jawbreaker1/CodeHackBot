@@ -30,7 +30,9 @@ This is a point-in-time report of the recorded work. The OWASP WSTG provides rep
 
 ### 3.1 Findings summary
 
-{{if .Findings}}{{range $i, $f := .Findings}}- **F-{{inc $i}} · {{inline $f.Title}}** — {{inline $f.Severity}} severity; {{inline $f.Status}}; {{inline $f.Confidence}} confidence.
+{{if .Findings}}| ID | Finding | Severity | State |
+| --- | --- | --- | --- |
+{{range $i, $f := .Findings}}| F-{{inc $i}} | {{cell $f.Title}} | {{if $f.Severity}}{{cell $f.Severity}}{{else}}Not rated{{end}} | {{cell $f.Status}} |
 {{end}}{{else}}No current findings were recorded.
 {{end}}
 ### 3.2 Findings details

@@ -64,3 +64,17 @@ func TestIncompleteReportDoesNotPresentAnUnreviewedPlanAsConclusion(t *testing.T
 		}
 	}
 }
+
+func TestFindingsOverviewIsReadableMarkdownTable(t *testing.T) {
+	state := State{Plans: []Decision{{Complete: true, Findings: []Finding{{Title: "Access | role boundary", Severity: "high", Status: "candidate"}}}}}
+	for _, format := range []ReportFormat{OWASPReport, PTESReport} {
+		output, err := RenderFormattedReport(state, format)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(output)
+		if !strings.Contains(text, "| ID | Finding | Severity | State |") || !strings.Contains(text, "| F-1 | Access \\| role boundary | high | candidate |") || !strings.Contains(text, "#### F-1 · Access | role boundary") {
+			t.Fatalf("%s findings overview lost its table or detail: %s", format, text)
+		}
+	}
+}

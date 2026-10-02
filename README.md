@@ -33,7 +33,7 @@ The Analysis view shows what was tested, where weaknesses were found, what still
 - **Examine web applications.** A delegated Playwright worker can follow pages and user flows, capture screenshots and traces, and expose an optional live browser preview beside the chat.
 - **See what happened.** Each test saves the command, result, timing, and supporting files. The interface separates possible weaknesses from findings that another worker has checked against the target.
 - **Explore the results.** Analysis compares sessions in the same customer folder. It links findings to evidence, shows tested areas and gaps, and puts suggested fixes beside each risk.
-- **Create formal reports.** Ask for an OWASP WSTG- or PTES-aligned report in Markdown or PDF. Templates check that scope, test results, evidence, limitations, and review details are present. The report is saved with the session and linked directly in chat.
+- **Create formal reports.** Ask for an OWASP WSTG- or PTES-aligned report in Markdown or PDF. Both formats include a findings overview and detailed evidence; PDFs add a cover, contents page, and print layout. Templates check that scope, test results, evidence, limitations, and review details are present. The report is saved with the session and linked directly in chat.
 - **Continue long investigations.** The coordinator and each worker keep track of their own work. Older details can be saved and brought back when needed. A local debug view shows exactly what information each model received.
 
 The web app and terminal UI share the same coordinator, workers, approvals, and saved evidence. The browser is the main place to explore a session; the CLI opens with a compact ASCII version of the raven for terminal use.

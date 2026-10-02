@@ -24,8 +24,11 @@ var reportTemplateFiles embed.FS
 
 var reportTemplates = template.Must(template.New("").Funcs(template.FuncMap{
 	"inline": func(value string) string { return strings.Join(strings.Fields(value), " ") },
-	"inc":    func(value int) int { return value + 1 },
-	"join":   strings.Join,
+	"cell": func(value string) string {
+		return strings.ReplaceAll(strings.Join(strings.Fields(value), " "), "|", `\|`)
+	},
+	"inc":  func(value int) int { return value + 1 },
+	"join": strings.Join,
 }).ParseFS(reportTemplateFiles, "templates/*.md.tmpl"))
 
 type formattedReport struct {
