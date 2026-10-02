@@ -26,6 +26,8 @@ const (
 	consoleAssessmentStarted
 	consoleAssessmentFinished
 	consolePermissions
+	consoleDashboard
+	consoleCoordinatorStatus
 )
 
 type consoleEvent struct {
@@ -142,11 +144,29 @@ func (c *Console) Print(format string, args ...any) {
 
 func (c *Console) Progress(e assessment.Event) {
 	var lines []string
+	var status string
 	c.mu.Lock()
 	for _, line := range c.dashboard.apply(e) {
 		lines = append(lines, line)
 	}
+	if e.TaskID != "" {
+		status = strings.Join(c.dashboard.compactSnapshot(), "\n")
+	}
 	c.mu.Unlock()
+	if status != "" && c.events != nil {
+		c.emit(consoleDashboard, status)
+		return
+	}
+	if c.events != nil && e.TaskID == "" {
+		switch e.Kind {
+		case "planning":
+			c.emit(consoleCoordinatorStatus, "planning next steps")
+		case "plan":
+			c.emit(consoleCoordinatorStatus, "plan ready")
+		case "round_update":
+			c.emit(consoleCoordinatorStatus, "reviewing worker results")
+		}
+	}
 	if len(lines) > 0 {
 		c.emit(consoleOutput, strings.Join(lines, "\n")+"\n")
 	}
@@ -159,9 +179,19 @@ func (c *Console) approvalRequested(taskID, command string) {
 		lines = append(lines, line)
 	}
 	c.mu.Unlock()
+	if c.events != nil {
+		c.emit(consoleDashboard, strings.Join(c.dashboardCompactSnapshot(), "\n"))
+		return
+	}
 	if len(lines) > 0 {
 		c.emit(consoleOutput, strings.Join(lines, "\n")+"\n")
 	}
+}
+
+func (c *Console) dashboardCompactSnapshot() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.dashboard.compactSnapshot()
 }
 
 func (c *Console) emit(kind consoleEventKind, text string) {

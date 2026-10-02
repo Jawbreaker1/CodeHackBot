@@ -251,6 +251,15 @@ def run_case(binary, root, endpoint, mode):
             terminal.expect("Assessment completed with gaps." if mode == "deny" else "Assessment completed.")
             terminal.expect("Report:")
             terminal.expect("Session ")
+            if mode == "success":
+                terminal.send("/plan")
+                terminal.expect("Plan 2")
+                terminal.send("/workers")
+                terminal.expect("Worker results")
+                terminal.send("/findings")
+                terminal.expect("No current findings")
+                terminal.send("/artifacts")
+                terminal.expect("No saved worker artifacts yet")
             if mode == "continuation":
                 terminal.send("Inspect fixture again")
                 terminal.expect("Continuing assessment")

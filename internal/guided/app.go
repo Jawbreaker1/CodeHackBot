@@ -198,7 +198,7 @@ func (a App) runPlain(ctx context.Context) error {
 	defer cancel()
 	c := newConsole(ctx, a.Reader, a.Writer, a.events)
 	c.Print(cliLogo + "\n\n")
-	c.Print("Talk to the coordinator about what you want to investigate. You choose the scope and approval level before workers act.\nUse /workers, /status, /help, or /stop during a session. Ctrl-C stops active work.\n\n")
+	c.Print("Talk to the coordinator about what you want to investigate. You choose the scope and approval level before workers act.\nUse /plan, /workers, /findings, /artifacts, /status, or /help during a session. Ctrl-C stops active work.\n\n")
 
 	preferencesPath := filepath.Join(a.RepoRoot, ".birdhackbot", "preferences.json")
 	prefs, err := configureProvider(ctx, c, preferencesPath)
@@ -344,7 +344,14 @@ func (a App) readGoalOrCommand(ctx context.Context, c *Console, path string, pre
 			c.Print("Model settings applied: %s / %s (reasoning: %s).\n", prefs.Provider, prefs.Model, reasoningLabel(*prefs))
 		case "/resume", "resume":
 			chosen, err := chooseSavedAssessment(ctx, c, filepath.Join(a.RepoRoot, "sessions"))
-			return nil, chosen, err
+			if err != nil {
+				return nil, nil, err
+			}
+			if chosen != nil && chosen.State.Model != "" && chosen.State.Model != prefs.Model {
+				c.Print("This session uses %s, but the selected model is %s. Change /settings to the session model before resuming.\n", chosen.State.Model, prefs.Model)
+				continue
+			}
+			return nil, chosen, nil
 		case "/help", "help":
 			c.Print("Talk naturally with the orchestrator. It answers questions and asks for missing assessment details. /permissions changes execution approval level; /settings changes provider/model; /resume reopens a saved assessment; /help repeats this message.\n")
 		default:
@@ -454,7 +461,7 @@ func (a App) runAssessmentWithFrame(ctx context.Context, c *Console, prefs prefe
 					c.Print("Permissions unchanged: %v\n", err)
 				}
 			case "/help", "help":
-				c.Print("While running: type a message to queue it for the coordinator, /workers shows worker state, /permissions changes execution approval level, /status shows the saved run status, /stop cancels the assessment. Model settings apply to the next assessment.\n")
+				c.Print("While running: type a message to the coordinator. /plan shows the latest plan; /workers shows live worker state; /findings and /artifacts show saved results; /permissions changes approvals; /status shows progress; /stop cancels the assessment. Model settings apply to the next assessment.\n")
 			case "/workers", "workers":
 				for _, row := range c.DashboardSnapshot() {
 					c.Print("%s\n", row)
@@ -462,6 +469,8 @@ func (a App) runAssessmentWithFrame(ctx context.Context, c *Console, prefs prefe
 			case "/status", "status":
 				state := conversation.State()
 				c.Print("Assessment status: %s; completed tasks: %d; model calls: %d.\n", state.Status, len(state.Results), budget.Usage().Calls)
+			case "/plan", "/findings", "/artifacts":
+				printSessionView(c, strings.ToLower(line), root, conversation.State())
 			case "/stop", "stop":
 				c.Print("Stopping the assessment and saving an aborted report.\n")
 				stop()

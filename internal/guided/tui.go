@@ -32,24 +32,26 @@ type tuiOutput struct {
 type tuiDone struct{ err error }
 
 type guidedTUI struct {
-	ctx             context.Context
-	cancel          context.CancelFunc
-	input           textinput.Model
-	inputPipe       io.WriteCloser
-	spinner         spinner.Model
-	conversation    viewport.Model
-	output          <-chan tuiOutput
-	done            <-chan error
-	lines           []string
-	width, height   int
-	busy            bool
-	waiting         bool
-	active          bool
-	sessionReady    bool
-	inputPrompt     string
-	permissionLabel string
-	stopping        bool
-	err             error
+	ctx               context.Context
+	cancel            context.CancelFunc
+	input             textinput.Model
+	inputPipe         io.WriteCloser
+	spinner           spinner.Model
+	conversation      viewport.Model
+	output            <-chan tuiOutput
+	done              <-chan error
+	lines             []string
+	width, height     int
+	busy              bool
+	waiting           bool
+	active            bool
+	sessionReady      bool
+	inputPrompt       string
+	permissionLabel   string
+	workerStatus      string
+	coordinatorStatus string
+	stopping          bool
+	err               error
 }
 
 func (a App) runTUI(parent context.Context) error {
@@ -96,7 +98,7 @@ func newGuidedTUI(ctx context.Context, cancel context.CancelFunc, output <-chan 
 	input.CharLimit = 0
 	spin := spinner.New()
 	spin.Spinner = spinner.Dot
-	return guidedTUI{ctx: ctx, cancel: cancel, input: input, inputPipe: inputPipe, spinner: spin, conversation: viewport.New(100, 24), output: output, done: done, width: 120, height: 32, busy: true}
+	return guidedTUI{ctx: ctx, cancel: cancel, input: input, inputPipe: inputPipe, spinner: spin, conversation: viewport.New(100, 24), output: output, done: done, width: 120, height: 32, busy: true, coordinatorStatus: "ready"}
 }
 
 func (m guidedTUI) Init() tea.Cmd {
@@ -143,19 +145,26 @@ func (m guidedTUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.input.Placeholder = m.inputPrompt
 		case consolePermissions:
 			m.permissionLabel = value.text
+		case consoleDashboard:
+			m.workerStatus = value.text
+		case consoleCoordinatorStatus:
+			m.coordinatorStatus = value.text
 		case consoleAssessmentStarted:
 			m.active = true
 			m.sessionReady = false
+			m.workerStatus = ""
 			m.waiting = false
 			m.busy = false
 			m.inputPrompt = "Talk to the orchestrator"
 			m.input.Prompt = ""
 			m.input.Placeholder = m.inputPrompt
+			m.coordinatorStatus = "working"
 		case consoleAssessmentFinished:
 			m.sessionReady = true
 			m.busy = false
 			m.waiting = false
 			m.input.Placeholder = "Ask about results or continue the session"
+			m.coordinatorStatus = "ready to discuss results"
 		case consoleOutput:
 			if text := strings.TrimRight(value.text, "\n"); text != "" {
 				m.lines = append(m.lines, text)
@@ -269,17 +278,24 @@ func (m guidedTUI) View() string {
 	if m.sessionReady {
 		phase = "phase: session ready"
 	}
+	workers := m.workerStatus
+	if workers == "" {
+		workers = "No workers yet"
+	}
 	rightBody := strings.Join([]string{
 		phase,
-		"workers: delegated by coordinator",
+		"coordinator: " + m.coordinatorStatus,
 		"approvals: " + permissionLabel,
 		"",
-		"The coordinator owns intent, planning, and scope questions.",
-		"Worker progress appears in the conversation pane.",
+		"Workers",
+		workers,
 		"",
-		"/workers /permissions /status /help /stop /exit",
+		"/plan /findings /artifacts /workers",
+		"/permissions /status /help /stop /exit",
 	}, "\n")
-	right := pane.Width(maxTUI(24, m.width-m.conversation.Width-9)).Height(m.conversation.Height + 2).Render(title.Render(" Assessment status ") + "\n" + rightBody)
+	rightWidth := maxTUI(24, m.width-m.conversation.Width-9)
+	rightBody = lipgloss.NewStyle().Width(rightWidth - 4).Render(rightBody)
+	right := pane.Width(rightWidth).Height(m.conversation.Height + 2).Render(title.Render(" Assessment status ") + "\n" + rightBody)
 	inputTitle := " Input "
 	if m.busy {
 		inputTitle = " Input " + m.spinner.View() + " thinking "

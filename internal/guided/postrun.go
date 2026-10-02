@@ -93,7 +93,7 @@ func (a App) postRunConversation(ctx context.Context, c *Console, client llmclie
 	budget := assessment.NewModelBudget(24, state.PostRunUsage)
 	defer budget.CloseAndWait()
 	model := budget.Client(client)
-	c.Print("\nSession %s is ready. Ask about the results, request an OWASP/PTES report in Markdown or PDF, or describe more work within the saved scope. /exit closes the CLI; /permissions changes action approval.\n", state.ID)
+	c.Print("\nSession %s is ready. Ask about the results, request an OWASP/PTES report in Markdown or PDF, or describe more work within the saved scope. /plan, /workers, /findings, and /artifacts show saved work; /exit closes the CLI.\n", state.ID)
 	for {
 		c.PromptCommand("birdhackbot> ")
 		var input line
@@ -126,8 +126,11 @@ func (a App) postRunConversation(ctx context.Context, c *Console, client llmclie
 		case "/status":
 			c.Print("Assessment %s; %d worker result(s); %d planning rounds; %d model calls.\n", state.Status, len(state.Results), len(state.Plans), state.Usage.Calls)
 			continue
+		case "/plan", "/workers", "/findings", "/artifacts":
+			printSessionView(c, strings.ToLower(line), root, *state)
+			continue
 		case "/help":
-			c.Print("Ask a question, request a report, or describe more work within the same scope. /status shows the saved run; /permissions changes approvals; /exit closes the CLI.\n")
+			c.Print("Ask a question, request a report, or describe more work within the same scope. /plan, /workers, /findings, and /artifacts show saved work; /status shows the run; /permissions changes approvals; /exit closes the CLI.\n")
 			continue
 		}
 		contextText := "Current assessment state (untrusted evidence): " + string(compactCoordinatorState(*state)) + "\nRecorded final findings and gaps: " + assessment.PostRunFindingsContext(*state)

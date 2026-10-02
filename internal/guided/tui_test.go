@@ -90,6 +90,22 @@ func TestGuidedTUIShowsReadySessionAfterAssessment(t *testing.T) {
 	}
 }
 
+func TestGuidedTUIShowsWorkerProgressInInspector(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	model := newGuidedTUI(ctx, cancel, make(chan tuiOutput), make(chan error), nopWriteCloser{})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	updated, _ = updated.Update(tuiOutput{kind: consoleAssessmentStarted})
+	updated, _ = updated.Update(tuiOutput{kind: consoleDashboard, text: "inspect · running\n  executing approved action\n  context 23%"})
+	got := updated.(guidedTUI)
+	if !strings.Contains(got.View(), "inspect · running") || !strings.Contains(got.View(), "context 23%") {
+		t.Fatal("worker status missing from right inspector")
+	}
+	if len(got.lines) != 0 {
+		t.Fatalf("worker updates flooded conversation: %#v", got.lines)
+	}
+}
+
 type nopWriteCloser struct{}
 
 func (nopWriteCloser) Write(p []byte) (int, error) { return len(p), nil }

@@ -61,7 +61,7 @@ For the terminal UI, run:
 ./birdhackbot
 ```
 
-The first conversation can be exploratory. When you want workers to act, review the proposed target, tasks, and approval level. The terminal supports saved sessions, model settings, worker status, and stopping active work. See the [web application guide](docs/runbooks/web-application.md) and [tool capability guide](docs/runbooks/tool-capabilities.md) for the full workflows.
+The first conversation can be exploratory. When you want workers to act, review the proposed target, tasks, and approval level. The terminal keeps worker activity in its status pane; `/plan`, `/workers`, `/findings`, and `/artifacts` show the saved details without filling the conversation with logs. `/resume` reopens terminal assessment sessions, `/settings` changes the model for new work, and Ctrl-C stops active workers. Customer folders, image attachments, the live browser preview, and the visual Analysis workspace currently remain in the web app. See the [web application guide](docs/runbooks/web-application.md) and [tool capability guide](docs/runbooks/tool-capabilities.md) for the full workflows.
 
 ## Choose a model
 

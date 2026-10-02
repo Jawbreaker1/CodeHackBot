@@ -136,6 +136,26 @@ func (d *assessmentDashboard) snapshot() []string {
 	return lines
 }
 
+// compactSnapshot is the terminal inspector view. Detailed activity remains
+// available through /workers and the saved evidence, not in the chat stream.
+func (d *assessmentDashboard) compactSnapshot() []string {
+	ids := make([]string, 0, len(d.tasks))
+	for id := range d.tasks {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	lines := make([]string, 0, len(ids)*2)
+	for _, id := range ids {
+		task := d.tasks[id]
+		lines = append(lines, dashboardText(task.id, 22)+" · "+task.status)
+		lines = append(lines, "  "+dashboardText(task.phase, 28))
+		if task.contextUse != "" {
+			lines = append(lines, "  context "+dashboardText(task.contextUse, 25))
+		}
+	}
+	return lines
+}
+
 func (d *assessmentDashboard) eventLine(task *dashboardTask) string {
 	depends := "-"
 	if len(task.dependsOn) > 0 {

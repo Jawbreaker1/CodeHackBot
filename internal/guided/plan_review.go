@@ -16,12 +16,19 @@ func reviewCoordinatorPlan(ctx context.Context, c *Console, plan assessment.Deci
 	for _, task := range plan.Tasks {
 		all = append(all, task.ID)
 	}
-	if c.approvalMode().Normalized() != approval.EveryExecution {
-		return assessment.PlanReview{TaskIDs: all}, nil
-	}
 	c.Print("\nCoordinator plan: %s\n", plan.Summary)
+	if plan.Review != "" {
+		c.Print("Previous round: %s\n", plan.Review)
+	}
+	if plan.PlainSummary != "" {
+		c.Print("Purpose: %s\n", plan.PlainSummary)
+	}
 	for i, task := range plan.Tasks {
 		c.Print("  %d. %s — %s\n     Done when: %s\n", i+1, task.ID, task.Goal, task.DoneWhen)
+	}
+	if c.approvalMode().Normalized() != approval.EveryExecution {
+		c.Print("Starting these tasks under the selected approval level.\n")
+		return assessment.PlanReview{TaskIDs: all}, nil
 	}
 	for {
 		answer, err := c.Ask(ctx, "Run all proposed tasks? [Enter=all, numbers=select, r=revise]")
