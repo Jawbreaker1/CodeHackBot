@@ -5,9 +5,8 @@
       "id": "daybreak",
       "label": "Daybreak Blue",
       "provider": "subscription",
-      "base_url": "http://127.0.0.1:8787/v1",
       "model": "gpt-daybreak-blue-latest",
-      "token_file": "/home/you/.config/birdhackbot/bridge-token",
+      "managed_bridge": true,
       "reasoning_effort": "high",
       "max_input_bytes": 131072
     },

@@ -23,7 +23,7 @@ the [Kali installation runbook](kali-installation.md) before building. The
 Codex CLI is additionally required for subscription sign-in and token refresh;
 local-model users do not need the subscription bridge or Codex credentials.
 
-For normal CLI use, build `birdhackbot`, run it without flags from the checkout, and select **ChatGPT subscription**. With an existing file-based Codex sign-in, the application starts and stops its own loopback bridge and removes its temporary client credential on exit. No separate bridge command or manual local token is needed. In the web UI, **Settings → ChatGPT plan → Continue with ChatGPT** starts first-time sign-in and displays a one-time code with its ChatGPT verification link. This uses Codex's structured device-code flow, so the browser need not reach a callback inside the Kali VM. The remaining commands document CLI sign-in and standalone bridge/development use.
+For normal CLI use, build `birdhackbot`, run it without flags from the checkout, and select **ChatGPT subscription**. With an existing file-based Codex sign-in, the application starts and stops its own loopback bridge and removes its temporary client credential on exit. The web server does the same for a subscription model profile configured with `managed_bridge: true`; it creates a fresh private client token on each start and removes it on shutdown. No separate bridge command or saved token path is needed. In the web UI, **Settings → ChatGPT plan → Continue with ChatGPT** starts first-time sign-in and displays a one-time code with its ChatGPT verification link. This uses Codex's structured device-code flow, so the browser need not reach a callback inside the Kali VM. The remaining commands document CLI sign-in and standalone bridge/development use.
 
 Build from the repository root:
 
@@ -38,7 +38,7 @@ Use a ChatGPT subscription login in Codex CLI. An existing file-based ChatGPT lo
 codex -c 'cli_auth_credentials_store="file"' login
 ```
 
-The first implementation requires `auth.json` under `CODEX_HOME` (default `~/.codex`); keychain-only credential storage is not supported. `--codex-home PATH` selects a different directory. Use the same `CODEX_HOME` when signing in. Codex CLI `0.154.0` was used for local validation.
+The first implementation requires `auth.json` under `CODEX_HOME` (default `~/.codex`); keychain-only credential storage is not supported. `--codex-home PATH` selects a different directory for the standalone bridge. Use the same `CODEX_HOME` when signing in. Codex CLI `0.154.0` was used for local validation.
 
 Create a separate local client token outside the repository and start the bridge:
 

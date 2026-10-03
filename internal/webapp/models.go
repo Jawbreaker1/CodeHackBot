@@ -35,6 +35,7 @@ type ModelProfile struct {
 	BaseURL               string `json:"base_url"`
 	Model                 string `json:"model"`
 	TokenFile             string `json:"token_file,omitempty"`
+	ManagedBridge         bool   `json:"managed_bridge,omitempty"`
 	ReasoningEffort       string `json:"reasoning_effort,omitempty"`
 	StructuredJSON        bool   `json:"structured_json,omitempty"`
 	MaxOutputTokens       int    `json:"max_output_tokens,omitempty"`
@@ -65,14 +66,20 @@ func LoadModelProfiles(path string) (ModelProfilesFile, error) {
 			return ModelProfilesFile{}, fmt.Errorf("model profiles need unique IDs, labels, and model IDs")
 		}
 		seen[profile.ID] = true
-		u, err := url.Parse(profile.BaseURL)
-		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil {
-			return ModelProfilesFile{}, fmt.Errorf("profile %s needs an HTTP(S) model endpoint without embedded credentials", profile.ID)
-		}
 		if profile.Provider != "local" && profile.Provider != "subscription" {
 			return ModelProfilesFile{}, fmt.Errorf("profile %s needs provider local or subscription", profile.ID)
 		}
-		if profile.Provider == "subscription" && profile.TokenFile == "" {
+		if profile.ManagedBridge {
+			if profile.Provider != "subscription" || profile.BaseURL != "" || profile.TokenFile != "" {
+				return ModelProfilesFile{}, fmt.Errorf("managed bridge profile %s must be subscription-backed without a separate endpoint or token file", profile.ID)
+			}
+		} else {
+			u, err := url.Parse(profile.BaseURL)
+			if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil {
+				return ModelProfilesFile{}, fmt.Errorf("profile %s needs an HTTP(S) model endpoint without embedded credentials", profile.ID)
+			}
+		}
+		if profile.Provider == "subscription" && !profile.ManagedBridge && profile.TokenFile == "" {
 			return ModelProfilesFile{}, fmt.Errorf("subscription profile %s needs a local token_file", profile.ID)
 		}
 		if profile.MaxInputBytes < 0 || profile.MaxOutputTokens < 0 || profile.RequestTimeoutSeconds < 0 {

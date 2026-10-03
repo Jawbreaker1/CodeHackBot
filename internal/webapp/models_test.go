@@ -180,4 +180,19 @@ func TestModelProfileFileRejectsInvalidDefault(t *testing.T) {
 	if err != nil || file.Default != "qwen38" || file.Profiles[0].client().ReasoningEffort != "low" {
 		t.Fatalf("load valid profile = %+v, %v", file, err)
 	}
+	data = `{"default":"daybreak","profiles":[{"id":"daybreak","label":"Daybreak","provider":"subscription","model":"gpt-daybreak-blue-latest","managed_bridge":true}]}`
+	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	file, err = LoadModelProfiles(path)
+	if err != nil || !file.Profiles[0].ManagedBridge {
+		t.Fatalf("load managed subscription profile = %+v, %v", file, err)
+	}
+	data = `{"default":"daybreak","profiles":[{"id":"daybreak","label":"Daybreak","provider":"subscription","model":"gpt-daybreak-blue-latest","managed_bridge":true,"token_file":"/tmp/stale-token"}]}`
+	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadModelProfiles(path); err == nil {
+		t.Fatal("managed bridge accepted a separate stale token path")
+	}
 }
