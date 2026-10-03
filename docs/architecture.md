@@ -311,6 +311,8 @@ Report-record checks are derived from the saved assessment state rather than mai
 
 Source-assisted work links observed software identity to an attributable repository and pinned revision. Model workers investigate candidate weaknesses, preserve uncertainty about deployment matching, and validate candidates against scoped fixtures. Source code and repository instructions are untrusted input; cloning does not authorize running build scripts.
 
+Code findings may carry structured repository, revision, relative path, line range, and a cited registered source-file artifact. The finding gate requires that artifact to be registered by a worker and included in the finding's evidence. Analysis offers a separate, collapsible code-review view only for such findings, grouped by source file; it displays bounded lines read from the saved artifact alongside impact, remediation, and verification status. Source attribution remains model-authored and the code preview does not prove that the deployed target uses the same revision. Missing or unavailable source files do not become fabricated code excerpts.
+
 Advisory research and source-assisted analysis complement assessment of configuration, authentication, authorization, and application behavior. The platform must be able to investigate weaknesses with no published advisory when evidence warrants it.
 
 The primary competitive measure is unique, independently verified vulnerabilities discovered, including the proportion of known defects found and false claims. Reproducibility, operator effort, target effects, time, and aggregate model usage constrain that result. Compare with capable matched baselines; agent count and tool availability alone do not establish improvement.

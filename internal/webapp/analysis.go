@@ -52,25 +52,26 @@ type analysisRisk struct {
 }
 
 type analysisFinding struct {
-	SessionID        string                `json:"session_id,omitempty"`
-	Scope            string                `json:"scope,omitempty"`
-	Title            string                `json:"title"`
-	Status           string                `json:"status"`
-	RecordedStatus   string                `json:"recorded_status,omitempty"`
-	Verification     *analysisVerification `json:"verification,omitempty"`
-	Severity         string                `json:"severity,omitempty"`
-	Confidence       string                `json:"confidence,omitempty"`
-	Priority         string                `json:"priority"`
-	PriorityScore    int                   `json:"priority_score"`
-	PriorityReason   string                `json:"priority_reason"`
-	ValidationTask   string                `json:"validation_task,omitempty"`
-	Impact           string                `json:"impact"`
-	Steps            []string              `json:"steps"`
-	Evidence         []string              `json:"evidence"`
-	Remediation      []string              `json:"remediation"`
-	CVEIDs           []string              `json:"cve_ids,omitempty"`
-	AffectedSoftware []string              `json:"affected_software,omitempty"`
-	References       []string              `json:"references,omitempty"`
+	SessionID        string                   `json:"session_id,omitempty"`
+	Scope            string                   `json:"scope,omitempty"`
+	Title            string                   `json:"title"`
+	Status           string                   `json:"status"`
+	RecordedStatus   string                   `json:"recorded_status,omitempty"`
+	Verification     *analysisVerification    `json:"verification,omitempty"`
+	Severity         string                   `json:"severity,omitempty"`
+	Confidence       string                   `json:"confidence,omitempty"`
+	Priority         string                   `json:"priority"`
+	PriorityScore    int                      `json:"priority_score"`
+	PriorityReason   string                   `json:"priority_reason"`
+	ValidationTask   string                   `json:"validation_task,omitempty"`
+	Impact           string                   `json:"impact"`
+	Steps            []string                 `json:"steps"`
+	Evidence         []string                 `json:"evidence"`
+	Remediation      []string                 `json:"remediation"`
+	CVEIDs           []string                 `json:"cve_ids,omitempty"`
+	AffectedSoftware []string                 `json:"affected_software,omitempty"`
+	References       []string                 `json:"references,omitempty"`
+	SourceLocations  []analysisSourceLocation `json:"source_locations,omitempty"`
 }
 
 type analysisVerification struct {
@@ -118,10 +119,13 @@ type analysisFindingInput struct {
 
 func (r *run) analysis() analysisView {
 	r.mu.RLock()
-	view := buildAnalysis(r.id, r.customer, r.state, nil)
-	root, anchors := r.root, browserAnchors(r.state)
+	state := r.state
+	view := buildAnalysis(r.id, r.customer, state, nil)
+	root, anchors := r.root, browserAnchors(state)
+	artifacts := registeredSourceArtifacts(state)
 	r.mu.RUnlock()
 	view.WebPages, view.WebTransitions = browserAnalysis(root, view.ID, anchors)
+	hydrateSourceLocations(root, artifacts, view.Findings)
 	linkPageFindings(view.WebPages, view.Findings)
 	return view
 }
@@ -235,7 +239,7 @@ func prioritizeFindings(inputs []analysisFindingInput) []analysisFinding {
 		}
 		seen[key] = struct{}{}
 		score, priority, reason := findingPriority(f)
-		findings = append(findings, analysisFinding{SessionID: input.SessionID, Scope: input.Scope, Title: f.Title, Status: f.Status, Severity: f.Severity, Confidence: f.Confidence, Priority: priority, PriorityScore: score, PriorityReason: reason, ValidationTask: f.ValidationTask, Impact: f.Impact, Steps: append([]string(nil), f.Steps...), Evidence: append([]string(nil), f.Evidence...), Remediation: append([]string(nil), f.Remediation...), CVEIDs: append([]string(nil), f.CVEIDs...), AffectedSoftware: append([]string(nil), f.AffectedSoftware...), References: append([]string(nil), f.References...)})
+		findings = append(findings, analysisFinding{SessionID: input.SessionID, Scope: input.Scope, Title: f.Title, Status: f.Status, Severity: f.Severity, Confidence: f.Confidence, Priority: priority, PriorityScore: score, PriorityReason: reason, ValidationTask: f.ValidationTask, Impact: f.Impact, Steps: append([]string(nil), f.Steps...), Evidence: append([]string(nil), f.Evidence...), Remediation: append([]string(nil), f.Remediation...), CVEIDs: append([]string(nil), f.CVEIDs...), AffectedSoftware: append([]string(nil), f.AffectedSoftware...), References: append([]string(nil), f.References...), SourceLocations: analysisSources(f.SourceLocations)})
 	}
 	sortAnalysisFindings(findings)
 	return findings

@@ -150,6 +150,35 @@ details { margin-top:13px; border-top:1px solid var(--line); padding-top:10px; }
 .web-map-finding p { margin:0 0 8px; color:var(--muted); font-size:11px; }
 .web-map-finding button { border:0; padding:0; color:var(--text); background:none; cursor:pointer; font:inherit; font-size:11px; text-decoration:underline; text-underline-offset:3px; }
 .web-map-analysis details { margin-top:12px; }
+.code-review-body { padding:18px; }
+.code-intro { margin:0 0 15px; color:var(--muted); font-size:12px; }
+.code-review-layout { display:grid; grid-template-columns:minmax(240px,.65fr) minmax(0,1.45fr); gap:14px; align-items:start; }
+.code-picker { display:grid; gap:11px; max-height:650px; overflow:auto; }
+.code-file-group { min-width:0; padding:12px; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
+.code-file-group h3 { margin:0; overflow-wrap:anywhere; font-size:12px; font-weight:600; }
+.code-file-group p { margin:2px 0 10px; overflow-wrap:anywhere; color:var(--faint); font-size:10px; }
+.code-select { display:block; width:100%; margin-top:5px; padding:9px 10px; border:1px solid transparent; border-radius:6px; background:#ffffff08; color:var(--text); text-align:left; cursor:pointer; font:inherit; }
+.code-select:hover,.code-select.selected { border-color:#d7d5cc65; background:#ffffff12; }
+.code-select strong,.code-select span { display:block; font-size:11px; }
+.code-select span { margin-top:3px; color:var(--muted); font-size:10px; }
+.code-select:focus-visible,.code-inspector button:focus-visible { outline:2px solid #e5484d; outline-offset:2px; }
+.code-inspector { min-width:0; padding:18px; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
+.code-inspector-head { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; }
+.code-inspector-head button { padding:0; border:0; color:var(--text); background:none; cursor:pointer; font:inherit; font-size:11px; }
+.code-inspector h3 { margin:13px 0 3px; font-size:17px; font-weight:550; }
+.code-location { margin:0 0 13px; overflow-wrap:anywhere; color:var(--muted); font-size:11px; }
+.code-excerpt { max-height:410px; overflow:auto; margin:0; padding:9px 0; border:1px solid var(--line); border-radius:6px; background:#111; color:#d6d6d1; font:11px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace; }
+.code-line { display:flex; width:max-content; min-width:100%; padding-right:12px; white-space:pre; }
+.code-line.highlighted { background:#e5484d22; }
+.code-line-number { flex:none; width:45px; padding-right:11px; color:var(--faint); text-align:right; user-select:none; }
+.code-line.highlighted .code-line-number { color:#ee8c80; }
+.code-unavailable { padding:11px; border:1px solid var(--line); border-radius:6px; color:var(--muted); font-size:11px; }
+.code-explanation { display:grid; grid-template-columns:1fr 1fr; gap:18px; margin:16px 0; }
+.code-explanation h4 { margin:0 0 5px; font-size:11px; font-weight:600; }
+.code-explanation p,.code-explanation li { margin:0; color:var(--muted); font-size:12px; line-height:1.5; }
+.code-explanation ol { margin:0; }
+.code-inspector > a { color:var(--text); font-size:11px; }
 @media (max-width:800px) { .topbar { padding:0 16px; }.eyebrow { display:none; }.analysis-shell { width:calc(100% - 30px); padding-top:28px; }.analysis-head { display:block; }.head-side { justify-items:start; margin-top:14px; }.summary-grid { grid-template-columns:repeat(3,1fr); }.columns { display:block; }.finding-explorer { grid-template-columns:1fr; }.finding-picker { display:flex; overflow:auto; }.finding-select { flex:0 0 min(280px,75vw); } }
+@media (max-width:800px) { .code-review-layout,.code-explanation { grid-template-columns:1fr; }.code-picker { max-height:300px; } }
 @media (max-width:850px) { .web-map-layout { grid-template-columns:1fr; }.web-map-scroll { max-height:420px; } }
 @media (max-width:600px) { .coverage-map { padding:14px; }.scope-grid { display:block; }.scope-card { margin-bottom:10px; }.correlation-grid,.challenge-grid { display:block; }.correlation,.challenge { margin-bottom:10px; } }

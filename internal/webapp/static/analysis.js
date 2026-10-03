@@ -1,10 +1,13 @@
 import {webPagesSection, bindWebPages} from './web-map.js';
+import {codeReviewSection} from './code-review.js';
 
 const app = document.getElementById('app');
 const params = new URLSearchParams(location.search);
 let selectedScope = -1;
 let selectedFinding = 0;
 let selectedRisk = 'all';
+let selectedCode = 0;
+let codeOpen = false;
 
 const displayStatus = value => String(value ?? '').replaceAll('_', ' ');
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -137,6 +140,7 @@ function render(data) {
     '<section class="summary-grid" aria-label="Filter findings by risk">' + metric(risk.critical || 0,'Critical','critical') + metric(risk.high || 0,'High','high') + metric(risk.medium || 0,'Medium','medium') + metric(risk.low || 0,'Low','low') + metric(risk.reproduced || 0,'Reproduced','reproduced') + metric(risk.candidates || 0,'Need checking','candidates') + '</section><p class="metric-note">Select a number to see those findings. Severity counts include only reproduced findings.</p>' +
     actionSection +
     '<section class="section finding-workspace" id="findings"><div class="section-heading"><div><h2>' + findingHeading + '</h2><p>For each finding, see the impact, recommended fix, and supporting checks.</p></div><div class="finding-controls"><span class="workspace-count">' + findings.length + ' shown</span>' + (selectedRisk !== 'all' ? '<button type="button" class="clear-filter" id="clear-risk">Show all findings</button>' : '') + '</div></div>' + findingExplorer(findings) + '</section>' +
+    codeReviewSection(allFindings, escapeHTML, selectedCode) +
     webPagesSection(data, visibleSessions, escapeHTML) +
     '<details class="analysis-more" id="analysis-details"><summary>Explore tests, open questions, and session history <span>↘</span></summary><div class="analysis-more-body">' + coverageSection(data) + sessionComparisonSection(data) + challengeSection(data, visibleSessions) + correlationSection(data, visibleSessions || []) + '<div class="columns"><div>' + conclusion + latestResult + '</div><aside><section class="side-card"><h2>Recorded limits and open questions · ' + gaps.length + '</h2>' + gapList + '</section></aside></div></div></details><p class="analysis-caveat">Only recorded work is shown. Review the evidence before sharing a conclusion; untested areas may still contain weaknesses.</p>';
   app.querySelector('#show-details')?.addEventListener('click', () => {
@@ -144,6 +148,23 @@ function render(data) {
     details.open = true;
     details.scrollIntoView({block:'start', behavior:'smooth'});
   });
+  const codeView = app.querySelector('#code-review');
+  if (codeView) {
+    codeView.open = codeOpen;
+    codeView.addEventListener('toggle', () => { codeOpen = codeView.open; });
+    codeView.querySelectorAll('[data-code-index]').forEach(button => button.addEventListener('click', () => {
+      selectedCode = Number(button.dataset.codeIndex);
+      codeOpen = true;
+      render(data);
+      app.querySelector('#code-review')?.scrollIntoView({block:'start'});
+    }));
+    codeView.querySelector('[data-code-finding]')?.addEventListener('click', event => {
+      selectedRisk = 'all';
+      selectedFinding = Number(event.currentTarget.dataset.codeFinding);
+      render(data);
+      app.querySelector('#findings')?.scrollIntoView({block:'start', behavior:'smooth'});
+    });
+  }
   app.querySelectorAll('[data-risk]').forEach(button => button.addEventListener('click', () => {
     selectedRisk = button.dataset.risk;
     selectedFinding = 0;

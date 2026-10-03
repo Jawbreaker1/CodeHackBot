@@ -57,6 +57,9 @@ This is a point-in-time report of the recorded work. The OWASP WSTG provides rep
 **Reproduction:**
 {{range $j, $step := $f.Steps}}{{inc $j}}. {{inline $step}}
 {{end}}
+{{if $f.SourceLocations}}**Recorded source locations** (confirm the deployed revision separately):
+{{range $f.SourceLocations}}- {{inline .Path}}:{{.StartLine}}{{if .EndLine}}–{{.EndLine}}{{end}} · {{inline .Repository}} @ {{inline .Revision}} · source artifact: {{inline .ArtifactRef}}
+{{end}}{{end}}
 **Evidence:**
 {{range $f.Evidence}}- {{inline .}}
 {{end}}

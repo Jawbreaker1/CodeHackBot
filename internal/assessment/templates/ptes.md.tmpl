@@ -67,6 +67,9 @@ The methods below reflect only recorded worker activity. No exploitation or acce
 **Reproduction:**
 {{range $j, $step := $f.Steps}}{{inc $j}}. {{inline $step}}
 {{end}}
+{{if $f.SourceLocations}}**Recorded source locations** (confirm the deployed revision separately):
+{{range $f.SourceLocations}}- {{inline .Path}}:{{.StartLine}}{{if .EndLine}}–{{.EndLine}}{{end}} · {{inline .Repository}} @ {{inline .Revision}} · source artifact: {{inline .ArtifactRef}}
+{{end}}{{end}}
 **Evidence:**
 {{range $f.Evidence}}- {{inline .}}
 {{end}}

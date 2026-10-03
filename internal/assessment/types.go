@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -103,18 +104,31 @@ type Result struct {
 
 // Findings are model-authored drafts, never independent verification claims.
 type Finding struct {
-	Title            string   `json:"title"`
-	Status           string   `json:"status"`               // candidate or reproduced
-	Severity         string   `json:"severity,omitempty"`   // critical, high, medium, low, or info
-	Confidence       string   `json:"confidence,omitempty"` // high, medium, or low
-	CVEIDs           []string `json:"cve_ids,omitempty"`
-	AffectedSoftware []string `json:"affected_software,omitempty"`
-	References       []string `json:"references,omitempty"`
-	ValidationTask   string   `json:"validation_task,omitempty"`
-	Impact           string   `json:"impact"`
-	Steps            []string `json:"steps"`
-	Evidence         []string `json:"evidence"`
-	Remediation      []string `json:"remediation"`
+	Title            string           `json:"title"`
+	Status           string           `json:"status"`               // candidate or reproduced
+	Severity         string           `json:"severity,omitempty"`   // critical, high, medium, low, or info
+	Confidence       string           `json:"confidence,omitempty"` // high, medium, or low
+	CVEIDs           []string         `json:"cve_ids,omitempty"`
+	AffectedSoftware []string         `json:"affected_software,omitempty"`
+	References       []string         `json:"references,omitempty"`
+	SourceLocations  []SourceLocation `json:"source_locations,omitempty"`
+	ValidationTask   string           `json:"validation_task,omitempty"`
+	Impact           string           `json:"impact"`
+	Steps            []string         `json:"steps"`
+	Evidence         []string         `json:"evidence"`
+	Remediation      []string         `json:"remediation"`
+}
+
+// SourceLocation ties a code observation to a registered source artifact.
+// Repository and revision describe the worker's attribution; the artifact is
+// the local snapshot from which Analysis may display actual source lines.
+type SourceLocation struct {
+	Repository  string `json:"repository"`
+	Revision    string `json:"revision"`
+	Path        string `json:"path"`
+	StartLine   int    `json:"start_line"`
+	EndLine     int    `json:"end_line,omitempty"`
+	ArtifactRef string `json:"artifact_ref"`
 }
 
 type Decision struct {
@@ -268,10 +282,14 @@ func validateDecision(d Decision, state State) error {
 		}
 	}
 	refs := map[string]bool{}
+	artifacts := map[string]bool{}
 	for _, result := range state.Results {
 		for _, evidence := range result.Evidence {
 			for _, ref := range append(append([]string{}, evidence.LogRefs...), evidence.ArtifactRefs...) {
 				refs[ref] = true
+			}
+			for _, ref := range evidence.ArtifactRefs {
+				artifacts[ref] = true
 			}
 		}
 	}
@@ -296,6 +314,14 @@ func validateDecision(d Decision, state State) error {
 		for _, ref := range f.References {
 			if !refs[ref] {
 				return fmt.Errorf("finding references an unrecorded research source: %s", ref)
+			}
+		}
+		for _, source := range f.SourceLocations {
+			if strings.TrimSpace(source.Repository) == "" || strings.TrimSpace(source.Revision) == "" || !filepath.IsLocal(source.Path) || filepath.Clean(source.Path) != source.Path || source.StartLine < 1 || (source.EndLine != 0 && source.EndLine < source.StartLine) {
+				return fmt.Errorf("finding has an invalid source location")
+			}
+			if !artifacts[source.ArtifactRef] || !slices.Contains(f.Evidence, source.ArtifactRef) {
+				return fmt.Errorf("finding source location needs a cited, registered source artifact")
 			}
 		}
 		if len(f.CVEIDs) > 0 && len(f.References) == 0 {

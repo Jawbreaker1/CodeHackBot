@@ -90,6 +90,16 @@ func writeReport(root string, s State) error {
 			for i, step := range f.Steps {
 				fmt.Fprintf(&b, "%d. %s\n", i+1, step)
 			}
+			if len(f.SourceLocations) > 0 {
+				b.WriteString("\nRecorded source locations (confirm the deployed revision separately):\n\n")
+				for _, source := range f.SourceLocations {
+					end := ""
+					if source.EndLine > 0 && source.EndLine != source.StartLine {
+						end = fmt.Sprintf("–%d", source.EndLine)
+					}
+					fmt.Fprintf(&b, "- %s:%d%s · %s @ %s · source artifact: %s\n", source.Path, source.StartLine, end, source.Repository, source.Revision, source.ArtifactRef)
+				}
+			}
 			b.WriteString("\nRemediation:\n\n")
 			for _, step := range f.Remediation {
 				fmt.Fprintf(&b, "- %s\n", step)
