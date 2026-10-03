@@ -18,17 +18,18 @@ import (
 )
 
 type Coordinator struct {
-	LLM          llmclient.Client
-	Frame        behavior.Frame
-	Approver     func(Task) approval.Approver
-	AskUser      func(context.Context, Task, string) (string, error)
-	PlanApproval func(context.Context, Decision) (PlanReview, error)
-	Emit         func(Event) // May be called concurrently by workers.
-	Limits       Limits
-	Budget       *ModelBudget    // Shared with live operator chat when supplied.
-	Conversation func() []string // Durable operator conversation excerpts.
-	Approach     *Approach       // Selected during intake for a new assessment.
-	Snapshot     func(State)     // Read-only snapshot; called by the coordinator goroutine.
+	LLM             llmclient.Client
+	Frame           behavior.Frame
+	Approver        func(Task) approval.Approver
+	AskUser         func(context.Context, Task, string) (string, error)
+	PlanApproval    func(context.Context, Decision) (PlanReview, error)
+	Emit            func(Event) // May be called concurrently by workers.
+	Limits          Limits
+	Budget          *ModelBudget    // Shared with live operator chat when supplied.
+	Conversation    func() []string // Durable operator conversation excerpts.
+	Approach        *Approach       // Selected during intake for a new assessment.
+	Snapshot        func(State)     // Read-only snapshot; called by the coordinator goroutine.
+	ContextSnapshot func(int, int)  // Current coordinator request bytes and application input ceiling.
 }
 
 // LoadState reads the durable assessment snapshot without starting work. UI
@@ -131,6 +132,7 @@ func (c Coordinator) run(ctx context.Context, root string, initial State) (state
 	state.ReasoningEffort = c.LLM.ReasoningEffort
 	state.MaxOutputTokens = c.LLM.MaxOutputTokens
 	state.MaxInputBytes = c.LLM.InputByteLimit()
+	recoverInterruptedBatch(root, &state)
 	budget := c.Budget
 	if budget == nil {
 		budget = NewModelBudget(limits.ModelCalls, state.Usage)
@@ -368,6 +370,13 @@ func (c Coordinator) decide(ctx context.Context, root string, round, proposal in
 		}
 		if err := saveJSON(stem+"-request.json", messages); err != nil {
 			return Decision{}, err
+		}
+		if c.ContextSnapshot != nil {
+			used := 0
+			for _, message := range messages {
+				used += len(message.Content)
+			}
+			c.ContextSnapshot(used, c.LLM.InputByteLimit())
 		}
 		text, err := c.LLM.ChatStructured(ctx, messages)
 		if err != nil {

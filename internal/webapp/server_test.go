@@ -361,21 +361,18 @@ func TestServerRejectsDeletingRunningSession(t *testing.T) {
 	}
 }
 
-func TestAggregateContextWindowUsesLargestCurrentWorkerRequest(t *testing.T) {
+func TestAgentContextWindowsKeepCoordinatorAndWorkersSeparate(t *testing.T) {
 	state := assessment.State{MaxInputBytes: 1000}
-	view := aggregateContextWindow(state, []workerView{
+	primary, all := agentContextWindows(state, contextWindowView{UsedBytes: 350, LimitBytes: 1000}, []workerView{
 		{ID: "worker-a", Phase: "decision_started", ContextUsedBytes: 100, ContextLimitBytes: 1000},
 		{ID: "worker-b", Phase: "execution_started", ContextUsedBytes: 250, ContextLimitBytes: 1000},
-	})
-	if view.UsedBytes != 250 || view.LimitBytes != 1000 || view.RemainingBytes != 750 || view.Percent != 25 || view.WorkerID != "worker-b" || !view.Active {
-		t.Fatalf("context window = %+v", view)
+	}, "running", true, false, nil)
+	if primary.Role != "coordinator" || primary.UsedBytes != 350 || primary.Percent != 35 || len(all) != 3 || all[1].WorkerID != "worker-a" || all[1].UsedBytes != 100 || all[2].WorkerID != "worker-b" || all[2].UsedBytes != 250 {
+		t.Fatalf("agent context windows were mixed: primary=%+v all=%+v", primary, all)
 	}
-	view = aggregateContextWindow(state, []workerView{
-		{ID: "old", Phase: "task_blocked", ContextUsedBytes: 900, UpdatedAt: time.Unix(1, 0)},
-		{ID: "current", Phase: "decision_started", ContextUsedBytes: 250, UpdatedAt: time.Unix(2, 0)},
-	})
-	if view.WorkerID != "current" || view.UsedBytes != 250 || !view.Active {
-		t.Fatalf("historical worker masked current request: %+v", view)
+	_, all = agentContextWindows(state, primary, []workerView{{ID: "worker-a", Phase: "decision_started", ContextUsedBytes: 900}}, "interrupted", false, false, nil)
+	if all[1].Active || all[1].Status != "interrupted" {
+		t.Fatalf("interrupted worker appeared active: %+v", all[1])
 	}
 }
 

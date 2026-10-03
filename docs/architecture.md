@@ -155,6 +155,8 @@ Knowledge moves through explicit contracts:
 
 At each inference boundary the packet builder retains protected anchors and includes the current task or planning question. It keeps the full same-role history that fits, then progressively compacts only if the request exceeds the configured allowance. Explicitly pinned older observations receive priority when space becomes tight. Offloaded cards are counted and remain searchable from the authoritative packet; `context_notes` marks the omission. A recall reads only a registered log inside that worker's log directory, and its excerpt is supplied for one decision unless the model pins the result. The coordinator still uses its separate projection. Neither side injects every document “just in case,” treats a document as an instruction, or lets a retrieved note override scope, approval, or runtime state. If the protected anchors alone exceed the allowance, the request fails visibly so the operator can shorten the task or change the model profile.
 
+Long shell actions have a readable script and a second shell-quoted copy of the same invocation. Worker model views keep the script once and point to the exact saved execution log for the quoted form; the durable packet and log remain unchanged. This removes duplicate bytes before pressure-based compaction without discarding tool output or the task's evidence references.
+
 This design makes context usage inspectable without pretending that byte counts are token counts. The coordinator and each worker measure their own exact rendered request, while provider-reported usage is retained as a separate metric. A future relevance index, cross-run knowledge catalog, or semantic run summary must preserve the same provenance and rehydration rules and must ship with a fixture proving which loss it prevents.
 
 The coordinator currently rebuilds a separate planning request from durable
@@ -170,13 +172,21 @@ budget. The local Qwen profile currently caps input text at 96 KiB and requests
 up to 32,768 output tokens; the approximately 70k server window still needs live
 validation because input, output, reasoning, and provider overhead share it.
 
-The browser assessment inspector exposes the latest worker request as a typed
-context meter: bytes used, the configured application ceiling, remaining bytes,
-and percentage used. The assessment overview reports the largest current
-worker request so concurrent work remains easy to scan. This is measured from
-the exact system and user message text sent by the application after projection;
-it is deliberately labelled an input-byte ceiling rather than a token count.
-Provider-reported cumulative token usage remains a separate assessment metric.
+The browser assessment inspector shows the coordinator's latest request by
+default. Hovering or focusing that meter reveals separate coordinator and
+worker requests with their current or last-known status. Planning and live
+coordinator chat update the coordinator measurement; worker progress updates
+each worker independently. The meter counts the exact message text after
+projection against the configured application input-byte ceiling. It is not a
+provider token count or a shared window across agents. Provider-reported
+cumulative token usage remains a separate assessment metric.
+
+On an interrupted web run, the next explicit resume reconciles the last
+accepted batch before another coordinator decision: completed task result files
+are retained, while tasks without a finished result are marked blocked. Saved
+task sessions and logs remain available for review. The coordinator can then
+plan recovery without silently replaying an interrupted action or treating its
+partial evidence as a completed conclusion.
 
 ### Browser assessment worker
 

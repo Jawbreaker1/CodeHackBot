@@ -44,27 +44,28 @@ func (s *Server) clientForRecord(record sessionRecord) llmclient.Client {
 }
 
 type sessionRecord struct {
-	PermissionMode approval.Mode        `json:"permission_mode,omitempty"`
-	Version        int                  `json:"version"`
-	Kind           string               `json:"kind"`
-	ID             string               `json:"id"`
-	Customer       string               `json:"customer,omitempty"`
-	Goal           string               `json:"goal,omitempty"`
-	Scope          string               `json:"scope,omitempty"`
-	Approach       *assessment.Approach `json:"approach,omitempty"`
-	Model          string               `json:"model,omitempty"`
-	ModelProfile   string               `json:"model_profile,omitempty"`
-	Status         string               `json:"status,omitempty"`
-	Usage          *assessment.Usage    `json:"usage,omitempty"`
-	PostRunUsage   *assessment.Usage    `json:"post_run_usage,omitempty"`
-	AssessmentID   string               `json:"assessment_id,omitempty"`
-	Messages       []intakeMessage      `json:"messages,omitempty"`
-	Conversation   []llmclient.Message  `json:"conversation,omitempty"`
-	Proposal       *intake.Draft        `json:"proposal,omitempty"`
-	Events         []eventRecord        `json:"events,omitempty"`
-	Workers        []workerView         `json:"workers,omitempty"`
-	Sequence       uint64               `json:"sequence,omitempty"`
-	UpdatedAt      time.Time            `json:"updated_at"`
+	PermissionMode     approval.Mode        `json:"permission_mode,omitempty"`
+	Version            int                  `json:"version"`
+	Kind               string               `json:"kind"`
+	ID                 string               `json:"id"`
+	Customer           string               `json:"customer,omitempty"`
+	Goal               string               `json:"goal,omitempty"`
+	Scope              string               `json:"scope,omitempty"`
+	Approach           *assessment.Approach `json:"approach,omitempty"`
+	Model              string               `json:"model,omitempty"`
+	ModelProfile       string               `json:"model_profile,omitempty"`
+	Status             string               `json:"status,omitempty"`
+	Usage              *assessment.Usage    `json:"usage,omitempty"`
+	PostRunUsage       *assessment.Usage    `json:"post_run_usage,omitempty"`
+	CoordinatorContext contextWindowView    `json:"coordinator_context,omitempty"`
+	AssessmentID       string               `json:"assessment_id,omitempty"`
+	Messages           []intakeMessage      `json:"messages,omitempty"`
+	Conversation       []llmclient.Message  `json:"conversation,omitempty"`
+	Proposal           *intake.Draft        `json:"proposal,omitempty"`
+	Events             []eventRecord        `json:"events,omitempty"`
+	Workers            []workerView         `json:"workers,omitempty"`
+	Sequence           uint64               `json:"sequence,omitempty"`
+	UpdatedAt          time.Time            `json:"updated_at"`
 }
 
 func (s *Server) restoreSessions() error {
@@ -195,6 +196,10 @@ func (s *Server) restoreRun(customer, root string) error {
 	workers := make(map[string]workerView, len(record.Workers))
 	for _, worker := range record.Workers {
 		if worker.ID != "" {
+			if status == "interrupted" && !terminalWorkerPhase(worker.Phase) {
+				worker.Phase = "interrupted"
+				worker.Detail = "The web server restarted before this worker finished. Review saved evidence before repeating work."
+			}
 			workers[worker.ID] = worker
 		}
 	}
@@ -202,7 +207,11 @@ func (s *Server) restoreRun(customer, root string) error {
 	if updated.IsZero() {
 		updated = state.FinishedAt
 	}
-	current := &run{permissionMode: record.PermissionMode.Normalized(), id: id, customer: customer, root: root, client: client, profileID: record.ModelProfile, goal: state.Goal, scope: state.Scope, status: status, state: state, resume: true, done: make(chan struct{}), approvals: make(map[string]*pendingApproval), questions: make(map[string]*pendingQuestion), sequence: record.Sequence, events: events, workers: workers, messages: append([]intakeMessage(nil), record.Messages...), updatedAt: updated}
+	coordinatorContext := record.CoordinatorContext
+	if coordinatorContext.LimitBytes == 0 {
+		coordinatorContext = lastCoordinatorRequestContext(root, state.MaxInputBytes)
+	}
+	current := &run{permissionMode: record.PermissionMode.Normalized(), id: id, customer: customer, root: root, client: client, profileID: record.ModelProfile, goal: state.Goal, scope: state.Scope, status: status, state: state, coordinatorContext: coordinatorContext, resume: true, done: make(chan struct{}), approvals: make(map[string]*pendingApproval), questions: make(map[string]*pendingQuestion), sequence: record.Sequence, events: events, workers: workers, messages: append([]intakeMessage(nil), record.Messages...), updatedAt: updated}
 	if record.PostRunUsage != nil {
 		current.postRunUsage = *record.PostRunUsage
 	}
@@ -308,7 +317,7 @@ func (r *run) persist() error {
 	if r.postRunBudget != nil {
 		postRunUsage = r.postRunBudget.Usage()
 	}
-	record := sessionRecord{PermissionMode: r.permissionMode.Normalized(), Version: sessionRecordVersion, Kind: "assessment", ID: r.id, Customer: r.customer, Goal: r.goal, Scope: r.scope, Approach: r.state.Approach, Model: r.client.Model, ModelProfile: r.profileID, Status: r.status, Usage: &usage, PostRunUsage: &postRunUsage, Messages: append([]intakeMessage(nil), r.messages...), Events: append([]eventRecord(nil), r.events...), Workers: workers, Sequence: r.sequence, UpdatedAt: r.updatedAt}
+	record := sessionRecord{PermissionMode: r.permissionMode.Normalized(), Version: sessionRecordVersion, Kind: "assessment", ID: r.id, Customer: r.customer, Goal: r.goal, Scope: r.scope, Approach: r.state.Approach, Model: r.client.Model, ModelProfile: r.profileID, Status: r.status, Usage: &usage, PostRunUsage: &postRunUsage, CoordinatorContext: r.coordinatorContext, Messages: append([]intakeMessage(nil), r.messages...), Events: append([]eventRecord(nil), r.events...), Workers: workers, Sequence: r.sequence, UpdatedAt: r.updatedAt}
 	root := r.root
 	r.mu.RUnlock()
 	return atomicWriteJSON(filepath.Join(root, "session.json"), record)

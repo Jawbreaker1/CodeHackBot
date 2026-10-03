@@ -27,6 +27,17 @@ func TestCoordinatorPlansFollowPersistedDecisionsAndLiveWorkerState(t *testing.T
 	}
 }
 
+func TestInterruptedPlanDoesNotClaimWorkersAreStillRunning(t *testing.T) {
+	state := assessment.State{Status: "interrupted", Plans: []assessment.Decision{{
+		Tasks: []assessment.Task{{ID: "finished"}, {ID: "unfinished"}}, ApprovedTaskIDs: []string{"finished", "unfinished"},
+	}}}
+	workers := map[string]workerView{"finished": {ID: "finished", Phase: "done"}, "unfinished": {ID: "unfinished", Phase: "interrupted"}}
+	plans := coordinatorPlans(state, workers)
+	if len(plans) != 1 || plans[0].Signal != "interrupted" || plans[0].Tasks[0].Status != "done" || plans[0].Tasks[1].Status != "interrupted" {
+		t.Fatalf("interrupted plan falsely reported running work: %+v", plans)
+	}
+}
+
 func TestCoordinatorPlanSeparatesWorkerCompletionFromFinding(t *testing.T) {
 	state := assessment.State{Plans: []assessment.Decision{
 		{Summary: "Attempt recovery", Tasks: []assessment.Task{{ID: "first", Goal: "test one method"}}, ApprovedTaskIDs: []string{"first"}},

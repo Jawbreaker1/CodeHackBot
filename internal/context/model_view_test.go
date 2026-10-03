@@ -107,6 +107,23 @@ func TestModelViewPreservesEvidenceAndPlansWithHeadroom(t *testing.T) {
 	}
 }
 
+func TestModelViewAvoidsRepeatingLongShellInvocation(t *testing.T) {
+	p := NewInitialWorkerPacket(behavior.Frame{SystemPrompt: "policy"}, session.Foundation{Goal: "inspect fixture"}, "/tmp", "fixture", "per_action", 10)
+	script := "printf '%s' '" + strings.Repeat("recorded report detail ", 600) + "'"
+	invocation := "/bin/bash -c '" + strings.ReplaceAll(script, "'", "'\\''") + "'"
+	p.LatestExecutionResult = ExecutionResult{Action: script, ActualExec: invocation, ExecutionMode: "shell", ExitStatus: "0", OutputSummary: "Report saved", LogRefs: []string{"/logs/report"}, ArtifactRefs: []string{"/work/report.md"}}
+	view, err := p.ModelView(100000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.LatestExecutionResult.Action != script || strings.Contains(view.LatestExecutionResult.ActualExec, "recorded report detail") || len(view.LatestExecutionResult.LogRefs) != 1 || len(view.ContextNotes) != 0 {
+		t.Fatalf("long shell invocation was not deduplicated safely: %+v", view.LatestExecutionResult)
+	}
+	if p.LatestExecutionResult.ActualExec != invocation || p.LatestExecutionResult.Action != script {
+		t.Fatal("model projection altered the authoritative execution record")
+	}
+}
+
 func TestModelViewKeepsEvidenceIndexWithoutResendingLongHistory(t *testing.T) {
 	p := NewInitialWorkerPacket(behavior.Frame{SystemPrompt: "policy"}, session.Foundation{Goal: "review a bounded system"}, "/tmp", "fixture", "per_action", 16)
 	for i := 0; i < 8; i++ {

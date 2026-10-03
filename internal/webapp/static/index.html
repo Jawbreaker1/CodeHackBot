@@ -70,10 +70,11 @@
           <p id="assessmentGoal" class="overview-goal">Workers appear here as the coordinator delegates work.</p>
           <p id="assessmentApproach" class="muted hidden"></p>
           <div id="assessmentMetrics" class="metrics hidden"></div>
-          <div id="contextWindow" class="context-window hidden" aria-label="Current input context usage">
-            <div class="context-window-header"><span>Input context</span><strong id="contextUsageLabel"></strong></div>
+          <div id="contextWindow" class="context-window hidden" tabindex="0" aria-label="Coordinator input usage; hover or focus for all agent contexts" aria-describedby="contextBreakdown">
+            <div class="context-window-header"><span>Coordinator input <span class="context-hint" aria-hidden="true">ⓘ</span></span><strong id="contextUsageLabel"></strong></div>
             <div class="context-track"><span id="contextFill"></span></div>
             <div id="contextUsageDetail" class="muted"></div>
+            <div id="contextBreakdown" class="context-popover" role="tooltip"></div>
           </div>
           <details id="reportReadiness" class="report-readiness hidden">
             <summary>Report completeness <span id="reportReadinessStatus"></span></summary>
@@ -91,7 +92,7 @@
           <button id="artifactsTab" role="tab" aria-selected="false" aria-controls="artifactsPanel" data-panel="artifactsPanel">Artifacts <span id="artifactCount">0</span></button>
           <button id="activityTab" role="tab" aria-selected="false" aria-controls="activityPanel" data-panel="activityPanel">Activity</button>
         </div>
-        <section id="workersPanel" role="tabpanel" aria-labelledby="workersTab"><div class="panel-toolbar"><span>Live workers</span><button id="collapseWorkers" class="text-button" type="button">Collapse details</button></div><div id="workers"><p class="empty">No delegated work yet. Discuss your objective with the coordinator to get started.</p></div></section>
+        <section id="workersPanel" role="tabpanel" aria-labelledby="workersTab"><div class="panel-toolbar"><span>Workers</span><button id="collapseWorkers" class="text-button" type="button">Collapse details</button></div><div id="workers"><p class="empty">No delegated work yet. Discuss your objective with the coordinator to get started.</p></div></section>
         <section id="findingsPanel" role="tabpanel" aria-labelledby="findingsTab" class="hidden"><div id="findings"></div><a id="customerReport" class="report-link hidden" target="_blank" rel="noopener">Unified customer report ↗</a></section>
         <section id="artifactsPanel" role="tabpanel" aria-labelledby="artifactsTab" class="hidden"><div id="artifacts"></div></section>
         <section id="activityPanel" role="tabpanel" aria-labelledby="activityTab" class="hidden"><ol id="activity" class="activity-list"></ol></section>

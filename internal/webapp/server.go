@@ -358,31 +358,32 @@ type intakeCustomerRequest struct {
 }
 
 type run struct {
-	permissionMode approval.Mode
-	mu             sync.RWMutex
-	id             string
-	customer       string
-	root           string
-	client         llmclient.Client
-	budget         *assessment.ModelBudget
-	postRunBudget  *assessment.ModelBudget
-	postRunUsage   assessment.Usage
-	profileID      string
-	goal           string
-	scope          string
-	status         string
-	state          assessment.State
-	started        bool
-	deleted        bool
-	runCtx         context.Context
-	cancel         context.CancelFunc
-	failCancel     context.CancelCauseFunc
-	done           chan struct{}
-	chatBusy       bool
-	resume         bool
-	updatedAt      time.Time
-	persistMu      sync.Mutex
-	persistErr     error
+	permissionMode     approval.Mode
+	mu                 sync.RWMutex
+	id                 string
+	customer           string
+	root               string
+	client             llmclient.Client
+	budget             *assessment.ModelBudget
+	postRunBudget      *assessment.ModelBudget
+	postRunUsage       assessment.Usage
+	coordinatorContext contextWindowView
+	profileID          string
+	goal               string
+	scope              string
+	status             string
+	state              assessment.State
+	started            bool
+	deleted            bool
+	runCtx             context.Context
+	cancel             context.CancelFunc
+	failCancel         context.CancelCauseFunc
+	done               chan struct{}
+	chatBusy           bool
+	resume             bool
+	updatedAt          time.Time
+	persistMu          sync.Mutex
+	persistErr         error
 
 	sequence  uint64
 	events    []eventRecord
@@ -460,6 +461,7 @@ type assessmentView struct {
 	Usage            assessment.Usage           `json:"usage"`
 	PostRunUsage     assessment.Usage           `json:"post_run_usage"`
 	ContextWindow    contextWindowView          `json:"context_window"`
+	ContextWindows   []contextWindowView        `json:"context_windows,omitempty"`
 	ReportReadiness  assessment.ReportReadiness `json:"report_readiness"`
 	Plans            int                        `json:"plans"`
 	PlanTimeline     []coordinatorPlanView      `json:"plan_timeline,omitempty"`
@@ -486,14 +488,16 @@ type planApprovalView struct {
 	Tasks        []assessment.Task `json:"tasks"`
 }
 
-// contextWindowView reports the largest active worker request, or the latest
-// worker request after completion, against the application input ceiling. These are bytes of
-// message text, not provider token counts.
+// Each coordinator or worker has its own request packet. These are bytes of
+// message text against the application input ceiling, not provider token counts.
 type contextWindowView struct {
 	UsedBytes      int    `json:"used_bytes"`
 	LimitBytes     int    `json:"limit_bytes"`
 	RemainingBytes int    `json:"remaining_bytes"`
 	Percent        int    `json:"percent"`
+	AgentID        string `json:"agent_id,omitempty"`
+	Role           string `json:"role,omitempty"`
+	Status         string `json:"status,omitempty"`
 	WorkerID       string `json:"worker_id,omitempty"`
 	Active         bool   `json:"active"`
 }
@@ -1835,8 +1839,9 @@ func (s *Server) runAssessment(ctx context.Context, current *run) {
 		PlanApproval: func(ctx context.Context, plan assessment.Decision) (assessment.PlanReview, error) {
 			return current.reviewPlanWait(ctx, plan)
 		},
-		Conversation: current.conversation,
-		Snapshot:     current.snapshot,
+		Conversation:    current.conversation,
+		Snapshot:        current.snapshot,
+		ContextSnapshot: current.setCoordinatorContext,
 	}
 	var state assessment.State
 	var err error
@@ -1880,6 +1885,14 @@ func (r *run) snapshot(state assessment.State) {
 	}
 	r.state = state
 	r.status = state.Status
+	r.updatedAt = time.Now().UTC()
+	r.mu.Unlock()
+	_ = r.persistOrStop()
+}
+
+func (r *run) setCoordinatorContext(used, limit int) {
+	r.mu.Lock()
+	r.coordinatorContext = contextWindowView{UsedBytes: used, LimitBytes: limit}
 	r.updatedAt = time.Now().UTC()
 	r.mu.Unlock()
 	_ = r.persistOrStop()
@@ -2039,6 +2052,11 @@ func (s *Server) message(ctx context.Context, r *run, text string, refs []attach
 	)
 	var rawReply string
 	if err == nil {
+		used := 0
+		for _, message := range prompt {
+			used += len(message.Content)
+		}
+		r.setCoordinatorContext(used, client.InputByteLimit())
 		callCtx, cancel := context.WithCancel(ctx)
 		if runCtx != nil {
 			stop := context.AfterFunc(runCtx, cancel)
@@ -2348,7 +2366,7 @@ func (r *run) view(after string) assessmentView {
 		view.Workers = append(view.Workers, worker)
 	}
 	sort.Slice(view.Workers, func(i, j int) bool { return view.Workers[i].ID < view.Workers[j].ID })
-	view.ContextWindow = aggregateContextWindow(r.state, view.Workers)
+	view.ContextWindow, view.ContextWindows = agentContextWindows(r.state, r.coordinatorContext, view.Workers, r.status, r.started, r.chatBusy, r.events)
 	view.ReportReadiness = assessment.AssessReportReadiness(r.state)
 	for i := range view.Workers {
 		for j := range view.Workers[i].Evidence {
@@ -2357,7 +2375,9 @@ func (r *run) view(after string) assessmentView {
 	}
 	view.Findings = assessment.CurrentFindings(r.state.Plans)
 	view.Artifacts = assessmentArtifacts(r.root, r.id, r.state, r.workers)
-	view.PlanTimeline = coordinatorPlans(r.state, r.workers)
+	planState := r.state
+	planState.Status = r.status
+	view.PlanTimeline = coordinatorPlans(planState, r.workers)
 	if n, err := strconv.ParseUint(strings.TrimSpace(after), 10, 64); err == nil {
 		for _, event := range r.events {
 			if event.Sequence > n {
@@ -2418,51 +2438,6 @@ func presentedImageView(assessmentID, ref string) attachmentView {
 		Filename: filepath.Base(ref), MIMEType: imageMIME(ref), Bytes: info.Size(),
 		URL: "/api/v1/assessments/" + url.PathEscape(assessmentID) + "/artifact?path=" + url.QueryEscape(ref),
 	}
-}
-
-func aggregateContextWindow(state assessment.State, workers []workerView) contextWindowView {
-	limit := state.MaxInputBytes
-	var selected *workerView
-	for _, worker := range workers {
-		if limit == 0 && worker.ContextLimitBytes > limit {
-			limit = worker.ContextLimitBytes
-		}
-		if worker.ContextUsedBytes == 0 || worker.Phase == "done" || worker.Phase == "task_completed" || worker.Phase == "failed" || worker.Phase == "task_failed" || worker.Phase == "blocked" || worker.Phase == "task_blocked" || worker.Phase == "aborted" {
-			continue
-		}
-		if selected == nil || worker.ContextUsedBytes > selected.ContextUsedBytes {
-			copy := worker
-			selected = &copy
-		}
-	}
-	active := selected != nil
-	if selected == nil {
-		for _, worker := range workers {
-			if worker.ContextUsedBytes == 0 {
-				continue
-			}
-			if selected == nil || worker.UpdatedAt.After(selected.UpdatedAt) {
-				copy := worker
-				selected = &copy
-			}
-		}
-	}
-	used, workerID := 0, ""
-	if selected != nil {
-		used, workerID = selected.ContextUsedBytes, selected.ID
-	}
-	remaining := limit - used
-	if remaining < 0 {
-		remaining = 0
-	}
-	percent := 0
-	if limit > 0 {
-		percent = used * 100 / limit
-		if percent > 100 {
-			percent = 100
-		}
-	}
-	return contextWindowView{UsedBytes: used, LimitBytes: limit, RemainingBytes: remaining, Percent: percent, WorkerID: workerID, Active: active}
 }
 
 func (r *run) writeView(w http.ResponseWriter, after string) {

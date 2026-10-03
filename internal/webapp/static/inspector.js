@@ -16,14 +16,14 @@ const phases = {
   post_exec_eval_finished: 'Evidence reviewed', user_question: 'Needs your input',
   user_answered: 'Continuing', task_completed: 'Finished task', done: 'Finished task',
   task_failed: 'Failed', failed: 'Failed', task_blocked: 'Blocked', blocked: 'Blocked',
-  aborted: 'Stopped', waiting_user: 'Needs your input', planning: 'Planning',
+  aborted: 'Stopped', interrupted: 'Interrupted', waiting_user: 'Needs your input', planning: 'Planning',
   plan: 'Assessment plan', assessment_started: 'Assessment started',
   round_update: 'Coordinator update',
   plan_revision_requested: 'Revising plan',
   assessment_finished: 'Assessment finished', assessment_stop_requested: 'Stopping workers',
 };
 export const phaseLabel = (kind) => phases[kind] || kind;
-export const isTerminal = (status) => ['done', 'task_completed', 'completed', 'task_failed', 'failed', 'task_blocked', 'blocked', 'aborted'].includes(status);
+export const isTerminal = (status) => ['done', 'task_completed', 'completed', 'task_failed', 'failed', 'task_blocked', 'blocked', 'aborted', 'interrupted'].includes(status);
 export function badge(text, phase) {
   const result = node('span', 'status', text);
   result.dataset.state = ['approval_required', 'user_question', 'waiting_user'].includes(phase) ? 'waiting' : phase;
@@ -249,6 +249,7 @@ export function renderCoordinatorPlans(view) {
   const signals = {
     review: ['Choose work', 'The coordinator has proposed this work. You can choose which tasks to run.'],
     in_progress: ['In progress', 'Workers are still running. The result of this round is not known yet.'],
+    interrupted: ['Interrupted', 'The run stopped before the coordinator reviewed this round. Saved evidence remains available; resume when ready.'],
     needs_attention: ['Needs review', 'A worker stopped or failed. The coordinator needs to review what was established.'],
     not_run: ['Not run', 'No worker ran in this round.'],
     awaiting_review: ['Awaiting review', 'The workers finished. The coordinator has not reported what their results mean yet.'],
@@ -258,7 +259,7 @@ export function renderCoordinatorPlans(view) {
     verified_final: ['Assessment complete', 'The assessment ended with an independently verified finding.'],
     concluded: ['Assessment ended', 'The coordinator ended the assessment. Read its conclusion in the conversation.'],
   };
-  const taskState = {done:'Finished', running:'Working', queued:'Queued', review:'Proposed', skipped:'Not run', failed:'Failed', blocked:'Blocked', aborted:'Stopped', waiting_user:'Needs input'};
+  const taskState = {done:'Finished', running:'Working', queued:'Queued', review:'Proposed', skipped:'Not run', failed:'Failed', blocked:'Blocked', aborted:'Stopped', interrupted:'Interrupted', waiting_user:'Needs input'};
   const items = [node('h3', 'plan-heading', 'Coordinator plan')];
   for (const plan of [...plans].reverse()) {
     const [signalLabel, signalText] = signals[plan.signal] || ['Work updated', 'Review the worker result and coordinator conclusion.'];
@@ -304,9 +305,10 @@ function renderWorkerPlan(worker, phase, sessionID) {
   const current = Math.max(0, steps.indexOf(worker.active_step));
   const finished = isTerminal(phase) && ['done', 'task_completed', 'completed'].includes(phase);
   const blocked = isTerminal(phase) && !finished;
+  const interrupted = phase === 'interrupted';
   const section = node('section', 'worker-plan-section');
   const header = node('div', 'plan-step-row');
-  const progress = finished ? 'Worker finished' : `Step ${current + 1}/${steps.length}`;
+  const progress = finished ? 'Worker finished' : interrupted ? 'Worker interrupted' : `Step ${current + 1}/${steps.length}`;
   header.append(node('strong', '', 'Worker plan'), node('span', 'plan-step-state', `${progress} · revision ${worker.plan_revision || 1}`));
   section.append(header);
   if (worker.plan_summary) {
@@ -316,7 +318,7 @@ function renderWorkerPlan(worker, phase, sessionID) {
   const list = node('ol', 'worker-plan');
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
-    const status = i < current ? 'completed' : i === current ? (finished ? 'completed' : blocked ? 'blocked' : 'active') : finished ? 'unreported' : 'queued';
+    const status = i < current ? 'completed' : i === current ? (finished ? 'completed' : interrupted ? 'interrupted' : blocked ? 'blocked' : 'active') : finished ? 'unreported' : 'queued';
     const item = node('li', 'worker-plan-step ' + status);
     const body = node('div', 'plan-content');
     body.append(node('p', 'worker-detail', worker.step_purposes?.[step] || step));

@@ -44,6 +44,14 @@ func (p WorkerPacket) ModelView(maxBytes int) (WorkerPacket, error) {
 			v.PlanHistory[i].Plan.WorkerGoal = "(see session_foundation.goal)"
 		}
 	}
+	// A shell invocation repeats the readable script with another layer of
+	// quoting. Keep the script once in the model view; the exact invocation
+	// remains in the execution log and authoritative packet. This removes
+	// duplicate bytes without shortening the observations or task contract.
+	dedupeInvocation(&v.LatestExecutionResult)
+	for i := range v.RelevantRecentResults {
+		dedupeInvocation(&v.RelevantRecentResults[i])
+	}
 	size := func() int { return len(v.Render()) }
 	if size() <= maxBytes {
 		return v, nil
@@ -152,6 +160,18 @@ func (p WorkerPacket) ModelView(maxBytes int) (WorkerPacket, error) {
 		return WorkerPacket{}, fmt.Errorf("worker context needs %d bytes after compaction; allowance is %d; shorten the task or supporting material", size(), maxBytes)
 	}
 	return v, nil
+}
+
+func dedupeInvocation(result *ExecutionResult) {
+	if len(result.Action) < 1024 || len(result.ActualExec) < 1024 || len(result.LogRefs) == 0 {
+		return
+	}
+	switch {
+	case result.ExecutionMode == "shell":
+		result.ActualExec = "/bin/bash -c <action>; exact quoted invocation in log_refs"
+	case result.ExecutionMode == "argv" && result.Action == result.ActualExec:
+		result.ActualExec = "(same as action; exact invocation in log_refs)"
+	}
 }
 
 func pruneOldestResult(view *WorkerPacket, includePinned bool) bool {

@@ -36,6 +36,9 @@ func coordinatorPlans(state assessment.State, workers map[string]workerView) []c
 			phase = "assessment"
 		}
 		plan := coordinatorPlanView{Round: i + 1, Phase: phase, Summary: decision.Summary, PlainSummary: decision.PlainSummary, Status: "finished"}
+		if state.Status == "interrupted" && i == len(state.Plans)-1 && !decision.Complete {
+			plan.Status = "interrupted"
+		}
 		if i+1 < len(state.Plans) {
 			plan.Review = state.Plans[i+1].Review
 		}
@@ -54,10 +57,27 @@ func coordinatorPlans(state assessment.State, workers map[string]workerView) []c
 				if !selected[task.ID] {
 					status = "skipped"
 				} else {
-					if worker, ok := workers[task.ID]; ok && worker.Phase != "task_queued" {
-						status = "running"
+					if worker, ok := workers[task.ID]; ok {
+						switch worker.Phase {
+						case "done", "task_completed":
+							status = "done"
+						case "failed", "task_failed":
+							status = "failed"
+						case "blocked", "task_blocked":
+							status = "blocked"
+						case "aborted", "interrupted":
+							status = worker.Phase
+						case "task_queued":
+						default:
+							status = "running"
+						}
 					}
-					plan.Status = "running"
+					if plan.Status == "interrupted" && (status == "running" || status == "queued") {
+						status = "interrupted"
+					}
+					if plan.Status != "interrupted" && (status == "running" || status == "queued") {
+						plan.Status = "running"
+					}
 				}
 			}
 			plan.Tasks = append(plan.Tasks, coordinatorTaskView{ID: task.ID, Goal: task.Goal, DoneWhen: task.DoneWhen, StrategyHints: task.StrategyHints, Status: status, ResultSummary: result.Summary})
@@ -81,6 +101,9 @@ func planSignal(plan coordinatorPlanView, state assessment.State, index int) str
 	}
 	if plan.Status == "running" {
 		return "in_progress"
+	}
+	if plan.Status == "interrupted" {
+		return "interrupted"
 	}
 	selected := map[string]bool{}
 	for _, task := range plan.Tasks {
