@@ -323,6 +323,9 @@ func validateDecision(d Decision, state State) error {
 			if !artifacts[source.ArtifactRef] || !slices.Contains(f.Evidence, source.ArtifactRef) {
 				return fmt.Errorf("finding source location needs a cited, registered source artifact")
 			}
+			if _, err := ReadSourceArtifact(source); err != nil {
+				return fmt.Errorf("finding source artifact is invalid: %w", err)
+			}
 		}
 		if len(f.CVEIDs) > 0 && len(f.References) == 0 {
 			return fmt.Errorf("finding with CVE leads needs a recorded research source")

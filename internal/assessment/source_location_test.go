@@ -1,6 +1,8 @@
 package assessment
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -8,7 +10,10 @@ import (
 )
 
 func TestSourceFindingRequiresCitedRegisteredArtifact(t *testing.T) {
-	const sourceRef = "/session/tasks/review/work/auth.py"
+	sourceRef := filepath.Join(t.TempDir(), "source.json")
+	if err := os.WriteFile(sourceRef, []byte(`{"version":1,"repository":"https://example.test/app.git","revision":"abc123","path":"server/auth.py","lines":[{"number":18,"text":"def view():"},{"number":19,"text":"    owner = record.owner"},{"number":20,"text":"    return record.secret"}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
 	state := State{Limits: Limits{Workers: 1, Tasks: 12}, Results: []Result{{Task: Task{ID: "review"}, Status: "done", Evidence: []ctxpacket.ExecutionResult{{ArtifactRefs: []string{sourceRef}}}}}}
 	finding := Finding{
 		Title: "Missing authorization check", Status: "candidate", Impact: "Another account's record may be readable.",
@@ -27,6 +32,13 @@ func TestSourceFindingRequiresCitedRegisteredArtifact(t *testing.T) {
 	decision.Findings[0].SourceLocations[0].Path = "../auth.py"
 	if err := validateDecision(decision, state); err == nil {
 		t.Fatal("invalid logical source path was accepted")
+	}
+	decision.Findings[0].SourceLocations[0].Path = "server/auth.py"
+	if err := os.WriteFile(sourceRef, []byte("18 def view():\n19 owner = record.owner\n20 return record.secret\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateDecision(decision, state); err == nil {
+		t.Fatal("unstructured numbered excerpt was accepted as source code")
 	}
 }
 

@@ -1,11 +1,9 @@
 package webapp
 
 import (
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/assessment"
 )
@@ -62,27 +60,24 @@ func hydrateSourceLocations(root string, artifacts map[string]bool, findings []a
 			if !artifacts[source.ArtifactRef] || !slices.Contains(findings[i].Evidence, source.ArtifactRef) || !resolvedWithin(root, source.ArtifactRef) {
 				continue
 			}
-			info, err := os.Stat(source.ArtifactRef)
-			if err != nil || !info.Mode().IsRegular() || info.Size() > maxArtifactServeBytes {
+			lines, err := assessment.ReadSourceArtifact(assessment.SourceLocation{
+				Repository: source.Repository, Revision: source.Revision, Path: source.Path,
+				StartLine: source.StartLine, EndLine: source.EndLine, ArtifactRef: source.ArtifactRef,
+			})
+			if err != nil {
 				continue
 			}
 			source.ArtifactURL = artifactURL(findings[i].SessionID, source.ArtifactRef)
-			if info.Size() > 1024*1024 {
-				continue
-			}
-			data, err := os.ReadFile(source.ArtifactRef)
-			if err != nil || !utf8.Valid(data) || strings.ContainsRune(string(data), 0) {
-				continue
-			}
-			lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
 			start := max(1, source.StartLine-3)
 			end := source.EndLine
 			if end < source.StartLine {
 				end = source.StartLine
 			}
-			end = min(len(lines), end+3, start+39)
-			for line := start; line <= end; line++ {
-				source.Lines = append(source.Lines, analysisSourceLine{Number: line, Text: strings.TrimSuffix(lines[line-1], "\r"), Highlight: line >= source.StartLine && line <= max(source.StartLine, source.EndLine)})
+			end = min(end+3, start+39)
+			for _, line := range lines {
+				if line.Number >= start && line.Number <= end {
+					source.Lines = append(source.Lines, analysisSourceLine{Number: line.Number, Text: line.Text, Highlight: line.Number >= source.StartLine && line.Number <= max(source.StartLine, source.EndLine)})
+				}
 			}
 		}
 	}

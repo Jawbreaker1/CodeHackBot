@@ -20,8 +20,8 @@ func TestCodeAnalysisShowsOnlyRecordedSourceLines(t *testing.T) {
 	if err := os.MkdirAll(work, 0700); err != nil {
 		t.Fatal(err)
 	}
-	source := filepath.Join(work, "auth.py")
-	if err := os.WriteFile(source, []byte("def view(user, record):\n    owner = record.owner\n    return record.secret\n"), 0600); err != nil {
+	source := filepath.Join(work, "auth.source.json")
+	if err := os.WriteFile(source, []byte(`{"version":1,"repository":"fixture/app","revision":"abc123","path":"server/auth.py","lines":[{"number":1,"text":"def view(user, record):"},{"number":2,"text":"    owner = record.owner"},{"number":3,"text":"    return record.secret"}]}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	current.state = assessment.State{ID: current.id, Status: "completed", Plans: []assessment.Decision{{Complete: true, Findings: []assessment.Finding{{
@@ -44,5 +44,12 @@ func TestCodeAnalysisShowsOnlyRecordedSourceLines(t *testing.T) {
 	current.state.Plans[0].Findings[0].Evidence = []string{"unrelated.log"}
 	if got := current.analysis().Findings[0].SourceLocations[0]; got.ArtifactURL != "" || len(got.Lines) != 0 {
 		t.Fatalf("uncited artifact leaked into code view: %+v", got)
+	}
+	current.state.Plans[0].Findings[0].Evidence = []string{source}
+	if err := os.WriteFile(source, []byte("1 def view(user, record):\n2 owner = record.owner\n3 return record.secret\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := current.analysis().Findings[0].SourceLocations[0]; got.ArtifactURL != "" || len(got.Lines) != 0 {
+		t.Fatalf("plain-text evidence was misread as a source file: %+v", got)
 	}
 }
