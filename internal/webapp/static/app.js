@@ -356,12 +356,24 @@ function renderTranscript() {
 function updateComposer() {
   const assessment = isAssessmentView(current);
   const finished = assessment && ['completed', 'completed_with_gaps', 'incomplete', 'aborted'].includes(current.status);
-  const canChat = !assessment || activeStatuses.includes(current.status) || finished;
+  const running = assessment && activeStatuses.includes(current.status);
+  const canChat = !assessment || running || finished || !!current?.resumable;
   $('chatInput').disabled = !current || !canChat;
   $('send').disabled = !current || !canChat || !!pendingMessage || (!$('chatInput').value.trim() && !selectedFiles.length);
   $('newAssessment').disabled = starting;
-  $('conversationState').textContent = current?.pending_plan ? (current.pending_plan.phase === 'research' ? 'Waiting for your research selection · No worker is running' : 'Waiting for your test selection · No worker is running') : current?.pending_tool ? 'Waiting for your approval · No tool is running' : pendingMessage ? 'Coordinator is responding…' : finished ? 'Assessment finished · Ask a question or continue the work here' : current?.resumable ? 'Session paused · Open Workers to review and resume' : assessment ? 'Workers can run while you discuss the assessment' : 'Ready when you are';
-  $('chatInput').placeholder = finished ? 'Ask about results, request a report, or continue the assessment…' : current?.resumable ? 'Resume this session to continue' : 'Ask, investigate, or plan an assessment…';
+  let conversationState = assessment ? 'Workers can run while you discuss the assessment' : 'Ready when you are';
+  if (current?.resumable) conversationState = `${current.status === 'interrupted' ? 'Session interrupted' : 'Session paused'} · Ask a question or say continue`;
+  if (finished) conversationState = 'Assessment ended · Ask a question or continue the work here';
+  if (pendingMessage) conversationState = 'Coordinator is responding…';
+  if (current?.pending_tool) conversationState = 'Waiting for your approval · No tool is running';
+  if (current?.pending_plan) conversationState = current.pending_plan.phase === 'research' ? 'Waiting for your research selection · No worker is running' : 'Waiting for your test selection · No worker is running';
+  $('conversationState').textContent = conversationState;
+  $('chatInput').placeholder = finished ? 'Ask about results, request a report, or continue the assessment…' : current?.resumable ? 'Ask the coordinator, or say continue to resume…' : 'Ask, investigate, or plan an assessment…';
+  $('runControls').classList.toggle('hidden', !assessment || (!running && !current.resumable));
+  $('runControlState').textContent = running ? 'Assessment running · chat stays available' : current?.status === 'interrupted' ? 'Run interrupted · saved evidence is available' : current?.status === 'paused' ? 'Run paused · workers are stopped' : 'Run ended · saved evidence is available';
+  $('runToggle').textContent = running ? 'Pause run' : 'Resume run';
+  $('runToggle').setAttribute('aria-label', running ? 'Pause assessment and stop active workers' : 'Resume assessment from saved evidence');
+  $('stopRun').classList.toggle('hidden', !running);
 }
 function formatBytes(value) {
   const bytes = Number(value) || 0;
@@ -787,6 +799,8 @@ $('startForm').onsubmit = async event => {
 };
 $('stop').onclick = () => act('stop', {}, $('assessmentStatus').parentElement);
 $('resume').onclick = () => act('start', {}, $('assessmentStatus').parentElement);
+$('runToggle').onclick = () => act(activeStatuses.includes(current?.status) ? 'pause' : 'start', {}, $('runControls'));
+$('stopRun').onclick = () => act('stop', {}, $('runControls'));
 $('newAssessment').onclick = () => navigate('/api/v1/intake');
 $('newFolder').onclick = () => { $('folderTitle').value = ''; $('folderError').textContent = ''; $('folderDialog').showModal(); $('folderTitle').focus(); };
 $('closeFolder').onclick = $('cancelFolder').onclick = () => $('folderDialog').close();

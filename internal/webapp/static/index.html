@@ -53,6 +53,10 @@
       <div id="liveStatus" class="live-status hidden" role="status" aria-live="polite" aria-label="Current coordinator and worker activity"><span class="live-status-heading">In progress</span><div id="liveStatusItems" class="live-status-items"></div></div>
       <div class="compose-area">
         <button id="reviewProposal" class="review-notice hidden" type="button">Assessment ready for review <span>Open details ↗</span></button>
+        <div id="runControls" class="run-controls hidden" role="group" aria-label="Assessment run controls">
+          <span id="runControlState"></span>
+          <div class="run-control-actions"><button id="runToggle" class="text-button" type="button">Resume</button><button id="stopRun" class="text-button danger hidden" type="button">Stop assessment</button></div>
+        </div>
         <form id="composer" class="composer">
           <textarea id="chatInput" aria-label="Message the coordinator" rows="2" placeholder="Ask, investigate, or plan an assessment…"></textarea>
           <div id="attachmentList" class="attachment-list hidden" aria-live="polite"></div>

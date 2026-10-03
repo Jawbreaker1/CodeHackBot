@@ -16,11 +16,11 @@ const phases = {
   post_exec_eval_finished: 'Evidence reviewed', user_question: 'Needs your input',
   user_answered: 'Continuing', task_completed: 'Finished task', done: 'Finished task',
   task_failed: 'Failed', failed: 'Failed', task_blocked: 'Blocked', blocked: 'Blocked',
-  aborted: 'Stopped', interrupted: 'Interrupted', waiting_user: 'Needs your input', planning: 'Planning',
+  aborted: 'Stopped', interrupted: 'Interrupted', paused: 'Paused', waiting_user: 'Needs your input', planning: 'Planning',
   plan: 'Assessment plan', assessment_started: 'Assessment started',
   round_update: 'Coordinator update',
   plan_revision_requested: 'Revising plan',
-  assessment_finished: 'Assessment finished', assessment_stop_requested: 'Stopping workers',
+  assessment_finished: 'Assessment finished', assessment_stop_requested: 'Stopping workers', assessment_pause_requested: 'Pausing workers',
 };
 export const phaseLabel = (kind) => phases[kind] || kind;
 export const isTerminal = (status) => ['done', 'task_completed', 'completed', 'task_failed', 'failed', 'task_blocked', 'blocked', 'aborted', 'interrupted'].includes(status);

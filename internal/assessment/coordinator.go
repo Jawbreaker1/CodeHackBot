@@ -70,6 +70,10 @@ func (c Coordinator) RunState(ctx context.Context, root string, initial State) (
 	return c.run(ctx, root, initial)
 }
 
+// ErrPaused distinguishes an operator pause from a final stop while the same
+// cancellation signal still reaches every active worker and child process.
+var ErrPaused = errors.New("assessment paused by operator")
+
 // PrepareContinuation opens a new bounded planning window in the same
 // assessment. Existing plans, results, evidence, and consumed usage remain.
 func PrepareContinuation(initial State, request string, increment Limits) (State, error) {
@@ -147,7 +151,10 @@ func (c Coordinator) run(ctx context.Context, root string, initial State) (state
 		state.FinishedAt = time.Now().UTC()
 		if ctx.Err() != nil {
 			cause := context.Cause(ctx)
-			if cause != nil && !errors.Is(cause, context.Canceled) && !errors.Is(cause, context.DeadlineExceeded) {
+			if errors.Is(cause, ErrPaused) {
+				state.Status = "paused"
+				runErr = nil
+			} else if cause != nil && !errors.Is(cause, context.Canceled) && !errors.Is(cause, context.DeadlineExceeded) {
 				state.Status = "incomplete"
 				runErr = cause
 			} else {

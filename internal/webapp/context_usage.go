@@ -94,6 +94,8 @@ func agentContextWindows(state assessment.State, coordinator contextWindowView, 
 		coordinatorStatus = "thinking"
 	case status == "interrupted":
 		coordinatorStatus = "interrupted"
+	case status == "paused":
+		coordinatorStatus = "paused"
 	case started:
 		coordinatorStatus = "waiting"
 	case status == "completed" || status == "completed_with_gaps":

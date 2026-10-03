@@ -52,7 +52,7 @@ class Model(BaseHTTPRequestHandler):
             self.send_json({"choices": [{"message": {"content": json.dumps(result)}}], "usage": {"total_tokens": 10}})
             return
         if "conversational interface" in messages[0]["content"]:
-            if "previous assessment round has ended" in messages[0]["content"]:
+            if "continue_assessment" in messages[0]["content"]:
                 latest = messages[-1]["content"]
                 if "Inspect fixture again" in latest:
                     result = {"text": "I will propose another bounded check in this session.", "continue_assessment": True}

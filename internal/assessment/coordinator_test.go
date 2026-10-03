@@ -721,6 +721,59 @@ func TestCoordinatorCancellationStopsAllWorkersAndWritesAbortedReport(t *testing
 	}
 }
 
+func TestCoordinatorPauseStopsWorkersAndKeepsRunResumable(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Messages []llmclient.Message `json:"messages"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if strings.Contains(req.Messages[1].Content, `"role":"assessment_coordinator"`) {
+			reply(w, Decision{Summary: "two active checks", Tasks: []Task{{ID: "one", Goal: "Wait", DoneWhen: "done"}, {ID: "two", Goal: "Wait", DoneWhen: "done"}}})
+			return
+		}
+		reply(w, map[string]any{"type": "bash", "command": "sh", "args": []string{"-c", "printf ready > ready; sleep 30"}})
+	}))
+	defer model.Close()
+	ctx, pause := context.WithCancelCause(context.Background())
+	defer pause(nil)
+	root := t.TempDir()
+	done := make(chan State, 1)
+	go func() {
+		state, _ := testCoordinator(model.URL).Run(ctx, root, "Pause two tasks", "local fixture only")
+		done <- state
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		_, one := os.Stat(filepath.Join(root, "tasks/one/work/ready"))
+		_, two := os.Stat(filepath.Join(root, "tasks/two/work/ready"))
+		if one == nil && two == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("workers did not start")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	pause(ErrPaused)
+	select {
+	case state := <-done:
+		if state.Status != "paused" || len(state.Results) != 2 {
+			t.Fatalf("pause lost worker outcomes: %+v", state)
+		}
+		for _, result := range state.Results {
+			if result.Status != "aborted" {
+				t.Fatalf("active worker was not stopped: %+v", result)
+			}
+		}
+		saved, err := LoadState(root)
+		if err != nil || saved.Status != "paused" {
+			t.Fatalf("paused session was not saved: %+v, %v", saved, err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("pause did not stop active workers")
+	}
+}
+
 func TestCoordinatorRejectsUnfinishedDependenciesAndInventedEvidence(t *testing.T) {
 	s := State{Limits: DefaultLimits(), Results: []Result{{Task: Task{ID: "old"}, Status: "failed", Evidence: []ctxpacket.ExecutionResult{{LogRefs: []string{"recorded.log"}}}}}}
 	for _, d := range []Decision{

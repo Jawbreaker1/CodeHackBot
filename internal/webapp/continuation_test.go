@@ -1,6 +1,7 @@
 package webapp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -127,5 +128,113 @@ func TestCompletedSessionContinuesWithAReviewedWorkerPlan(t *testing.T) {
 	restored := NewServer(config)
 	if restored.loadErr != nil || len(restored.getRun(current.id).view("").Results) != 2 {
 		t.Fatalf("continued session did not restore: %v", restored.loadErr)
+	}
+}
+
+func TestInterruptedSessionCanResumeFromCoordinatorChat(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Messages []llmclient.Message `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			return
+		}
+		response := `{"summary":"Saved evidence reviewed.","plain_summary":"The saved result was reviewed.","tasks":[],"complete":true,"findings":[],"gaps":[]}`
+		if strings.Contains(request.Messages[0].Content, "conversational interface") {
+			seenStatus := false
+			for _, message := range request.Messages {
+				seenStatus = seenStatus || strings.Contains(message.Content, `"status":"interrupted"`)
+			}
+			if !seenStatus {
+				t.Error("coordinator chat did not receive the restored interruption status")
+			}
+			response = `{"text":"I will review the saved evidence and continue in this session.","continue_assessment":true}`
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"choices":[{"message":{"content":%q}}],"usage":{"total_tokens":1}}`, response)
+	}))
+	defer model.Close()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("Synthetic fixture only.\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	frame, err := behavior.Load(root, "assessment_coordinator", map[string]string{"approval_mode": "per_action"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := Config{RepoRoot: root, SessionsRoot: filepath.Join(root, "sessions"), LLM: llmclient.Client{BaseURL: model.URL + "/v1", Model: "fixture"}, Frame: frame, Limits: assessment.DefaultLimits()}
+	server := NewServer(config)
+	current, err := server.newRun("fixture", "Review the fixture", "synthetic fixture only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := assessment.Task{ID: "saved-worker", Goal: "Record fixture evidence", DoneWhen: "evidence saved"}
+	current.resume, current.status = true, "interrupted"
+	current.state = assessment.State{
+		Version: 1, ID: current.id, Goal: current.goal, Scope: current.scope, Status: "running", Limits: assessment.DefaultLimits(),
+		Plans:   []assessment.Decision{{Summary: "Review fixture", Tasks: []assessment.Task{task}, ApprovedTaskIDs: []string{task.ID}}},
+		Results: []assessment.Result{{Task: task, Status: "done", Summary: "Saved fixture evidence."}},
+	}
+	if err := atomicWriteJSON(filepath.Join(current.root, "assessment.json"), current.state); err != nil {
+		t.Fatal(err)
+	}
+	if err := current.persist(); err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+	path := httpServer.URL + "/api/v1/assessments/" + current.id
+	view := postJSON[assessmentView](t, path+"/messages", messageRequest{Text: "continue"})
+	if view.ID != current.id {
+		t.Fatalf("chat opened a different session: %+v", view)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		view = getJSON[assessmentView](t, path)
+		if view.Status == "completed" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if view.Status != "completed" || len(view.Results) != 1 || view.Results[0].Task.ID != task.ID {
+		t.Fatalf("saved result was lost during resume: status=%s results=%+v", view.Status, view.Results)
+	}
+	saved, err := assessment.LoadState(current.root)
+	if err != nil || len(saved.ContinuationRequests) != 0 || len(saved.Plans) != 2 {
+		t.Fatalf("resume created a new round instead of reconciling saved work: %+v, %v", saved, err)
+	}
+}
+
+func TestWebPauseControlCancelsWithoutMarkingRunStopped(t *testing.T) {
+	root := t.TempDir()
+	server := NewServer(Config{RepoRoot: root, SessionsRoot: filepath.Join(root, "sessions"), LLM: llmclient.Client{Model: "fixture"}})
+	current, err := server.newRun("fixture", "Inspect fixture", "synthetic fixture only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	current.mu.Lock()
+	current.started, current.status, current.runCtx, current.failCancel = true, "running", ctx, cancel
+	current.mu.Unlock()
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+	path := httpServer.URL + "/api/v1/assessments/" + current.id
+	postJSON[assessmentView](t, path+"/pause", nil)
+	if context.Cause(ctx) != assessment.ErrPaused {
+		t.Fatalf("pause did not broadcast its distinct cancellation cause: %v", context.Cause(ctx))
+	}
+	current.mu.Lock()
+	current.started, current.status, current.state.Status = false, "paused", "paused"
+	current.mu.Unlock()
+	if view := getJSON[assessmentView](t, path); !view.Resumable || view.Status != "paused" {
+		t.Fatalf("paused session is not resumable: %+v", view)
+	}
+	current.mu.Lock()
+	current.status, current.state.Status = "aborted", "aborted"
+	current.mu.Unlock()
+	if view := getJSON[assessmentView](t, path); view.Resumable {
+		t.Fatalf("stopped run incorrectly offers direct resume: %+v", view)
 	}
 }

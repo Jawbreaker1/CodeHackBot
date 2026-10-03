@@ -186,7 +186,12 @@ accepted batch before another coordinator decision: completed task result files
 are retained, while tasks without a finished result are marked blocked. Saved
 task sessions and logs remain available for review. The coordinator can then
 plan recovery without silently replaying an interrupted action or treating its
-partial evidence as a completed conclusion.
+partial evidence as a completed conclusion. The browser keeps its chat composer
+available for paused and interrupted sessions: the coordinator can answer a
+question or choose structured continuation from a message such as “continue.”
+The main conversation area also exposes Resume when stopped and Pause/Stop while
+running. Pause broadcasts cancellation to active workers and saves a resumable
+`paused` state; Stop records an `aborted` outcome. Neither replays a tool action.
 
 ### Browser assessment worker
 
@@ -253,7 +258,7 @@ Coordinator and event text use a safe presentation renderer. Plain prose remains
 
 Session state is one local JSON snapshot per worker session, written through a temporary file and atomic replacement. Version 2 persists the original turn limit and consumed turns. Resume never replenishes that budget. Version 1 snapshots remain inspectable JSON but cannot be resumed because they lack reliable budget accounting. A pending invocation with an unknown outcome is never replayed automatically; inspect its evidence before starting a new task. This is not a multi-worker event store and does not provide exactly-once recovery of external tool effects.
 
-Canceled runs persist an aborted outcome. The TUI keeps ownership of terminal input, routes typed prompt events to the guided console, and waits for the application to finalize before quitting. Task preparation runs outside the UI update handler. Per-action approvals and worker questions use the same prompt event path as setup; the UI never creates a second stdin reader.
+Stopped runs persist an aborted outcome; a web-initiated pause persists a paused outcome after the same worker/process cancellation and leaves the session ready for explicit resume. The TUI keeps ownership of terminal input, routes typed prompt events to the guided console, and waits for the application to finalize before quitting. Task preparation runs outside the UI update handler. Per-action approvals and worker questions use the same prompt event path as setup; the UI never creates a second stdin reader.
 
 The worker stops when execution evidence, configured context inspection, or progress persistence fails. After an action it observes the actual result before proposing whole-task completion; a completion claim is evaluated against evidence. Two rejected completion claims with no intervening action or operator answer prevent a third identical-evidence evaluation and return a blocked result for coordinator revision. Progress is persisted synchronously before an action starts, with a single worker-side writer; queued UI events cannot overwrite newer snapshots. Optional UI transcripts still have best-effort paths; production evidence journaling is separate future work.
 

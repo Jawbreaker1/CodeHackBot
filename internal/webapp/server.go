@@ -1514,6 +1514,16 @@ func (s *Server) assessmentRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		current.writeView(w, "")
+	case "pause":
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w, http.MethodPost)
+			return
+		}
+		if err := current.pause(); err != nil {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		current.writeView(w, "")
 	case "messages":
 		if r.Method != http.MethodPost {
 			methodNotAllowed(w, http.MethodPost)
@@ -1956,6 +1966,24 @@ func (r *run) stop() error {
 	return nil
 }
 
+func (r *run) pause() error {
+	r.mu.RLock()
+	deleted, cancel, started, status := r.deleted, r.failCancel, r.started, r.status
+	r.mu.RUnlock()
+	if deleted {
+		return fmt.Errorf("session has been deleted")
+	}
+	if !started || cancel == nil {
+		return fmt.Errorf("assessment is not running")
+	}
+	if status != "running" && status != "starting" {
+		return fmt.Errorf("assessment is already %s", status)
+	}
+	cancel(assessment.ErrPaused)
+	r.emit(assessment.Event{Kind: "assessment_pause_requested", Message: "Pause requested; stopping workers and saving their evidence."})
+	return nil
+}
+
 func (s *Server) message(ctx context.Context, r *run, text string, refs []attachmentRef) error {
 	text = strings.TrimSpace(text)
 	if text == "" && len(refs) > 0 {
@@ -1973,7 +2001,8 @@ func (s *Server) message(ctx context.Context, r *run, text string, refs []attach
 		r.mu.Unlock()
 		return fmt.Errorf("session has been deleted")
 	}
-	postRun := !r.started && (r.status == "completed" || r.status == "completed_with_gaps" || r.status == "incomplete" || r.status == "aborted")
+	resumeSaved := !r.started && (r.status == "paused" || r.status == "interrupted")
+	postRun := resumeSaved || (!r.started && (r.status == "completed" || r.status == "completed_with_gaps" || r.status == "incomplete" || r.status == "aborted"))
 	if !postRun && (!r.started || (r.status != "running" && r.status != "starting")) {
 		r.mu.Unlock()
 		return fmt.Errorf("start the assessment before sending messages")
@@ -2028,10 +2057,12 @@ func (s *Server) message(ctx context.Context, r *run, text string, refs []attach
 		proposal := r.plan.plan
 		proposed = &proposal
 	}
-	stateContext := compactRunState(r.state, pending, r.workers, r.permissionMode, availableImages, proposed)
+	chatState := r.state
+	chatState.Status = r.status // A restored run can be interrupted while its saved assessment still says running.
+	stateContext := compactRunState(chatState, pending, r.workers, r.permissionMode, availableImages, proposed)
 	system := behavior.CoordinatorConversationPrompt(s.config.Frame) + "\n\n" + webCoordinatorDisplayPrompt
 	if postRun {
-		stateContext += "\nRecorded final findings and gaps: " + assessment.PostRunFindingsContext(r.state)
+		stateContext += "\nRecorded findings and gaps: " + assessment.PostRunFindingsContext(r.state)
 		if latestReport != nil {
 			output := latestReport.Output
 			if output == "" {
@@ -2123,7 +2154,12 @@ func (s *Server) message(ctx context.Context, r *run, text string, refs []attach
 		return fmt.Errorf("save coordinator conversation: %w", err)
 	}
 	if continueAssessment {
-		startErr := s.start(r, text)
+		var startErr error
+		if resumeSaved {
+			startErr = s.start(r)
+		} else {
+			startErr = s.start(r, text)
+		}
 		r.mu.Lock()
 		r.chatBusy = false
 		r.mu.Unlock()
@@ -2335,7 +2371,7 @@ func (r *run) view(after string) assessmentView {
 	if strings.TrimSpace(model) == "" {
 		model = r.state.Model
 	}
-	view := assessmentView{Customer: r.customer, ID: r.id, Goal: r.goal, Scope: r.scope, Approach: r.state.Approach, Status: r.status, Model: model, ModelProfile: r.profileID, ModelBusy: r.chatBusy || r.started, CanChangeModel: !r.chatBusy && !r.started && r.status == "draft", Resumable: !r.started && r.status != "draft" && r.status != "completed" && r.status != "completed_with_gaps", UpdatedAt: r.updatedAt, Error: r.state.Error, StartedAt: r.state.StartedAt, FinishedAt: r.state.FinishedAt, Usage: r.state.Usage, PostRunUsage: r.postRunUsage, Plans: len(r.state.Plans), Results: append([]assessment.Result(nil), r.state.Results...), Messages: messageViews(r.messages, "assessments", r.id), ReportURL: "/api/v1/assessments/" + r.id + "/report"}
+	view := assessmentView{Customer: r.customer, ID: r.id, Goal: r.goal, Scope: r.scope, Approach: r.state.Approach, Status: r.status, Model: model, ModelProfile: r.profileID, ModelBusy: r.chatBusy || r.started, CanChangeModel: !r.chatBusy && !r.started && r.status == "draft", Resumable: !r.started && r.status != "draft" && r.status != "completed" && r.status != "completed_with_gaps" && r.status != "aborted", UpdatedAt: r.updatedAt, Error: r.state.Error, StartedAt: r.state.StartedAt, FinishedAt: r.state.FinishedAt, Usage: r.state.Usage, PostRunUsage: r.postRunUsage, Plans: len(r.state.Plans), Results: append([]assessment.Result(nil), r.state.Results...), Messages: messageViews(r.messages, "assessments", r.id), ReportURL: "/api/v1/assessments/" + r.id + "/report"}
 	if r.persistErr != nil {
 		view.Error = r.persistErr.Error()
 	}
