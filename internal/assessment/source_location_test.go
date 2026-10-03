@@ -24,6 +24,18 @@ func TestSourceFindingRequiresCitedRegisteredArtifact(t *testing.T) {
 	if err := validateDecision(decision, state); err != nil {
 		t.Fatal(err)
 	}
+	// The worker's registered artifact is the source of truth for provenance.
+	// A coordinator may omit it or use an imprecise label in its decision.
+	decision.Findings[0].SourceLocations[0].Repository = "local filesystem"
+	decision.Findings[0].SourceLocations[0].Revision = ""
+	decision.Findings[0].SourceLocations[0].Path = ""
+	normalizeSourceLocations(&decision, state)
+	if got := decision.Findings[0].SourceLocations[0]; got.Repository != "https://example.test/app.git" || got.Revision != "abc123" || got.Path != "server/auth.py" {
+		t.Fatalf("registered artifact metadata was not used: %+v", got)
+	}
+	if err := validateDecision(decision, state); err != nil {
+		t.Fatalf("normalized source location was rejected: %v", err)
+	}
 	decision.Findings[0].SourceLocations[0].ArtifactRef = "/session/tasks/review/work/other.py"
 	if err := validateDecision(decision, state); err == nil {
 		t.Fatal("uncited source file was accepted")
