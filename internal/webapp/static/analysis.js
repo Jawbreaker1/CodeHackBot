@@ -29,6 +29,7 @@ function findingCard(f) {
   const cve = f.cve_ids?.length ? '<div class="finding-meta"><span><strong>CVE references</strong> ' + escapeHTML(f.cve_ids.join(', ')) + '</span></div>' : '';
   const software = f.affected_software?.length ? '<div class="finding-meta"><span><strong>Affected software</strong> ' + escapeHTML(f.affected_software.join(', ')) + '</span></div>' : '';
   const refs = f.references?.length ? '<details><summary>Research references</summary>' + list(f.references) + '</details>' : '';
+  const retest = f.latest_review ? '<div class="finding-answer"><strong>Later retest: ' + escapeHTML(f.latest_review.verdict.replaceAll('_', ' ')) + '</strong><p>' + escapeHTML(f.latest_review.reason) + ' <a href="' + sessionURL(f.latest_review.session_id) + '">Open retest ↗</a></p><details><summary>Retest evidence</summary>' + evidenceList(f.latest_review.evidence, f.latest_review.session_id) + '</details></div>' : '';
   const verification = f.verification
     ? '<details><summary>Independent challenge · ' + escapeHTML(f.verification.verdict) + '</summary><p><strong>Claim:</strong> ' + escapeHTML(f.verification.claim) + '</p><p><strong>Alternative:</strong> ' + escapeHTML(f.verification.alternative) + '</p><p><strong>Check:</strong> ' + escapeHTML(f.verification.alternative_result) + '</p><p><strong>Why:</strong> ' + escapeHTML(f.verification.reason) + '</p><strong>Execution logs</strong>' + evidenceList(f.verification.evidence, f.session_id) + '</details>'
     : (f.recorded_status ? '<p class="review-note">Earlier session called this reproduced; no structured challenge verdict was recorded. Review before treating it as confirmed.</p>' : '');
@@ -37,13 +38,13 @@ function findingCard(f) {
   const confirmed = f.status === 'reproduced';
   const actionText = confirmed ? action : 'Verify this on the current system first. If confirmed, consider this fix: ' + action;
   const label = confirmed ? f.priority : 'Needs confirmation';
-  return '<article class="finding" data-priority="' + escapeHTML(f.priority) + '"><div class="finding-head"><h3>' + escapeHTML(f.title) + '</h3><span class="tag ' + escapeHTML(f.priority) + '">' + escapeHTML(label) + '</span></div><div class="finding-answer"><strong>Why it matters</strong><p>' + escapeHTML(f.impact || 'Impact has not been recorded yet.') + '</p></div><div class="finding-answer"><strong>What to do</strong><p>' + actionText + '</p></div><div class="finding-meta"><span><strong>Check</strong> ' + (confirmed ? 'reproduced' : 'not yet verified') + '</span><span><strong>Confidence</strong> ' + escapeHTML(f.confidence || 'not rated') + '</span></div>' + cve + software + verification + '<details><summary>See how this was tested and how to fix it</summary>' + (f.scope ? '<strong>Scope</strong><p>' + escapeHTML(f.scope) + '</p>' : '') + '<strong>Why this priority</strong><p>' + escapeHTML(f.priority_reason) + '</p><strong>Reproduction</strong>' + list(f.steps) + '<strong>Evidence</strong>' + evidenceList(f.evidence, f.session_id) + '<strong>Full remediation</strong>' + list(f.remediation) + '</details>' + refs + (session ? '<div class="finding-session">' + session + '</div>' : '') + '</article>';
+  return '<article class="finding" data-priority="' + escapeHTML(f.priority) + '"><div class="finding-head"><h3>' + escapeHTML(f.title) + '</h3><span class="tag ' + escapeHTML(f.priority) + '">' + escapeHTML(f.latest_review?.verdict === 'remediated' ? 'Retested · remediated' : label) + '</span></div><div class="finding-answer"><strong>Why it matters</strong><p>' + escapeHTML(f.impact || 'Impact has not been recorded yet.') + '</p></div><div class="finding-answer"><strong>What to do</strong><p>' + (f.latest_review?.verdict === 'remediated' ? 'Review the linked retest and keep the control in place.' : actionText) + '</p></div><div class="finding-meta"><span><strong>Original check</strong> ' + (confirmed ? 'reproduced' : 'not yet verified') + '</span><span><strong>Confidence</strong> ' + escapeHTML(f.confidence || 'not rated') + '</span></div>' + retest + cve + software + verification + '<details><summary>See how this was tested and how to fix it</summary>' + (f.scope ? '<strong>Scope</strong><p>' + escapeHTML(f.scope) + '</p>' : '') + '<strong>Why this priority</strong><p>' + escapeHTML(f.priority_reason) + '</p><strong>Reproduction</strong>' + list(f.steps) + '<strong>Evidence</strong>' + evidenceList(f.evidence, f.session_id) + '<strong>Full remediation</strong>' + list(f.remediation) + '</details>' + refs + (session ? '<div class="finding-session">' + session + '</div>' : '') + '</article>';
 }
 
 function findingExplorer(findings) {
   if (!findings.length) return '<p class="empty">No findings match this view. Check the test coverage before drawing conclusions.</p>';
   if (selectedFinding >= findings.length) selectedFinding = 0;
-  const rows = findings.map((finding, index) => '<button type="button" class="finding-select' + (selectedFinding === index ? ' selected' : '') + '" data-finding-index="' + index + '" aria-pressed="' + (selectedFinding === index) + '"><span class="finding-select-title">' + escapeHTML(finding.title) + '</span><span class="finding-select-meta"><span class="tag ' + escapeHTML(finding.priority) + '">' + escapeHTML(finding.status === 'reproduced' ? finding.priority : 'Needs confirmation') + '</span>' + escapeHTML(compactText(finding.affected_software?.join(', ') || finding.session_id, 70)) + '</span></button>').join('');
+  const rows = findings.map((finding, index) => '<button type="button" class="finding-select' + (selectedFinding === index ? ' selected' : '') + '" data-finding-index="' + index + '" aria-pressed="' + (selectedFinding === index) + '"><span class="finding-select-title">' + escapeHTML(finding.title) + '</span><span class="finding-select-meta"><span class="tag ' + escapeHTML(finding.priority) + '">' + escapeHTML(finding.latest_review?.verdict === 'remediated' ? 'Retested · remediated' : finding.status === 'reproduced' ? finding.priority : 'Needs confirmation') + '</span>' + escapeHTML(compactText(finding.affected_software?.join(', ') || finding.session_id, 70)) + '</span></button>').join('');
   return '<div class="finding-explorer"><nav class="finding-picker" aria-label="Findings">' + rows + '</nav><div class="finding-inspector">' + findingCard(findings[selectedFinding]) + '</div></div>';
 }
 
@@ -88,9 +89,35 @@ function correlationSection(data, visibleSessions) {
   if (data.kind !== 'customer') return '';
   const shared = (data.coverage || []).filter(entry => (entry.session_ids || []).length > 1 && (selectedScope < 0 || visibleSessions.includes(entry.session_ids[0])));
   const sharedCards = shared.map(entry => '<article class="correlation shared"><div><strong>' + escapeHTML(compactText(entry.scope || 'Scope not recorded', 100)) + '</strong><span>' + entry.session_ids.length + ' sessions</span></div><p>' + (entry.tests || []).length + ' recorded worker tests · ' + (entry.weak_points || []).length + ' findings · ' + (entry.challenges || []).length + ' independent challenges. Review changes in coverage and verdicts across these sessions.</p><div class="correlation-links">' + entry.session_ids.map(id => '<a href="' + sessionURL(id) + '">' + escapeHTML(id) + ' ↗</a>').join('') + '</div></article>').join('');
-  const groups = (data.correlations || []).filter(group => selectedScope < 0 || group.matches.some(match => visibleSessions.includes(match.session_id)));
+  const groups = (data.correlations || []).filter(group => !group.label.startsWith('Same target:') && (selectedScope < 0 || group.matches.some(match => visibleSessions.includes(match.session_id))));
   const cards = groups.map(group => '<article class="correlation"><div><strong>' + escapeHTML(group.label) + '</strong><span>' + group.matches.length + ' recorded finding(s)</span></div><p>' + escapeHTML(group.basis) + '</p><ul>' + group.matches.map(match => '<li><a href="' + sessionURL(match.session_id) + '">' + escapeHTML(match.title) + ' ↗</a> · ' + escapeHTML(match.status) + '</li>').join('') + '</ul></article>').join('');
-  return '<section class="section exploration"><div class="section-heading"><div><h2>Cross-session signals</h2><p>Shared declared scope, CVE reference, or recorded software label. Overlap is a review lead, not a proven attack chain.</p></div></div>' + (sharedCards || cards ? '<div class="correlation-grid">' + sharedCards + cards + '</div>' : '<p class="empty-inline">No cross-session overlap is recorded yet.</p>') + '</section>';
+  if (!sharedCards && !cards) return '';
+  return '<section class="section exploration"><div class="section-heading"><div><h2>Cross-session signals</h2><p>Shared declared scope, CVE, software label, or an explicit follow-up link. Overlap is a review lead, not a proven shared weakness.</p></div></div><div class="correlation-grid">' + sharedCards + cards + '</div></section>';
+}
+
+function targetHistorySection(data) {
+  if (data.kind !== 'customer') return '';
+  const groups = new Map();
+  for (const session of data.sessions || []) {
+    const key = session.target || 'unknown:' + session.id;
+    if (!groups.has(key)) groups.set(key, {label: session.target || 'Target not identified', sessions: []});
+    groups.get(key).sessions.push(session);
+  }
+  const cards = [...groups.values()].map(({label, sessions}) => {
+    sessions.sort((a, b) => String(a.updated_at).localeCompare(String(b.updated_at)));
+    const rows = sessions.map(session => {
+      const findings = (data.findings || []).filter(finding => finding.session_id === session.id);
+      const reviews = (data.prior_reviews || []).filter(review => review.session_id === session.id);
+      const date = session.updated_at && !session.updated_at.startsWith('0001-') ? session.updated_at.slice(0, 10) : 'Date not recorded';
+      const detail = findings.map(finding => '<li>' + escapeHTML(finding.title) + ' · ' + escapeHTML(finding.status) + '</li>').join('') +
+        reviews.map(review => '<li>Retest: ' + escapeHTML(review.verdict.replaceAll('_', ' ')) + ' · ' + escapeHTML(review.reason) + '</li>').join('');
+      return '<li><a href="' + sessionURL(session.id) + '">' + escapeHTML(date) + ' · ' + escapeHTML(compactText(session.goal || session.id, 115)) + ' ↗</a>' +
+        '<span> · ' + Number(session.tests || 0) + ' tests · ' + findings.length + ' finding records</span>' +
+        (detail ? '<details><summary>What this run recorded</summary><ul>' + detail + '</ul></details>' : '') + '</li>';
+    }).join('');
+    return '<article class="correlation"><div><strong>' + escapeHTML(label) + '</strong><span>' + sessions.length + ' session(s)</span></div><ol class="target-history">' + rows + '</ol></article>';
+  }).join('');
+  return '<section class="section exploration"><div class="section-heading"><div><h2>Target history</h2><p>Runs are shown in time order with their own evidence. A later run that does not mention an older finding has not proved it was fixed.</p></div></div><div class="correlation-grid">' + cards + '</div></section>';
 }
 
 function sessionComparisonSection(data) {
@@ -107,8 +134,9 @@ function challengeSection(data, visibleSessions) {
 }
 
 function filteredRisk(findings) {
-  const risk = {critical:0,high:0,medium:0,low:0,reproduced:0,candidates:0};
+  const risk = {critical:0,high:0,medium:0,low:0,reproduced:0,candidates:0,remediated:0};
   for (const finding of findings) {
+    if (finding.latest_review?.verdict === 'remediated') { risk.remediated++; continue; }
     if (finding.status !== 'reproduced') { risk.candidates++; continue; }
     risk.reproduced++;
     if (Object.hasOwn(risk, finding.severity)) risk[finding.severity]++;
@@ -121,7 +149,7 @@ function render(data) {
   if (selectedScope >= coverage.length) selectedScope = -1;
   const visibleSessions = selectedScope < 0 ? null : coverage[selectedScope].session_ids;
   const allFindings = (data.findings || []).filter(finding => !visibleSessions || visibleSessions.includes(finding.session_id));
-  const findings = allFindings.filter(finding => selectedRisk === 'all' || (selectedRisk === 'candidates' ? finding.status !== 'reproduced' : selectedRisk === 'reproduced' ? finding.status === 'reproduced' : finding.status === 'reproduced' && finding.severity === selectedRisk));
+  const findings = allFindings.filter(finding => selectedRisk === 'all' || (finding.latest_review?.verdict !== 'remediated' && (selectedRisk === 'candidates' ? finding.status !== 'reproduced' : selectedRisk === 'reproduced' ? finding.status === 'reproduced' : finding.status === 'reproduced' && finding.severity === selectedRisk)));
   const risk = visibleSessions ? filteredRisk(allFindings) : (data.risk || {});
   const title = data.kind === 'customer' ? 'Customer security analysis' : 'Security analysis';
   const goal = data.goal ? '<p class="goal-description">' + escapeHTML(compactText(data.goal, 185)) + '</p>' : '';
@@ -137,8 +165,9 @@ function render(data) {
   const actionSection = actions.length ? '<section class="section priority-actions"><div class="section-heading"><div><h2>What to do next</h2><p>Start with these actions, then open a finding to see why it matters and how it was checked.</p></div></div><ol class="action-list">' + actions.slice(0, 3).map(item => '<li>' + escapeHTML(item) + '</li>').join('') + '</ol>' + (actions.length > 3 ? '<details><summary>Show ' + (actions.length - 3) + ' more actions</summary><ol class="action-list">' + actions.slice(3).map(item => '<li>' + escapeHTML(item) + '</li>').join('') + '</ol></details>' : '') + (gaps.length ? '<button type="button" class="subtle-action" id="show-details">See test coverage and remaining questions ↓</button>' : '') + '</section>' : '';
   app.innerHTML =
     '<header class="analysis-head"><div><div class="eyebrow">' + escapeHTML(data.kind === 'customer' ? 'Across customer sessions' : 'Assessment evidence') + '</div><h1>' + escapeHTML(title) + '</h1>' + goal + '<p>' + escapeHTML(data.summary || '') + '</p></div><div class="head-side"><span class="status" data-state="' + escapeHTML(data.status) + '">' + escapeHTML(displayStatus(data.status)) + '</span>' + (data.report_url ? '<a class="report-link" href="' + escapeHTML(data.report_url) + '" target="_blank" rel="noopener">Open formal report ↗</a>' : '') + '</div></header>' +
-    '<section class="summary-grid" aria-label="Filter findings by risk">' + metric(risk.critical || 0,'Critical','critical') + metric(risk.high || 0,'High','high') + metric(risk.medium || 0,'Medium','medium') + metric(risk.low || 0,'Low','low') + metric(risk.reproduced || 0,'Reproduced','reproduced') + metric(risk.candidates || 0,'Need checking','candidates') + '</section><p class="metric-note">Select a number to see those findings. Severity counts include only reproduced findings.</p>' +
+    '<section class="summary-grid" aria-label="Filter findings by risk">' + metric(risk.critical || 0,'Critical','critical') + metric(risk.high || 0,'High','high') + metric(risk.medium || 0,'Medium','medium') + metric(risk.low || 0,'Low','low') + metric(risk.reproduced || 0,'Reproduced','reproduced') + metric(risk.candidates || 0,'Need checking','candidates') + '</section><p class="metric-note">Select a number to see those findings. Severity counts include only reproduced findings.' + (data.kind === 'customer' ? ' Across sessions these are finding records, not a count of distinct weaknesses.' + (risk.remediated ? ' ' + risk.remediated + ' earlier finding(s) have an explicit remediation retest and are excluded from current risk counts.' : '') : '') + '</p>' +
     actionSection +
+    targetHistorySection(data) +
     '<section class="section finding-workspace" id="findings"><div class="section-heading"><div><h2>' + findingHeading + '</h2><p>For each finding, see the impact, recommended fix, and supporting checks.</p></div><div class="finding-controls"><span class="workspace-count">' + findings.length + ' shown</span>' + (selectedRisk !== 'all' ? '<button type="button" class="clear-filter" id="clear-risk">Show all findings</button>' : '') + '</div></div>' + findingExplorer(findings) + '</section>' +
     codeReviewSection(allFindings, escapeHTML, selectedCode) +
     webPagesSection(data, visibleSessions, escapeHTML) +

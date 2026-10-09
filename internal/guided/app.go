@@ -3,6 +3,7 @@ package guided
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -25,6 +26,8 @@ type App struct {
 	Writer   io.Writer
 	events   func(consoleEvent)
 }
+
+var errCLIExit = errors.New("CLI exit requested")
 
 type assessmentConversation struct {
 	mu       sync.RWMutex
@@ -140,27 +143,37 @@ func findSavedAssessments(base string) []savedAssessment {
 func chooseSavedAssessment(ctx context.Context, c *Console, base string) (*savedAssessment, error) {
 	sessions := findSavedAssessments(base)
 	if len(sessions) == 0 {
-		c.Print("No saved assessment sessions were found.\n")
+		return nil, c.ShowInfoModal(ctx, "Resume session", "No saved assessment sessions were found.")
+	}
+	c.BeginModal("Resume session")
+	defer c.EndModal()
+	choices := make([]consoleChoice, 0, len(sessions)+1)
+	choices = append(choices, consoleChoice{Label: "Start a new assessment", Value: "new"})
+	for _, session := range sessions {
+		choices = append(choices, consoleChoice{
+			Label:  compactSessionText(session.State.Goal, 52),
+			Detail: strings.ReplaceAll(session.State.Status, "_", " ") + " · " + session.State.StartedAt.Local().Format("2006-01-02 15:04"),
+			Value:  session.Root,
+		})
+	}
+	answer, err := c.Choose(ctx, "Saved assessments", "Choose a session to resume, or Esc to close", choices, 0)
+	if errors.Is(err, errModalCanceled) {
 		return nil, nil
 	}
-	c.Print("\nSaved assessment sessions\n")
-	for i, session := range sessions {
-		c.Print("  %d. %-20s %-18s %s\n", i+1, strings.ReplaceAll(session.State.Status, "_", " "), session.State.StartedAt.Local().Format("2006-01-02 15:04"), compactSessionText(session.State.Goal, 72))
-	}
-	answer, err := c.Ask(ctx, "Choose a session number to resume, or press Enter to start a new assessment")
 	if err != nil {
 		return nil, err
 	}
 	if answer == "" || strings.EqualFold(answer, "n") || strings.EqualFold(answer, "new") {
 		return nil, nil
 	}
-	n := 0
-	if _, err := fmt.Sscanf(answer, "%d", &n); err != nil || n < 1 || n > len(sessions) {
-		c.Print("No session selected; starting a new assessment.\n")
-		return nil, nil
+	for _, session := range sessions {
+		if session.Root == answer {
+			chosen := session
+			return &chosen, nil
+		}
 	}
-	chosen := sessions[n-1]
-	return &chosen, nil
+	c.Notice("No session selected; starting a new assessment.")
+	return nil, nil
 }
 
 func compactSessionText(value string, max int) string {
@@ -198,10 +211,13 @@ func (a App) runPlain(ctx context.Context) error {
 	defer cancel()
 	c := newConsole(ctx, a.Reader, a.Writer, a.events)
 	c.Print(cliLogo + "\n\n")
-	c.Print("Talk to the coordinator about what you want to investigate. You choose the scope and approval level before workers act.\nUse /plan, /workers, /findings, /artifacts, /status, or /help during a session. Ctrl-C stops active work.\n\n")
+	c.Print("Talk to the coordinator. Review scope and approvals before workers act.\n/help lists commands. Ctrl-C stops active work.\n\n")
 
 	preferencesPath := filepath.Join(a.RepoRoot, ".birdhackbot", "preferences.json")
 	prefs, err := configureProvider(ctx, c, preferencesPath)
+	if errors.Is(err, errModalCanceled) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -210,6 +226,7 @@ func (a App) runPlain(ctx context.Context) error {
 		return fmt.Errorf("model access unavailable: %w; restart BirdHackBot after correcting sign-in or choose another provider", err)
 	}
 	defer func() { cleanup() }()
+	c.Notice("Model: %s (%s)", prefs.Model, reasoningLabel(prefs))
 
 	conversation := &intakeConversation{}
 	intakeFrame, err := behavior.Load(a.RepoRoot, "assessment_intake", a.behaviorParameters("operator_selected_session_policy", ""))
@@ -227,6 +244,9 @@ func (a App) runPlain(ctx context.Context) error {
 	}
 	for {
 		draft, resume, err := a.readGoalOrCommand(ctx, c, preferencesPath, &prefs, &client, &cleanup, conversation)
+		if errors.Is(err, errCLIExit) {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -326,22 +346,29 @@ func (a App) readGoalOrCommand(ctx context.Context, c *Console, path string, pre
 		}
 		trimmed := strings.TrimSpace(value)
 		switch strings.ToLower(trimmed) {
+		case "/exit", "exit":
+			return nil, nil, errCLIExit
 		case "/permissions":
 			if err := c.choosePermissions(ctx); err != nil {
 				return nil, nil, err
 			}
 		case "/settings", "settings":
-			(*cleanup)()
-			next, err := configureProvider(ctx, c, path)
+			next, err := configureProviderSelection(ctx, c, path, true)
+			if errors.Is(err, errModalCanceled) {
+				continue
+			}
 			if err != nil {
 				return nil, nil, err
 			}
 			nextClient, nextCleanup, err := startProvider(ctx, next)
 			if err != nil {
-				return nil, nil, fmt.Errorf("model access unavailable: %w", err)
+				_, _ = savePreferences(ctx, c, path, *prefs)
+				c.Notice("Could not switch models: %v. The current model is still available.", err)
+				continue
 			}
+			(*cleanup)()
 			*prefs, *client, *cleanup = next, nextClient, nextCleanup
-			c.Print("Model settings applied: %s / %s (reasoning: %s).\n", prefs.Provider, prefs.Model, reasoningLabel(*prefs))
+			c.Notice("Model: %s (%s)", prefs.Model, reasoningLabel(*prefs))
 		case "/resume", "resume":
 			chosen, err := chooseSavedAssessment(ctx, c, filepath.Join(a.RepoRoot, "sessions"))
 			if err != nil {
@@ -475,7 +502,9 @@ func (a App) runAssessmentWithFrame(ctx context.Context, c *Console, prefs prefe
 				c.Print("Stopping the assessment and saving an aborted report.\n")
 				stop()
 			case "/settings", "settings":
-				c.Print("Model settings are locked for the active assessment and will apply to the next one.\n")
+				if err := c.ShowInfoModal(runCtx, "Model settings", "This assessment keeps its current model until it finishes. Open a new session to choose another model."); err != nil {
+					c.Notice("Could not open model settings: %v", err)
+				}
 			default:
 				history := conversation.Messages()
 				conversation.Add("user", line)

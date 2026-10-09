@@ -90,19 +90,22 @@ func ReviewSummary(state State) string {
 // final free-text gaps remain in the saved plan but cannot substitute a broader
 // unperformed objective for the exact proposal the operator declined.
 func ReportGaps(state State) []string {
-	if !HasDeniedExecution(state) {
-		if len(state.Plans) == 0 {
-			return nil
-		}
-		return append([]string(nil), state.Plans[len(state.Plans)-1].Gaps...)
-	}
 	var gaps []string
-	for _, result := range state.Results {
-		if denied := result.DeniedExecution; denied != nil {
-			gaps = append(gaps, fmt.Sprintf("Task %s stopped after the operator denied the proposed action %q. That action did not execute; the remaining task objective was not completed. Approval record: %s", result.Task.ID, denied.Summary, denied.AuditRef))
-		} else if result.Status != "done" {
-			gaps = append(gaps, fmt.Sprintf("Task %s ended with status %s; its objective was not confirmed complete.", result.Task.ID, result.Status))
+	if !HasDeniedExecution(state) {
+		if len(state.Plans) > 0 {
+			gaps = append(gaps, state.Plans[len(state.Plans)-1].Gaps...)
 		}
+	} else {
+		for _, result := range state.Results {
+			if denied := result.DeniedExecution; denied != nil {
+				gaps = append(gaps, fmt.Sprintf("Task %s stopped after the operator denied the proposed action %q. That action did not execute; the remaining task objective was not completed. Approval record: %s", result.Task.ID, denied.Summary, denied.AuditRef))
+			} else if result.Status != "done" {
+				gaps = append(gaps, fmt.Sprintf("Task %s ended with status %s; its objective was not confirmed complete.", result.Task.ID, result.Status))
+			}
+		}
+	}
+	for _, lead := range CurrentOpenLeads(state.Plans) {
+		gaps = append(gaps, fmt.Sprintf("Unverified lead: %s", lead.Hypothesis))
 	}
 	return gaps
 }

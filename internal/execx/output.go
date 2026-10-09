@@ -8,7 +8,10 @@ import (
 	"time"
 )
 
-const outputPreviewBytes = 8 * 1024
+// Keep medium tool results available to the worker. The model-view builder
+// prunes older evidence only when the selected request budget requires it;
+// an unconditional 8 KiB head preview hid relevant matches in saved logs.
+const outputPreviewBytes = 64 * 1024
 
 func readOutputSummary(path string) (string, error) {
 	file, err := os.Open(path)

@@ -3,6 +3,7 @@ package assessment
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -35,6 +36,22 @@ func TestSourceFindingRequiresCitedRegisteredArtifact(t *testing.T) {
 	}
 	if err := validateDecision(decision, state); err != nil {
 		t.Fatalf("normalized source location was rejected: %v", err)
+	}
+	// A cited, registered source location is evidence even if the coordinator
+	// omits its duplicate reference from the finding's evidence array.
+	decision.Findings[0].Evidence = nil
+	decision.Findings[0].SourceLocations[0].Repository = ""
+	decision.Findings[0].SourceLocations[0].Revision = ""
+	decision.Findings[0].SourceLocations[0].Path = ""
+	normalizeSourceLocations(&decision, state)
+	if !slices.Contains(decision.Findings[0].Evidence, sourceRef) {
+		t.Fatal("registered source location was not cited as finding evidence")
+	}
+	if got := decision.Findings[0].SourceLocations[0]; got.Path != "server/auth.py" || got.Revision != "abc123" {
+		t.Fatalf("registered source location was not normalized: %+v", got)
+	}
+	if err := validateDecision(decision, state); err != nil {
+		t.Fatalf("registered source location should be sufficient evidence: %v", err)
 	}
 	decision.Findings[0].SourceLocations[0].ArtifactRef = "/session/tasks/review/work/other.py"
 	if err := validateDecision(decision, state); err == nil {

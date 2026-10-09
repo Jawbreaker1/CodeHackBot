@@ -53,3 +53,5 @@ run go build -buildvcs=false -o /tmp/birdhackbot-llm-bridge-ci ./cmd/birdhackbot
 run python3 ./scripts/check_guided_app.py /tmp/birdhackbot-ci
 run python3 ./scripts/check_webapp.py /tmp/birdhackbot-web-ci
 run python3 -m unittest discover -s testdata/source-lab -p 'test_*.py'
+run python3 ./scripts/check_review_workflow_lab.py
+run python3 ./scripts/check_safe_documents_lab.py

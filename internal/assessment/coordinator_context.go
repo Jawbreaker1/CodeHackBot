@@ -23,6 +23,16 @@ func coordinatorPromptBounded(state State, maxBytes int) (string, error) {
 	if len(prompt) <= maxBytes {
 		return prompt, nil
 	}
+	// Historical project context is useful, but current-run evidence and the
+	// operator's latest direction take priority when the request is crowded.
+	if packet.ProjectHistory != nil {
+		packet.ProjectHistory = nil
+		packet.ContextNotes = append(packet.ContextNotes, "Earlier project sessions were omitted from this bounded request; their saved evidence remains available in the project directory.")
+		prompt = encode()
+		if len(prompt) <= maxBytes {
+			return prompt, nil
+		}
+	}
 	// The assessment remains complete on disk. Only a planning request that
 	// exceeds its allowance starts shortening older material.
 	protectedEvidence := make(map[string]bool)
@@ -34,6 +44,11 @@ func coordinatorPromptBounded(state State, maxBytes int) (string, error) {
 			for _, ref := range finding.References {
 				protectedEvidence[ref] = true
 			}
+		}
+	}
+	for _, lead := range packet.Assessment.OpenLeads {
+		for _, ref := range lead.Evidence {
+			protectedEvidence[ref] = true
 		}
 	}
 	oldCount := len(packet.Assessment.Results) - 2

@@ -42,6 +42,18 @@ func TestAnalysisDoesNotRepeatEveryGapAsANextAction(t *testing.T) {
 	}
 }
 
+func TestAnalysisShowsRecordedNextCheckInsteadOfGenericGapAction(t *testing.T) {
+	check := "Read the installed build and compare it with the vendor release history."
+	state := assessment.State{Status: "completed_with_gaps", Plans: []assessment.Decision{{
+		Complete:  true,
+		OpenLeads: []assessment.Lead{{ID: "version", Hypothesis: "The installed build may predate a fix.", NextCheck: check, Evidence: []string{"tasks/inspect/version.log"}}},
+	}}}
+	view := buildAnalysis("fixture", "lab", state, nil)
+	if len(view.NextChecks) != 1 || view.NextChecks[0] != check || len(view.NextActions) != 1 || view.NextActions[0] != check || len(view.Gaps) != 1 || !strings.Contains(view.Gaps[0], "Unverified lead") {
+		t.Fatalf("analysis did not surface the recorded continuation: %+v", view)
+	}
+}
+
 func TestAnalysisSeparatesUnreviewedWorkerResultFromCandidateRisk(t *testing.T) {
 	state := assessment.State{Status: "incomplete", Plans: []assessment.Decision{{Summary: "The worker will retry", Gaps: []string{"Retry in progress"}, Tasks: []assessment.Task{{ID: "retry"}}, Findings: []assessment.Finding{{Title: "Possible issue", Status: "candidate", Severity: "medium", Confidence: "low"}}}}, Results: []assessment.Result{{Task: assessment.Task{ID: "retry"}, Status: "done", Summary: "The retry ended without application access."}}}
 	view := buildAnalysis("fixture", "lab", state, nil)

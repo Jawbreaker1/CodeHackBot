@@ -123,6 +123,11 @@ func (a App) postRunConversation(ctx context.Context, c *Console, client llmclie
 				return "", err
 			}
 			continue
+		case "/settings", "settings":
+			if err := c.ShowInfoModal(ctx, "Model settings", "This saved session uses "+client.Model+". Start a new session to choose a different model."); err != nil {
+				return "", err
+			}
+			continue
 		case "/status":
 			c.Print("Assessment %s; %d worker result(s); %d planning rounds; %d model calls.\n", state.Status, len(state.Results), len(state.Plans), state.Usage.Calls)
 			continue

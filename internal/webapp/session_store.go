@@ -51,6 +51,7 @@ type sessionRecord struct {
 	Customer           string               `json:"customer,omitempty"`
 	Goal               string               `json:"goal,omitempty"`
 	Scope              string               `json:"scope,omitempty"`
+	Target             string               `json:"target,omitempty"`
 	Approach           *assessment.Approach `json:"approach,omitempty"`
 	Model              string               `json:"model,omitempty"`
 	ModelProfile       string               `json:"model_profile,omitempty"`
@@ -172,6 +173,9 @@ func (s *Server) restoreRun(customer, root string) error {
 	}
 	if state.Approach == nil {
 		state.Approach = record.Approach
+	}
+	if state.Target == "" {
+		state.Target = record.Target
 	}
 	id := filepath.Base(root)
 	if recordErr == nil && record.ID != "" {
@@ -317,7 +321,7 @@ func (r *run) persist() error {
 	if r.postRunBudget != nil {
 		postRunUsage = r.postRunBudget.Usage()
 	}
-	record := sessionRecord{PermissionMode: r.permissionMode.Normalized(), Version: sessionRecordVersion, Kind: "assessment", ID: r.id, Customer: r.customer, Goal: r.goal, Scope: r.scope, Approach: r.state.Approach, Model: r.client.Model, ModelProfile: r.profileID, Status: r.status, Usage: &usage, PostRunUsage: &postRunUsage, CoordinatorContext: r.coordinatorContext, Messages: append([]intakeMessage(nil), r.messages...), Events: append([]eventRecord(nil), r.events...), Workers: workers, Sequence: r.sequence, UpdatedAt: r.updatedAt}
+	record := sessionRecord{PermissionMode: r.permissionMode.Normalized(), Version: sessionRecordVersion, Kind: "assessment", ID: r.id, Customer: r.customer, Goal: r.goal, Scope: r.scope, Target: r.state.Target, Approach: r.state.Approach, Model: r.client.Model, ModelProfile: r.profileID, Status: r.status, Usage: &usage, PostRunUsage: &postRunUsage, CoordinatorContext: r.coordinatorContext, Messages: append([]intakeMessage(nil), r.messages...), Events: append([]eventRecord(nil), r.events...), Workers: workers, Sequence: r.sequence, UpdatedAt: r.updatedAt}
 	root := r.root
 	r.mu.RUnlock()
 	return atomicWriteJSON(filepath.Join(root, "session.json"), record)

@@ -1,6 +1,6 @@
 # Local strategy catalog
 
-Revision: 2026-09-23. Provenance: BirdHackBot project guidance, maintained in this repository. This compact index is shared by the coordinator and workers. The coordinator may suggest up to two paths per task; the worker selects a useful guide with `load_strategy` and may change course as evidence develops. A guide's full text is loaded only for that worker and retained with its source and checksum. Guides are strategic decision aids, not runbooks, permission, or evidence. Match the observed problem and desired outcome, not just a keyword; do not load every guide.
+Revision: 2026-10-04. Provenance: BirdHackBot project guidance, maintained in this repository. This compact index is shared by the coordinator and workers. The coordinator may suggest up to two paths per task; the worker selects a useful guide with `load_strategy` and may change course as evidence develops. A guide's full text is loaded only for that worker and retained with its source and checksum. Guides are strategic decision aids, not runbooks, permission, or evidence. Match the observed problem and desired outcome, not just a keyword; do not load every guide.
 
 | Guide | Use when |
 | --- | --- |
@@ -10,6 +10,7 @@ Revision: 2026-09-23. Provenance: BirdHackBot project guidance, maintained in th
 | `software-research/SKILL.md` | An identified product or build needs attributable source, advisories, CVEs, exploit references, and applicability research. |
 | `source-review/SKILL.md` | Available source needs trust-boundary tracing and hypotheses tied back to the deployed target. |
 | `web-application/SKILL.md` | A browser-facing application needs UI journeys, HTTP evidence, and available source/configuration compared. |
+| `browser-data-flow/SKILL.md` | A specific browser-mediated value or decision must be traced through client code, browser state, and outgoing requests. |
 | `api-assessment/SKILL.md` | A scoped HTTP or RPC API needs endpoint, object-authorization, schema, and state-transition assessment. |
 | `identity-access/SKILL.md` | Accounts, roles, sessions, tokens, or permission boundaries need controlled authentication and authorization testing. |
 | `configuration-exposure/SKILL.md` | Deployment, secrets handling, storage, or host configuration may create unintended access or data exposure. |

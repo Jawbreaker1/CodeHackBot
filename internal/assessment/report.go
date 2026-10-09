@@ -31,6 +31,13 @@ func writeReport(root string, s State) error {
 	b.WriteString("## Executive summary\n\n")
 	summary, unreviewed := reportOutcome(s)
 	fmt.Fprintf(&b, "%s\n\n", summary)
+	if leads := CurrentOpenLeads(s.Plans); len(leads) > 0 {
+		b.WriteString("## Recommended continuation\n\nThese are open questions, not completed tests or confirmed vulnerabilities. Continue in this session after reviewing scope and the recorded evidence.\n\n")
+		for i, lead := range leads {
+			fmt.Fprintf(&b, "%d. **Question:** %s\n   **Next check:** %s\n", i+1, lead.Hypothesis, lead.NextCheck)
+		}
+		b.WriteString("\n")
+	}
 	b.WriteString("## Method and coverage\n\n")
 	b.WriteString("The sequence records each coordinator round and the tasks proposed, approved, or skipped. A proposed task does not establish coverage; completed work and execution references are detailed in the separate evidence index.\n\n")
 	for i, d := range s.Plans {
@@ -116,6 +123,14 @@ func writeReport(root string, s State) error {
 			}
 			b.WriteString("\n")
 		}
+	}
+	priorReviews := CurrentPriorReviews(s.Plans)
+	if len(priorReviews) > 0 {
+		b.WriteString("## Follow-up on earlier project findings\n\nThese conclusions concern findings from earlier sessions. They rely on this session's cited worker checks; absence from a later scan alone is not evidence of remediation.\n\n")
+		for _, review := range priorReviews {
+			fmt.Fprintf(&b, "- **%s** — %s. %s Worker: `%s`. Evidence: %s\n", review.Verdict, review.FindingID, review.Reason, review.ValidationTask, strings.Join(review.Evidence, ", "))
+		}
+		b.WriteString("\n")
 	}
 	deniedCount := 0
 	for _, result := range s.Results {

@@ -47,6 +47,32 @@ func TestReportReferencesRawEvidenceWithoutCopyingSensitiveInput(t *testing.T) {
 	}
 }
 
+func TestReportsShowOpenLeadContinuationSeparatelyFromFindings(t *testing.T) {
+	root := t.TempDir()
+	state := State{ID: "fixture", Status: "completed_with_gaps", Plans: []Decision{{
+		Complete: true, Summary: "The observed version is still unknown.",
+		OpenLeads: []Lead{{ID: "version", Hypothesis: "The installed build may precede a vendor fix.", NextCheck: "Read the installed build from the authorized status page and compare it with the vendor release history.", Evidence: []string{"tasks/inspect/version.log"}}},
+	}}}
+	if err := writeReport(root, state); err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := os.ReadFile(filepath.Join(root, "report.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, format := range []ReportFormat{OWASPReport, PTESReport} {
+		formatted, err := RenderFormattedReport(state, format)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, report := range []string{string(canonical), string(formatted)} {
+			if !strings.Contains(report, "Recommended continuation") || !strings.Contains(report, state.Plans[0].OpenLeads[0].NextCheck) || !strings.Contains(report, "Unverified lead: "+state.Plans[0].OpenLeads[0].Hypothesis) {
+				t.Fatalf("%s report lost the next check or its unresolved status: %s", format, report)
+			}
+		}
+	}
+}
+
 func TestReportKeepsRepeatedExecutionReferencesOutOfOverview(t *testing.T) {
 	root := t.TempDir()
 	result := Result{Task: Task{ID: "inspect", Goal: "Inspect the scoped system"}, Status: "done", Summary: "Inspection completed with recorded evidence."}

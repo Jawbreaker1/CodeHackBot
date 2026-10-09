@@ -366,13 +366,22 @@ func TestAgentContextWindowsKeepCoordinatorAndWorkersSeparate(t *testing.T) {
 	primary, all := agentContextWindows(state, contextWindowView{UsedBytes: 350, LimitBytes: 1000}, []workerView{
 		{ID: "worker-a", Phase: "decision_started", ContextUsedBytes: 100, ContextLimitBytes: 1000},
 		{ID: "worker-b", Phase: "execution_started", ContextUsedBytes: 250, ContextLimitBytes: 1000},
+		{ID: "finished", Phase: "done", ContextUsedBytes: 900, ContextLimitBytes: 1000},
 	}, "running", true, false, nil)
 	if primary.Role != "coordinator" || primary.UsedBytes != 350 || primary.Percent != 35 || len(all) != 3 || all[1].WorkerID != "worker-a" || all[1].UsedBytes != 100 || all[2].WorkerID != "worker-b" || all[2].UsedBytes != 250 {
 		t.Fatalf("agent context windows were mixed: primary=%+v all=%+v", primary, all)
 	}
+	_, all = agentContextWindows(state, primary, []workerView{{ID: "waiting", Phase: "approval_required", ContextUsedBytes: 450}}, "running", true, false, nil)
+	if len(all) != 2 || all[1].WorkerID != "waiting" || all[1].Active {
+		t.Fatalf("worker waiting for approval lost its resumable context: %+v", all)
+	}
+	_, all = agentContextWindows(state, primary, []workerView{{ID: "starting", Phase: "decision_started"}}, "running", true, false, nil)
+	if len(all) != 2 || all[1].WorkerID != "starting" || !all[1].Active {
+		t.Fatalf("active worker disappeared before its first context measurement: %+v", all)
+	}
 	_, all = agentContextWindows(state, primary, []workerView{{ID: "worker-a", Phase: "decision_started", ContextUsedBytes: 900}}, "interrupted", false, false, nil)
-	if all[1].Active || all[1].Status != "interrupted" {
-		t.Fatalf("interrupted worker appeared active: %+v", all[1])
+	if len(all) != 1 || all[0].Role != "coordinator" {
+		t.Fatalf("interrupted run retained a worker context that cannot resume: %+v", all)
 	}
 }
 

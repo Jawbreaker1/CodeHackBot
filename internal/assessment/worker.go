@@ -84,6 +84,9 @@ func (c Coordinator) runWorker(ctx context.Context, root string, state State, ta
 		r.Summary = outcome.Packet.RunningSummary
 	}
 	r.Status = outcome.Packet.TaskRuntime.State
+	if r.Status == "done" {
+		r.LeadHints = append([]string(nil), outcome.LeadHints...)
+	}
 	if task.Verification != nil && outcome.GoalEvaluation != nil && outcome.GoalEvaluation.Verification != nil {
 		v := outcome.GoalEvaluation.Verification
 		r.Verification = &VerificationResult{Verdict: v.Verdict, AlternativeResult: v.AlternativeResult, Reason: v.Reason, Evidence: append([]string(nil), v.Evidence...)}

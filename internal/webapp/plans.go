@@ -5,14 +5,16 @@ import "github.com/Jawbreaker1/CodeHackBot/internal/assessment"
 // coordinatorPlanView is a read-only presentation of persisted coordinator
 // decisions. It never infers or advances a plan from tool output.
 type coordinatorPlanView struct {
-	Round        int                   `json:"round"`
-	Phase        string                `json:"phase"`
-	Summary      string                `json:"summary"`
-	PlainSummary string                `json:"plain_summary,omitempty"`
-	Review       string                `json:"review,omitempty"`
-	Signal       string                `json:"signal"`
-	Status       string                `json:"status"`
-	Tasks        []coordinatorTaskView `json:"tasks"`
+	Round        int                      `json:"round"`
+	Phase        string                   `json:"phase"`
+	Summary      string                   `json:"summary"`
+	PlainSummary string                   `json:"plain_summary,omitempty"`
+	Review       string                   `json:"review,omitempty"`
+	Signal       string                   `json:"signal"`
+	Status       string                   `json:"status"`
+	Tasks        []coordinatorTaskView    `json:"tasks"`
+	OpenLeads    []assessment.Lead        `json:"open_leads,omitempty"`
+	ClosedLeads  []assessment.LeadClosure `json:"closed_leads,omitempty"`
 }
 
 type coordinatorTaskView struct {
@@ -35,7 +37,7 @@ func coordinatorPlans(state assessment.State, workers map[string]workerView) []c
 		if phase == "" {
 			phase = "assessment"
 		}
-		plan := coordinatorPlanView{Round: i + 1, Phase: phase, Summary: decision.Summary, PlainSummary: decision.PlainSummary, Status: "finished"}
+		plan := coordinatorPlanView{Round: i + 1, Phase: phase, Summary: decision.Summary, PlainSummary: decision.PlainSummary, Status: "finished", OpenLeads: append([]assessment.Lead(nil), decision.OpenLeads...), ClosedLeads: append([]assessment.LeadClosure(nil), decision.ClosedLeads...)}
 		if state.Status == "interrupted" && i == len(state.Plans)-1 && !decision.Complete {
 			plan.Status = "interrupted"
 		}

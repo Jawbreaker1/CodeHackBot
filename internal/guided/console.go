@@ -4,8 +4,10 @@ package guided
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -28,12 +30,30 @@ const (
 	consolePermissions
 	consoleDashboard
 	consoleCoordinatorStatus
+	consoleModalStart
+	consoleModalEnd
+	consoleChoices
+	consoleNotice
 )
 
-type consoleEvent struct {
-	kind consoleEventKind
-	text string
+type consoleChoice struct {
+	Label  string
+	Detail string
+	Value  string
 }
+
+type consoleEvent struct {
+	kind          consoleEventKind
+	text          string
+	choices       []consoleChoice
+	defaultChoice int
+	working       bool
+	activeWorkers int
+}
+
+var errModalCanceled = errors.New("dialog canceled")
+
+const modalCancelInput = "\x1b"
 
 // One reader owns stdin for the application lifetime. The mutex serializes
 // prompts and progress from concurrent workers without losing buffered input.
@@ -109,6 +129,10 @@ func newConsole(ctx context.Context, reader io.Reader, writer io.Writer, events 
 }
 
 func (c *Console) Ask(ctx context.Context, prompt string) (string, error) {
+	return c.ask(ctx, prompt, nil)
+}
+
+func (c *Console) ask(ctx context.Context, prompt string, choiceEvent *consoleEvent) (string, error) {
 	c.askMu.Lock()
 	defer c.askMu.Unlock()
 	response := make(chan line, 1)
@@ -116,6 +140,9 @@ func (c *Console) Ask(ctx context.Context, prompt string) (string, error) {
 	case <-ctx.Done():
 		return "", ctx.Err()
 	case c.requests <- promptRequest{response: response}:
+	}
+	if choiceEvent != nil {
+		c.emitEvent(*choiceEvent)
 	}
 	c.emit(consolePrompt, prompt)
 	select {
@@ -125,8 +152,62 @@ func (c *Console) Ask(ctx context.Context, prompt string) (string, error) {
 		if input.err != nil {
 			return "", input.err
 		}
+		if input.text == modalCancelInput {
+			return "", errModalCanceled
+		}
 		return strings.TrimSpace(input.text), nil
 	}
+}
+
+func (c *Console) BeginModal(title string) { c.emit(consoleModalStart, title) }
+func (c *Console) EndModal()               { c.emit(consoleModalEnd, "") }
+
+func (c *Console) Choose(ctx context.Context, title, prompt string, choices []consoleChoice, defaultChoice int) (string, error) {
+	if c.events == nil {
+		c.Print("\n%s\n", title)
+		for i, choice := range choices {
+			c.Print("  %d. %s", i+1, choice.Label)
+			if choice.Detail != "" {
+				c.Print(" · %s", choice.Detail)
+			}
+			c.Print("\n")
+		}
+	}
+	var selection *consoleEvent
+	if c.events != nil {
+		selection = &consoleEvent{kind: consoleChoices, text: title, choices: choices, defaultChoice: defaultChoice}
+	}
+	answer, err := c.ask(ctx, prompt, selection)
+	if err != nil {
+		return "", err
+	}
+	if answer == "" && defaultChoice >= 0 && defaultChoice < len(choices) {
+		return choices[defaultChoice].Value, nil
+	}
+	if n, err := strconv.Atoi(answer); err == nil && n >= 1 && n <= len(choices) {
+		return choices[n-1].Value, nil
+	}
+	return answer, nil
+}
+
+func (c *Console) Notice(format string, args ...any) {
+	message := fmt.Sprintf(format, args...)
+	if c.events == nil {
+		c.Print("%s\n", message)
+		return
+	}
+	c.emit(consoleNotice, message)
+}
+
+func (c *Console) ShowInfoModal(ctx context.Context, title, message string) error {
+	c.BeginModal(title)
+	defer c.EndModal()
+	c.Print("%s\n", message)
+	_, err := c.Ask(ctx, "Press Enter or Esc to close")
+	if errors.Is(err, errModalCanceled) {
+		return nil
+	}
+	return err
 }
 
 // Commands returns operator input received while no approval or worker
@@ -145,26 +226,28 @@ func (c *Console) Print(format string, args ...any) {
 func (c *Console) Progress(e assessment.Event) {
 	var lines []string
 	var status string
+	var activeWorkers int
 	c.mu.Lock()
 	for _, line := range c.dashboard.apply(e) {
 		lines = append(lines, line)
 	}
 	if e.TaskID != "" {
 		status = strings.Join(c.dashboard.compactSnapshot(), "\n")
+		activeWorkers = c.dashboard.activeWorkers()
 	}
 	c.mu.Unlock()
 	if status != "" && c.events != nil {
-		c.emit(consoleDashboard, status)
+		c.emitEvent(consoleEvent{kind: consoleDashboard, text: status, activeWorkers: activeWorkers})
 		return
 	}
 	if c.events != nil && e.TaskID == "" {
 		switch e.Kind {
 		case "planning":
-			c.emit(consoleCoordinatorStatus, "planning next steps")
+			c.emitEvent(consoleEvent{kind: consoleCoordinatorStatus, text: "planning next steps", working: true})
 		case "plan":
-			c.emit(consoleCoordinatorStatus, "plan ready")
+			c.emitEvent(consoleEvent{kind: consoleCoordinatorStatus, text: "plan ready"})
 		case "round_update":
-			c.emit(consoleCoordinatorStatus, "reviewing worker results")
+			c.emitEvent(consoleEvent{kind: consoleCoordinatorStatus, text: "reviewing worker results", working: true})
 		}
 	}
 	if len(lines) > 0 {
@@ -174,13 +257,17 @@ func (c *Console) Progress(e assessment.Event) {
 
 func (c *Console) approvalRequested(taskID, command string) {
 	var lines []string
+	var status string
+	var activeWorkers int
 	c.mu.Lock()
 	for _, line := range c.dashboard.apply(assessment.Event{TaskID: taskID, Kind: "approval_required", Message: command, Action: command}) {
 		lines = append(lines, line)
 	}
+	status = strings.Join(c.dashboard.compactSnapshot(), "\n")
+	activeWorkers = c.dashboard.activeWorkers()
 	c.mu.Unlock()
 	if c.events != nil {
-		c.emit(consoleDashboard, strings.Join(c.dashboardCompactSnapshot(), "\n"))
+		c.emitEvent(consoleEvent{kind: consoleDashboard, text: status, activeWorkers: activeWorkers})
 		return
 	}
 	if len(lines) > 0 {
@@ -195,19 +282,25 @@ func (c *Console) dashboardCompactSnapshot() []string {
 }
 
 func (c *Console) emit(kind consoleEventKind, text string) {
+	c.emitEvent(consoleEvent{kind: kind, text: text})
+}
+
+func (c *Console) emitEvent(event consoleEvent) {
 	c.eventMu.Lock()
 	defer c.eventMu.Unlock()
 	if c.events != nil {
-		c.events(consoleEvent{kind: kind, text: text})
+		c.events(event)
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if kind == consolePrompt {
-		_, _ = fmt.Fprint(c.writer, text+"\n> ")
+	if event.kind == consolePrompt {
+		_, _ = fmt.Fprint(c.writer, event.text+"\n> ")
 		return
 	}
-	_, _ = fmt.Fprint(c.writer, text)
+	if event.kind == consoleOutput {
+		_, _ = fmt.Fprint(c.writer, event.text)
+	}
 }
 
 func (c *Console) assessmentStarted() {

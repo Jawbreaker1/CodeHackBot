@@ -26,6 +26,13 @@ This is a point-in-time report of the recorded work. The OWASP WSTG provides rep
 
 {{if .Findings}}Current findings: {{len .Findings}}. Technical details and remediation follow.{{else}}No findings were recorded; this does not establish that the scoped system is free of vulnerabilities.{{end}}
 
+{{if .NextChecks}}### Recommended continuation
+
+These questions remain open. The checks below are proposals, not completed tests or confirmed findings.
+{{range $i, $lead := .NextChecks}}
+{{inc $i}}. **Question:** {{inline $lead.Hypothesis}} **Next check:** {{inline $lead.NextCheck}}
+{{end}}
+{{end}}
 ## 3. Findings
 
 ### 3.1 Findings summary
@@ -71,6 +78,13 @@ This is a point-in-time report of the recorded work. The OWASP WSTG provides rep
 {{range $f.References}}- {{inline .}}
 {{end}}{{end}}
 {{end}}{{else}}No findings to detail.
+{{end}}
+{{if .PriorReviews}}### 3.3 Follow-up on earlier project findings
+
+These verdicts refer to older sessions and cite evidence from this assessment. A later scan omitting an older finding is not proof of remediation.
+
+{{range .PriorReviews}}- **{{inline .Verdict}}** — `{{inline .FindingID}}`: {{inline .Reason}}. Worker: `{{inline .ValidationTask}}`. Evidence: {{join .Evidence ", "}}
+{{end}}
 {{end}}
 ## 4. Method and coverage
 

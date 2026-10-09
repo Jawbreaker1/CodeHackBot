@@ -26,6 +26,7 @@ type Response struct {
 	Risk            string      `json:"risk,omitempty"`
 	Artifacts       []string    `json:"artifacts,omitempty"`
 	Summary         string      `json:"summary,omitempty"`
+	LeadHints       []string    `json:"lead_hints,omitempty"`
 	Question        string      `json:"question,omitempty"`
 	Strategy        string      `json:"strategy,omitempty"`
 	ContextRef      string      `json:"context_ref,omitempty"`
@@ -97,6 +98,17 @@ func ParseResponse(text string) (Response, error) {
 	}
 	if r.Type != "bash" && len(r.Artifacts) != 0 {
 		return r, fmt.Errorf("only bash may declare artifacts")
+	}
+	if r.Type != "step_complete" && len(r.LeadHints) != 0 {
+		return r, fmt.Errorf("only step_complete may contain lead hints")
+	}
+	if len(r.LeadHints) > 3 {
+		return r, fmt.Errorf("step_complete may contain at most three lead hints")
+	}
+	for _, hint := range r.LeadHints {
+		if strings.TrimSpace(hint) == "" || len(hint) > 400 {
+			return r, fmt.Errorf("lead hints must be concise nonempty text")
+		}
 	}
 	if r.Type != "load_strategy" && r.Strategy != "" {
 		return r, fmt.Errorf("only load_strategy may name a strategy")

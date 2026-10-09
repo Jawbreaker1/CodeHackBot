@@ -370,9 +370,12 @@ function updateComposer() {
   $('conversationState').textContent = conversationState;
   $('chatInput').placeholder = finished ? 'Ask about results, request a report, or continue the assessment…' : current?.resumable ? 'Ask the coordinator, or say continue to resume…' : 'Ask, investigate, or plan an assessment…';
   $('runControls').classList.toggle('hidden', !assessment || (!running && !current.resumable));
-  $('runControlState').textContent = running ? 'Assessment running · chat stays available' : current?.status === 'interrupted' ? 'Run interrupted · saved evidence is available' : current?.status === 'paused' ? 'Run paused · workers are stopped' : 'Run ended · saved evidence is available';
-  $('runToggle').textContent = running ? 'Pause run' : 'Resume run';
-  $('runToggle').setAttribute('aria-label', running ? 'Pause assessment and stop active workers' : 'Resume assessment from saved evidence');
+  $('runToggleLabel').textContent = running ? 'Pause' : 'Resume';
+  $('runPauseIcon').classList.toggle('hidden', !running);
+  $('runResumeIcon').classList.toggle('hidden', running);
+  const runToggleDescription = running ? 'Pause assessment and stop active workers' : 'Resume assessment from saved evidence';
+  $('runToggle').setAttribute('aria-label', runToggleDescription);
+  $('runToggle').title = runToggleDescription;
   $('stopRun').classList.toggle('hidden', !running);
 }
 function formatBytes(value) {
@@ -441,7 +444,7 @@ function renderOverview(view) {
     $('contextUsageDetail').textContent = context.used_bytes ? `${context.active ? 'Current' : 'Last saved'} request · ${percent}% of app input limit` : 'Waiting for coordinator request';
     const agents = view.context_windows || [context];
     if (changed('context-breakdown', [view.id, agents])) {
-      const intro = node('p', 'context-explainer', 'Each agent has a separate request packet. These are bytes against the app’s input limit, not the model’s token window.');
+      const intro = node('p', 'context-explainer', 'Coordinator and current workers have separate contexts. Finished worker packets stay in Context for debugging. Sizes are bytes against the app input limit, not model tokens.');
       const rows = agents.map(agent => {
         const row = node('div', 'context-agent');
         const name = node('span', 'context-agent-name', agent.role === 'worker' ? `Worker · ${agent.agent_id}` : 'Coordinator');

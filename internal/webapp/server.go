@@ -1071,6 +1071,10 @@ func (s *Server) startIntake(current *intakeRun, customer, approachID string) (a
 	}
 	created.mu.Lock()
 	created.state.Approach = selectedApproach
+	created.state.Target = canonicalTarget(proposal.Target)
+	if created.state.Target == "" {
+		created.state.Target = legacyHostname(proposal.Scope)
+	}
 	created.permissionMode = current.permissionMode
 	created.client = client
 	created.profileID = current.profileID
@@ -1731,6 +1735,14 @@ func (s *Server) customerReport(w http.ResponseWriter, view customerView) {
 			b.WriteString("\n")
 		}
 	}
+	analysis := s.customerAnalysis(view.ID)
+	if len(analysis.PriorReviews) > 0 {
+		b.WriteString("## Follow-up on earlier findings\n\nA later worker explicitly retested these earlier records. An omitted finding in any other session is not proof of remediation.\n\n")
+		for _, review := range analysis.PriorReviews {
+			fmt.Fprintf(&b, "- `%s` — **%s** in session `%s`: %s. Evidence: %s\n", review.FindingID, review.Verdict, review.SessionID, review.Reason, strings.Join(review.Evidence, ", "))
+		}
+		b.WriteString("\n")
+	}
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	_, _ = w.Write([]byte(b.String()))
 }
@@ -1832,14 +1844,25 @@ func (s *Server) runAssessment(ctx context.Context, current *run) {
 	budget := current.budget
 	resume := current.resume
 	initial := current.state
+	project, id := current.customer, current.id
 	current.mu.RUnlock()
+	target := assessmentTarget(initial)
+	if target == "" {
+		target = legacyHostname(initial.Scope)
+	}
+	if initial.ProjectHistory == nil {
+		initial.ProjectHistory = s.projectHistory(project, target, id)
+	}
+	initial.Target = target
 	runner := assessment.Coordinator{
-		LLM:      client,
-		Budget:   budget,
-		Frame:    s.config.Frame,
-		Limits:   s.config.Limits,
-		Approach: initial.Approach,
-		Emit:     current.emit,
+		LLM:            client,
+		Budget:         budget,
+		Frame:          s.config.Frame,
+		Target:         target,
+		ProjectHistory: initial.ProjectHistory,
+		Limits:         s.config.Limits,
+		Approach:       initial.Approach,
+		Emit:           current.emit,
 		Approver: func(task assessment.Task) approval.Approver {
 			return &runApprover{run: current, taskID: task.ID}
 		},
@@ -2441,7 +2464,7 @@ func (r *run) view(after string) assessmentView {
 			phase = "assessment"
 		}
 		view.PendingPlan = &planApprovalView{ID: r.plan.ID, Phase: phase, Summary: r.plan.plan.Summary, PlainSummary: r.plan.plan.PlainSummary, Tasks: append([]assessment.Task(nil), r.plan.plan.Tasks...)}
-		pending := coordinatorPlanView{Round: len(r.state.Plans) + 1, Phase: phase, Summary: r.plan.plan.Summary, PlainSummary: r.plan.plan.PlainSummary, Signal: "review", Status: "review"}
+		pending := coordinatorPlanView{Round: len(r.state.Plans) + 1, Phase: phase, Summary: r.plan.plan.Summary, PlainSummary: r.plan.plan.PlainSummary, Signal: "review", Status: "review", OpenLeads: append([]assessment.Lead(nil), r.plan.plan.OpenLeads...), ClosedLeads: append([]assessment.LeadClosure(nil), r.plan.plan.ClosedLeads...)}
 		for _, task := range r.plan.plan.Tasks {
 			pending.Tasks = append(pending.Tasks, coordinatorTaskView{ID: task.ID, Goal: task.Goal, DoneWhen: task.DoneWhen, StrategyHints: task.StrategyHints, Status: "review"})
 		}

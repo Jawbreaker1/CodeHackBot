@@ -104,17 +104,18 @@ func agentContextWindows(state assessment.State, coordinator contextWindowView, 
 	primary := measuredContext(coordinator.UsedBytes, limit, "coordinator", "coordinator", coordinatorStatus, coordinatorActive)
 	all := []contextWindowView{primary}
 	for _, worker := range workers {
+		// The coordinator resumes from saved results, not from a finished or
+		// interrupted worker packet. Show only contexts that can receive another
+		// decision in the current run; historical packets remain in the debugger.
+		if !started || terminalWorkerPhase(worker.Phase) {
+			continue
+		}
 		workerLimit := worker.ContextLimitBytes
 		if workerLimit == 0 {
 			workerLimit = state.MaxInputBytes
 		}
-		terminal := terminalWorkerPhase(worker.Phase)
-		workerStatus := worker.Phase
-		if status == "interrupted" && !terminal {
-			workerStatus = "interrupted"
-		}
-		active := started && !terminal && workerStatus != "approval_required" && workerStatus != "user_question" && workerStatus != "waiting_user"
-		all = append(all, measuredContext(worker.ContextUsedBytes, workerLimit, "worker", worker.ID, workerStatus, active))
+		active := worker.Phase != "approval_required" && worker.Phase != "user_question" && worker.Phase != "waiting_user"
+		all = append(all, measuredContext(worker.ContextUsedBytes, workerLimit, "worker", worker.ID, worker.Phase, active))
 	}
 	return primary, all
 }

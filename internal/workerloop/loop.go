@@ -29,6 +29,7 @@ type Loop struct {
 }
 type Outcome struct {
 	Summary        string
+	LeadHints      []string
 	Packet         ctxpacket.WorkerPacket
 	GoalEvaluation *workergoal.Evaluation
 }
@@ -334,6 +335,7 @@ func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps i
 			current.TaskRuntime.MissingFact = "(none)"
 			if response.Type == "step_complete" {
 				out.Summary = blank(response.Summary, blank(evaluation.Summary, evaluation.Reason))
+				out.LeadHints = append([]string(nil), response.LeadHints...)
 			} else {
 				out.Summary = blank(evaluation.Summary, evaluation.Reason)
 			}
@@ -518,7 +520,7 @@ func buildUserPrompt(packet ctxpacket.WorkerPacket) string {
 			"On any decision, optionally set context_keep_refs to up to two exact recorded log references whose older observations still matter to the current plan. It replaces the previous pinned set; use an empty array to release them. The runtime keeps recent results regardless, and all other full results remain saved for later recall. Pin only evidence that may change a coming decision; do not pin text just because it is long.",
 			"For a direct command: {\"type\":\"bash\",\"command\":\"executable\",\"args\":[\"literal argument\"],\"use_shell\":false,\"impact\":\"short plain-language effect and risk\",\"artifacts\":[\"relative/path-created-by-this-command\"]}. This is the general execution tool, not a command-specific tool. Never add shell quotes to literal arguments. Declare at most eight bounded regular files the approved command is expected to create inside the worker workspace; declared artifacts are registered only after execution. A command may produce more files, but list the most useful eight and keep the others discoverable through the task-local log or workspace.",
 			"For Bash syntax such as pipes or redirection: {\"type\":\"bash\",\"command\":\"complete Bash script\",\"use_shell\":true}. Omit args. The runtime uses /bin/bash -c and shows the exact invocation before execution.",
-			"For completion: {\"type\":\"step_complete\",\"summary\":\"evidence-backed answer to the original goal, with limitations\"}. This means the whole task is complete, not just one plan step.",
+			"For completion: {\"type\":\"step_complete\",\"summary\":\"evidence-backed answer to the original goal, with limitations\",\"lead_hints\":[]}. This means the whole task is complete, not just one plan step. If an observation also suggests a material security question beyond your assigned goal, add at most three concise lead_hints for the coordinator to evaluate. For a possible sensitive-data flow across components, state the observed entry point and destination, or identify the missing link; coexistence alone does not prove a leak. Give a useful next check without raw secrets; do not pursue an unselected sibling task or turn a hint into a confirmed finding. Leave lead_hints empty when there is no concrete adjacent lead.",
 			"After an action, inspect its observed result in the next decision. When the task's done condition is met, explicitly return step_complete with the actual outcome and evidence references; an action summary describes intent and is not a completion answer. The runtime checks completion claims against recorded evidence. If the final decision executes an action, the runtime evaluates its evidence as a fallback, but it may have no answer to validate.",
 			"If a completion claim is rejected, use the evaluator's specific missing fact to choose one concrete corrective action. Do not resubmit a completion claim against unchanged evidence; if the remaining condition cannot be established within this task, return an honest blocked or partial result so the coordinator can revise the assignment.",
 			"For missing operator information: {\"type\":\"ask_user\",\"question\":\"...\"}. For an unrecoverable blocker: {\"type\":\"blocked\",\"summary\":\"what is missing and what was established\"}.",

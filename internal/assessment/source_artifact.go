@@ -69,12 +69,18 @@ func normalizeSourceLocations(d *Decision, state State) {
 		finding := &d.Findings[i]
 		for j := range finding.SourceLocations {
 			location := &finding.SourceLocations[j]
-			if !artifacts[location.ArtifactRef] || !slices.Contains(finding.Evidence, location.ArtifactRef) {
+			if !artifacts[location.ArtifactRef] {
 				continue
 			}
 			artifact, err := readSourceArtifact(location.ArtifactRef)
 			if err != nil {
 				continue
+			}
+			// A source location already cites this registered artifact. Keep the
+			// finding's evidence list consistent when the model omits the same
+			// reference there, without inventing or accepting unregistered proof.
+			if !slices.Contains(finding.Evidence, location.ArtifactRef) {
+				finding.Evidence = append(finding.Evidence, location.ArtifactRef)
 			}
 			location.Repository, location.Revision, location.Path = artifact.Repository, artifact.Revision, artifact.Path
 		}

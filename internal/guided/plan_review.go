@@ -2,6 +2,7 @@ package guided
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -16,16 +17,31 @@ func reviewCoordinatorPlan(ctx context.Context, c *Console, plan assessment.Deci
 	for _, task := range plan.Tasks {
 		all = append(all, task.ID)
 	}
-	c.Print("\nCoordinator plan: %s\n", plan.Summary)
+	var presentation strings.Builder
+	fmt.Fprintf(&presentation, "\nCoordinator plan: %s\n", plan.Summary)
 	if plan.Review != "" {
-		c.Print("Previous round: %s\n", plan.Review)
+		fmt.Fprintf(&presentation, "\nPrevious round: %s\n", plan.Review)
 	}
 	if plan.PlainSummary != "" {
-		c.Print("Purpose: %s\n", plan.PlainSummary)
+		fmt.Fprintf(&presentation, "\nPurpose: %s\n", plan.PlainSummary)
 	}
+	presentation.WriteString("\nTasks\n")
 	for i, task := range plan.Tasks {
-		c.Print("  %d. %s — %s\n     Done when: %s\n", i+1, task.ID, task.Goal, task.DoneWhen)
+		fmt.Fprintf(&presentation, "  %d. %s — %s\n     Done when: %s\n", i+1, task.ID, task.Goal, task.DoneWhen)
 	}
+	if len(plan.OpenLeads) > 0 {
+		presentation.WriteString("\nOpen questions (unverified):\n")
+		for _, lead := range plan.OpenLeads {
+			fmt.Fprintf(&presentation, "  - %s\n    Next check: %s\n", lead.Hypothesis, lead.NextCheck)
+		}
+	}
+	if len(plan.ClosedLeads) > 0 {
+		presentation.WriteString("\nQuestions resolved in this round:\n")
+		for _, lead := range plan.ClosedLeads {
+			fmt.Fprintf(&presentation, "  - %s: %s\n", lead.ID, lead.Reason)
+		}
+	}
+	c.Print("%s", presentation.String())
 	if c.approvalMode().Normalized() != approval.EveryExecution {
 		c.Print("Starting these tasks under the selected approval level.\n")
 		return assessment.PlanReview{TaskIDs: all}, nil

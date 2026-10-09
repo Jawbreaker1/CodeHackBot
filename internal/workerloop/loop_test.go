@@ -63,6 +63,14 @@ func TestActionIntentCannotBecomeWorkerOutcome(t *testing.T) {
 	}
 }
 
+func TestCompletedWorkerPassesAdjacentLeadToCoordinator(t *testing.T) {
+	loop, packet, _ := fixtureWorker(t, 2, printAction, `{"type":"step_complete","summary":"The fixture was observed","lead_hints":["A distinct observed access path merits a bounded follow-up."]}`, completeEval)
+	out, err := loop.Run(context.Background(), packet, 2)
+	if err != nil || len(out.LeadHints) != 1 || out.LeadHints[0] != "A distinct observed access path merits a bounded follow-up." {
+		t.Fatalf("worker lead was lost on completion: leads=%v err=%v", out.LeadHints, err)
+	}
+}
+
 func TestRepeatedUnsupportedCompletionWithoutNewEvidenceStops(t *testing.T) {
 	claim := `{"type":"step_complete","summary":"The task is complete"}`
 	loop, packet, calls := fixtureWorker(t, 5, printAction, claim, continueEval, claim, continueEval, claim)

@@ -1,0 +1,16 @@
+---
+name: browser-data-flow
+description: Use when a browser application's security depends on how values move through client code, browser state, and network requests.
+---
+
+# Browser data-flow investigation
+
+Use this guide for a concrete cross-component question, not as a reason to capture every request or read every script.
+
+1. Name the value or decision to trace, its source, the expected trust boundary, and the observable result that would confirm or refute the concern. Prefer a synthetic marker over a real token or customer datum. Record the tested role, page, and browser state.
+2. Follow the relevant path across the initial HTML, script loading order, URL and redirect handling, DOM, storage or cookies, API responses, and outgoing requests. Inspect only the components needed to explain that path. Distinguish client-side visibility from server-side authorization and distinguish code that could run from code that actually ran.
+3. Use bounded browser captures and attributable source excerpts together. Preserve the exact origin, request destination, method, relevant URL or body fields, timing, and response status. External services are separate destinations: observe ordinary in-scope page behavior without actively probing an out-of-scope service. Keep sensitive values out of ordinary logs and reports.
+4. Test the smallest plausible hypothesis with controlled state. Compare a positive and negative control when practical, such as before and after a user action, with and without the synthetic marker, or across two authorized roles. Account for reloads, stale storage, caches, redirects, and browser policy before attributing an effect to the application.
+5. Hand the coordinator a short chain of observed steps with exact evidence references, the missing link if any, and one bounded next check. A script reference, storage setting, or third-party request alone does not prove disclosure or exploitability. Report a confirmed finding only when the relevant value reached the unintended boundary under the tested conditions.
+
+Use `web-application` for a broad site assessment and `identity-access` when the main question is an account or authorization boundary. This guide narrows the investigation to one browser-mediated data flow; it does not expand scope or approve target contact.

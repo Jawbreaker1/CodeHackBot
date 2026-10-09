@@ -291,6 +291,21 @@ export function renderCoordinatorPlans(view) {
       tasks.append(item);
     }
     if (tasks.children.length) content.append(tasks);
+    if (plan.open_leads?.length) {
+      const leadList = node('ul', 'coordinator-tasks');
+      for (const lead of plan.open_leads) {
+        const item = node('li', 'coordinator-task');
+        item.append(node('strong', '', lead.hypothesis || 'Unverified question'));
+        if (lead.next_check) item.append(node('p', 'worker-detail', 'Useful next check: ' + lead.next_check));
+        leadList.append(item);
+      }
+      content.append(disclosure(`Open questions · ${plan.open_leads.length}`, leadList, view.id + '-coordinator-leads-' + plan.round));
+    }
+    if (plan.closed_leads?.length) {
+      const closedList = node('ul', 'coordinator-tasks');
+      for (const lead of plan.closed_leads) closedList.append(node('li', 'coordinator-task', lead.id + ': ' + lead.reason));
+      content.append(disclosure(`Questions resolved · ${plan.closed_leads.length}`, closedList, view.id + '-coordinator-closed-leads-' + plan.round));
+    }
     const label = `Round ${plan.round} · ${signalLabel}`;
     const details = disclosure(label, content, view.id + '-coordinator-plan-' + plan.round);
     details.dataset.signal = plan.signal || '';

@@ -53,6 +53,8 @@ The `legacy/` tree is also non-authoritative: it is preserved as historical refe
 - `./scripts/ci.sh` runs the deterministic local/GitHub CI checks.
 - CI includes `scripts/check_guided_app.py`: the built application runs in a real terminal against a deterministic local model fixture. Python 3 and a Unix PTY are required.
 - CI includes `scripts/check_webapp.py`: the built browser binary is started on loopback and exercised through HTTP against the same deterministic model fixture, including two sessions aggregated under one customer report.
+- CI includes `scripts/check_review_workflow_lab.py`: the synthetic two-role editorial target must reproduce its seeded workflow flaw while a fixed control rejects the same post-approval edit.
+- CI includes `scripts/check_safe_documents_lab.py`: the synthetic document target must serve its public file and reject traversal attempts to a private fixture.
 - Rebuild-root tests now exist for the implemented core packages.
 - Real LLM validation remains required for major behavior slices.
 - Repeated live validations can be run with `scripts/repeat_worker_run.sh`.

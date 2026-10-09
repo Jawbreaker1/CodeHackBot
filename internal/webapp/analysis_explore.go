@@ -96,6 +96,12 @@ func correlateFindings(findings []analysisFinding) []analysisCorrelation {
 		matches      []analysisCorrelationMatch
 	}
 	groups := map[string]*group{}
+	byID := map[string]analysisFinding{}
+	for _, finding := range findings {
+		if finding.ID != "" {
+			byID[finding.ID] = finding
+		}
+	}
 	add := func(key, label, basis string, finding analysisFinding) {
 		item := groups[key]
 		if item == nil {
@@ -105,6 +111,9 @@ func correlateFindings(findings []analysisFinding) []analysisCorrelation {
 		item.matches = append(item.matches, analysisCorrelationMatch{SessionID: finding.SessionID, Title: finding.Title, Status: finding.Status, Scope: finding.Scope})
 	}
 	for _, finding := range findings {
+		if finding.Target != "" {
+			add("target:"+finding.Target, "Same target: "+finding.Target, "Findings concern the same named target; inspect the evidence before treating them as one weakness.", finding)
+		}
 		if strings.TrimSpace(finding.Scope) != "" {
 			add("scope:"+finding.Scope, finding.Scope, "Findings on the same declared scope; review whether they interact.", finding)
 		}
@@ -118,6 +127,15 @@ func correlateFindings(findings []analysisFinding) []analysisCorrelation {
 			software = strings.TrimSpace(software)
 			if software != "" {
 				add("software:"+strings.ToLower(software), software, "Same recorded affected-software label; verify versions, deployments, and impact separately.", finding)
+			}
+		}
+		for _, priorID := range finding.RelatedPrior {
+			if prior, ok := byID[priorID]; ok && prior.SessionID != finding.SessionID {
+				key := "retest:" + priorID
+				if groups[key] == nil {
+					add(key, "Possible follow-up: "+prior.Title, "The later coordinator linked these records for review; compare their evidence and test conditions.", prior)
+				}
+				add(key, "Possible follow-up: "+prior.Title, "The later coordinator linked these records for review; compare their evidence and test conditions.", finding)
 			}
 		}
 	}

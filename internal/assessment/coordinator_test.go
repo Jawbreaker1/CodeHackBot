@@ -86,6 +86,20 @@ func TestCoordinatorCarriesDepthAndExplainsRoundTransition(t *testing.T) {
 	}
 }
 
+func TestCoverageReviewIsReservedForThoroughAssessments(t *testing.T) {
+	for _, depth := range []string{"focused", "balanced", "thorough"} {
+		state := State{Approach: &Approach{ID: depth}}
+		instructions := strings.Join(coordinatorPayload(state).Instructions, "\n")
+		hasReview := strings.Contains(instructions, "For this Thorough assessment")
+		if hasReview != (depth == "thorough") {
+			t.Fatalf("depth %q coverage review = %v", depth, hasReview)
+		}
+	}
+	if instructions := strings.Join(coordinatorPayload(State{}).Instructions, "\n"); strings.Contains(instructions, "For this Thorough assessment") {
+		t.Fatal("unselected depth unexpectedly requests a coverage review")
+	}
+}
+
 func TestOperatorCanRedirectProposedPlanBeforeExecution(t *testing.T) {
 	requests := 0
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -141,7 +155,8 @@ func TestCoordinatorPromptCompactsPriorExecutionBodies(t *testing.T) {
 		},
 	}
 	prompt := coordinatorPrompt(state)
-	if len(prompt) > 20000 || strings.Contains(prompt, large) || !strings.Contains(prompt, "/tmp/evidence.log") {
+	base := len(coordinatorPrompt(State{Version: state.Version, ID: state.ID, Goal: state.Goal, Scope: state.Scope}))
+	if len(prompt)-base > 8<<10 || strings.Contains(prompt, large) || !strings.Contains(prompt, "/tmp/evidence.log") {
 		t.Fatalf("coordinator prompt was not compacted: bytes=%d", len(prompt))
 	}
 }
@@ -154,7 +169,8 @@ func TestCoordinatorRetainsEvidenceCatalogWhileBoundingResultCards(t *testing.T)
 	}
 	state.Results = []Result{result}
 	prompt := coordinatorPrompt(state)
-	if len(prompt) > 16<<10 {
+	base := len(coordinatorPrompt(State{Version: state.Version, ID: state.ID, Goal: state.Goal, Scope: state.Scope}))
+	if len(prompt)-base > 5<<10 {
 		t.Fatalf("coordinator prompt grew with repeated full commands: %d bytes", len(prompt))
 	}
 	var payload struct {
@@ -904,5 +920,45 @@ func TestInvalidCoordinatorProposalGetsOnlyOneBoundedCorrection(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "coordinator-01-correction-rejection.json")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCoordinatorCorrectionKeepsLateLeadProposals(t *testing.T) {
+	const evidenceRef = "/fixture/tasks/client-review/observation.log"
+	prior := Lead{ID: "existing-boundary", Hypothesis: "A public form may lack an abuse limit", Evidence: []string{evidenceRef}, NextCheck: "Review recorded controls"}
+	newLead := Lead{ID: "client-token-boundary", Hypothesis: "Client token handling may expose a trust boundary", Evidence: []string{evidenceRef}, NextCheck: "Review the saved client code"}
+	state := State{Version: 1, Goal: "Review fixture evidence", Scope: "synthetic fixture", Limits: DefaultLimits(),
+		Plans:   []Decision{{Summary: "Initial review", OpenLeads: []Lead{prior}}},
+		Results: []Result{{Task: Task{ID: "client-review"}, Status: "done", Evidence: []ctxpacket.ExecutionResult{{LogRefs: []string{evidenceRef}}}}},
+	}
+	invalid := Decision{Summary: "Review both questions", Tasks: []Task{{ID: "reconcile", Goal: "Reconcile saved observations", DoneWhen: "Questions reviewed"}}, OpenLeads: []Lead{prior, newLead}}
+	invalid.OpenLeads[0].NextCheck = strings.Repeat("Review the evidence carefully. ", 15)
+	valid := invalid
+	valid.OpenLeads = []Lead{prior, newLead}
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var request struct {
+			Messages []llmclient.Message `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			return
+		}
+		if calls == 1 {
+			reply(w, invalid)
+			return
+		}
+		correction := request.Messages[len(request.Messages)-1].Content
+		if !strings.Contains(correction, prior.ID) || !strings.Contains(correction, newLead.ID) || !strings.Contains(correction, "Only these IDs may appear in closed_leads") {
+			t.Errorf("correction lost lead continuity: %s", correction)
+		}
+		reply(w, valid)
+	}))
+	defer server.Close()
+	c := testCoordinator(server.URL)
+	got, err := c.decide(t.Context(), t.TempDir(), 2, 0, state)
+	if err != nil || calls != 2 || len(got.OpenLeads) != 2 || got.OpenLeads[1].ID != newLead.ID {
+		t.Fatalf("correction did not preserve new lead: calls=%d decision=%+v err=%v", calls, got, err)
 	}
 }

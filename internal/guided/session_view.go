@@ -42,6 +42,18 @@ func printSessionView(c *Console, command, root string, state assessment.State) 
 			}
 			c.Print("  %s [%s] %s\n    Done when: %s\n", task.ID, status, task.Goal, task.DoneWhen)
 		}
+		if len(plan.OpenLeads) > 0 {
+			c.Print("Open questions (unverified):\n")
+			for _, lead := range plan.OpenLeads {
+				c.Print("  - %s\n    Next check: %s\n", lead.Hypothesis, lead.NextCheck)
+			}
+		}
+		if len(plan.ClosedLeads) > 0 {
+			c.Print("Questions resolved in this round:\n")
+			for _, lead := range plan.ClosedLeads {
+				c.Print("  - %s: %s\n", lead.ID, lead.Reason)
+			}
+		}
 		if plan.Complete {
 			c.Print("Coordinator marked this assessment complete.\n")
 		}

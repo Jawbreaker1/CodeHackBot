@@ -10,6 +10,7 @@ func TestCoordinatorPlansFollowPersistedDecisionsAndLiveWorkerState(t *testing.T
 	state := assessment.State{Plans: []assessment.Decision{{
 		Phase:           "research",
 		Summary:         "Trace plan display",
+		OpenLeads:       []assessment.Lead{{ID: "trace-question", Hypothesis: "A shared trace may expose another tenant", NextCheck: "Compare synthetic markers"}},
 		Tasks:           []assessment.Task{{ID: "trace", Goal: "trace the UI", DoneWhen: "source evidence", StrategyHints: []string{"source-review/SKILL.md"}}, {ID: "skip", Goal: "unused"}},
 		ApprovedTaskIDs: []string{"trace"},
 	}}}
@@ -19,6 +20,9 @@ func TestCoordinatorPlansFollowPersistedDecisionsAndLiveWorkerState(t *testing.T
 	}
 	if len(plans[0].Tasks[0].StrategyHints) != 1 || plans[0].Tasks[0].StrategyHints[0] != "source-review/SKILL.md" {
 		t.Fatalf("plan lost suggested guidance: %+v", plans[0])
+	}
+	if len(plans[0].OpenLeads) != 1 || plans[0].OpenLeads[0].ID != "trace-question" {
+		t.Fatalf("plan lost the open question: %+v", plans[0])
 	}
 	state.Results = []assessment.Result{{Task: state.Plans[0].Tasks[0], Status: "done"}}
 	plans = coordinatorPlans(state, nil)

@@ -18,12 +18,16 @@ import (
 )
 
 type preferences struct {
-	Provider        string `json:"provider"`
-	BaseURL         string `json:"base_url,omitempty"`
-	Model           string `json:"model"`
-	ReasoningEffort string `json:"reasoning_effort,omitempty"`
-	MaxOutputTokens int    `json:"max_output_tokens,omitempty"`
-	MaxInputBytes   int    `json:"max_input_bytes,omitempty"`
+	Provider              string `json:"provider"`
+	BaseURL               string `json:"base_url,omitempty"`
+	Model                 string `json:"model"`
+	TokenFile             string `json:"token_file,omitempty"`
+	ManagedBridge         bool   `json:"managed_bridge,omitempty"`
+	ReasoningEffort       string `json:"reasoning_effort,omitempty"`
+	StructuredJSON        bool   `json:"structured_json,omitempty"`
+	MaxOutputTokens       int    `json:"max_output_tokens,omitempty"`
+	MaxInputBytes         int    `json:"max_input_bytes,omitempty"`
+	RequestTimeoutSeconds int    `json:"request_timeout_seconds,omitempty"`
 }
 
 // SubscriptionInputByteLimit gives Daybreak a larger evidence budget than the
@@ -32,19 +36,24 @@ type preferences struct {
 const SubscriptionInputByteLimit = llmclient.SubscriptionInputByteLimit
 
 func configureProvider(ctx context.Context, c *Console, path string) (preferences, error) {
+	return configureProviderSelection(ctx, c, path, false)
+}
+
+func configureProviderSelection(ctx context.Context, c *Console, path string, switching bool) (preferences, error) {
 	var p preferences
-	if data, err := os.ReadFile(path); err == nil && json.Unmarshal(data, &p) == nil && validSavedPreferences(p) {
-		answer, err := c.Ask(ctx, fmt.Sprintf("Use saved provider %s / %s (reasoning: %s)? [Y/n, s=settings]", p.Provider, p.Model, reasoningLabel(p)))
-		if err != nil {
-			return p, err
-		}
-		if answer == "" || strings.EqualFold(answer, "y") || strings.EqualFold(answer, "yes") {
+	if !switching {
+		if data, err := os.ReadFile(path); err == nil && json.Unmarshal(data, &p) == nil && validSavedPreferences(p) {
 			return savePreferences(ctx, c, path, p)
 		}
-		if strings.EqualFold(answer, "s") || strings.EqualFold(answer, "settings") {
-			c.Print("Opening model settings. The selected profile is used for this and future assessments.\n")
-		}
 	}
+	c.BeginModal("Model settings")
+	defer c.EndModal()
+	if chosen, ok, err := chooseConfiguredProfile(ctx, c, path); err != nil {
+		return p, err
+	} else if ok {
+		return savePreferences(ctx, c, path, chosen)
+	}
+	p = preferences{}
 	for {
 		choice, err := c.Ask(ctx, "Choose model access:\n  1. Local model server\n  2. ChatGPT subscription (selected context is sent to OpenAI)\nSelection [1]")
 		if err != nil {
@@ -100,15 +109,23 @@ func configureProvider(ctx context.Context, c *Console, path string) (preference
 		}
 		c.Print("All application model roles will use this server. Full air-gapped operation is not yet validated; third-party tools can still access the network.\n")
 	} else {
-		model, err := c.Ask(ctx, "Subscription model ID [gpt-daybreak-blue-latest]")
-		if err != nil {
-			return p, err
+		for {
+			model, err := c.Ask(ctx, "Subscription model ID [gpt-daybreak-blue-latest]")
+			if err != nil {
+				return p, err
+			}
+			if model == "" {
+				model = "gpt-daybreak-blue-latest"
+			}
+			if !validSavedPreferences(preferences{Provider: "subscription", Model: model}) {
+				c.Print("Enter a model ID, not a chat message or command. Press Enter for Daybreak Blue.\n")
+				continue
+			}
+			p.Model = model
+			break
 		}
-		if model == "" {
-			model = "gpt-daybreak-blue-latest"
-		}
-		p.Model, p.BaseURL = model, ""
-		if model == "gpt-daybreak-blue-latest" {
+		p.BaseURL = ""
+		if p.Model == "gpt-daybreak-blue-latest" {
 			p.ReasoningEffort = "high"
 		}
 		p.MaxInputBytes = SubscriptionInputByteLimit
@@ -123,10 +140,18 @@ func validSavedPreferences(p preferences) bool {
 	// Subscription model IDs come from a fixed provider namespace. Rejecting
 	// whitespace here prevents an earlier setup answer from being persisted as
 	// the model after an input-routing failure. Local model IDs remain opaque.
-	if p.Provider == "subscription" && strings.ContainsAny(p.Model, " \t\r\n") {
+	if p.Provider == "subscription" && (strings.ContainsAny(p.Model, " \t\r\n") || strings.HasPrefix(p.Model, "/")) {
+		return false
+	}
+	if p.Provider == "local" && !validModelEndpoint(p.BaseURL) {
 		return false
 	}
 	return true
+}
+
+func validModelEndpoint(endpoint string) bool {
+	u, err := url.Parse(endpoint)
+	return err == nil && u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == "" && (u.Scheme == "http" || u.Scheme == "https")
 }
 
 func reasoningLabel(p preferences) string {
@@ -196,8 +221,7 @@ func savePreferences(ctx context.Context, c *Console, path string, p preferences
 }
 
 func listModels(ctx context.Context, endpoint string) ([]string, error) {
-	u, err := url.Parse(endpoint)
-	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https") {
+	if !validModelEndpoint(endpoint) {
 		return nil, fmt.Errorf("enter an http(s) model-server URL without credentials or query parameters")
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/models", nil)
@@ -234,11 +258,15 @@ func listModels(ctx context.Context, endpoint string) ([]string, error) {
 }
 
 func startProvider(ctx context.Context, p preferences) (llmclient.Client, func(), error) {
-	client := llmclient.Client{BaseURL: p.BaseURL, Model: p.Model}
+	client := llmclient.Client{BaseURL: p.BaseURL, Model: p.Model, StructuredJSON: p.StructuredJSON}
 	client.MaxInputBytes = p.MaxInputBytes
 	if p.Provider == "local" {
 		client.MaxOutputTokens = p.MaxOutputTokens
-		client.HTTPClient = &http.Client{Timeout: 10 * time.Minute}
+		timeout := 10 * time.Minute
+		if p.RequestTimeoutSeconds > 0 {
+			timeout = time.Duration(p.RequestTimeoutSeconds) * time.Second
+		}
+		client.HTTPClient = &http.Client{Timeout: timeout}
 		if p.ReasoningEffort != "default" {
 			client.ReasoningEffort = p.ReasoningEffort
 		}
@@ -247,6 +275,13 @@ func startProvider(ctx context.Context, p preferences) (llmclient.Client, func()
 	client.MaxOutputTokens = llmclient.SubscriptionMaxOutputTokens
 	if p.ReasoningEffort != "default" {
 		client.ReasoningEffort = p.ReasoningEffort
+	}
+	if p.BaseURL != "" && p.TokenFile != "" && !p.ManagedBridge {
+		client.AuthTokenFile = p.TokenFile
+		if p.RequestTimeoutSeconds > 0 {
+			client.HTTPClient = &http.Client{Timeout: time.Duration(p.RequestTimeoutSeconds) * time.Second}
+		}
+		return client, func() {}, nil
 	}
 	// Reuse the existing subscription adapter; the application owns its local
 	// listener and ephemeral credential, never provider credential copies.

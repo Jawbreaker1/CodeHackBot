@@ -156,6 +156,16 @@ func (d *assessmentDashboard) compactSnapshot() []string {
 	return lines
 }
 
+func (d *assessmentDashboard) activeWorkers() int {
+	count := 0
+	for _, task := range d.tasks {
+		if task.status == "running" {
+			count++
+		}
+	}
+	return count
+}
+
 func (d *assessmentDashboard) eventLine(task *dashboardTask) string {
 	depends := "-"
 	if len(task.dependsOn) > 0 {

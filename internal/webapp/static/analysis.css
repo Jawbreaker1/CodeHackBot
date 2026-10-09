@@ -79,6 +79,11 @@ details { margin-top:13px; border-top:1px solid var(--line); padding-top:10px; }
 .correlation { padding:15px; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
 .correlation > div { display:flex; justify-content:space-between; gap:10px; align-items:baseline; }.correlation strong { font-size:13px; font-weight:550; overflow-wrap:anywhere; }.correlation span { color:var(--faint); font-size:10px; white-space:nowrap; }
 .correlation p { margin:8px 0; color:var(--muted); font-size:11px; }.correlation ul { margin-top:8px; }
+.target-history { margin:10px 0 0; padding-left:20px; display:grid; gap:10px; font-size:12px; }
+.target-history li { line-height:1.5; }
+.target-history li span { white-space:normal; }
+.target-history details { margin-top:4px; color:var(--muted); }
+.target-history details summary { cursor:pointer; }
 .correlation-links { display:grid; gap:4px; max-height:130px; overflow:auto; }.correlation-links a { display:block; font-size:10px; overflow-wrap:anywhere; }
 .session-matrix { overflow:auto; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
 .session-matrix table { width:100%; min-width:760px; border-collapse:collapse; font-size:11px; }

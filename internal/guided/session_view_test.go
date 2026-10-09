@@ -19,14 +19,14 @@ func TestSessionViewsShowCurrentPlanAndFindings(t *testing.T) {
 	state := assessment.State{
 		Plans: []assessment.Decision{
 			{Summary: "old plan", Findings: []assessment.Finding{{Title: "obsolete lead"}}},
-			{Summary: "Check the access boundary", Review: "The earlier check did not reproduce the issue.", Tasks: []assessment.Task{{ID: "verify", Goal: "Check both tenants", DoneWhen: "both responses recorded"}}, Findings: []assessment.Finding{{Title: "Access issue", Status: "candidate", Severity: "high", Impact: "A reader may see another tenant's data."}}},
+			{Summary: "Check the access boundary", Review: "The earlier check did not reproduce the issue.", Tasks: []assessment.Task{{ID: "verify", Goal: "Check both tenants", DoneWhen: "both responses recorded"}}, OpenLeads: []assessment.Lead{{ID: "shared-trace", Hypothesis: "A shared trace may expose another tenant", NextCheck: "Compare synthetic markers"}}, Findings: []assessment.Finding{{Title: "Access issue", Status: "candidate", Severity: "high", Impact: "A reader may see another tenant's data."}}},
 		},
 	}
 	if !printSessionView(console, "/plan", t.TempDir(), state) || !printSessionView(console, "/findings", t.TempDir(), state) {
 		t.Fatal("known session command was not handled")
 	}
 	got := output.String()
-	for _, value := range []string{"Plan 2", "Previous round:", "verify [proposed]", "Access issue", "A reader may see another tenant's data."} {
+	for _, value := range []string{"Plan 2", "Previous round:", "verify [proposed]", "Open questions (unverified):", "A shared trace may expose another tenant", "Access issue", "A reader may see another tenant's data."} {
 		if !strings.Contains(got, value) {
 			t.Fatalf("missing %q in %q", value, got)
 		}

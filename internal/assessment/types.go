@@ -96,6 +96,7 @@ type Result struct {
 	Task            Task                        `json:"task"`
 	Status          string                      `json:"status"`
 	Summary         string                      `json:"summary"`
+	LeadHints       []string                    `json:"lead_hints,omitempty"`
 	Error           string                      `json:"error,omitempty"`
 	Evidence        []ctxpacket.ExecutionResult `json:"evidence"`
 	DeniedExecution *ctxpacket.DeniedExecution  `json:"denied_execution,omitempty"`
@@ -105,9 +106,10 @@ type Result struct {
 // Findings are model-authored drafts, never independent verification claims.
 type Finding struct {
 	Title            string           `json:"title"`
-	Status           string           `json:"status"`               // candidate or reproduced
-	Severity         string           `json:"severity,omitempty"`   // critical, high, medium, low, or info
-	Confidence       string           `json:"confidence,omitempty"` // high, medium, or low
+	RelatedPrior     []string         `json:"related_prior,omitempty"` // Explicit project-history finding IDs; never proof of equivalence.
+	Status           string           `json:"status"`                  // candidate or reproduced
+	Severity         string           `json:"severity,omitempty"`      // critical, high, medium, low, or info
+	Confidence       string           `json:"confidence,omitempty"`    // high, medium, or low
 	CVEIDs           []string         `json:"cve_ids,omitempty"`
 	AffectedSoftware []string         `json:"affected_software,omitempty"`
 	References       []string         `json:"references,omitempty"`
@@ -132,16 +134,19 @@ type SourceLocation struct {
 }
 
 type Decision struct {
-	Phase           string    `json:"phase,omitempty"` // research or assessment; empty means assessment
-	Summary         string    `json:"summary"`
-	PlainSummary    string    `json:"plain_summary,omitempty"` // short operator-facing purpose of this round
-	Review          string    `json:"review,omitempty"`        // plain-language outcome of the previous round
-	Tasks           []Task    `json:"tasks"`
-	ApprovedTaskIDs []string  `json:"approved_task_ids,omitempty"`
-	SkippedTaskIDs  []string  `json:"skipped_task_ids,omitempty"`
-	Complete        bool      `json:"complete"`
-	Findings        []Finding `json:"findings"`
-	Gaps            []string  `json:"gaps"`
+	Phase           string        `json:"phase,omitempty"` // research or assessment; empty means assessment
+	Summary         string        `json:"summary"`
+	PlainSummary    string        `json:"plain_summary,omitempty"` // short operator-facing purpose of this round
+	Review          string        `json:"review,omitempty"`        // plain-language outcome of the previous round
+	Tasks           []Task        `json:"tasks"`
+	OpenLeads       []Lead        `json:"open_leads,omitempty"`
+	ClosedLeads     []LeadClosure `json:"closed_leads,omitempty"`
+	ApprovedTaskIDs []string      `json:"approved_task_ids,omitempty"`
+	SkippedTaskIDs  []string      `json:"skipped_task_ids,omitempty"`
+	Complete        bool          `json:"complete"`
+	Findings        []Finding     `json:"findings"`
+	PriorReviews    []PriorReview `json:"prior_reviews,omitempty"`
+	Gaps            []string      `json:"gaps"`
 }
 
 // Approach is an operator-selected investigation depth proposed during intake.
@@ -161,28 +166,30 @@ type PlanReview struct {
 }
 
 type State struct {
-	Version              int          `json:"version"`
-	ID                   string       `json:"id"`
-	Goal                 string       `json:"goal"`
-	Scope                string       `json:"scope"`
-	Approach             *Approach    `json:"approach,omitempty"`
-	Model                string       `json:"model"`
-	ReasoningEffort      string       `json:"reasoning_effort,omitempty"`
-	MaxOutputTokens      int          `json:"max_output_tokens,omitempty"`
-	MaxInputBytes        int          `json:"max_input_bytes,omitempty"`
-	Status               string       `json:"status"`
-	StartedAt            time.Time    `json:"started_at"`
-	FinishedAt           time.Time    `json:"finished_at,omitempty"`
-	Limits               Limits       `json:"limits"`
-	Plans                []Decision   `json:"plans"`
-	Results              []Result     `json:"results"`
-	OperatorMessages     []string     `json:"operator_messages,omitempty"`
-	ContinuationRequests []string     `json:"continuation_requests,omitempty"`
-	ContinuationRound    int          `json:"continuation_round,omitempty"`
-	Usage                Usage        `json:"usage"`
-	PostRunUsage         Usage        `json:"post_run_usage,omitempty"`
-	LatestReportFormat   ReportFormat `json:"latest_report_format,omitempty"`
-	Error                string       `json:"error,omitempty"`
+	Version              int             `json:"version"`
+	ID                   string          `json:"id"`
+	Goal                 string          `json:"goal"`
+	Scope                string          `json:"scope"`
+	Target               string          `json:"target,omitempty"`
+	ProjectHistory       *ProjectHistory `json:"project_history,omitempty"`
+	Approach             *Approach       `json:"approach,omitempty"`
+	Model                string          `json:"model"`
+	ReasoningEffort      string          `json:"reasoning_effort,omitempty"`
+	MaxOutputTokens      int             `json:"max_output_tokens,omitempty"`
+	MaxInputBytes        int             `json:"max_input_bytes,omitempty"`
+	Status               string          `json:"status"`
+	StartedAt            time.Time       `json:"started_at"`
+	FinishedAt           time.Time       `json:"finished_at,omitempty"`
+	Limits               Limits          `json:"limits"`
+	Plans                []Decision      `json:"plans"`
+	Results              []Result        `json:"results"`
+	OperatorMessages     []string        `json:"operator_messages,omitempty"`
+	ContinuationRequests []string        `json:"continuation_requests,omitempty"`
+	ContinuationRound    int             `json:"continuation_round,omitempty"`
+	Usage                Usage           `json:"usage"`
+	PostRunUsage         Usage           `json:"post_run_usage,omitempty"`
+	LatestReportFormat   ReportFormat    `json:"latest_report_format,omitempty"`
+	Error                string          `json:"error,omitempty"`
 }
 
 // CurrentFindings is the coordinator's latest assessment of the evidence.
@@ -293,6 +300,14 @@ func validateDecision(d Decision, state State) error {
 			}
 		}
 	}
+	priorIDs := map[string]bool{}
+	if state.ProjectHistory != nil {
+		for _, session := range state.ProjectHistory.Sessions {
+			for _, finding := range session.Findings {
+				priorIDs[finding.ID] = true
+			}
+		}
+	}
 	for _, f := range d.Findings {
 		if f.Title == "" || f.Impact == "" || len(f.Steps) == 0 || len(f.Remediation) == 0 || len(f.Evidence) == 0 {
 			return fmt.Errorf("finding lacks reproducible reporting fields")
@@ -305,6 +320,11 @@ func validateDecision(d Decision, state State) error {
 		}
 		if f.Confidence != "" && !validFindingConfidence(f.Confidence) {
 			return fmt.Errorf("unknown finding confidence %q", f.Confidence)
+		}
+		for _, id := range f.RelatedPrior {
+			if !priorIDs[id] {
+				return fmt.Errorf("finding links to unknown prior finding %q", id)
+			}
 		}
 		for _, ref := range f.Evidence {
 			if !refs[ref] {
@@ -368,6 +388,42 @@ func validateDecision(d Decision, state State) error {
 				return fmt.Errorf("reproduced finding must cite the challenge verdict's execution log")
 			}
 		}
+	}
+	if len(d.PriorReviews) > 8 {
+		return fmt.Errorf("too many prior-finding reviews")
+	}
+	reviewed := map[string]bool{}
+	for _, review := range d.PriorReviews {
+		if !priorIDs[review.FindingID] || reviewed[review.FindingID] || strings.TrimSpace(review.Reason) == "" || len(review.Evidence) == 0 {
+			return fmt.Errorf("prior-finding review needs a known finding, reason, and current evidence")
+		}
+		reviewed[review.FindingID] = true
+		switch review.Verdict {
+		case "still_present", "not_observed", "remediated", "inconclusive":
+		default:
+			return fmt.Errorf("unknown prior-finding verdict %q", review.Verdict)
+		}
+		result := known[review.ValidationTask]
+		if result.Status != "done" || len(result.Evidence) == 0 {
+			return fmt.Errorf("prior-finding review needs a completed worker task")
+		}
+		ownLogs := map[string]bool{}
+		for _, observation := range result.Evidence {
+			for _, ref := range observation.LogRefs {
+				ownLogs[ref] = true
+			}
+		}
+		for _, ref := range review.Evidence {
+			if !refs[ref] || !ownLogs[ref] {
+				return fmt.Errorf("prior-finding review must cite its own worker log")
+			}
+		}
+		if review.Verdict == "remediated" && (result.Task.Verification == nil || result.Verification == nil || result.Verification.Verdict != "supported") {
+			return fmt.Errorf("remediated verdict needs a supported independent challenge")
+		}
+	}
+	if err := validateLeadContinuity(d, state, refs); err != nil {
+		return err
 	}
 	return nil
 }

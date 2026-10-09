@@ -169,10 +169,7 @@ class Terminal:
 def run_case(binary, root, endpoint, mode):
     terminal = Terminal(binary, root)
     try:
-        if mode == "reuse":
-            terminal.expect("Use saved provider")
-            terminal.send("")
-        else:
+        if mode != "reuse":
             terminal.expect("Selection [1]")
             terminal.send("1")
             terminal.expect("Local model server address")
@@ -188,14 +185,14 @@ def run_case(binary, root, endpoint, mode):
         terminal.expect("birdhackbot> ")
         if mode == "auto":
             terminal.send("/permissions")
-            terminal.expect("Choose 1–3")
+            terminal.expect("Choose an approval level")
             terminal.send("3")
             terminal.expect("Type confirm to apply.")
             terminal.send("confirm")
             terminal.expect("Approval setting: Approve everything")
             terminal.expect("birdhackbot> ")
         terminal.send("Who are you?")
-        terminal.expect("Coordinator: I am the assessment orchestrator.")
+        terminal.expect("I am the assessment orchestrator.")
         terminal.expect("birdhackbot> ")
         goal = {"stop": "cancellation fixture", "question": "question fixture", "recovery": "recovery fixture", "orchestration": "orchestrate generic capability checks", "subset": "orchestrate generic capability checks"}.get(mode, "Print terminal fixture")
         terminal.send(goal)
@@ -222,7 +219,7 @@ def run_case(binary, root, endpoint, mode):
         if mode == "mode-switch":
             terminal.expect("Allow this action?")
             terminal.send("p")
-            terminal.expect("Choose 1–3")
+            terminal.expect("Choose an approval level")
             terminal.send("3")
             terminal.expect("Type confirm to apply.")
             terminal.send("confirm")
@@ -326,11 +323,19 @@ def run_tui_smoke(binary, root, endpoint):
         terminal.expect("Reasoning effort:")
         terminal.send("low")
         terminal.expect("birdhackbot>")
+        os.write(terminal.fd, b"/")
+        terminal.expect("Slash commands")
+        os.write(terminal.fd, b"per")
+        os.write(terminal.fd, b"\t\r")
+        terminal.expect("Approval settings")
+        os.write(terminal.fd, b"\x1b")
+        terminal.expect("birdhackbot>")
         terminal.send("Who are you?")
-        terminal.expect("Coordinator: I am the assessment orchestrator.")
+        terminal.expect("I am the assessment orchestrator.")
         terminal.interrupt()
         terminal.finish(0)
-        assert "Coordinator: I am the assessment orchestrator." in terminal.transcript
+        assert "│ Coordinator" in terminal.transcript
+        assert "I am the assessment orchestrator." in terminal.transcript
         assert "\n> " not in terminal.transcript, "raw console prompts leaked into the TUI stream"
     finally:
         (root / "terminal-tui.txt").write_text(terminal.transcript)
@@ -342,12 +347,10 @@ def run_completed_resume(binary, root):
     original_id = json.loads(saved.read_text())["id"]
     terminal = Terminal(binary, root)
     try:
-        terminal.expect("Use saved provider")
-        terminal.send("")
         terminal.expect("birdhackbot> ")
         terminal.send("/resume")
-        terminal.expect("Choose a session number")
-        terminal.send("1")
+        terminal.expect("Choose a session to resume")
+        terminal.send("2")
         terminal.expect("Session " + original_id + " is ready")
         terminal.send("Inspect fixture again")
         terminal.expect("Continuing assessment " + original_id)
@@ -383,12 +386,11 @@ def run_tui_completed_continuation(binary, root):
     }))
     terminal = Terminal(binary, root, plain=False)
     try:
-        terminal.expect("Use saved provider")
-        terminal.send("")
         terminal.expect("birdhackbot>")
         terminal.send("/resume")
-        terminal.expect("Choose a session number")
-        terminal.send("1")
+        terminal.expect("Saved assessments")
+        os.write(terminal.fd, b"\x1b[B")  # Select the saved session below "Start new".
+        terminal.send("")
         terminal.expect("Session assessment-tui-fixture is ready")
         terminal.send("Inspect fixture again")
         terminal.expect("Continuing assessment assessment-tui-fixture")

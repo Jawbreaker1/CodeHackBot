@@ -18,6 +18,13 @@
 {{if .Findings}}{{range .Findings}}{{range .Remediation}}- {{inline .}}
 {{end}}{{end}}{{else}}Review the recorded coverage and unresolved gaps before deciding on further testing.{{end}}
 
+{{if .NextChecks}}### Recommended continuation
+
+These questions remain open. The checks below are proposals, not completed tests or confirmed findings.
+{{range $i, $lead := .NextChecks}}
+{{inc $i}}. **Question:** {{inline $lead.Hypothesis}} **Next check:** {{inline $lead.NextCheck}}
+{{end}}
+{{end}}
 ### 1.1 Findings at a glance
 
 {{if .Findings}}| ID | Finding | Severity | State |
@@ -82,7 +89,14 @@ The methods below reflect only recorded worker activity. No exploitation or acce
 {{end}}{{end}}
 {{end}}{{else}}No current findings were recorded. This does not establish absence of vulnerabilities.
 {{end}}
-### 2.4 Limitations and unresolved gaps
+{{if .PriorReviews}}### 2.4 Follow-up on earlier project findings
+
+These verdicts refer to older sessions and cite evidence from this assessment. A later scan omitting an older finding is not proof of remediation.
+
+{{range .PriorReviews}}- **{{inline .Verdict}}** — `{{inline .FindingID}}`: {{inline .Reason}}. Worker: `{{inline .ValidationTask}}`. Evidence: {{join .Evidence ", "}}
+{{end}}
+{{end}}
+### {{if .PriorReviews}}2.5{{else}}2.4{{end}} Limitations and unresolved gaps
 
 {{range .Results}}{{if .DeniedExecution}}- Operator denied the proposed action for `{{inline .Task.ID}}`: {{inline .DeniedExecution.Summary}} (target: {{inline .DeniedExecution.Target}}). It did not execute; approval record: `{{inline .DeniedExecution.AuditRef}}`. This does not imply that later planned tests were proposed or denied.
 {{end}}{{end}}
