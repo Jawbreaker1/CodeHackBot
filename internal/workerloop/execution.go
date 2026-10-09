@@ -20,6 +20,14 @@ func (l Loop) execute(ctx context.Context, current *ctxpacket.WorkerPacket, resp
 		}
 		response = prepared
 	}
+	if response.Type == "metasploit_lookup" {
+		prepared, failure := prepareMetasploitLookup(response, current.OperatorState.WorkingDir, l.Executor.LogDir)
+		if failure != nil {
+			current.RunningSummary = "Metasploit lookup rejected before execution: " + failure.OutputSummary
+			return false, l.capture(current.Budget.Used, "post-validation", *current)
+		}
+		response = prepared
+	}
 	if err := l.emitWithRationale(EventActionProposed, *current, response.Command, response.Summary); err != nil {
 		return false, err
 	}

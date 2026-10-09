@@ -23,6 +23,8 @@ type Response struct {
 	UseShell        bool        `json:"use_shell,omitempty"`
 	Scenario        string      `json:"scenario,omitempty"`
 	ArtifactDir     string      `json:"artifact_dir,omitempty"`
+	CVE             string      `json:"cve,omitempty"`
+	Module          string      `json:"module,omitempty"`
 	Impact          string      `json:"impact,omitempty"`
 	Target          string      `json:"target,omitempty"`
 	Risk            string      `json:"risk,omitempty"`
@@ -69,6 +71,13 @@ func ParseResponse(text string) (Response, error) {
 		if r.Type == "browser_run" && (strings.TrimSpace(r.Scenario) == "" || strings.TrimSpace(r.ArtifactDir) == "" || strings.TrimSpace(r.Summary) == "" || strings.TrimSpace(r.Target) == "" || strings.TrimSpace(r.Impact) == "") {
 			return r, fmt.Errorf("browser_run requires scenario, artifact_dir, summary, target, and impact")
 		}
+	case "metasploit_lookup":
+		if (strings.TrimSpace(r.CVE) == "") == (strings.TrimSpace(r.Module) == "") {
+			return r, fmt.Errorf("metasploit_lookup needs exactly one cve or module")
+		}
+		if err := validateMetasploitLookup(r); err != nil {
+			return r, err
+		}
 	case "step_complete", "blocked":
 		if strings.TrimSpace(r.Summary) == "" {
 			return r, fmt.Errorf("%s summary is required", r.Type)
@@ -106,6 +115,9 @@ func ParseResponse(text string) (Response, error) {
 	}
 	if r.Type != "browser_run" && (r.Scenario != "" || r.ArtifactDir != "") {
 		return r, fmt.Errorf("only browser_run may set scenario or artifact_dir")
+	}
+	if r.Type != "metasploit_lookup" && (r.CVE != "" || r.Module != "") {
+		return r, fmt.Errorf("only metasploit_lookup may set cve or module")
 	}
 	if r.Type != "bash" && r.Type != "browser_run" && len(r.Artifacts) != 0 {
 		return r, fmt.Errorf("only execution actions may declare artifacts")
