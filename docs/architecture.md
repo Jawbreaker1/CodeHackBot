@@ -201,8 +201,10 @@ Web application assessment is an optional worker capability, not a second
 orchestrator. The pinned helper in `tools/playwright-runner` runs a
 preprovisioned Playwright package against an approved system browser. A worker
 may create a task-local scenario to traverse declared routes or role flows and
-capture screenshots, traces, DOM snapshots, or network evidence. The action
-must declare each expected output path; the shared worker engine registers only
+capture screenshots, traces, DOM snapshots, or network evidence. The
+`browser_run` action automatically declares the runner's trace, live preview,
+and observed page map; the worker declares any additional captures. The shared
+worker engine registers only
 regular files that exist inside that task's workspace after the approved
 action completes. The coordinator receives those paths through the ordinary
 evidence catalog and can schedule a later validation task. Browser state and

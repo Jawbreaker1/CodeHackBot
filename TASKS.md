@@ -1,6 +1,6 @@
 # Tasks
 
-Updated 2026-10-07. This file owns immediate implementation order and status.
+Updated 2026-10-09. This file owns immediate implementation order and status.
 
 ## Agreed sequence
 
@@ -12,6 +12,8 @@ Updated 2026-10-07. This file owns immediate implementation order and status.
 The product remains orchestrator-first. The first two steps establish its shared engine and model access. Keep each implementation small, runnable, and tied to its done condition. Priority clarification, 2026-09-19: complete and accept the agentic worker first, then complete and accept the orchestrator structure, before expanding knowledge/source capabilities. Completed cleanup and provider checks do not establish full worker acceptance.
 
 ## Current priority: foundation acceptance and capability proof
+
+2026-10-09 worker tooling: `browser_run` now gives the existing Playwright runner a typed worker decision. A task-local scenario still defines the flow, while the runtime supplies the pinned runner invocation and registers trace, live preview, and page map through the shared approval and evidence path. Contract, execution, full CI, and a real installed-browser check passed. In one Daybreak GUI smoke, the worker chose `browser_run`, but its first launch failed because the server had no browser executable configured. The worker found installed Chromium, retried through `bash`, and finished with the observed title, screenshot, preview, trace, and report; the coordinator explained the retry. The runner now defaults to Kali's `/usr/bin/chromium` when present, with an environment override retained; a second installed-browser test passed without that override. This one smoke validates the user path, not reliable browser-agent behavior on broader sites. Keep `bash` for general Kali commands and advisory research until a dedicated adapter adds clear provenance or operator value beyond a command alias.
 
 2026-10-07 project history: web assessments now carry a structured primary target label and receive a bounded snapshot of earlier sessions on the same target. The coordinator can plan follow-up work from prior finding IDs and evidence references without treating those records as fresh proof. Analysis groups dated sessions by target, shows explicit retest verdicts, and keeps remediated findings visible as history rather than active risk. Earlier OpenSverige runs with an explicit hostname in saved scope can be grouped without rewriting evidence. Package, race, browser, and API checks passed; a live-model assessment of how reliably the coordinator chooses retests remains an acceptance gap.
 

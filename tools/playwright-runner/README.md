@@ -9,14 +9,25 @@ cd tools/playwright-runner
 npm ci --ignore-scripts
 ```
 
-The assessment image must also provide a browser. Set
-`BIRDHACKBOT_BROWSER_EXECUTABLE` to an approved binary such as
-`/usr/bin/chromium`; the helper never downloads a browser at task time.
+The assessment image must also provide a browser. On Kali, the runner uses
+`/usr/bin/chromium` when present. Set `BIRDHACKBOT_BROWSER_EXECUTABLE` to
+another approved binary path when needed; the helper never downloads a browser
+at task time.
 
 Workers create a real, task-local `.mjs` scenario file and run it only after
-the normal action approval. The first argument is a filesystem path; an
-in-memory pipe is not a scenario file. One approved invocation may contain
-several named browser steps, and the live preview shows those steps:
+the normal action approval. The worker's `browser_run` decision invokes the
+pinned runner and registers the standard evidence:
+
+```json
+{"type":"browser_run","scenario":"scenario.mjs","artifact_dir":"browser-artifacts-1","summary":"Inspect the authorized page","target":"authorized host","impact":"Visit one page without submitting a form","risk":"low"}
+```
+
+Choose a new artifact directory for each run. The scenario must be a `.mjs`
+file in the worker workspace. The runtime shows the exact Node invocation for
+approval and uses the same log and cancellation path as `bash`. It registers
+the Playwright trace, live preview, and observed page map automatically. Up to
+five extra files may be named in `artifacts`. One approved invocation may
+contain several named browser steps. The direct equivalent for diagnosis is:
 
 ```sh
 node /absolute/path/to/tools/playwright-runner/run.mjs scenario.mjs browser-artifacts
@@ -25,9 +36,8 @@ node /absolute/path/to/tools/playwright-runner/run.mjs scenario.mjs browser-arti
 The scenario exports `async function run({context, artifactDir, step})`. It may open
 pages, follow the declared application flow, and write screenshots or other
 bounded artifacts beneath `artifactDir`. The wrapper records a Playwright
-trace at `browser-artifacts/playwright-trace.zip`. The worker must declare the
-expected output paths in its action response so BirdHackBot registers them as
-evidence. The coordinator still owns task planning and scope; a scenario does
+trace at `browser-artifacts/playwright-trace.zip`. The coordinator still owns
+task planning and scope; a scenario does
 not grant permission to navigate outside the declared target.
 
 Authentication state, cookies, headers, uploads, traces, and screenshots can
@@ -45,9 +55,9 @@ execution** view alongside its exact invocation and live stdout/stderr.
 The helper refreshes `browser-live.png` in `artifactDir` about once per second
 and after named steps. It also writes `browser-live.json` with the current page
 address, named step, and step state. Query parameters and fragments are removed
-from the displayed address. Declare `browser-live.png` in the worker action's
-`artifacts` array to make the optional **Browser** panel available while
-running; the status file stays in the same task workspace. Keep a separately
+from the displayed address. `browser_run` exposes `browser-live.png` to the
+optional **Browser** panel while running; the status file stays in the same
+task workspace. Keep a separately
 named final screenshot when it is needed as report evidence. The preview shows
 the most recently opened page and does not control the target browser. Never
 put a password or other secret in a step label. The Playwright trace retains

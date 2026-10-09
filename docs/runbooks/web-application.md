@@ -37,7 +37,8 @@ any other tool action.
 
 The console keeps customer workspaces and their sessions in a persistent left navigation rail while the coordinator transcript stays in the center. A persistent strip above the composer shows the coordinator and every active worker separately, including their current phase and any wait for operator input. Runtime annotations between turns are collapsed by default and can be expanded to inspect planning, delegation, proposed actions, approvals, execution transitions, and evidence references. The right inspector separates each coordinator round's planned work from its observed result. A worker marked *Finished* has ended its assigned task; that label alone never means that the assessment goal was met. The round outcome instead distinguishes work still awaiting review, an unconfirmed goal, a possible finding, and an independently verified finding. The coordinator supplies short operator-facing purpose and review sentences for new rounds; full technical plans and worker reports remain expandable. The inspector also shows each worker's current step, purpose, progress, plan revisions, action, approval state, context usage, remaining budget, evidence, and findings. Plan review and execution approvals still appear in the main conversation. Selecting a session restores its live view without opening a separate chat surface; at narrow widths the inspector is available from the `Workers` control instead of disappearing.
 
-When a Playwright worker declares `browser-live.png`, the **Browser** control
+When a Playwright worker uses `browser_run`, its `browser-live.png` preview is
+registered automatically and the **Browser** control
 opens a separate, optional preview beside the coordinator conversation. It
 shows the latest captured page, a query-free page address, and the helper's
 named step and state; multiple web workers can be selected from the panel.

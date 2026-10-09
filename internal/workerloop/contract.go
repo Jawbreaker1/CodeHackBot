@@ -21,6 +21,8 @@ type Response struct {
 	Command         string      `json:"command,omitempty"`
 	Args            []string    `json:"args,omitempty"`
 	UseShell        bool        `json:"use_shell,omitempty"`
+	Scenario        string      `json:"scenario,omitempty"`
+	ArtifactDir     string      `json:"artifact_dir,omitempty"`
 	Impact          string      `json:"impact,omitempty"`
 	Target          string      `json:"target,omitempty"`
 	Risk            string      `json:"risk,omitempty"`
@@ -54,15 +56,18 @@ func ParseResponse(text string) (Response, error) {
 		return r, fmt.Errorf("parse worker decision: %w", err)
 	}
 	switch r.Type {
-	case "bash":
+	case "bash", "browser_run":
 		if r.Risk != "" && r.Risk != "low" && r.Risk != "dangerous" && r.Risk != "unknown" {
-			return r, fmt.Errorf("bash risk must be low, dangerous, or unknown")
+			return r, fmt.Errorf("execution risk must be low, dangerous, or unknown")
 		}
-		if strings.TrimSpace(r.Command) == "" {
+		if r.Type == "bash" && strings.TrimSpace(r.Command) == "" {
 			return r, fmt.Errorf("bash command is required")
 		}
 		if r.UseShell && len(r.Args) != 0 {
 			return r, fmt.Errorf("bash shell mode must omit args")
+		}
+		if r.Type == "browser_run" && (strings.TrimSpace(r.Scenario) == "" || strings.TrimSpace(r.ArtifactDir) == "" || strings.TrimSpace(r.Summary) == "" || strings.TrimSpace(r.Target) == "" || strings.TrimSpace(r.Impact) == "") {
+			return r, fmt.Errorf("browser_run requires scenario, artifact_dir, summary, target, and impact")
 		}
 	case "step_complete", "blocked":
 		if strings.TrimSpace(r.Summary) == "" {
@@ -93,11 +98,17 @@ func ParseResponse(text string) (Response, error) {
 	default:
 		return r, fmt.Errorf("unsupported response type %q", r.Type)
 	}
-	if r.Type != "bash" && (r.Command != "" || len(r.Args) != 0 || r.UseShell || r.Impact != "" || r.Target != "" || r.Risk != "") {
-		return r, fmt.Errorf("only bash may contain execution fields")
+	if r.Type != "bash" && r.Type != "browser_run" && (r.Command != "" || len(r.Args) != 0 || r.UseShell || r.Impact != "" || r.Target != "" || r.Risk != "") {
+		return r, fmt.Errorf("only execution actions may contain execution fields")
 	}
-	if r.Type != "bash" && len(r.Artifacts) != 0 {
-		return r, fmt.Errorf("only bash may declare artifacts")
+	if r.Type == "browser_run" && (r.Command != "" || len(r.Args) != 0 || r.UseShell) {
+		return r, fmt.Errorf("browser_run uses scenario and artifact_dir, not command or args")
+	}
+	if r.Type != "browser_run" && (r.Scenario != "" || r.ArtifactDir != "") {
+		return r, fmt.Errorf("only browser_run may set scenario or artifact_dir")
+	}
+	if r.Type != "bash" && r.Type != "browser_run" && len(r.Artifacts) != 0 {
+		return r, fmt.Errorf("only execution actions may declare artifacts")
 	}
 	if r.Type != "step_complete" && len(r.LeadHints) != 0 {
 		return r, fmt.Errorf("only step_complete may contain lead hints")
@@ -129,7 +140,10 @@ func ParseResponse(text string) (Response, error) {
 		}
 	}
 	if len(r.Artifacts) > 8 {
-		return r, fmt.Errorf("bash declares %d artifacts; maximum is 8, so keep the most useful references", len(r.Artifacts))
+		return r, fmt.Errorf("action declares %d artifacts; maximum is 8, so keep the most useful references", len(r.Artifacts))
+	}
+	if r.Type == "browser_run" && len(r.Artifacts) > 5 {
+		return r, fmt.Errorf("browser_run declares %d additional artifacts; maximum is 5", len(r.Artifacts))
 	}
 	for _, artifact := range r.Artifacts {
 		if strings.TrimSpace(artifact) == "" {

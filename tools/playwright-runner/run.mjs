@@ -2,6 +2,7 @@ import { chromium } from 'playwright';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 
 const scenario = process.argv[2];
 const artifactDir = path.resolve(process.argv[3] || 'browser-artifacts');
@@ -15,7 +16,7 @@ if (typeof module.run !== 'function') {
   throw new Error('scenario must export async function run({ context, artifactDir })');
 }
 
-const executablePath = process.env.BIRDHACKBOT_BROWSER_EXECUTABLE || undefined;
+const executablePath = process.env.BIRDHACKBOT_BROWSER_EXECUTABLE || (existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : undefined);
 const browser = await chromium.launch({ headless: true, executablePath });
 const context = await browser.newContext();
 const log = message => console.log(`${new Date().toISOString()} · ${message}`);

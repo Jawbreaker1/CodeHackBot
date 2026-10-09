@@ -12,6 +12,14 @@ import (
 )
 
 func (l Loop) execute(ctx context.Context, current *ctxpacket.WorkerPacket, response Response) (bool, error) {
+	if response.Type == "browser_run" {
+		prepared, failure := prepareBrowserRun(response, current.OperatorState.WorkingDir)
+		if failure != nil {
+			current.RunningSummary = "Browser action rejected before execution: " + failure.OutputSummary
+			return false, l.capture(current.Budget.Used, "post-validation", *current)
+		}
+		response = prepared
+	}
 	if err := l.emitWithRationale(EventActionProposed, *current, response.Command, response.Summary); err != nil {
 		return false, err
 	}
