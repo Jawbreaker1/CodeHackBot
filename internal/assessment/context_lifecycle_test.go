@@ -3,6 +3,8 @@ package assessment
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -233,13 +235,26 @@ func TestCoordinatorFanInKeepsEveryCurrentWorkerVisible(t *testing.T) {
 		current.Tasks = append(current.Tasks, Task{ID: id, Goal: "review a distinct fixture", DoneWhen: "record its observed behavior"})
 		current.ApprovedTaskIDs = append(current.ApprovedTaskIDs, id)
 		result := Result{Task: current.Tasks[i], Status: "done", Summary: id + " observed a distinct outcome. " + strings.Repeat("Detailed interpretation. ", 140)}
+		result.LeadHints = []string{id + " has a specific follow-up question"}
 		for step := 0; step < 4; step++ {
 			ref := fmt.Sprintf("/fixture/tasks/%s/logs/step-%d.log", id, step)
 			result.Evidence = append(result.Evidence, ctxpacket.ExecutionResult{ActualExec: "read fixture", ExitStatus: "0", OutputEvidence: strings.Repeat("Evidence preview. ", 180), LogRefs: []string{ref}})
 		}
 		state.Results = append(state.Results, result)
 	}
+	citedRef := "/fixture/tasks/current-00/logs/step-0.log"
+	current.Findings = []Finding{{Title: "Unverified fixture observation", Status: "candidate", Evidence: []string{citedRef}}}
 	state.Plans = append(state.Plans, current)
+	root := t.TempDir()
+	for _, result := range state.Results {
+		if err := saveJSON(filepath.Join(root, "tasks", result.Task.ID, "result.json"), result); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(coordinatorPrompt(state)) <= 100*1024 {
 		t.Fatal("fixture did not put pressure on the coordinator context")
 	}
@@ -261,30 +276,53 @@ func TestCoordinatorFanInKeepsEveryCurrentWorkerVisible(t *testing.T) {
 			t.Fatalf("current worker %s lost its conclusion or evidence: %+v", id, result)
 		}
 	}
-	// Under heavier pressure a request may fail visibly, but a successful
-	// request must not silently drop the first workers in the current batch.
-	boundedRequests := 0
-	for allowance := 20 * 1024; allowance < 100*1024; allowance += 4 * 1024 {
-		bounded, err := coordinatorPromptBounded(state, allowance)
-		if err != nil {
-			continue
+	// Ten high-output workers fit as outcome cards even when their previews
+	// do not. Each ref must resolve to the original result, including evidence
+	// paths that were deliberately omitted from this planning request.
+	bounded, err := coordinatorPromptBounded(state, 48*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var indexed coordinatorModelPacket
+	if err := json.Unmarshal([]byte(bounded), &indexed); err != nil {
+		t.Fatal(err)
+	}
+	if len(indexed.Assessment.Results) < 10 || len(bounded) > 48*1024 {
+		t.Fatalf("indexed fan-in lost results or exceeded budget: %d bytes, %d results", len(bounded), len(indexed.Assessment.Results))
+	}
+	if len(indexed.Assessment.Plans) == 0 || len(indexed.Assessment.Plans[len(indexed.Assessment.Plans)-1].Findings) != 1 || len(indexed.RecordedEvidence["current-00"]) == 0 || indexed.RecordedEvidence["current-00"][0] != citedRef {
+		t.Fatal("indexed fan-in lost a current finding or its registered evidence")
+	}
+	visible := make(map[string]compactResult, len(indexed.Assessment.Results))
+	for _, result := range indexed.Assessment.Results {
+		visible[result.Task.ID] = result
+	}
+	for i := 0; i < 10; i++ {
+		id := fmt.Sprintf("current-%02d", i)
+		result := visible[id]
+		if result.Task.ID != id || result.Status != "done" || !strings.Contains(result.Summary, id) || len(result.LeadHints) != 1 || len(result.Evidence) != 0 || result.OmittedEvidence != 4 {
+			t.Fatalf("indexed worker %s lost its useful outcome or retained previews: %+v", id, result)
 		}
-		boundedRequests++
-		var current coordinatorModelPacket
-		if err := json.Unmarshal([]byte(bounded), &current); err != nil {
+		if result.ResultRef != "tasks/"+id+"/result.json" {
+			t.Fatalf("indexed worker %s has wrong result ref: %q", id, result.ResultRef)
+		}
+		data, err := os.ReadFile(filepath.Join(root, result.ResultRef))
+		if err != nil {
 			t.Fatal(err)
 		}
-		seen := map[string]bool{}
-		for _, result := range current.Assessment.Results {
-			seen[result.Task.ID] = true
+		var restored Result
+		if err := json.Unmarshal(data, &restored); err != nil {
+			t.Fatal(err)
 		}
-		for _, id := range state.Plans[len(state.Plans)-1].ApprovedTaskIDs {
-			if !seen[id] {
-				t.Fatalf("%d-byte request silently omitted current worker %s", allowance, id)
-			}
+		if restored.Summary != state.Results[i+1].Summary || len(restored.Evidence) != 4 {
+			t.Fatalf("offloaded worker %s is incomplete", id)
 		}
 	}
-	if boundedRequests == 0 {
-		t.Fatal("fixture never produced a successful pressured planning request")
+	after, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatal("fan-in projection mutated authoritative results")
 	}
 }

@@ -168,9 +168,14 @@ packet of the same type. Its model-facing projection retains planning history
 and operator conversation while they fit the configured input-byte ceiling.
 Under pressure, older worker evidence becomes navigation entries while the
 current batch's results, cited finding evidence, and the latest operator
-direction remain visible. If all current-batch result identities cannot fit,
-the request fails visibly rather than silently omitting an early worker. Full
-older results and logs remain in the assessment directory.
+direction remain visible. If the current batch is still too large, every
+worker becomes a short outcome card with a `result_ref` to its complete
+`tasks/<task-id>/result.json`; uncited evidence paths and previews remain in
+those saved records. A later worker can inspect a specific result or log when
+the next decision needs its detail. Only an allowance too small for the
+protected goal, instructions, latest direction, current findings, and worker
+outcome cards fails visibly. Full results and logs remain in the assessment
+directory.
 This is bounded projection, not a semantic long-run summary or an exact token
 budget. The local Qwen profile currently caps input text at 96 KiB and requests
 up to 32,768 output tokens; the approximately 70k server window still needs live

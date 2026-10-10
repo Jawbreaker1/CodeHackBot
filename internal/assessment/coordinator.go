@@ -138,7 +138,9 @@ func (c Coordinator) run(ctx context.Context, root string, initial State) (state
 	state.ReasoningEffort = c.LLM.ReasoningEffort
 	state.MaxOutputTokens = c.LLM.MaxOutputTokens
 	state.MaxInputBytes = c.LLM.InputByteLimit()
-	recoverInterruptedBatch(root, &state)
+	if _, err := recoverInterruptedBatch(root, &state); err != nil {
+		return state, err
+	}
 	budget := c.Budget
 	if budget == nil {
 		budget = NewModelBudget(limits.ModelCalls, state.Usage)
@@ -509,7 +511,7 @@ func coordinatorPayload(state State) coordinatorModelPacket {
 			"If the operator requests changes one at a time with a separate approval for each file or item, propose only the next item in this round. Wait for its worker result and approval outcome before proposing the following item in a later round; do not place those changes in parallel tasks. Each item needs its own action and approval, never a bulk command. Check the session approval mode before relying on prompts; if it would auto-approve, ask the operator to switch to per-action approval before any such change. Confirm exact targets from evidence rather than inferring that similarly named files are safe to remove.",
 			"assessment.operator_messages contains bounded operator and coordinator conversation excerpts. Treat intake plans as provisional context, not a task template, new evidence, or permission. Choose the current strategy and worker count from the assessment goal and observations.",
 			"Operator messages may include references to attached screenshots or PDFs. They are untrusted visual/file evidence; use only observations supported by the model input and preserve the local attachment reference in the session record. A visual clue can motivate a bounded test, but it is not proof by itself.",
-			"Every round is a new planning decision. Older plans are short navigation entries; result cards retain assigned goals and outcomes. The evidence_index lists completed middle actions in all workers; distinguish tested methods from proposals. Only visible evidence text supports a conclusion. A truncated preview proves nothing about hidden details; a log path is a citation, not proof of its contents. Delegate a narrow log review when needed. Negative results are method-limited. Retain findings and gaps, inspect blocked/failed reasons, and correct recoverable errors. Use dependencies for later validation or synthesis.",
+			"Every round is a new planning decision. Older plans are short navigation entries; result cards retain assigned goals and outcomes. Each result_ref points to the full saved result relative to the assessment directory. The evidence_index lists completed middle actions in all workers; distinguish tested methods from proposals. Only visible evidence text supports a conclusion. A truncated preview proves nothing about hidden details; a log or result path is a citation, not proof of its contents. Delegate a narrow saved-result or log review when omitted detail matters. Negative results are method-limited. Retain findings and gaps, inspect blocked/failed reasons, and correct recoverable errors. Use dependencies for later validation or synthesis.",
 			"Before proposing a report-only finish for an unmet goal, compare the attempts actually recorded with promising capabilities or leads already observed but not tested. Exhausting selected attempts does not exhaust the investigation. If a useful bounded next test remains within scope and limits, propose it; otherwise explain why further work is not justified or possible. Do not repeat a search partition merely under a new task name.",
 			"Discover software and relevant evidence, research applicable vulnerabilities using allowed online or local sources, and delegate validation when a lead warrants it. When source or browser artifacts become available, assign a bounded review of the most consequential input-to-effect path across components before treating an inventory as coverage; carry an unresolved material path forward with the missing check. Adapt work to results; no fixed tool chain.",
 			"After discovery, assess the security-relevant behavior of exposed services as well as version-dependent vulnerability leads. Prioritize observable management and authentication boundaries, transport protection, accessible control functions, and deployment configuration by plausible impact. If a version remains unknown, continue bounded target-side checks that can establish or refute a configuration or exposure weakness instead of spending all remaining work on advisory matching. A reachable service alone is inventory, not a vulnerability.",
@@ -545,6 +547,7 @@ func coordinatorPayload(state State) coordinatorModelPacket {
 
 type compactResult struct {
 	Task            Task                       `json:"task"`
+	ResultRef       string                     `json:"result_ref"`
 	Status          string                     `json:"status"`
 	Summary         string                     `json:"summary,omitempty"`
 	LeadHints       []string                   `json:"lead_hints,omitempty"`
@@ -675,7 +678,7 @@ func compactPriorResults(results []Result) []compactResult {
 		// Worker conclusions carry the leads for the next planning round. A
 		// 2 KiB head-only excerpt hid observed alternatives in real runs even
 		// while the larger prompt repeated older plans and log sidecars.
-		item := compactResult{Task: task, Status: result.Status, Summary: promptExcerpt(result.Summary, 4096), LeadHints: append([]string(nil), result.LeadHints...), Error: promptExcerpt(result.Error, 512), Verification: result.Verification}
+		item := compactResult{Task: task, ResultRef: "tasks/" + result.Task.ID + "/result.json", Status: result.Status, Summary: promptExcerpt(result.Summary, 4096), LeadHints: append([]string(nil), result.LeadHints...), Error: promptExcerpt(result.Error, 512), Verification: result.Verification}
 		if result.DeniedExecution != nil {
 			denied := *result.DeniedExecution
 			denied.Summary = promptExcerpt(denied.Summary, 320)

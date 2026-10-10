@@ -185,9 +185,85 @@ func coordinatorPromptBounded(state State, maxBytes int) (string, error) {
 		}
 	}
 	if len(prompt) > maxBytes {
+		// A large parallel batch must still reach the next decision. Keep an
+		// outcome card for every worker and offload previews and excess source
+		// paths to the already-saved result.json files. Findings and open leads
+		// retain their registered references for the next decision.
+		compactCoordinatorResultIndex(&packet, oldCount)
+		packet.ContextNotes = append(packet.ContextNotes, "Worker previews and uncited evidence paths were offloaded for this request. Every result_ref names a full saved task result; delegate a focused read before relying on omitted observations or citing their evidence.")
+		prompt = encode()
+	}
+	if len(prompt) > maxBytes {
 		return "", fmt.Errorf("coordinator context needs %d bytes after compaction; allowance is %d; narrow the planning question or use a larger model profile", len(prompt), maxBytes)
 	}
 	return prompt, nil
+}
+
+func compactCoordinatorResultIndex(packet *coordinatorModelPacket, oldCount int) {
+	protected := make(map[string]bool)
+	for _, plan := range packet.Assessment.Plans {
+		for _, finding := range plan.Findings {
+			for _, ref := range append(append([]string(nil), finding.Evidence...), finding.References...) {
+				protected[ref] = true
+			}
+		}
+	}
+	for _, lead := range packet.Assessment.OpenLeads {
+		for _, ref := range lead.Evidence {
+			protected[ref] = true
+		}
+	}
+	for _, result := range packet.Assessment.Results {
+		if result.Verification != nil {
+			for _, ref := range result.Verification.Evidence {
+				protected[ref] = true
+			}
+		}
+	}
+	for i := range packet.Assessment.Results {
+		result := &packet.Assessment.Results[i]
+		result.Task.Goal = promptExcerpt(result.Task.Goal, 240)
+		result.Task.DoneWhen = promptExcerpt(result.Task.DoneWhen, 160)
+		result.Task.StrategyHints = nil
+		result.OmittedEvidence += len(result.Evidence)
+		result.Evidence = nil
+		result.EvidenceIndex = nil
+		limit := 640
+		if i < oldCount {
+			limit = 320
+		}
+		result.Summary = promptExcerptEnds(result.Summary, limit)
+		result.Error = promptExcerptEnds(result.Error, 240)
+		for j := range result.LeadHints {
+			result.LeadHints[j] = promptExcerptEnds(result.LeadHints[j], 320)
+		}
+		if result.Verification != nil {
+			verification := *result.Verification
+			result.Verification = &verification
+			result.Verification.Reason = promptExcerpt(result.Verification.Reason, 320)
+			result.Verification.AlternativeResult = promptExcerpt(result.Verification.AlternativeResult, 240)
+		}
+		refs := packet.RecordedEvidence[result.Task.ID]
+		if len(refs) == 0 {
+			continue
+		}
+		kept := make([]string, 0, len(refs))
+		for _, ref := range refs {
+			if protected[ref] {
+				kept = append(kept, ref)
+			}
+		}
+		// One current source pointer helps the coordinator identify which
+		// observation to inspect next without resending every path.
+		if i >= oldCount && !protected[refs[len(refs)-1]] {
+			kept = append(kept, refs[len(refs)-1])
+		}
+		if len(kept) == 0 {
+			delete(packet.RecordedEvidence, result.Task.ID)
+		} else {
+			packet.RecordedEvidence[result.Task.ID] = kept
+		}
+	}
 }
 
 // Keep every result from the most recent completed worker batch in the same

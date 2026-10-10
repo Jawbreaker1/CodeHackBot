@@ -724,7 +724,8 @@ func TestCompletedWorkerIsSavedWhileSiblingStillRuns(t *testing.T) {
 			if state.Results[0].Task.ID != "fast" || state.Results[0].Status != "blocked" {
 				t.Fatalf("unexpected partial result: %+v", state.Results)
 			}
-			if !recoverInterruptedBatch(root, &state) || len(state.Results) != 2 || state.Results[0].Task.ID != "fast" || state.Results[1].Task.ID != "slow" || state.Results[1].Status != "blocked" {
+			changed, err := recoverInterruptedBatch(root, &state)
+			if err != nil || !changed || len(state.Results) != 2 || state.Results[0].Task.ID != "fast" || state.Results[1].Task.ID != "slow" || state.Results[1].Status != "blocked" {
 				t.Fatalf("restart recovery lost the finished worker or replayed its sibling: %+v", state.Results)
 			}
 			break

@@ -28,18 +28,36 @@ func TestRecoverInterruptedBatchRetainsFinishedResultAndMarksMissingWorker(t *te
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if !recoverInterruptedBatch(root, &state) || len(state.Results) != 2 || state.Results[0].Status != "done" || state.Results[0].Summary != result.Summary || state.Results[1].Status != "blocked" || state.Results[1].Task.ID != second.ID {
+	changed, err := recoverInterruptedBatch(root, &state)
+	if err != nil || !changed || len(state.Results) != 2 || state.Results[0].Status != "done" || state.Results[0].Summary != result.Summary || state.Results[1].Status != "blocked" || state.Results[1].Task.ID != second.ID {
 		t.Fatalf("batch recovery lost a result or repeated unfinished work: %+v", state.Results)
 	}
-	if recoverInterruptedBatch(root, &state) || len(state.Results) != 2 {
+	if _, err := os.Stat(filepath.Join(root, "tasks", second.ID, "result.json")); err != nil {
+		t.Fatalf("interrupted worker has no durable result reference: %v", err)
+	}
+	changed, err = recoverInterruptedBatch(root, &state)
+	if err != nil || changed || len(state.Results) != 2 {
 		t.Fatalf("repeated recovery duplicated task results: %+v", state.Results)
 	}
 }
 
 func TestRecoverInterruptedBatchDoesNotReviveSkippedTasks(t *testing.T) {
 	state := State{Plans: []Decision{{Tasks: []Task{{ID: "approved"}, {ID: "skipped"}}, ApprovedTaskIDs: []string{"approved"}, SkippedTaskIDs: []string{"skipped"}}}}
-	if !recoverInterruptedBatch(t.TempDir(), &state) || len(state.Results) != 1 || state.Results[0].Task.ID != "approved" || state.Results[0].Status != "blocked" {
+	changed, err := recoverInterruptedBatch(t.TempDir(), &state)
+	if err != nil || !changed || len(state.Results) != 1 || state.Results[0].Task.ID != "approved" || state.Results[0].Status != "blocked" {
 		t.Fatalf("skipped task was revived: %+v", state.Results)
+	}
+}
+
+func TestRecoverInterruptedBatchDoesNotPublishMissingResultRef(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "tasks"), []byte("occupied"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	state := State{Plans: []Decision{{Tasks: []Task{{ID: "interrupted"}}, ApprovedTaskIDs: []string{"interrupted"}}}}
+	changed, err := recoverInterruptedBatch(root, &state)
+	if err == nil || changed || len(state.Results) != 0 {
+		t.Fatalf("missing result document must not appear in coordinator state: changed=%v err=%v results=%+v", changed, err, state.Results)
 	}
 }
 
