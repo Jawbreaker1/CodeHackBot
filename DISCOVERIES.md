@@ -1,5 +1,11 @@
 # Discoveries
 
+## Vulnerability research source check — 2026-10-10
+
+- The installed Kali host has SearchSploit/Exploit-DB (`exploitdb 20260205-0kali1`, about 10 MB of exploit index) and Metasploit (`metasploit-framework 6.4.112-0kali1`). A local SearchSploit query for a known CVE returned entries; these are useful exploit/module leads, not comprehensive or necessarily current CVE coverage. No imported local NVD, OSV, or CISA KEV snapshot was found in the locations checked during this inventory. Air-gapped research remains limited to the installed catalogs and any snapshots an operator later provisions.
+- Connected read-only checks returned parseable records for an exact CVE through the CVE Program and NVD APIs, a Maven package/version through OSV, an exact CVE through GitHub Global Security Advisories, and the CISA KEV catalog through the official `cisagov/kev-data` mirror. These checks establish reachability from this host on this date, not service availability in future deployments or completeness for every product.
+- The selectively loaded `software-research` guide now maps these sources to specific questions and their connected/offline availability. Workers still use approved `bash` for general research and the existing local `metasploit_lookup` for module metadata. No forced lookup sequence or new always-on service was added. Source queries must be saved with their retrieval details, and any match needs target-side validation before it becomes a confirmed finding.
+
 ## Held-out source-assisted web smoke — 2026-10-01
 
 - A fresh four-file synthetic ticket service, outside the repository at `/tmp/bhb-heldout-20261001/HarborDesk`, was assessed through the browser with `gpt-daybreak-blue-latest` at high reasoning. Session `web-assessment-20261001-071816.988801676-000002` ran from 07:18–07:30 UTC with 23 model calls, no failed calls, and 339,884 reported tokens. This was one smoke run, not three-run capability acceptance.
