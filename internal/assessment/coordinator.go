@@ -293,17 +293,23 @@ func (c Coordinator) run(ctx context.Context, root string, initial State) (state
 		}
 		done := make(chan finished, len(selectedTasks))
 		batchCtx, cancel := context.WithCancel(ctx)
+		batchState := state
+		batchState.Results = append([]Result(nil), state.Results...)
 		for i, task := range selectedTasks {
 			go func(i int, task Task) {
-				r, err := c.runWorker(batchCtx, root, state, task)
+				r, err := c.runWorker(batchCtx, root, batchState, task)
 				done <- finished{i, r, err}
 			}(i, task)
 		}
 		results := make([]Result, len(selectedTasks))
+		received := make([]bool, len(selectedTasks))
 		var persistenceErr error
 		for range selectedTasks {
 			f := <-done
 			results[f.index] = f.result
+			if f.result.Task.ID != "" && f.result.Status != "running" {
+				received[f.index] = true
+			}
 			if f.err != nil {
 				// A worker can end with a recorded failed/blocked result (for
 				// example, a tool is unavailable or its model budget is
@@ -315,18 +321,29 @@ func (c Coordinator) run(ctx context.Context, root string, initial State) (state
 					cancel()
 				}
 			}
+			// Record a finished worker immediately. A slow sibling must not hide
+			// completed evidence from the operator or from restart recovery.
+			state.Results = append([]Result(nil), batchState.Results...)
+			for i, result := range results {
+				if received[i] {
+					state.Results = append(state.Results, result)
+				}
+			}
+			state.Usage = budget.Usage()
+			c.syncConversation(&state)
+			if persistenceErr == nil {
+				if err := saveJSON(filepath.Join(root, "assessment.json"), state); err != nil {
+					persistenceErr = err
+					cancel()
+				} else {
+					c.publish(state)
+				}
+			}
 		}
 		cancel()
-		state.Results = append(state.Results, results...)
 		if persistenceErr != nil {
 			return state, persistenceErr
 		}
-		state.Usage = budget.Usage()
-		c.syncConversation(&state)
-		if err := saveJSON(filepath.Join(root, "assessment.json"), state); err != nil {
-			return state, err
-		}
-		c.publish(state)
 	}
 	return state, fmt.Errorf("assessment reached its planning-round limit; review the partial report")
 }

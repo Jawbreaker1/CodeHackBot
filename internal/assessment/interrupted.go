@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 )
 
-// A batch is added to assessment.json only after every worker returns. After
-// a server restart, keep finished task results and make unfinished tasks
-// explicit before the next coordinator round. No task is replayed implicitly.
+// Finished worker results are saved as they arrive. After a server restart,
+// keep those results and make unfinished tasks explicit before the next
+// coordinator round. No task is replayed implicitly.
 func recoverInterruptedBatch(root string, state *State) bool {
 	if len(state.Plans) == 0 || state.Plans[len(state.Plans)-1].Complete {
 		return false

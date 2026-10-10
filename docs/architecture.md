@@ -150,7 +150,7 @@ In the current layout, the assessment authority is `assessment.json`; each deleg
 Knowledge moves through explicit contracts:
 
 1. **Coordinator to worker.** The coordinator sends one bounded task with its question, done condition, inherited goal and scope, approval mode, dependencies, relevant compact result cards, and references to prior evidence. If the operator skipped sibling tasks in that round, their IDs and goals are sent as explicit exclusions. The worker receives a separate mutable workspace and does not inherit the coordinator's full prompt or every other worker's raw output.
-2. **Worker to coordinator.** A worker returns status, a concise model-authored summary, an error when applicable, and structured execution evidence. The coordinator receives compact summaries and stable references; full bodies are rehydrated only when the next decision needs them and the runtime permits the read.
+2. **Worker to coordinator.** A worker returns status, a concise model-authored summary, an error when applicable, and structured execution evidence. Each completed result is immediately visible in the saved assessment and operator view, even if a sibling worker is still active. Planning waits for the independent batch to finish; the next request receives every current-batch outcome at the same priority, plus stable evidence references. Full bodies are rehydrated only when the next decision needs them and the runtime permits the read.
 3. **Worker to worker.** Workers do not share a global mutable conversation. A later worker can learn from an earlier worker only through the coordinator's result catalog and explicitly registered evidence paths. This makes provenance and task dependencies inspectable after resume.
 4. **Operator to coordinator.** New chat messages are bounded conversation context. They can clarify the goal or redirect work inside the existing scope, but they do not become evidence, broaden authorization, or grant a pending action. Approval is a separate typed runtime event.
 5. **Model to runtime.** Plans, summaries, findings, and retrieved documents are untrusted claims. The runtime validates the decision schema, enforces budgets and dependencies, and records approvals and executions independently of the model's wording.
@@ -166,9 +166,11 @@ assessment state for each round; each worker has its own persisted `WorkerPacket
 and task-local context snapshots. The coordinator does not yet have a persisted
 packet of the same type. Its model-facing projection retains planning history
 and operator conversation while they fit the configured input-byte ceiling.
-Under pressure, older worker evidence becomes navigation entries while cited
-finding evidence and the latest operator direction remain visible. Full older
-results and logs remain in the assessment directory.
+Under pressure, older worker evidence becomes navigation entries while the
+current batch's results, cited finding evidence, and the latest operator
+direction remain visible. If all current-batch result identities cannot fit,
+the request fails visibly rather than silently omitting an early worker. Full
+older results and logs remain in the assessment directory.
 This is bounded projection, not a semantic long-run summary or an exact token
 budget. The local Qwen profile currently caps input text at 96 KiB and requests
 up to 32,768 output tokens; the approximately 70k server window still needs live
@@ -286,7 +288,7 @@ This depends on a Codex backend compatibility endpoint, not a stable public infe
 
 ## Orchestration: generic guided foundation
 
-`internal/assessment` calls the shared adaptive worker loop with separate task working directories and inherited scope/approval rules. Mutable directories are separated for ordinary work; they are not filesystem security boundaries. The coordinator proposes a batch of up to two independent tasks, reviews their results, and decides the next batch or final synthesis. When a search or recovery objective has independent bounded strategies or candidate partitions, those strategies may run in parallel with isolated state; a later validation or synthesis task reconciles their evidence. Dependencies must reference completed earlier tasks. The built application test runs two independent capability tasks, then a dependent validation task, using the same path an operator starts from. No fixed phase sequence or separate worker execution engine is introduced. The worker capability frame assumes a full Kali assessment environment, asks the model to verify available tooling, and permits a small task-local helper when standard tools are insufficient. Source and validation evidence remain attached to the task for review and later reuse.
+`internal/assessment` calls the shared adaptive worker loop with separate task working directories and inherited scope/approval rules. Mutable directories are separated for ordinary work; they are not filesystem security boundaries. The coordinator proposes a batch of up to two independent tasks, saves and publishes each terminal result as its worker finishes, then reviews the whole batch before deciding the next batch or final synthesis. When a search or recovery objective has independent bounded strategies or candidate partitions, those strategies may run in parallel with isolated state; a later validation or synthesis task reconciles their evidence. Dependencies must reference completed earlier tasks. The built application test runs two independent capability tasks, then a dependent validation task, using the same path an operator starts from. No fixed phase sequence or separate worker execution engine is introduced. The worker capability frame assumes a full Kali assessment environment, asks the model to verify available tooling, and permits a small task-local helper when standard tools are insufficient. Source and validation evidence remain attached to the task for review and later reuse.
 
 The behavior frame is the product contract for every model-facing role. Planning, worker decisions, evaluation, intake, and interactive coordinator chat all receive the same repository `AGENTS.md` rules plus the role-specific runtime parameters. In particular, the coordinator is told that a full Kali environment is a supported part of BirdHackBot's architecture, while still distinguishing that product capability from an individual binary or version that has not been verified on the current host. A conversational response must not use a narrower, conflicting prompt that drops this context.
 

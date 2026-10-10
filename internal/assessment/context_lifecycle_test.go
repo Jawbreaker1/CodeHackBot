@@ -222,3 +222,69 @@ func TestCoordinatorCompactionAcrossWorkerRoundsAndResume(t *testing.T) {
 		t.Fatal("full history did not return after a tight projection")
 	}
 }
+
+func TestCoordinatorFanInKeepsEveryCurrentWorkerVisible(t *testing.T) {
+	state := State{Version: 1, ID: "fan-in", Goal: "compare independent fixture results", Scope: "synthetic fixtures only"}
+	state.Results = append(state.Results, Result{Task: Task{ID: "older-work"}, Status: "done", Summary: strings.Repeat("older observation ", 200)})
+	state.Plans = append(state.Plans, Decision{Summary: "earlier round", Tasks: []Task{{ID: "older-work"}}, ApprovedTaskIDs: []string{"older-work"}})
+	current := Decision{Summary: "compare ten independent observations", ApprovedTaskIDs: make([]string, 0, 10)}
+	for i := 0; i < 10; i++ {
+		id := fmt.Sprintf("current-%02d", i)
+		current.Tasks = append(current.Tasks, Task{ID: id, Goal: "review a distinct fixture", DoneWhen: "record its observed behavior"})
+		current.ApprovedTaskIDs = append(current.ApprovedTaskIDs, id)
+		result := Result{Task: current.Tasks[i], Status: "done", Summary: id + " observed a distinct outcome. " + strings.Repeat("Detailed interpretation. ", 140)}
+		for step := 0; step < 4; step++ {
+			ref := fmt.Sprintf("/fixture/tasks/%s/logs/step-%d.log", id, step)
+			result.Evidence = append(result.Evidence, ctxpacket.ExecutionResult{ActualExec: "read fixture", ExitStatus: "0", OutputEvidence: strings.Repeat("Evidence preview. ", 180), LogRefs: []string{ref}})
+		}
+		state.Results = append(state.Results, result)
+	}
+	state.Plans = append(state.Plans, current)
+	if len(coordinatorPrompt(state)) <= 100*1024 {
+		t.Fatal("fixture did not put pressure on the coordinator context")
+	}
+	prompt, err := coordinatorPromptBounded(state, 100*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var packet coordinatorModelPacket
+	if err := json.Unmarshal([]byte(prompt), &packet); err != nil {
+		t.Fatal(err)
+	}
+	if len(prompt) > 100*1024 || len(packet.Assessment.Results) != 11 {
+		t.Fatalf("fan-in packet lost results or exceeded budget: %d bytes, %d results", len(prompt), len(packet.Assessment.Results))
+	}
+	for i := 0; i < 10; i++ {
+		id := fmt.Sprintf("current-%02d", i)
+		result := packet.Assessment.Results[i+1]
+		if result.Task.ID != id || result.Status != "done" || !strings.Contains(result.Summary, id) || len(result.Evidence) == 0 || len(packet.RecordedEvidence[id]) != 4 {
+			t.Fatalf("current worker %s lost its conclusion or evidence: %+v", id, result)
+		}
+	}
+	// Under heavier pressure a request may fail visibly, but a successful
+	// request must not silently drop the first workers in the current batch.
+	boundedRequests := 0
+	for allowance := 20 * 1024; allowance < 100*1024; allowance += 4 * 1024 {
+		bounded, err := coordinatorPromptBounded(state, allowance)
+		if err != nil {
+			continue
+		}
+		boundedRequests++
+		var current coordinatorModelPacket
+		if err := json.Unmarshal([]byte(bounded), &current); err != nil {
+			t.Fatal(err)
+		}
+		seen := map[string]bool{}
+		for _, result := range current.Assessment.Results {
+			seen[result.Task.ID] = true
+		}
+		for _, id := range state.Plans[len(state.Plans)-1].ApprovedTaskIDs {
+			if !seen[id] {
+				t.Fatalf("%d-byte request silently omitted current worker %s", allowance, id)
+			}
+		}
+	}
+	if boundedRequests == 0 {
+		t.Fatal("fixture never produced a successful pressured planning request")
+	}
+}

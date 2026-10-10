@@ -51,10 +51,7 @@ func coordinatorPromptBounded(state State, maxBytes int) (string, error) {
 			protectedEvidence[ref] = true
 		}
 	}
-	oldCount := len(packet.Assessment.Results) - 2
-	if oldCount < 0 {
-		oldCount = 0
-	}
+	oldCount := recentBatchStart(packet.Assessment)
 	for i := 0; i < oldCount; i++ {
 		result := &packet.Assessment.Results[i]
 		result.Task.Goal = promptExcerpt(result.Task.Goal, 320)
@@ -168,9 +165,11 @@ func coordinatorPromptBounded(state State, maxBytes int) (string, error) {
 		}
 	}
 	if len(prompt) > maxBytes {
-		for len(packet.Assessment.Results) > 2 && len(prompt) > maxBytes {
+		// Older results may become navigation entries, but never silently
+		// discard one member of the current batch to fit the request.
+		for oldCount > 0 && len(prompt) > maxBytes {
 			remove := -1
-			for i, result := range packet.Assessment.Results[:len(packet.Assessment.Results)-2] {
+			for i, result := range packet.Assessment.Results[:oldCount] {
 				if len(packet.RecordedEvidence[result.Task.ID]) == 0 {
 					remove = i
 					break
@@ -181,6 +180,7 @@ func coordinatorPromptBounded(state State, maxBytes int) (string, error) {
 			}
 			packet.Assessment.Results = append(packet.Assessment.Results[:remove], packet.Assessment.Results[remove+1:]...)
 			packet.OmittedResults++
+			oldCount--
 			prompt = encode()
 		}
 	}
@@ -188,6 +188,35 @@ func coordinatorPromptBounded(state State, maxBytes int) (string, error) {
 		return "", fmt.Errorf("coordinator context needs %d bytes after compaction; allowance is %d; narrow the planning question or use a larger model profile", len(prompt), maxBytes)
 	}
 	return prompt, nil
+}
+
+// Keep every result from the most recent completed worker batch in the same
+// priority tier. A batch may eventually contain more than two workers; its
+// first result is no less current than its last result.
+func recentBatchStart(state coordinatorPromptState) int {
+	for planIndex := len(state.Plans) - 1; planIndex >= 0; planIndex-- {
+		plan := state.Plans[planIndex]
+		ids := make(map[string]bool, len(plan.ApprovedTaskIDs))
+		for _, id := range plan.ApprovedTaskIDs {
+			ids[id] = true
+		}
+		if len(ids) == 0 && len(plan.SkippedTaskIDs) == 0 {
+			for _, task := range plan.Tasks {
+				ids[task.ID] = true
+			}
+		}
+		if len(ids) == 0 {
+			continue
+		}
+		for i, result := range state.Results {
+			if ids[result.Task.ID] {
+				return i
+			}
+		}
+	}
+	// Without a matching plan we cannot know which outcomes are historical.
+	// Preserve them rather than guessing that only the last two are current.
+	return 0
 }
 
 // A historical result may place its next lead after a lengthy preamble.

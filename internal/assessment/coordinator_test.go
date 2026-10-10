@@ -666,6 +666,85 @@ func TestOperatorSkippedTaskIsExplicitlyExcludedFromWorkerContext(t *testing.T) 
 	}
 }
 
+func TestCompletedWorkerIsSavedWhileSiblingStillRuns(t *testing.T) {
+	root := t.TempDir()
+	releaseSlow := make(chan struct{})
+	var releaseOnce sync.Once
+	var slowOnce sync.Once
+	slowStarted := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Messages []llmclient.Message `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			return
+		}
+		if strings.Contains(request.Messages[1].Content, `"role":"assessment_coordinator"`) {
+			reply(w, Decision{Summary: "Check independent fixtures", Tasks: []Task{
+				{ID: "slow", Goal: "Slow fixture observation", DoneWhen: "observation recorded"},
+				{ID: "fast", Goal: "Fast fixture observation", DoneWhen: "observation recorded"},
+			}})
+			return
+		}
+		var payload struct {
+			ContextPacket string `json:"context_packet"`
+		}
+		if err := json.Unmarshal([]byte(request.Messages[1].Content), &payload); err != nil {
+			t.Error(err)
+			return
+		}
+		if strings.Contains(payload.ContextPacket, "[session_foundation]\ngoal: Slow fixture observation") {
+			slowOnce.Do(func() { close(slowStarted) })
+			<-releaseSlow
+		}
+		// Both workers terminate without an execution; the test checks result
+		// handoff and persistence rather than model decision quality.
+		reply(w, map[string]string{"type": "invalid-fixture-decision"})
+	}))
+	defer server.Close()
+	defer releaseOnce.Do(func() { close(releaseSlow) })
+	coordinator := testCoordinator(server.URL)
+	coordinator.Limits = Limits{Workers: 2, Rounds: 1, Tasks: 2, StepsPerTask: 4, ModelCalls: 20}
+	finished := make(chan State, 1)
+	go func() {
+		state, _ := coordinator.Run(context.Background(), root, "Compare fixtures", "synthetic fixtures only")
+		finished <- state
+	}()
+	select {
+	case <-slowStarted:
+	case <-time.After(5 * time.Second):
+		state, err := LoadState(root)
+		t.Fatalf("slow worker did not start: state=%+v err=%v", state, err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		state, err := LoadState(root)
+		if err == nil && len(state.Results) == 1 {
+			if state.Results[0].Task.ID != "fast" || state.Results[0].Status != "blocked" {
+				t.Fatalf("unexpected partial result: %+v", state.Results)
+			}
+			if !recoverInterruptedBatch(root, &state) || len(state.Results) != 2 || state.Results[0].Task.ID != "fast" || state.Results[1].Task.ID != "slow" || state.Results[1].Status != "blocked" {
+				t.Fatalf("restart recovery lost the finished worker or replayed its sibling: %+v", state.Results)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("fast worker was not saved while slow worker remained active: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	releaseOnce.Do(func() { close(releaseSlow) })
+	select {
+	case state := <-finished:
+		if len(state.Results) != 2 || state.Results[0].Task.ID != "slow" || state.Results[1].Task.ID != "fast" {
+			t.Fatalf("final results did not return to plan order: %+v", state.Results)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("assessment did not finish")
+	}
+}
+
 func TestBudgetFailureStillProducesPartialReport(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reply(w, Decision{Summary: "one task", Tasks: []Task{{ID: "one", Goal: "print a value", DoneWhen: "evidence recorded"}}})
