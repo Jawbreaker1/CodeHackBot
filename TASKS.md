@@ -1,6 +1,6 @@
 # Tasks
 
-Updated 2026-10-09. This file owns immediate implementation order and status.
+Updated 2026-10-10. This file owns immediate implementation order and status.
 
 ## Agreed sequence
 
@@ -12,6 +12,8 @@ Updated 2026-10-09. This file owns immediate implementation order and status.
 The product remains orchestrator-first. The first two steps establish its shared engine and model access. Keep each implementation small, runnable, and tied to its done condition. Priority clarification, 2026-09-19: complete and accept the agentic worker first, then complete and accept the orchestrator structure, before expanding knowledge/source capabilities. Completed cleanup and provider checks do not establish full worker acceptance.
 
 ## Current priority: foundation acceptance and capability proof
+
+2026-10-10 live diagnostics: three single-run Daybreak GUI smokes covered two different encrypted artifacts, a source-assisted web workflow with a seeded authorization flaw, and a fixed black-box document endpoint. The protected contents were recovered, the workflow flaw was reproduced by a later worker, and the fixed endpoint did not produce a false finding for the tested paths. A malformed intake control response and transient subscription 502s exposed harness reliability gaps; bounded correction and one retry for transient gateway errors are implemented and CI passed. The coordinator prompt now warns against parallel tasks that change the same shared target state. Live validation of that planning change and the retry branch, excess model use on small tasks, and round-summary duplication after restart remain open. Repeat on held-out targets before claiming capability acceptance. Evidence and limits: `docs/experiments/live-diagnostics-2026-10-10.md`.
 
 2026-10-10 source toolbox: connected CVE Program, NVD, OSV, GitHub Advisory, and CISA KEV queries were checked from this host; local Exploit-DB and Metasploit catalogs were confirmed. The worker's optional software-research guide now explains which source answers which question, and the shared prompt explicitly avoids a mandatory database sweep. OWASP Top 10 remains an optional lens for broader web coverage. A comprehensive offline CVE snapshot is not provisioned, and automatic source availability/status in the UI remains future work. See `DISCOVERIES.md` for verification limits.
 

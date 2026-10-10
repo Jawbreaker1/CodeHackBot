@@ -64,6 +64,12 @@ func TestLiveCoordinatorChoosesUsefulParallelism(t *testing.T) {
 			scope:     "Only " + filepath.Join(root, "testdata/client-flow-lab/build-a") + " and " + filepath.Join(root, "testdata/webhook-lab") + "; do not modify files, start services, or contact any network.",
 			wantTasks: 2,
 		},
+		{
+			name:      "two questions on one shared mutable document",
+			goal:      "The local editorial app has one shared in-memory submission and no reset or isolated test fixture. Its approval binding and wrong-role transitions are two relevant security questions, and both tests change that same submission. Plan the next bounded assessment round without letting one test invalidate the other's evidence.",
+			scope:     "Only " + filepath.Join(root, "testdata/review-workflow-lab") + " and its loopback test service on 127.0.0.1:8766. Documented demo-role actions are permitted; do not start services or contact any other network target.",
+			wantTasks: 1,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

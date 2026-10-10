@@ -1,6 +1,46 @@
 package intake
 
-import "testing"
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/Jawbreaker1/CodeHackBot/internal/llmclient"
+)
+
+func TestTurnCorrectsMalformedControlOnceWithoutCommittingIt(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var request struct {
+			Messages []llmclient.Message `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		if calls == 2 && (len(request.Messages) != 3 || !strings.Contains(request.Messages[2].Content, "exactly one valid JSON object")) {
+			t.Errorf("correction request = %+v", request.Messages)
+		}
+		response := `{"reply":"first"},{"reply":"second"}`
+		if calls == 2 {
+			response = `{"reply":"I can assess this lab.","proposal":null,"tool":null}`
+		}
+		body, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"content": response}}}})
+		_, _ = w.Write(body)
+	}))
+	defer server.Close()
+	conversation := &Conversation{}
+	turn, err := conversation.Turn(context.Background(), llmclient.Client{BaseURL: server.URL, Model: "fixture"}, "Assess the local lab")
+	if err != nil || turn.Reply != "I can assess this lab." || calls != 2 {
+		t.Fatalf("turn=%+v err=%v calls=%d", turn, err, calls)
+	}
+	if messages := conversation.Messages(); len(messages) != 2 || messages[0].Content != "Assess the local lab" || strings.Contains(messages[1].Content, "first") {
+		t.Fatalf("unexpected committed messages: %+v", messages)
+	}
+}
 
 func TestDecodeTurnRequiresExactProtocol(t *testing.T) {
 	turn, err := DecodeTurn(`{"reply":"I coordinate authorized assessments.","proposal":null}`)

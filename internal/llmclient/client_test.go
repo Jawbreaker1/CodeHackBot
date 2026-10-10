@@ -54,6 +54,39 @@ func TestRequestLimitAndIncompleteControlOutput(t *testing.T) {
 	}
 }
 
+func TestStructuredChatRetriesOneTransientFailureAndAccountsForBothRequests(t *testing.T) {
+	requests, reserved, completed := 0, 0, 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests == 1 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"reply\":\"ready\"}"}}]}`))
+	}))
+	defer server.Close()
+	client := Client{BaseURL: server.URL, Model: "fixture"}
+	client.BeforeRequest = func(context.Context) error { reserved++; return nil }
+	client.OnCompletion = func(Completion, error) { completed++ }
+	answer, err := client.ChatStructured(context.Background(), []Message{{Role: "user", Content: "decide"}})
+	if err != nil || answer != `{"reply":"ready"}` || requests != 2 || reserved != 2 || completed != 2 {
+		t.Fatalf("answer=%q err=%v requests=%d reserved=%d completed=%d", answer, err, requests, reserved, completed)
+	}
+}
+
+func TestStructuredChatDoesNotRetryBadRequest(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer server.Close()
+	client := Client{BaseURL: server.URL, Model: "fixture"}
+	if _, err := client.ChatStructured(context.Background(), []Message{{Role: "user", Content: "decide"}}); err == nil || requests != 1 {
+		t.Fatalf("bad request retried: err=%v requests=%d", err, requests)
+	}
+}
+
 func TestReasoningEffortIsExplicitAndOptional(t *testing.T) {
 	for _, effort := range []string{"", "low"} {
 		t.Run("effort="+effort, func(t *testing.T) {

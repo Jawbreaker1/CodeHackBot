@@ -249,7 +249,7 @@ type chatResponse struct {
 
 // Chat sends a minimal chat completion request and returns the assistant content.
 func (c Client) Chat(ctx context.Context, messages []Message) (string, error) {
-	completion, err := c.Complete(ctx, messages, ChatOptions{Profile: ProfileConversation})
+	completion, err := c.completeWithTransientRetry(ctx, messages, ChatOptions{Profile: ProfileConversation})
 	if err != nil {
 		return "", err
 	}
@@ -261,11 +261,34 @@ func (c Client) Chat(ctx context.Context, messages []Message) (string, error) {
 
 // ChatStructured sends a chat completion request for machine-readable control output.
 func (c Client) ChatStructured(ctx context.Context, messages []Message) (string, error) {
-	completion, err := c.Complete(ctx, messages, ChatOptions{Profile: ProfileStructuredControl})
+	completion, err := c.completeWithTransientRetry(ctx, messages, ChatOptions{Profile: ProfileStructuredControl})
 	if err != nil {
 		return "", err
 	}
 	return completion.Text, nil
+}
+
+type chatStatusError struct {
+	status int
+	text   string
+}
+
+func (e *chatStatusError) Error() string { return e.text }
+
+// Retry only a transient gateway/service failure, once. Each Complete call
+// passes through the normal request budget and usage accounting hooks.
+func (c Client) completeWithTransientRetry(ctx context.Context, messages []Message, opts ChatOptions) (Completion, error) {
+	completion, err := c.Complete(ctx, messages, opts)
+	var statusErr *chatStatusError
+	if err == nil || !errors.As(err, &statusErr) || (statusErr.status != 502 && statusErr.status != 503 && statusErr.status != 504) {
+		return completion, err
+	}
+	select {
+	case <-ctx.Done():
+		return Completion{}, ctx.Err()
+	case <-time.After(time.Second):
+	}
+	return c.Complete(ctx, messages, opts)
 }
 
 // Complete sends a minimal chat completion request and normalizes provider output.
@@ -379,10 +402,10 @@ func (c Client) Complete(ctx context.Context, messages []Message, opts ChatOptio
 				if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
 					message += " (Retry-After: " + retryAfter + ")"
 				}
-				return Completion{}, errors.New(message)
+				return Completion{}, &chatStatusError{status: resp.StatusCode, text: message}
 			}
 		}
-		return Completion{}, fmt.Errorf("chat request returned status %s", resp.Status)
+		return Completion{}, &chatStatusError{status: resp.StatusCode, text: fmt.Sprintf("chat request returned status %s", resp.Status)}
 	}
 
 	var decoded chatResponse
