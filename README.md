@@ -12,6 +12,10 @@ The operator sets the target boundaries and is responsible for authorization. Bi
 
 ## See it in action
 
+[![Watch the 30-second BirdHackBot film](docs/media/birdhackbot-launch-poster.jpg)](docs/media/birdhackbot-launch.mp4)
+
+[Watch or download the 30-second film](docs/media/birdhackbot-launch.mp4) — 1080p with an original techno soundtrack. Turn on sound for the full experience.
+
 These screenshots come from the current local web app. The new-session view shows the detailed raven; the smaller [bird-head icon](internal/webapp/static/logo-small.svg) stays in the navigation and favicon.
 
 ![A new BirdHackBot session with the detailed raven above the conversation](docs/screenshots/new-session.png)
