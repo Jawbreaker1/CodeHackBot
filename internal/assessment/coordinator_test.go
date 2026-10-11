@@ -436,6 +436,14 @@ func TestCoordinatorDelegatesThenValidatesWithSharedBudgetAndEvidence(t *testing
 			t.Error(err)
 			return
 		}
+		if req.Messages[0].Content == coverageQuestionInstructions {
+			reply(w, coverageQuestions{})
+			return
+		}
+		if req.Messages[0].Content == coverageReviewInstructions {
+			reply(w, coverageReview{})
+			return
+		}
 		var payload struct {
 			Role          string `json:"role"`
 			ContextPacket string `json:"context_packet"`
@@ -512,7 +520,7 @@ func TestCoordinatorDelegatesThenValidatesWithSharedBudgetAndEvidence(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Status != "completed" || len(s.Results) != 3 || s.Usage.Calls != 12 || s.Usage.ReportedTokens != 120 {
+	if s.Status != "completed" || len(s.Results) != 3 || s.Usage.Calls != 16 || s.Usage.ReportedTokens != 160 {
 		t.Fatalf("unexpected result: %+v", s)
 	}
 	mu.Lock()
@@ -916,9 +924,13 @@ func TestReproducedFindingUsesLaterWorkerEvidenceWithoutFormalDependency(t *test
 		t.Fatal("same-round task counted as later validation")
 	}
 	state.Plans = []Decision{{Tasks: []Task{inspect}}, {Tasks: []Task{validate}}}
-	state.Results[0].Status = "failed"
+	state.Results[0].Status = "blocked"
+	if err := validateDecision(decision, state); err != nil {
+		t.Fatalf("later independent validation rejected because the observed worker was blocked: %v", err)
+	}
+	state.Results[0].Evidence = nil
 	if err := validateDecision(decision, state); err == nil {
-		t.Fatal("failed prior task counted as a completed investigation")
+		t.Fatal("prior task without recorded observations counted as an investigation")
 	}
 }
 
@@ -1040,5 +1052,201 @@ func TestCoordinatorCorrectionKeepsLateLeadProposals(t *testing.T) {
 	got, err := c.decide(t.Context(), t.TempDir(), 2, 0, state)
 	if err != nil || calls != 2 || len(got.OpenLeads) != 2 || got.OpenLeads[1].ID != newLead.ID {
 		t.Fatalf("correction did not preserve new lead: calls=%d decision=%+v err=%v", calls, got, err)
+	}
+}
+
+func TestCoverageReviewReplansObservedMaterialGap(t *testing.T) {
+	const ref = "/fixture/tasks/baseline/observation.log"
+	initial := Decision{Summary: "Retest a minor header", Tasks: []Task{{ID: "header", Goal: "Retest the header", DoneWhen: "Header recorded"}}}
+	revised := Decision{Summary: "Trace the observed data boundary", Tasks: []Task{{ID: "data-flow", Goal: "Trace the separate URL value through page startup and outside scripts without sending a real secret", DoneWhen: "Record the observed value path and remaining limits"}}}
+	state := State{Version: 1, Goal: "Assess the fixture", Scope: "Read-only fixture", Limits: DefaultLimits(),
+		Plans:   []Decision{{Summary: "Inspect the fixture", Tasks: []Task{{ID: "baseline", Goal: "Inspect public code", DoneWhen: "Record security-relevant behavior"}}, ApprovedTaskIDs: []string{"baseline"}}},
+		Results: []Result{{Task: Task{ID: "baseline", Goal: "Inspect public code"}, Status: "done", Summary: "A URL value is exchanged for a separate stored session credential, and an outside script loads during page startup.", Evidence: []ctxpacket.ExecutionResult{{LogRefs: []string{ref}, OutputSummary: "Source shows the separate values and outside script."}}}},
+	}
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var request struct {
+			Messages []llmclient.Message `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			return
+		}
+		switch calls {
+		case 1:
+			reply(w, initial)
+		case 2:
+			if request.Messages[0].Content != coverageQuestionInstructions || strings.Contains(request.Messages[1].Content, "Retest a minor header") {
+				t.Error("independent question pass saw the proposed plan")
+			}
+			reply(w, coverageQuestions{Questions: []coverageOmission{{Question: "Could the distinct URL value reach the outside script?", Evidence: []string{ref}, NextCheck: "Inspect startup order"}}})
+		case 3:
+			if !strings.Contains(request.Messages[1].Content, "outside script") || !strings.Contains(request.Messages[1].Content, "Retest a minor header") {
+				t.Error("coverage reviewer did not receive recent evidence and candidate plan")
+			}
+			reply(w, coverageReview{Omissions: []coverageOmission{{Question: "Could the distinct URL value reach the outside script?", Evidence: []string{ref}, NextCheck: "Inspect startup order and source with a synthetic marker"}}})
+		case 4:
+			if !strings.Contains(request.Messages[len(request.Messages)-1].Content, "distinct URL value") {
+				t.Error("coordinator correction lost the reviewed omission")
+			}
+			reply(w, revised)
+		default:
+			t.Errorf("unexpected model call %d", calls)
+		}
+	}))
+	defer server.Close()
+	decision, err := testCoordinator(server.URL).decide(t.Context(), t.TempDir(), 2, 0, state)
+	if err != nil || calls != 4 || len(decision.Tasks) != 1 || decision.Tasks[0].ID != "data-flow" {
+		t.Fatalf("observed omission did not lead to one bounded revision: calls=%d decision=%+v err=%v", calls, decision, err)
+	}
+}
+
+func TestCoverageReviewRunsAfterSchemaCorrection(t *testing.T) {
+	const ref = "/fixture/tasks/baseline/observation.log"
+	state := State{Version: 1, Goal: "Assess the fixture", Scope: "Read-only fixture", Limits: DefaultLimits(),
+		Plans:   []Decision{{Tasks: []Task{{ID: "baseline"}}, ApprovedTaskIDs: []string{"baseline"}}},
+		Results: []Result{{Task: Task{ID: "baseline"}, Status: "done", Summary: "One observed trust boundary remains unanswered.", Evidence: []ctxpacket.ExecutionResult{{LogRefs: []string{ref}}}}},
+	}
+	initial := Decision{Summary: "Invalid ID", Tasks: []Task{{ID: "../escape", Goal: "Bad task", DoneWhen: "Never"}}}
+	corrected := Decision{Summary: "Check an easier path", Tasks: []Task{{ID: "easy", Goal: "Repeat one low-value check", DoneWhen: "Result recorded"}}}
+	revised := Decision{Summary: "Check the observed boundary", Tasks: []Task{{ID: "boundary", Goal: "Trace the observed trust boundary", DoneWhen: "The path is explained"}}}
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		switch calls {
+		case 1:
+			reply(w, initial)
+		case 2:
+			reply(w, corrected)
+		case 3:
+			reply(w, coverageQuestions{Questions: []coverageOmission{{Question: "What happens at the observed trust boundary?", Evidence: []string{ref}, NextCheck: "Trace the path"}}})
+		case 4:
+			reply(w, coverageReview{Omissions: []coverageOmission{{Question: "What happens at the observed trust boundary?", Evidence: []string{ref}, NextCheck: "Trace the path"}}})
+		case 5:
+			reply(w, revised)
+		default:
+			t.Errorf("unexpected model call %d", calls)
+		}
+	}))
+	defer server.Close()
+	decision, err := testCoordinator(server.URL).decide(t.Context(), t.TempDir(), 2, 0, state)
+	if err != nil || calls != 5 || len(decision.Tasks) != 1 || decision.Tasks[0].ID != "boundary" {
+		t.Fatalf("corrected plan bypassed independent review: calls=%d decision=%+v err=%v", calls, decision, err)
+	}
+}
+
+func TestCoverageReviewKeepsLatestWorkerConclusionAndEvidence(t *testing.T) {
+	const ref = "/fixture/tasks/baseline/observation.log"
+	const lateObservation = "A second value crosses a separate trust boundary and has not been traced."
+	state := State{Goal: "Assess the fixture", Scope: "Read-only fixture", Plans: []Decision{{Tasks: []Task{{ID: "baseline"}}, ApprovedTaskIDs: []string{"baseline"}}},
+		Results: []Result{{Task: Task{ID: "baseline"}, Status: "done",
+			Summary:  strings.Repeat("Earlier observations and method details. ", 115) + lateObservation,
+			Evidence: []ctxpacket.ExecutionResult{{LogRefs: []string{ref}, OutputSummary: strings.Repeat("Observation detail. ", 24) + lateObservation}},
+		}},
+	}
+	input, refs := coverageReviewInput(state, Decision{Summary: "Continue assessment"})
+	if !refs[ref] || strings.Count(string(input), lateObservation) != 2 {
+		t.Fatalf("latest material observation was lost from the independent review packet: %s", input)
+	}
+}
+
+func TestCoverageReviewIgnoresUnregisteredEvidence(t *testing.T) {
+	const ref = "/fixture/tasks/baseline/observation.log"
+	initial := Decision{Summary: "Review the recorded fixture", Tasks: []Task{{ID: "review", Goal: "Review observation", DoneWhen: "Observation explained"}}}
+	state := State{Version: 1, Goal: "Assess the fixture", Scope: "Read-only fixture", Limits: DefaultLimits(),
+		Plans:   []Decision{{Summary: "Inspect", Tasks: []Task{{ID: "baseline"}}, ApprovedTaskIDs: []string{"baseline"}}},
+		Results: []Result{{Task: Task{ID: "baseline"}, Status: "done", Summary: "A recorded observation", Evidence: []ctxpacket.ExecutionResult{{LogRefs: []string{ref}}}}},
+	}
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			reply(w, initial)
+		} else if calls == 2 {
+			reply(w, coverageQuestions{Questions: []coverageOmission{{Question: "Unsupported", Evidence: []string{"/fictional/unknown.log"}, NextCheck: "Act on it"}}})
+		} else {
+			reply(w, coverageReview{Omissions: []coverageOmission{{Question: "An unsupported claim", Evidence: []string{"/fictional/unknown.log"}, NextCheck: "Act on it"}}})
+		}
+	}))
+	defer server.Close()
+	decision, err := testCoordinator(server.URL).decide(t.Context(), t.TempDir(), 2, 0, state)
+	if err != nil || calls != 3 || len(decision.Tasks) != 1 || decision.Tasks[0].ID != "review" {
+		t.Fatalf("unregistered audit claim changed plan: calls=%d decision=%+v err=%v", calls, decision, err)
+	}
+}
+
+func TestCoverageReviewKeepsValidPlanIfRevisionIsInvalid(t *testing.T) {
+	const ref = "/fixture/tasks/baseline/observation.log"
+	initial := Decision{Summary: "Investigate the fixture", Tasks: []Task{{ID: "review", Goal: "Review the observation", DoneWhen: "Observation explained"}}}
+	state := State{Version: 1, Goal: "Assess fixture", Scope: "Read-only fixture", Limits: DefaultLimits(),
+		Plans:   []Decision{{Summary: "Inspect", Tasks: []Task{{ID: "baseline"}}, ApprovedTaskIDs: []string{"baseline"}}},
+		Results: []Result{{Task: Task{ID: "baseline"}, Status: "done", Summary: "One observed path remains untested", Evidence: []ctxpacket.ExecutionResult{{LogRefs: []string{ref}}}}},
+	}
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		switch calls {
+		case 1:
+			reply(w, initial)
+		case 2:
+			reply(w, coverageQuestions{Questions: []coverageOmission{{Question: "Check the observed path", Evidence: []string{ref}, NextCheck: "Read saved source"}}})
+		case 3:
+			reply(w, coverageReview{Omissions: []coverageOmission{{Question: "Check the observed path", Evidence: []string{ref}, NextCheck: "Read the saved source"}}})
+		case 4:
+			reply(w, Decision{Summary: "Invalid revision", Tasks: []Task{{ID: "../escape", Goal: "Bad path", DoneWhen: "Never"}}})
+		case 5:
+			reply(w, Decision{Summary: "Still invalid", Tasks: []Task{{ID: "../escape", Goal: "Bad path", DoneWhen: "Never"}}})
+		default:
+			t.Errorf("unexpected model call %d", calls)
+		}
+	}))
+	defer server.Close()
+	decision, err := testCoordinator(server.URL).decide(t.Context(), t.TempDir(), 2, 0, state)
+	if err != nil || calls != 5 || len(decision.Tasks) != 1 || decision.Tasks[0].ID != "review" {
+		t.Fatalf("invalid audit revision displaced valid plan: calls=%d decision=%+v err=%v", calls, decision, err)
+	}
+}
+
+func TestCoverageReviewRepairsInvalidRevisionOnce(t *testing.T) {
+	const ref = "/fixture/tasks/baseline/observation.log"
+	state := State{Version: 1, Goal: "Assess fixture", Scope: "Read-only fixture", Limits: DefaultLimits(),
+		Plans:   []Decision{{Tasks: []Task{{ID: "baseline"}}, ApprovedTaskIDs: []string{"baseline"}}},
+		Results: []Result{{Task: Task{ID: "baseline"}, Status: "done", Summary: "A recorded question remains open", Evidence: []ctxpacket.ExecutionResult{{LogRefs: []string{ref}}}}},
+	}
+	initial := Decision{Summary: "Initial proposal", Tasks: []Task{{ID: "easy", Goal: "Repeat a minor check", DoneWhen: "Record result"}}}
+	repaired := Decision{Summary: "Check observed question", Tasks: []Task{{ID: "material", Goal: "Investigate the recorded question", DoneWhen: "Explain the observed path"}}}
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var request struct {
+			Messages []llmclient.Message `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			return
+		}
+		switch calls {
+		case 1:
+			reply(w, initial)
+		case 2:
+			reply(w, coverageQuestions{Questions: []coverageOmission{{Question: "What happens on the observed path?", Evidence: []string{ref}, NextCheck: "Inspect the source"}}})
+		case 3:
+			reply(w, coverageReview{Omissions: []coverageOmission{{Question: "What happens on the observed path?", Evidence: []string{ref}, NextCheck: "Inspect the source"}}})
+		case 4:
+			reply(w, Decision{Summary: "Invalid revision", Tasks: []Task{{ID: "../escape", Goal: "Bad task", DoneWhen: "Never"}}})
+		case 5:
+			if !strings.Contains(request.Messages[len(request.Messages)-1].Content, "What happens on the observed path?") {
+				t.Error("schema correction lost independent review question")
+			}
+			reply(w, repaired)
+		default:
+			t.Errorf("unexpected model call %d", calls)
+		}
+	}))
+	defer server.Close()
+	decision, err := testCoordinator(server.URL).decide(t.Context(), t.TempDir(), 2, 0, state)
+	if err != nil || calls != 5 || len(decision.Tasks) != 1 || decision.Tasks[0].ID != "material" {
+		t.Fatalf("invalid review revision was not corrected: calls=%d decision=%+v err=%v", calls, decision, err)
 	}
 }

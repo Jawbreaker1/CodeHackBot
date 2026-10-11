@@ -128,9 +128,12 @@ func ParseResponse(text string) (Response, error) {
 	if len(r.LeadHints) > 3 {
 		return r, fmt.Errorf("step_complete may contain at most three lead hints")
 	}
-	for _, hint := range r.LeadHints {
-		if strings.TrimSpace(hint) == "" || len(hint) > 400 {
-			return r, fmt.Errorf("lead hints must be concise nonempty text")
+	for i, hint := range r.LeadHints {
+		if strings.TrimSpace(hint) == "" {
+			return r, fmt.Errorf("lead hint %d is empty", i+1)
+		}
+		if len(hint) > 800 {
+			return r, fmt.Errorf("lead hint %d is %d bytes; maximum is 800", i+1, len(hint))
 		}
 	}
 	if r.Type != "load_strategy" && r.Strategy != "" {

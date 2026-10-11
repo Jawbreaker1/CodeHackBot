@@ -64,6 +64,12 @@ class Model(BaseHTTPRequestHandler):
             else:
                 self.send_json({"choices": [{"message": {"content": "The worker is waiting for your approval before it runs the proposed action."}}], "usage": {"total_tokens": 10}})
             return
+        if "Read the latest worker observations without a proposed plan" in messages[0]["content"]:
+            self.send_json({"choices": [{"message": {"content": json.dumps({"questions": []})}}], "usage": {"total_tokens": 10}})
+            return
+        if "Compare the independent unanswered questions" in messages[0]["content"]:
+            self.send_json({"choices": [{"message": {"content": json.dumps({"material_omissions": []})}}], "usage": {"total_tokens": 10}})
+            return
         prompt = messages[1]["content"]
         payload = json.loads(prompt)
         if "Operator answer: fixture answer" in prompt:
@@ -292,7 +298,7 @@ def run_case(binary, root, endpoint, mode):
             validate = next(item for item in state["results"] if item["task"]["id"] == "validate")
             assert validate["task"]["depends_on"] == ["discover"], validate
             assert len({item["evidence"][0]["Cwd"] for item in state["results"]}) == 3, state
-            assert state["usage"]["calls"] == 12, state
+            assert state["usage"]["calls"] == 16, state
             assert "Generic orchestrator fixture assessment" in (runs[-1].parent / "report.md").read_text()
         if mode == "subset":
             assert len(state["results"]) == 1 and state["results"][0]["task"]["id"] == "discover", state

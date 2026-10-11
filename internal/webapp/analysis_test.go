@@ -77,7 +77,7 @@ func TestAnalysisFlagsLegacyReproducedFindingWithoutChangingSavedState(t *testin
 	view := current.view("")
 	analysis := current.analysis()
 	customer := server.customerView("fixture-lab")
-	if len(view.Findings) != 1 || view.Findings[0].Status != "reproduced" || len(analysis.Findings) != 1 || analysis.Findings[0].Status != "candidate" || analysis.Findings[0].RecordedStatus != "reproduced" || analysis.Risk.Candidates != 1 || analysis.Risk.Reproduced != 0 || len(customer.Findings) != 1 || customer.Findings[0].Finding.Status != "reproduced" {
+	if len(view.Findings) != 1 || view.Findings[0].Status != "candidate" || len(analysis.Findings) != 1 || analysis.Findings[0].Status != "candidate" || analysis.Findings[0].RecordedStatus != "reproduced" || analysis.Risk.Candidates != 1 || analysis.Risk.Reproduced != 0 || len(customer.Findings) != 1 || customer.Findings[0].Finding.Status != "candidate" {
 		t.Fatalf("legacy reproduction was not marked for review without changing saved state: session=%+v analysis=%+v customer=%+v", view.Findings, analysis.Findings, customer.Findings)
 	}
 	current.state.Plans = append(current.state.Plans, assessment.Decision{Complete: true})

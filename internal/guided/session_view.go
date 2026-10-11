@@ -59,7 +59,7 @@ func printSessionView(c *Console, command, root string, state assessment.State) 
 		}
 		return true
 	case "/findings":
-		findings := assessment.CurrentFindings(state.Plans)
+		findings := assessment.DisplayFindings(state)
 		if len(findings) == 0 {
 			c.Print("No current findings. Earlier plan drafts are not current findings.\n")
 			return true

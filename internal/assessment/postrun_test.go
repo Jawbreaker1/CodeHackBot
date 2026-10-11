@@ -15,3 +15,16 @@ func TestPostRunContextKeepsOpenNextChecks(t *testing.T) {
 		t.Fatalf("post-run coordinator lost its continuation: %s", context)
 	}
 }
+
+func TestPostRunContextDoesNotPresentUnsupportedReproductionAsConfirmed(t *testing.T) {
+	state := State{Status: "completed", Plans: []Decision{{Complete: true, Findings: []Finding{{
+		Title: "Unverified historical claim", Status: "reproduced", ValidationTask: "missing-review",
+	}}}}}
+	context := PostRunFindingsContext(state)
+	if strings.Contains(context, `"status":"reproduced"`) || !strings.Contains(context, `"status":"candidate"`) {
+		t.Fatalf("post-run model received an unsupported reproduction claim: %s", context)
+	}
+	if state.Plans[0].Findings[0].Status != "reproduced" {
+		t.Fatal("post-run projection changed the saved historical record")
+	}
+}

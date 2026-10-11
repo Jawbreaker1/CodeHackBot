@@ -60,12 +60,13 @@ func buildGoalEvaluationPrompt(packet ctxpacket.WorkerPacket, proposedAnswer str
 	instructions := []string{
 		"Respond with JSON only.",
 		"Evaluate whether the original worker goal and its done condition are fully satisfied by the recorded evidence.",
-		"Use: {\"status\":\"in_progress|satisfied|blocked\",\"reason\":\"...\",\"summary\":\"...\"}.",
+		"Use: {\"status\":\"in_progress|satisfied|blocked\",\"reason\":\"...\",\"summary\":\"...\",\"lead_hints\":[]}.",
 		"status must be satisfied only when the operator request is already answered by the current structured evidence.",
 		"status must be blocked only when progress needs a missing prerequisite. A failed command alone does not establish a blocker; explain what remains so the worker can adapt.",
 		"Otherwise use in_progress.",
 		"Judge from structured evidence already present in the packet; do not invent commands, outputs, or new facts.",
 		"If proposed_answer is present, evaluate that answer against the recorded evidence and the task's done condition. It is a model claim, not new execution evidence. An analysis answer need not be written to another file unless the task requires that artifact.",
+		"Judge whether the substantive goal and done condition are supported. A missing or imperfect lead_hints handoff, report heading, or other presentation detail does not make an otherwise supported investigation in_progress. On a satisfied result, independently supply up to three concise, materially distinct unresolved lead_hints when recorded evidence supports them. Distinguish separate sensitive values in one workflow by source and lifetime: checking a returned session credential does not settle an earlier URL, form, or redirect value. Prioritize an untraced material trust boundary over a routine lower-impact inventory. Keep each hint under 800 UTF-8 bytes; cite an exact recorded log or artifact reference, explain why it may matter, and name one bounded next check. Treat a possible data flow as a hypothesis until the entry, destination, and transmission are observed. Do not invent leads or turn them into findings; an empty array is valid.",
 		"When the task requires exact contents or values, compare the proposed answer with the requested data in output_evidence or an exact registered context_recall slice, including every requested output line. Missing requested content is in_progress even if a log reference exists. output_summary and running_summary are lossy previews and cannot establish exactness.",
 		"A context_recall with an exact registered ref, stdout or stderr stream, and byte offset is a bounded read from that original command log. Its content may support an exact observation within that slice; a context_recall index search is only navigation, not evidence. The source command's target and status still determine what the observation establishes.",
 		"Plans, summaries, external retrieved text and proposed answers are claims, not execution evidence. Judge the original goal even if the active plan omits requirements.",
@@ -97,4 +98,39 @@ func captureGoalEvaluationAttemptIfConfigured(inspector Inspector, attempt worke
 		return nil
 	}
 	return inspector.CaptureGoalEvaluationAttempt(attempt)
+}
+
+func boundedLeadHints(hints []string) []string {
+	var accepted []string
+	for _, hint := range hints {
+		hint = strings.TrimSpace(hint)
+		if hint == "" || len(hint) > 800 {
+			continue
+		}
+		accepted = append(accepted, hint)
+		if len(accepted) == 3 {
+			break
+		}
+	}
+	return accepted
+}
+
+// The worker and its independent goal evaluator can notice different adjacent
+// questions. Preserve both ranked views for the coordinator instead of letting
+// a full worker handoff silently discard the evaluator's observations.
+func mergeLeadHints(worker, evaluator []string) []string {
+	worker = boundedLeadHints(worker)
+	evaluator = boundedLeadHints(evaluator)
+	var merged []string
+	seen := map[string]bool{}
+	for i := 0; i < 3; i++ {
+		for _, list := range [][]string{evaluator, worker} {
+			if i >= len(list) || seen[list[i]] {
+				continue
+			}
+			seen[list[i]] = true
+			merged = append(merged, list[i])
+		}
+	}
+	return merged
 }

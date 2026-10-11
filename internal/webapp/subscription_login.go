@@ -57,7 +57,7 @@ func (s *Server) subscriptionLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func sameOrigin(r *http.Request) bool {
-	if site := r.Header.Get("Sec-Fetch-Site"); site == "cross-site" {
+	if site := r.Header.Get("Sec-Fetch-Site"); site == "cross-site" || site == "same-site" && r.Header.Get("Origin") == "" {
 		return false
 	}
 	origin := strings.TrimSpace(r.Header.Get("Origin"))

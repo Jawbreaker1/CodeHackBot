@@ -19,7 +19,39 @@ type Evaluation struct {
 	Status       Status        `json:"status"`
 	Reason       string        `json:"reason"`
 	Summary      string        `json:"summary"`
+	LeadHints    LeadHints     `json:"lead_hints,omitempty"`
 	Verification *Verification `json:"verification,omitempty"`
+}
+
+// LeadHints accepts either the documented plain strings or the observed
+// structured hint/lead form without parsing prose or command output.
+type LeadHints []string
+
+func (h *LeadHints) UnmarshalJSON(data []byte) error {
+	var items []json.RawMessage
+	if err := json.Unmarshal(data, &items); err != nil {
+		return err
+	}
+	var hints []string
+	for _, item := range items {
+		var hint string
+		if err := json.Unmarshal(item, &hint); err != nil {
+			var structured struct {
+				Hint string `json:"hint"`
+				Lead string `json:"lead"`
+			}
+			if err := json.Unmarshal(item, &structured); err != nil {
+				return err
+			}
+			hint = structured.Hint
+			if hint == "" {
+				hint = structured.Lead
+			}
+		}
+		hints = append(hints, hint)
+	}
+	*h = hints
+	return nil
 }
 
 // Verification is an evidence-backed challenge verdict for a delegated

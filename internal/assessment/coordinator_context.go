@@ -235,7 +235,7 @@ func compactCoordinatorResultIndex(packet *coordinatorModelPacket, oldCount int)
 		result.Summary = promptExcerptEnds(result.Summary, limit)
 		result.Error = promptExcerptEnds(result.Error, 240)
 		for j := range result.LeadHints {
-			result.LeadHints[j] = promptExcerptEnds(result.LeadHints[j], 320)
+			result.LeadHints[j] = promptExcerptEnds(result.LeadHints[j], 800)
 		}
 		if result.Verification != nil {
 			verification := *result.Verification

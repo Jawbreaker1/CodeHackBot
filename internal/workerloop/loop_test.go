@@ -71,6 +71,26 @@ func TestCompletedWorkerPassesAdjacentLeadToCoordinator(t *testing.T) {
 	}
 }
 
+func TestGoalEvaluatorCanPreserveLeadWhenWorkerOmitsHandoff(t *testing.T) {
+	lead := "The observed fixture has a separate access path in the recorded log; check it with one bounded read."
+	eval := `{"status":"satisfied","reason":"the requested observation is supported","summary":"Fixture established","lead_hints":[` + fmt.Sprintf("%q", lead) + `]}`
+	loop, packet, _ := fixtureWorker(t, 2, printAction, `{"type":"step_complete","summary":"The fixture was observed; a separate path remains untested."}`, eval)
+	out, err := loop.Run(context.Background(), packet, 2)
+	if err != nil || out.Packet.TaskRuntime.State != "done" || len(out.LeadHints) != 1 || out.LeadHints[0] != lead {
+		t.Fatalf("a supported worker result lost its unresolved lead: state=%s leads=%v err=%v", out.Packet.TaskRuntime.State, out.LeadHints, err)
+	}
+}
+
+func TestGoalEvaluatorLeadSurvivesFullWorkerHandoff(t *testing.T) {
+	worker := `{"type":"step_complete","summary":"The fixture was observed","lead_hints":["Check the first saved route.","Check the second saved route.","Check the third saved route."]}`
+	eval := `{"status":"satisfied","reason":"the observation is supported","summary":"Fixture established","lead_hints":["A distinct sensitive value crosses an untested boundary in the recorded fixture; trace its destination."]}`
+	loop, packet, _ := fixtureWorker(t, 2, printAction, worker, eval)
+	out, err := loop.Run(context.Background(), packet, 2)
+	if err != nil || len(out.LeadHints) != 4 || out.LeadHints[0] != "A distinct sensitive value crosses an untested boundary in the recorded fixture; trace its destination." {
+		t.Fatalf("independent lead was discarded by a full worker handoff: leads=%v err=%v", out.LeadHints, err)
+	}
+}
+
 func TestRepeatedUnsupportedCompletionWithoutNewEvidenceStops(t *testing.T) {
 	claim := `{"type":"step_complete","summary":"The task is complete"}`
 	loop, packet, calls := fixtureWorker(t, 5, printAction, claim, continueEval, claim, continueEval, claim)

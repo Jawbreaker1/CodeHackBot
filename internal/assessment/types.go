@@ -352,7 +352,7 @@ func validateDecision(d Decision, state State) error {
 		}
 		if f.Status == "reproduced" {
 			r := known[f.ValidationTask]
-			if r.Status != "done" || !hasCompletedEarlierTask(state, f.ValidationTask, known) || len(r.Evidence) == 0 {
+			if r.Status != "done" || !hasEarlierObservedTask(state, f.ValidationTask, known) || len(r.Evidence) == 0 {
 				return fmt.Errorf("reproduced finding needs a completed later-round validation task")
 			}
 			if r.Task.Verification == nil || strings.TrimSpace(r.Task.Verification.Claim) == "" || strings.TrimSpace(r.Task.Verification.Alternative) == "" || r.Verification == nil || r.Verification.Verdict != "supported" || strings.TrimSpace(r.Verification.AlternativeResult) == "" || strings.TrimSpace(r.Verification.Reason) == "" || len(r.Verification.Evidence) == 0 {
@@ -428,21 +428,21 @@ func validateDecision(d Decision, state State) error {
 	return nil
 }
 
-// A later worker can validate an earlier observation without declaring a
-// formal dependency. The dependency field controls its detailed context
-// handoff; the finding gate checks the durable execution sequence and the
-// validation worker's own evidence instead.
-func hasCompletedEarlierTask(state State, validationTask string, results map[string]Result) bool {
-	priorDone := false
+// A later worker can validate an earlier observation even when the first
+// worker stopped before completing its broader task. The earlier execution
+// must have recorded evidence; the validation worker must independently
+// complete a supported challenge and cite its own log.
+func hasEarlierObservedTask(state State, validationTask string, results map[string]Result) bool {
+	priorObserved := false
 	for _, plan := range state.Plans {
 		for _, task := range plan.Tasks {
 			if task.ID == validationTask {
-				return priorDone
+				return priorObserved
 			}
 		}
 		for _, task := range plan.Tasks {
-			if results[task.ID].Status == "done" {
-				priorDone = true
+			if len(results[task.ID].Evidence) > 0 {
+				priorObserved = true
 			}
 		}
 	}

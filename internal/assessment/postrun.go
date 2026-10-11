@@ -22,13 +22,14 @@ func PostRunFindingsContext(state State) string {
 	if finalReviewPending {
 		latestResult = lastResult.Task.ID + " — " + lastResult.Status + ": " + postRunExcerpt(lastResult.Summary, 1200)
 	}
+	findings := DisplayFindings(state)
 	data, _ := json.Marshal(struct {
 		Findings           []Finding `json:"current_findings"`
 		Gaps               []string  `json:"unresolved_gaps"`
 		OpenLeads          []Lead    `json:"open_leads,omitempty"`
 		FinalReviewPending bool      `json:"final_review_pending"`
 		LatestResult       string    `json:"latest_worker_result,omitempty"`
-	}{Findings: CurrentFindings(state.Plans), Gaps: gaps, OpenLeads: CurrentOpenLeads(state.Plans), FinalReviewPending: finalReviewPending, LatestResult: latestResult})
+	}{Findings: findings, Gaps: gaps, OpenLeads: CurrentOpenLeads(state.Plans), FinalReviewPending: finalReviewPending, LatestResult: latestResult})
 	return string(data)
 }
 

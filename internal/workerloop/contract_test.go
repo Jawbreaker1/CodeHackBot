@@ -1,6 +1,9 @@
 package workerloop
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDecisionContract(t *testing.T) {
 	for _, text := range []string{
@@ -49,5 +52,16 @@ func TestDecisionContract(t *testing.T) {
 		if _, err := ParseResponse(text); err == nil {
 			t.Errorf("accepted ambiguous or invalid decision: %s", text)
 		}
+	}
+}
+
+func TestLeadHintLengthReportsActionableError(t *testing.T) {
+	valid := `{"type":"step_complete","summary":"done","lead_hints":["` + strings.Repeat("a", 600) + `"]}`
+	if _, err := ParseResponse(valid); err != nil {
+		t.Fatalf("rejected an evidence-sized handoff: %v", err)
+	}
+	tooLong := `{"type":"step_complete","summary":"done","lead_hints":["` + strings.Repeat("a", 801) + `"]}`
+	if _, err := ParseResponse(tooLong); err == nil || !strings.Contains(err.Error(), "maximum is 800") {
+		t.Fatalf("oversize hint did not receive a useful correction: %v", err)
 	}
 }

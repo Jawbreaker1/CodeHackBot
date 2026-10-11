@@ -2,6 +2,14 @@ package assessment
 
 import "strings"
 
+// DisplayFindings applies the same evidence check used by formal reports to
+// findings shown in chat and session views. The saved plan remains
+// intact so reviewers can inspect the historical claim.
+func DisplayFindings(state State) []Finding {
+	findings, _ := reviewFindings(state)
+	return findings
+}
+
 // reviewFindings keeps historical session state intact while preventing an
 // older, unchallenged reproduction claim from being presented as confirmed in
 // a newly rendered report.

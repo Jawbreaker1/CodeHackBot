@@ -81,6 +81,29 @@ func TestServerCreatesDraftAndServesUI(t *testing.T) {
 	}
 }
 
+func TestServerRejectsCrossOriginAssessmentMutation(t *testing.T) {
+	server := NewServer(Config{RepoRoot: t.TempDir()})
+	for _, headers := range []map[string]string{
+		{"Origin": "https://foreign.example"},
+		{"Sec-Fetch-Site": "cross-site"},
+	} {
+		request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8080/api/v1/assessments", strings.NewReader(`{"customer":"fixture","goal":"run","scope":"local"}`))
+		for name, value := range headers {
+			request.Header.Set(name, value)
+		}
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("cross-origin assessment creation status = %d for %v", response.Code, headers)
+		}
+	}
+	server.mu.RLock()
+	defer server.mu.RUnlock()
+	if len(server.runs) != 0 {
+		t.Fatal("cross-origin request created a session")
+	}
+}
+
 func TestCompletedAssessmentLinksSeparateEvidenceIndex(t *testing.T) {
 	server := NewServer(Config{RepoRoot: t.TempDir()})
 	current, err := server.newRun("customer", "review evidence", "synthetic fixture")
@@ -844,7 +867,9 @@ func TestServerRunsSharedCoordinatorAndApprovalThroughHTTP(t *testing.T) {
 		t.Fatalf("start status = %q", start.Status)
 	}
 
-	deadline := time.Now().Add(5 * time.Second)
+	// Race instrumentation makes each model, persistence, and HTTP step slower;
+	// leave enough time for the full coordinator/worker cycle to finish.
+	deadline := time.Now().Add(15 * time.Second)
 	approved := false
 	planApproved := false
 	var latest assessmentView
