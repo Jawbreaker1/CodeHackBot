@@ -1,6 +1,6 @@
 # Tasks
 
-Updated 2026-10-12. This file owns immediate implementation order and status.
+Updated 2026-10-13. This file owns immediate implementation order and status.
 
 ## Agreed sequence
 
@@ -12,6 +12,8 @@ Updated 2026-10-12. This file owns immediate implementation order and status.
 The product remains orchestrator-first. The first two steps establish its shared engine and model access. Keep each implementation small, runnable, and tied to its done condition. Priority clarification, 2026-09-19: complete and accept the agentic worker first, then complete and accept the orchestrator structure, before expanding knowledge/source capabilities. Completed cleanup and provider checks do not establish full worker acceptance.
 
 ## Current priority: foundation acceptance and capability proof
+
+2026-10-13 discovery and operator-control smokes: a new local AccountDesk fixture kept its seeded flaw out of the worker prompt and documented target material, with an independent HTTP oracle in CI. A built-CLI Daybreak/high Thorough run found and independently reproduced authenticated cross-account disclosure through the v1 summary cache; the fixed v2 route and post-warm anonymous requests provided controls. A separate Focused run on the rebuilt CLI followed an operator message to finish after the current worker, started no further task, and reported the observed issue only as a candidate because independent confirmation was intentionally omitted. The coverage review now receives recent operator messages so it cannot treat an explicit finish direction as a missing test, and source-location rejection names the actually captured lines for a usable correction. Go tests, vet, fixture oracle, and both live CLI paths passed. These are two diagnostic smokes on one known synthetic fixture, not held-out detection acceptance. See [the run record](docs/experiments/accountdesk-discovery-2026-10-13.md).
 
 2026-10-12 planning and worker-efficiency smokes: the independent coverage reviewer now receives compact outcomes and evidence refs from earlier worker rounds, not only the latest batch, to avoid treating completed checks as new work. A built-CLI Daybreak/high run against a different, fixed local document service preserved that prior-check context in round three and completed without a reproduced false finding; it still took 9m38s and 22 model calls for nine GET requests. A generic worker instruction now asks short, non-sensitive responses to be printed with the action that records them. A second focused built-CLI run used three actions for three GET requests, with no readback-only action, and completed in 2m18s with nine model calls and zero reproduced findings. The two runs had different scopes, so this is a workflow smoke, not a measured speedup or effectiveness comparison. Full Go tests, vet, and architecture guardrails passed. See [the diagnostic record](docs/experiments/coverage-efficiency-2026-10-12.md). Further latency work and repeated, held-out detection comparisons remain open.
 

@@ -1139,7 +1139,7 @@ func TestCoverageReviewRunsAfterSchemaCorrection(t *testing.T) {
 func TestCoverageReviewKeepsLatestWorkerConclusionAndEvidence(t *testing.T) {
 	const ref = "/fixture/tasks/baseline/observation.log"
 	const lateObservation = "A second value crosses a separate trust boundary and has not been traced."
-	state := State{Goal: "Assess the fixture", Scope: "Read-only fixture", Plans: []Decision{{Tasks: []Task{{ID: "baseline"}}, ApprovedTaskIDs: []string{"baseline"}}},
+	state := State{Goal: "Assess the fixture", Scope: "Read-only fixture", OperatorMessages: []string{"user: First investigate the fixture.", "assistant: Investigation started.", "user: Finish after the current workers and report the remaining questions as gaps."}, Plans: []Decision{{Tasks: []Task{{ID: "baseline"}}, ApprovedTaskIDs: []string{"baseline"}}},
 		Results: []Result{{Task: Task{ID: "baseline"}, Status: "done",
 			Summary:  strings.Repeat("Earlier observations and method details. ", 115) + lateObservation,
 			Evidence: []ctxpacket.ExecutionResult{{LogRefs: []string{ref}, OutputSummary: strings.Repeat("Observation detail. ", 24) + lateObservation}},
@@ -1148,6 +1148,9 @@ func TestCoverageReviewKeepsLatestWorkerConclusionAndEvidence(t *testing.T) {
 	input, refs := coverageReviewInput(state, Decision{Summary: "Continue assessment"})
 	if !refs[ref] || strings.Count(string(input), lateObservation) != 2 {
 		t.Fatalf("latest material observation was lost from the independent review packet: %s", input)
+	}
+	if !strings.Contains(string(input), "Finish after the current workers") {
+		t.Fatalf("operator's current stop direction was lost from the independent review packet: %s", input)
 	}
 }
 

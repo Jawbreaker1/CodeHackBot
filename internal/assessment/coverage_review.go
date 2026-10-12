@@ -27,9 +27,9 @@ type coverageQuestions struct {
 	Questions []coverageOmission `json:"questions"`
 }
 
-const coverageQuestionInstructions = "Read the latest worker observations without a proposed plan. Use prior_worker_checks to avoid proposing a check already performed; a prior result settles only what it actually tested. Return JSON only: {\"questions\":[{\"question\":\"...\",\"evidence\":[\"exact recorded ref\"],\"next_check\":\"...\"}]}. Identify at most three distinct, materially consequential unanswered questions supported by visible observations, ordered by plausible impact and the value of an in-scope discriminating check rather than ease or source order. Distinguish separate values, roles, and trust boundaries within a workflow; a conclusion about one does not settle another. Prefer a bounded check over a generic inventory or repeated low-impact test. Do not mistake an existing finding title, an open lead, or a general untested-area statement for a completed test. Cite exact recorded refs; a ref is a pointer, not proof of unseen contents. Do not invent a vulnerability, claim exfiltration, request a prohibited action, or expand scope. An empty array is valid."
+const coverageQuestionInstructions = "Read the latest worker observations without a proposed plan. Use prior_worker_checks to avoid proposing a check already performed; a prior result settles only what it actually tested. Recent operator messages are authoritative about whether to continue testing or finish; unanswered questions may instead be report gaps. Return JSON only: {\"questions\":[{\"question\":\"...\",\"evidence\":[\"exact recorded ref\"],\"next_check\":\"...\"}]}. Identify at most three distinct, materially consequential unanswered questions supported by visible observations, ordered by plausible impact and the value of an in-scope discriminating check rather than ease or source order. Distinguish separate values, roles, and trust boundaries within a workflow; a conclusion about one does not settle another. Prefer a bounded check over a generic inventory or repeated low-impact test. Do not mistake an existing finding title, an open lead, or a general untested-area statement for a completed test. Cite exact recorded refs; a ref is a pointer, not proof of unseen contents. Do not invent a vulnerability, claim exfiltration, request a prohibited action, or expand scope. An empty array is valid."
 
-const coverageReviewInstructions = "Compare the independent unanswered questions with the coordinator's proposed tasks. Use prior_worker_checks to avoid requesting work already performed; a prior result settles only what it actually tested. Return JSON only: {\"material_omissions\":[{\"question\":\"...\",\"evidence\":[\"exact recorded ref\"],\"next_check\":\"...\"}]}. Return at most two omissions, ordered by plausible impact and the value of a bounded in-scope check. Include a question only when that check could materially change the assessment and the proposed tasks do not answer it. A task covers a question only if its stated goal and done condition would resolve that specific question; mentioning the same page, workflow, value class, or risk category is not enough. An open_leads entry or a general limitation in gaps is not a test or a reason to skip an available bounded check; accept a deferral only when it explains why that particular check is infeasible or less valuable now. You may notice a material omission beyond the independent list, but support it with visible observations and exact recorded refs. Do not invent a vulnerability, claim exfiltration, request a prohibited action, or expand scope. An empty array is valid."
+const coverageReviewInstructions = "Compare the independent unanswered questions with the coordinator's proposed tasks. Use prior_worker_checks to avoid requesting work already performed; a prior result settles only what it actually tested. Respect recent operator messages: if the operator directed the assessment to finish after current work, do not request another worker merely to resolve an open question. A completed report may state that question as a gap. Return JSON only: {\"material_omissions\":[{\"question\":\"...\",\"evidence\":[\"exact recorded ref\"],\"next_check\":\"...\"}]}. Return at most two omissions, ordered by plausible impact and the value of a bounded in-scope check. Include a question only when that check could materially change the assessment and the proposed tasks do not answer it. A task covers a question only if its stated goal and done condition would resolve that specific question; mentioning the same page, workflow, value class, or risk category is not enough. An open_leads entry or a general limitation in gaps is not a test or a reason to skip an available bounded check; accept a deferral when it follows the operator's direction or explains why that particular check is infeasible or less valuable now. You may notice a material omission beyond the independent list, but support it with visible observations and exact recorded refs. Do not invent a vulnerability, claim exfiltration, request a prohibited action, or expand scope. An empty array is valid."
 
 type coverageResult struct {
 	TaskID    string   `json:"task_id"`
@@ -46,6 +46,7 @@ type coverageResult struct {
 type coveragePacket struct {
 	Goal                 string               `json:"goal"`
 	Scope                string               `json:"scope"`
+	OperatorMessages     []string             `json:"recent_operator_messages,omitempty"`
 	Results              []coverageResult     `json:"latest_worker_results"`
 	PriorChecks          []coveragePriorCheck `json:"prior_worker_checks,omitempty"`
 	OpenLeads            []Lead               `json:"prior_open_leads,omitempty"`
@@ -108,6 +109,13 @@ func coverageEvidencePacket(state State) (coveragePacket, map[string]bool) {
 		results = append(results, card)
 	}
 	payload.Goal, payload.Scope, payload.Results = state.Goal, state.Scope, results
+	if len(state.OperatorMessages) > 0 {
+		messages := state.OperatorMessages
+		if len(messages) > 4 {
+			messages = messages[len(messages)-4:]
+		}
+		payload.OperatorMessages = boundedStrings(messages, 4, 1200)
+	}
 	if len(payload.PriorChecks) > 12 {
 		payload.PriorChecks = payload.PriorChecks[len(payload.PriorChecks)-12:]
 	}

@@ -108,8 +108,33 @@ func ReadSourceArtifact(location SourceLocation) ([]SourceLine, error) {
 	}
 	for line := location.StartLine; line <= end; line++ {
 		if !covered[line] {
-			return nil, fmt.Errorf("source artifact does not include cited line %d", line)
+			return nil, fmt.Errorf("source artifact %s does not include cited line %d (captured lines: %s); cite a captured range or omit this source location", artifact.Path, line, capturedSourceRanges(artifact.Lines))
 		}
 	}
 	return artifact.Lines, nil
+}
+
+func capturedSourceRanges(lines []SourceLine) string {
+	if len(lines) == 0 {
+		return "none"
+	}
+	var ranges []string
+	start, end := lines[0].Number, lines[0].Number
+	appendRange := func() {
+		if start == end {
+			ranges = append(ranges, fmt.Sprint(start))
+		} else {
+			ranges = append(ranges, fmt.Sprintf("%d-%d", start, end))
+		}
+	}
+	for _, line := range lines[1:] {
+		if line.Number == end+1 {
+			end = line.Number
+			continue
+		}
+		appendRange()
+		start, end = line.Number, line.Number
+	}
+	appendRange()
+	return strings.Join(ranges, ", ")
 }

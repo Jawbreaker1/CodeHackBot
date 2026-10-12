@@ -81,3 +81,15 @@ func TestFormattedReportsKeepSourceLocation(t *testing.T) {
 		}
 	}
 }
+
+func TestMissingSourceLineExplainsCapturedRanges(t *testing.T) {
+	ref := filepath.Join(t.TempDir(), "source.json")
+	data := `{"version":1,"repository":"fixture/app","revision":"abc123","path":"server/auth.py","lines":[{"number":18,"text":"first"},{"number":41,"text":"second"},{"number":42,"text":"third"}]}`
+	if err := os.WriteFile(ref, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ReadSourceArtifact(SourceLocation{Repository: "fixture/app", Revision: "abc123", Path: "server/auth.py", StartLine: 18, EndLine: 19, ArtifactRef: ref})
+	if err == nil || !strings.Contains(err.Error(), "cited line 19") || !strings.Contains(err.Error(), "captured lines: 18, 41-42") || !strings.Contains(err.Error(), "omit this source location") {
+		t.Fatalf("missing source line should yield a usable correction: %v", err)
+	}
+}
