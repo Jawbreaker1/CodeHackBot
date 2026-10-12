@@ -84,6 +84,8 @@ Recorded 2026-09-19: two guided Daybreak runs against `testdata/source-lab/` pas
 
 ## Comparative value gate — planned
 
+The local [scoring procedure](comparative-evaluation.md) now records independently reviewed true findings, candidate-only leads, missed fixture issues, false claims, fixed-control errors, duplicate claims, elapsed time, and model use from the saved assessment. It is an evaluation aid, not an automated judge of whether cited evidence proves a claim. No comparative detection result has passed this gate yet.
+
 Freeze fixtures, prompts, versions, scoring, budgets, and the minimum useful improvement before measuring. Start with the first working assessment fixture, then add known-CVE, configuration, authorization/business-logic, and source-assisted scenarios, including fixed controls and held-out variants not used to tune the harness. Fixture truth must be maintained independently of the assessing agent; on open-ended targets, report verified findings without pretending total vulnerability recall is known.
 
 Compare against Codex with its normal capabilities available and a relevant specialist competitor from the [competitive assessment](../competitive-assessment-2026-09-19.md). Match model, Kali/tool access, credentials, source access, initial knowledge, and aggregate budgets where supported; disclose unavoidable differences. Separate harness comparisons using the same model from complete-product comparisons using each product's supported configuration.

@@ -14,7 +14,7 @@ Revision: 2026-10-04. Provenance: BirdHackBot project guidance, maintained in th
 | `api-assessment/SKILL.md` | A scoped HTTP or RPC API needs endpoint, object-authorization, schema, and state-transition assessment. |
 | `identity-access/SKILL.md` | Accounts, roles, sessions, tokens, or permission boundaries need controlled authentication and authorization testing. |
 | `configuration-exposure/SKILL.md` | Deployment, secrets handling, storage, or host configuration may create unintended access or data exposure. |
-| `credential-recovery/SKILL.md` | An explicitly authorized encrypted artifact or account needs staged candidate recovery and independent verification. |
+| `credential-recovery/SKILL.md` | An explicitly authorized encrypted artifact or account needs staged candidate recovery, feasible search partitioning, and independent verification. |
 | `vulnerability-validation/SKILL.md` | A source finding, scanner result, advisory, or exploit lead needs bounded target-side reproduction before a claim. |
 | `evidence-reporting/SKILL.md` | Several test results must be reconciled into reproducible, prioritized findings and a clear report. |
 

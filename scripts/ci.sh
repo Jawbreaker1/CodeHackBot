@@ -55,3 +55,4 @@ run python3 ./scripts/check_webapp.py /tmp/birdhackbot-web-ci
 run python3 -m unittest discover -s testdata/source-lab -p 'test_*.py'
 run python3 ./scripts/check_review_workflow_lab.py
 run python3 ./scripts/check_safe_documents_lab.py
+run python3 -m unittest discover -s scripts -p 'test_score_assessment.py'

@@ -1,6 +1,6 @@
 # Tasks
 
-Updated 2026-10-10. This file owns immediate implementation order and status.
+Updated 2026-10-12. This file owns immediate implementation order and status.
 
 ## Agreed sequence
 
@@ -12,6 +12,8 @@ Updated 2026-10-10. This file owns immediate implementation order and status.
 The product remains orchestrator-first. The first two steps establish its shared engine and model access. Keep each implementation small, runnable, and tied to its done condition. Priority clarification, 2026-09-19: complete and accept the agentic worker first, then complete and accept the orchestrator structure, before expanding knowledge/source capabilities. Completed cleanup and provider checks do not establish full worker acceptance.
 
 ## Current priority: foundation acceptance and capability proof
+
+2026-10-12 generic discovery measurement: domain-specific recovery details now live in the selectively loaded credential-recovery guide rather than every coordinator packet. The coordinator's cross-component instruction now applies to source, browser, service, and configuration evidence without naming the earlier web scenario. An offline scoring script and review procedure compare saved BirdHackBot runs or transcribed competitor results against truth held outside worker reach. They separate verified reproduced findings, candidate-only leads, missed fixture issues, false claims, fixed-control errors, duplicate claims, time, and model use. Seven scorer tests and full CI passed; one Daybreak/high cross-worker planning smoke on the updated prompt produced an evidence-linked combined lead. Retrospective scoring of one positive workflow lab and one fixed-control lab matched their independent oracles; these are checks of the scorer and handoff, **not** a comparative detection result. Run held-out, unlike fixtures and matched Codex baselines before making a superiority claim. See [the evaluation procedure](docs/runbooks/comparative-evaluation.md) and [run note](docs/experiments/comparative-scoring-2026-10-12.md).
 
 2026-10-10 model-specific parallelism requirement: Qwen 3.8 stays at two concurrent inference requests on the operator's local hardware. Daybreak sessions should expose a user-settable maximum worker count, with room for roughly ten independent workers when useful; the coordinator still chooses the number from the task. The current two-worker ceiling exists in assessment-limit validation, coordinator instructions, and the shared model budget's two-request semaphore, while the 12-task total budget would leave little room after a ten-worker round. First harden the current two-worker handoff and prove it in an end-user run. Then implement worker count and provider request concurrency as distinct session/profile settings, persist the selected limits, and expose the worker setting in both Web and CLI. Validate 2/4/10-worker runs, coordinator result synthesis/context, approvals, operator chat, cancellation, retry/rate limits, and shared-state task isolation before claiming ten-worker reliability. This is a capacity and quality change, not a reason to spawn ten workers for every request.
 
