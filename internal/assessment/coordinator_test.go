@@ -1151,6 +1151,37 @@ func TestCoverageReviewKeepsLatestWorkerConclusionAndEvidence(t *testing.T) {
 	}
 }
 
+func TestCoverageReviewCarriesPriorChecksWithoutReplayingTheirFullEvidence(t *testing.T) {
+	const previousRef = "/fixture/tasks/first/request.log"
+	const latestRef = "/fixture/tasks/second/request.log"
+	state := State{Goal: "Assess the fixture", Scope: "Read-only fixture",
+		Plans: []Decision{
+			{Tasks: []Task{{ID: "first"}}, ApprovedTaskIDs: []string{"first"}},
+			{Tasks: []Task{{ID: "second"}}, ApprovedTaskIDs: []string{"second"}},
+		},
+		Results: []Result{
+			{Task: Task{ID: "first", Goal: "Check the original access boundary"}, Status: "done",
+				Summary:  "The original access boundary denied the private request and returned the public control.",
+				Evidence: []ctxpacket.ExecutionResult{{LogRefs: []string{previousRef}, OutputSummary: strings.Repeat("Private response bytes. ", 1000)}},
+			},
+			{Task: Task{ID: "second", Goal: "Inspect a separate observed path"}, Status: "done",
+				Summary: "The separate path exposed a new question.", Evidence: []ctxpacket.ExecutionResult{{LogRefs: []string{latestRef}}},
+			},
+		},
+	}
+	packet, refs := coverageEvidencePacket(state)
+	if len(packet.PriorChecks) != 1 || packet.PriorChecks[0].TaskID != "first" || !strings.Contains(packet.PriorChecks[0].Summary, "denied the private request") {
+		t.Fatalf("prior tested boundary missing from coverage packet: %+v", packet)
+	}
+	if len(packet.Results) != 1 || packet.Results[0].TaskID != "second" || !refs[previousRef] || !refs[latestRef] {
+		t.Fatalf("latest observation or exact prior refs missing: %+v, refs=%v", packet, refs)
+	}
+	data, err := json.Marshal(packet)
+	if err != nil || strings.Contains(string(data), "Private response bytes") {
+		t.Fatalf("coverage packet replayed prior raw output: %v, %s", err, data)
+	}
+}
+
 func TestCoverageReviewIgnoresUnregisteredEvidence(t *testing.T) {
 	const ref = "/fixture/tasks/baseline/observation.log"
 	initial := Decision{Summary: "Review the recorded fixture", Tasks: []Task{{ID: "review", Goal: "Review observation", DoneWhen: "Observation explained"}}}

@@ -27,9 +27,9 @@ type coverageQuestions struct {
 	Questions []coverageOmission `json:"questions"`
 }
 
-const coverageQuestionInstructions = "Read the latest worker observations without a proposed plan. Return JSON only: {\"questions\":[{\"question\":\"...\",\"evidence\":[\"exact recorded ref\"],\"next_check\":\"...\"}]}. Identify at most three distinct, materially consequential unanswered questions supported by visible observations, ordered by plausible impact and the value of an in-scope discriminating check rather than ease or source order. Distinguish separate values, roles, and trust boundaries within a workflow; a conclusion about one does not settle another. Prefer a bounded check over a generic inventory or repeated low-impact test. Do not mistake an existing finding title, an open lead, or a general untested-area statement for a completed test. Cite exact recorded refs; a ref is a pointer, not proof of unseen contents. Do not invent a vulnerability, claim exfiltration, request a prohibited action, or expand scope. An empty array is valid."
+const coverageQuestionInstructions = "Read the latest worker observations without a proposed plan. Use prior_worker_checks to avoid proposing a check already performed; a prior result settles only what it actually tested. Return JSON only: {\"questions\":[{\"question\":\"...\",\"evidence\":[\"exact recorded ref\"],\"next_check\":\"...\"}]}. Identify at most three distinct, materially consequential unanswered questions supported by visible observations, ordered by plausible impact and the value of an in-scope discriminating check rather than ease or source order. Distinguish separate values, roles, and trust boundaries within a workflow; a conclusion about one does not settle another. Prefer a bounded check over a generic inventory or repeated low-impact test. Do not mistake an existing finding title, an open lead, or a general untested-area statement for a completed test. Cite exact recorded refs; a ref is a pointer, not proof of unseen contents. Do not invent a vulnerability, claim exfiltration, request a prohibited action, or expand scope. An empty array is valid."
 
-const coverageReviewInstructions = "Compare the independent unanswered questions with the coordinator's proposed tasks. Return JSON only: {\"material_omissions\":[{\"question\":\"...\",\"evidence\":[\"exact recorded ref\"],\"next_check\":\"...\"}]}. Return at most two omissions, ordered by plausible impact and the value of a bounded in-scope check. Include a question only when that check could materially change the assessment and the proposed tasks do not answer it. A task covers a question only if its stated goal and done condition would resolve that specific question; mentioning the same page, workflow, value class, or risk category is not enough. An open_leads entry or a general limitation in gaps is not a test or a reason to skip an available bounded check; accept a deferral only when it explains why that particular check is infeasible or less valuable now. You may notice a material omission beyond the independent list, but support it with visible observations and exact recorded refs. Do not invent a vulnerability, claim exfiltration, request a prohibited action, or expand scope. An empty array is valid."
+const coverageReviewInstructions = "Compare the independent unanswered questions with the coordinator's proposed tasks. Use prior_worker_checks to avoid requesting work already performed; a prior result settles only what it actually tested. Return JSON only: {\"material_omissions\":[{\"question\":\"...\",\"evidence\":[\"exact recorded ref\"],\"next_check\":\"...\"}]}. Return at most two omissions, ordered by plausible impact and the value of a bounded in-scope check. Include a question only when that check could materially change the assessment and the proposed tasks do not answer it. A task covers a question only if its stated goal and done condition would resolve that specific question; mentioning the same page, workflow, value class, or risk category is not enough. An open_leads entry or a general limitation in gaps is not a test or a reason to skip an available bounded check; accept a deferral only when it explains why that particular check is infeasible or less valuable now. You may notice a material omission beyond the independent list, but support it with visible observations and exact recorded refs. Do not invent a vulnerability, claim exfiltration, request a prohibited action, or expand scope. An empty array is valid."
 
 type coverageResult struct {
 	TaskID    string   `json:"task_id"`
@@ -44,12 +44,21 @@ type coverageResult struct {
 }
 
 type coveragePacket struct {
-	Goal                 string             `json:"goal"`
-	Scope                string             `json:"scope"`
-	Results              []coverageResult   `json:"latest_worker_results"`
-	OpenLeads            []Lead             `json:"prior_open_leads,omitempty"`
-	IndependentQuestions []coverageOmission `json:"independent_questions,omitempty"`
-	Proposed             *Decision          `json:"proposed_decision,omitempty"`
+	Goal                 string               `json:"goal"`
+	Scope                string               `json:"scope"`
+	Results              []coverageResult     `json:"latest_worker_results"`
+	PriorChecks          []coveragePriorCheck `json:"prior_worker_checks,omitempty"`
+	OpenLeads            []Lead               `json:"prior_open_leads,omitempty"`
+	IndependentQuestions []coverageOmission   `json:"independent_questions,omitempty"`
+	Proposed             *Decision            `json:"proposed_decision,omitempty"`
+}
+
+type coveragePriorCheck struct {
+	TaskID  string   `json:"task_id"`
+	Goal    string   `json:"goal"`
+	Status  string   `json:"status"`
+	Summary string   `json:"summary"`
+	Refs    []string `json:"refs,omitempty"`
 }
 
 func coverageEvidencePacket(state State) (coveragePacket, map[string]bool) {
@@ -67,9 +76,19 @@ func coverageEvidencePacket(state State) (coveragePacket, map[string]bool) {
 		}
 	}
 	var results []coverageResult
+	payload := coveragePacket{}
 	knownRefs := map[string]bool{}
 	for _, result := range state.Results {
 		if !latest[result.Task.ID] {
+			prior := coveragePriorCheck{TaskID: result.Task.ID, Goal: promptExcerpt(result.Task.Goal, 300), Status: result.Status, Summary: promptExcerptEnds(result.Summary, 1200)}
+			for _, evidence := range result.Evidence {
+				for _, ref := range modelEvidenceRefs(evidence.LogRefs, evidence.ArtifactRefs) {
+					if len(prior.Refs) < 3 {
+						prior.Refs = append(prior.Refs, ref)
+					}
+				}
+			}
+			payload.PriorChecks = append(payload.PriorChecks, prior)
 			continue
 		}
 		card := coverageResult{TaskID: result.Task.ID, Goal: promptExcerpt(result.Task.Goal, 500), Status: result.Status, Summary: promptExcerptEnds(result.Summary, 10000), LeadHints: boundedStrings(result.LeadHints, 6, 800)}
@@ -88,7 +107,15 @@ func coverageEvidencePacket(state State) (coveragePacket, map[string]bool) {
 		}
 		results = append(results, card)
 	}
-	payload := coveragePacket{Goal: state.Goal, Scope: state.Scope, Results: results}
+	payload.Goal, payload.Scope, payload.Results = state.Goal, state.Scope, results
+	if len(payload.PriorChecks) > 12 {
+		payload.PriorChecks = payload.PriorChecks[len(payload.PriorChecks)-12:]
+	}
+	for _, prior := range payload.PriorChecks {
+		for _, ref := range prior.Refs {
+			knownRefs[ref] = true
+		}
+	}
 	if len(state.Plans) > 0 {
 		payload.OpenLeads = state.Plans[len(state.Plans)-1].OpenLeads
 	}
@@ -116,7 +143,13 @@ func boundedStrings(values []string, count, bytes int) []string {
 
 func (c Coordinator) reviewPlanCoverage(ctx context.Context, root string, round, proposal int, state State, decision Decision) string {
 	payload, knownRefs := coverageEvidencePacket(state)
-	if len(knownRefs) == 0 {
+	hasLatestEvidence := false
+	for _, result := range payload.Results {
+		for _, evidence := range result.Evidence {
+			hasLatestEvidence = hasLatestEvidence || len(evidence.Refs) > 0
+		}
+	}
+	if !hasLatestEvidence {
 		return ""
 	}
 	stem := filepath.Join(root, fmt.Sprintf("coordinator-%02d-coverage", round))
