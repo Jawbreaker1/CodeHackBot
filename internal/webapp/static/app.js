@@ -1038,8 +1038,28 @@ $('expandBrowser').onclick = () => {
 };
 $('browserWorker').onchange = () => openBrowser($('browserWorker').value);
 const savedSession = localStorage.getItem('birdhackbot.selectedSession');
-if (!savedSession || !/^\/api\/v1\/(intake|assessments)\//.test(savedSession) || !(await navigate(savedSession))) {
+const query = new URLSearchParams(location.search);
+const requestedSession = query.get('assessment');
+const requestedIntake = query.get('intake');
+const openedRequested = requestedIntake && /^[A-Za-z0-9_.-]+$/.test(requestedIntake)
+  ? await selectIntake(requestedIntake)
+  : requestedSession && /^[A-Za-z0-9_.-]+$/.test(requestedSession) && await selectSession(requestedSession);
+if (!openedRequested && (!savedSession || !/^\/api\/v1\/(intake|assessments)\//.test(savedSession) || !(await navigate(savedSession)))) {
   await openExistingSession();
+}
+if (openedRequested) {
+  try {
+    const handoff = JSON.parse(sessionStorage.getItem('birdhackbot.analysisHandoff') || 'null');
+    if ((handoff?.assessment === requestedSession || handoff?.intake === requestedIntake) && typeof handoff.draft === 'string') {
+      $('chatInput').value = handoff.draft.slice(0, 2000);
+      updateComposer();
+      $('chatInput').focus();
+    }
+  } catch (_) {
+    // A damaged local handoff draft must not prevent the coordinator from opening.
+  } finally {
+    sessionStorage.removeItem('birdhackbot.analysisHandoff');
+  }
 }
 
 async function poll() {

@@ -1,0 +1,55 @@
+# {{.FormatLabel}} project assessment draft
+
+- **Project:** {{inline .View.ID}}
+- **Recorded sessions:** {{.View.SessionCount}}
+- **Status:** {{inline .View.Status}}
+- **Draft:** Compiled from saved assessment records. Professional review is required before sharing.
+
+## 1. Executive summary
+
+{{inline .View.Summary}}
+
+**Recorded result counts:** {{.View.Risk.Reproduced}} reproduced finding records; {{.View.Risk.Candidates}} possible finding records requiring review. Similar records across sessions are not automatically distinct weaknesses.
+
+{{if .View.NextActions}}**Suggested next actions:**
+{{range .View.NextActions}}- {{inline .Title}}{{if .Detail}} — {{inline .Detail}}{{end}}
+{{end}}{{end}}
+## 2. Scope and recorded work
+
+This project view combines the saved sessions listed below. Each session keeps its own target boundary, evidence and conclusion; this report does not expand any session's scope.
+
+{{range .View.Sessions}}- **{{inline .ID}}** — {{inline .Goal}}. Target: {{if .Target}}{{inline .Target}}{{else}}Not recorded{{end}}. Scope: {{if .Scope}}{{inline .Scope}}{{else}}Not recorded{{end}}. Status: {{inline .Status}}. Recorded tests: {{.Tests}}.
+{{end}}
+## 3. Findings for review
+
+{{if .View.Findings}}{{range $i, $f := .View.Findings}}### F-{{inc $i}} · {{inline $f.Title}}
+
+- **Saved finding ID:** `{{$f.ID}}`
+- **Session:** `{{$f.SessionID}}`
+- **Status:** {{inline $f.Status}}
+- **Severity:** {{if $f.Severity}}{{inline $f.Severity}}{{else}}Not rated{{end}}
+- **Confidence:** {{if $f.Confidence}}{{inline $f.Confidence}}{{else}}Not rated{{end}}
+
+**Why it matters:** {{if $f.Impact}}{{inline $f.Impact}}{{else}}Impact was not recorded.{{end}}
+
+{{if $f.Steps}}**Recorded reproduction:**
+{{range $f.Steps}}- {{inline .}}
+{{end}}{{end}}
+{{if $f.Evidence}}**Evidence references:**
+{{range $f.Evidence}}- {{inline .}}
+{{end}}{{end}}
+{{if $f.Remediation}}**Recommended correction:**
+{{range $f.Remediation}}- {{inline .}}
+{{end}}{{end}}
+{{with $f.LatestReview}}**Latest explicit retest:** {{inline .Verdict}} in session `{{.SessionID}}` — {{inline .Reason}}
+{{end}}
+{{end}}{{else}}No findings were recorded. This does not establish that the systems in scope are secure.
+{{end}}
+## 4. Open questions and limits
+
+{{if .View.Gaps}}{{range .View.Gaps}}- {{inline .}}
+{{end}}{{else}}No additional open questions were recorded. Untested areas may still contain weaknesses.
+{{end}}
+## 5. Reporting basis
+
+{{.FormatNote}} A reproduced finding means the saved assessment includes a separate recorded check, not that every claim has been independently reviewed by a professional. A later session that does not mention an earlier finding does not prove it was fixed. Review the underlying session reports and registered evidence before distributing this draft.

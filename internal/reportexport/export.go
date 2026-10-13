@@ -86,7 +86,7 @@ func Save(root string, state assessment.State, format assessment.ReportFormat, o
 			os.Remove(file.Name())
 			return nil, fmt.Errorf("close PDF report: %w", err)
 		}
-		if err := renderReportPDF(content, file.Name(), state, format); err != nil {
+		if err := renderReportPDF(content, file.Name(), state.ID, "Assessment", format); err != nil {
 			os.Remove(file.Name())
 			return nil, err
 		}
@@ -112,13 +112,75 @@ func Save(root string, state assessment.State, format assessment.ReportFormat, o
 	return &Artifact{Name: filepath.Base(file.Name()), Format: format, Output: output, Bytes: int64(len(content))}, nil
 }
 
-func renderReportPDF(markdown []byte, path string, state assessment.State, format assessment.ReportFormat) error {
+// SaveDraft stores an analysis-authored report as a new local version. PDF
+// exports retain their Markdown source so a later edit can use the exact draft.
+func SaveDraft(root string, markdown []byte, subject, subjectKind string, format assessment.ReportFormat, output Output) ([]Artifact, error) {
+	if !format.Valid() || (output != Markdown && output != PDF) {
+		return nil, fmt.Errorf("unsupported draft report format or output")
+	}
+	if len(markdown) == 0 || len(markdown) > 2<<20 {
+		return nil, fmt.Errorf("report draft must contain 1 to 2 MiB of Markdown")
+	}
+	dir := filepath.Join(root, "reports")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return nil, fmt.Errorf("create reports directory: %w", err)
+	}
+	file, err := os.CreateTemp(dir, "analysis-"+string(format)+"-*.md")
+	if err != nil {
+		return nil, fmt.Errorf("create report draft: %w", err)
+	}
+	if _, err := file.Write(markdown); err != nil {
+		file.Close()
+		os.Remove(file.Name())
+		return nil, fmt.Errorf("write report draft: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		os.Remove(file.Name())
+		return nil, fmt.Errorf("sync report draft: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		os.Remove(file.Name())
+		return nil, fmt.Errorf("close report draft: %w", err)
+	}
+	artifacts := []Artifact{{Name: filepath.Base(file.Name()), Format: format, Output: Markdown, Bytes: int64(len(markdown))}}
+	if output == Markdown {
+		return artifacts, nil
+	}
+	pdfPath := strings.TrimSuffix(file.Name(), ".md") + ".pdf"
+	pdfFile, err := os.OpenFile(pdfPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		os.Remove(file.Name())
+		return nil, fmt.Errorf("create PDF draft: %w", err)
+	}
+	if err := pdfFile.Close(); err != nil {
+		os.Remove(file.Name())
+		os.Remove(pdfPath)
+		return nil, fmt.Errorf("close PDF draft: %w", err)
+	}
+	if err := renderReportPDF(markdown, pdfPath, subject, subjectKind, format); err != nil {
+		os.Remove(file.Name())
+		os.Remove(pdfPath)
+		return nil, err
+	}
+	info, err := os.Stat(pdfPath)
+	if err != nil {
+		os.Remove(file.Name())
+		os.Remove(pdfPath)
+		return nil, fmt.Errorf("stat PDF draft: %w", err)
+	}
+	artifacts = append(artifacts, Artifact{Name: filepath.Base(pdfPath), Format: format, Output: PDF, Bytes: info.Size()})
+	return artifacts, nil
+}
+
+func renderReportPDF(markdown []byte, path, subject, subjectKind string, format assessment.ReportFormat) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	metadata, err := json.Marshal(map[string]string{
-		"assessment": state.ID,
-		"format":     string(format),
-		"exported":   time.Now().UTC().Format("2 Jan 2006"),
+		"assessment":   subject,
+		"subject_kind": subjectKind,
+		"format":       string(format),
+		"exported":     time.Now().UTC().Format("2 Jan 2006"),
 	})
 	if err != nil {
 		return fmt.Errorf("prepare PDF metadata: %w", err)

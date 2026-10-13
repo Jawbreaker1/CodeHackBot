@@ -88,7 +88,7 @@ func (s *Server) serveAssessmentArtifact(w http.ResponseWriter, r *http.Request,
 	}
 	current.mu.RUnlock()
 	if !found {
-		pages, _ := browserAnalysis(root, current.id, anchors)
+		pages, _, _ := browserAnalysis(root, current.id, anchors)
 		for _, page := range pages {
 			if page.ScreenshotPath == wanted {
 				found = true

@@ -41,6 +41,13 @@ func TestObservedBrowserPagesAndNotes(t *testing.T) {
 		From string `json:"from"`
 		To   string `json:"to"`
 	}{From: "https://example.test/", To: "https://example.test/login"})
+	for _, target := range []string{"https://example.test/login?token=secret", "https://example.test/help", "https://elsewhere.test/"} {
+		manifest.Links = append(manifest.Links, struct {
+			From string `json:"from"`
+			To   string `json:"to"`
+		}{From: "https://example.test/", To: target})
+	}
+	manifest.LinkScans = []string{"https://example.test/"}
 	data, err := json.Marshal(manifest)
 	if err != nil {
 		t.Fatal(err)
@@ -51,8 +58,11 @@ func TestObservedBrowserPagesAndNotes(t *testing.T) {
 	state := assessment.State{ID: "assessment", Status: "completed", Results: []assessment.Result{{Task: assessment.Task{ID: "browser"}, Status: "done", Evidence: []ctxpacket.ExecutionResult{{ArtifactRefs: []string{anchor, shot}}}}}, Plans: []assessment.Decision{{Findings: []assessment.Finding{{Title: "Observed login behavior", Status: "candidate", Impact: "Example impact", Steps: []string{"Open the login page"}, Evidence: []string{shot}, Remediation: []string{"Review the behavior"}}}}}}
 	current := &run{id: "assessment", root: root, state: state}
 	view := current.analysis()
-	if len(view.WebPages) != 2 || len(view.WebTransitions) != 1 || view.WebPages[1].URL != "https://example.test/login" || view.WebPages[1].ScreenshotPath != shot {
+	if len(view.WebPages) != 2 || len(view.WebTransitions) != 1 || view.WebPages[1].URL != "https://example.test/login" || view.WebPages[1].ScreenshotPath != shot || !view.WebPages[0].LinksCaptured || view.WebPages[1].LinksCaptured {
 		t.Fatalf("unexpected browser analysis: pages=%+v transitions=%+v", view.WebPages, view.WebTransitions)
+	}
+	if len(view.WebLinks) != 2 || view.WebLinks[0].To != "https://example.test/login" || view.WebLinks[1].To != "https://example.test/help" {
+		t.Fatalf("same-origin links to opened and unopened pages were not preserved: %+v", view.WebLinks)
 	}
 	if len(view.WebPages[0].FindingRefs) != 0 || len(view.WebPages[1].FindingRefs) != 1 || view.WebPages[1].FindingRefs[0] != 0 {
 		t.Fatalf("unexpected finding links: %+v", view.WebPages)
@@ -98,9 +108,9 @@ func TestLegacyBrowserPreviewAppearsAsOneObservedPage(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(work, "browser-live.json"), []byte(`{"url":"https://example.test/page?secret=value","phase":"finished"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	pages, transitions := browserAnalysis(root, "assessment", []browserAnchor{{TaskID: "browser", Path: anchor}})
-	if len(pages) != 1 || pages[0].URL != "https://example.test/page" || len(transitions) != 0 {
-		t.Fatalf("pages=%+v transitions=%+v", pages, transitions)
+	pages, transitions, links := browserAnalysis(root, "assessment", []browserAnchor{{TaskID: "browser", Path: anchor}})
+	if len(pages) != 1 || pages[0].URL != "https://example.test/page" || len(transitions) != 0 || len(links) != 0 {
+		t.Fatalf("pages=%+v transitions=%+v links=%+v", pages, transitions, links)
 	}
 }
 

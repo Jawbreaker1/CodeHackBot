@@ -382,6 +382,10 @@ func (s *Server) assessmentRoute(w http.ResponseWriter, r *http.Request) {
 		}
 		current.formattedReport(w, parts[2])
 	case "analysis":
+		if len(parts) == 3 && parts[2] == "assistant" {
+			s.analysisAssistantRoute(w, r, "assessment", current.id)
+			return
+		}
 		if r.Method != http.MethodGet {
 			methodNotAllowed(w, http.MethodGet)
 			return
@@ -410,6 +414,14 @@ func (s *Server) customerRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(parts) == 2 && parts[1] == "analysis" && r.Method == http.MethodGet {
 		writeJSON(w, http.StatusOK, s.customerAnalysis(parts[0]))
+		return
+	}
+	if len(parts) == 3 && parts[1] == "analysis" && parts[2] == "assistant" {
+		s.analysisAssistantRoute(w, r, "customer", parts[0])
+		return
+	}
+	if len(parts) == 3 && parts[1] == "reports" && r.Method == http.MethodGet {
+		serveFormattedReport(w, filepath.Join(s.config.SessionsRoot, parts[0]), parts[2])
 		return
 	}
 	methodNotAllowed(w, http.MethodGet)

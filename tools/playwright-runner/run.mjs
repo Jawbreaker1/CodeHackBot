@@ -26,10 +26,14 @@ let lastURL = '';
 let statusWrite = Promise.resolve();
 const visited = new Map();
 const transitions = [];
+const links = [];
+const linkedPairs = new Set();
+const linkScans = new Set();
 const pageLocations = new WeakMap();
 let journeyWrite = Promise.resolve();
 const maxRecordedPages = 40;
 const maxRecordedTransitions = 120;
+const maxRecordedLinks = 160;
 function recordNavigation(page, rawURL) {
   const url = visibleURL(rawURL);
   if (!url) return;
@@ -44,7 +48,7 @@ function recordNavigation(page, rawURL) {
   void publishJourney();
 }
 function publishJourney() {
-  const payload = JSON.stringify({version: 1, pages: [...visited.values()], transitions});
+  const payload = JSON.stringify({version: 1, pages: [...visited.values()], transitions, links, link_scans: [...linkScans]});
   journeyWrite = journeyWrite.then(async () => {
     const temporary = path.join(artifactDir, '.browser-pages.json');
     await fs.writeFile(temporary, payload, {mode: 0o600});
@@ -72,6 +76,16 @@ function publishStatus() {
   return statusWrite;
 }
 let capturing;
+const pageCaptures = new WeakMap();
+const pendingCaptures = new Set();
+function schedulePageCapture(page) {
+  if (!page || page.isClosed()) return Promise.resolve();
+  const pending = (pageCaptures.get(page) || Promise.resolve()).then(() => capturePage(page)).catch(error => { log(`Page capture unavailable: ${error.message}`); });
+  pageCaptures.set(page, pending);
+  pendingCaptures.add(pending);
+  void pending.finally(() => pendingCaptures.delete(pending));
+  return pending;
+}
 async function capturePreview() {
   if (capturing) return capturing;
   const page = context.pages().at(-1);
@@ -84,13 +98,27 @@ async function capturePreview() {
   })().catch(() => {}).finally(() => { capturing = undefined; });
   return capturing;
 }
-async function capturePage() {
-  const page = context.pages().at(-1);
+async function capturePage(page) {
   if (!page || page.isClosed()) return;
   recordNavigation(page, page.url());
   const url = visibleURL(page.url());
   const entry = visited.get(url);
   if (!entry) return;
+  try {
+    const hrefs = await page.evaluate(() => Array.from(document.querySelectorAll('a[href]'), node => node.href).slice(0, 400));
+    const origin = new URL(url).origin;
+    for (const href of hrefs) {
+      if (links.length >= maxRecordedLinks) break;
+      const to = visibleURL(href);
+      if (!to || to === url || new URL(to).origin !== origin) continue;
+      const key = `${url}\n${to}`;
+      if (linkedPairs.has(key)) continue;
+      linkedPairs.add(key);
+      links.push({from: url, to});
+    }
+    linkScans.add(url);
+    await publishJourney();
+  } catch (error) { log(`Page links unavailable: ${error.message}`); }
   try {
     const bytes = await page.screenshot({type: 'png', timeout: 5000});
     const number = [...visited.keys()].indexOf(url) + 1;
@@ -111,6 +139,7 @@ context.on('page', page => {
       void publishStatus();
     }
   });
+  page.on('domcontentloaded', () => { void schedulePageCapture(page); });
   page.on('close', () => { log('Browser page closed'); void publishStatus(); });
   void publishStatus();
 });
@@ -131,7 +160,7 @@ async function step(label, action) {
   } finally {
     await publishStatus();
     await capturePreview();
-    await capturePage();
+    await schedulePageCapture(context.pages().at(-1));
   }
 }
 const tracePath = path.join(artifactDir, 'playwright-trace.zip');
@@ -147,7 +176,8 @@ try {
 } finally {
   clearInterval(previewTimer);
   await capturePreview();
-  await capturePage();
+  await schedulePageCapture(context.pages().at(-1));
+  await Promise.allSettled([...pendingCaptures]);
   await journeyWrite;
   activePhase = runFailed || activePhase === 'failed' ? 'failed' : 'finished';
   await publishStatus();

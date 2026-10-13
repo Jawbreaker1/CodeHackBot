@@ -70,7 +70,7 @@ func assessmentArtifacts(root, sessionID string, state assessment.State, workers
 		}
 	}
 	if anchors := browserAnchors(state); len(anchors) > 0 {
-		pages, _ := browserAnalysis(root, sessionID, anchors)
+		pages, _, _ := browserAnalysis(root, sessionID, anchors)
 		for _, page := range pages {
 			if page.ScreenshotPath != "" {
 				add(page.ScreenshotPath, page.TaskID, strings.TrimSpace(page.URL))

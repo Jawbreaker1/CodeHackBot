@@ -38,7 +38,7 @@ cover = f"""<section class="report-cover">
   <div class="cover-title"><p class="eyebrow">SECURITY ASSESSMENT</p>
     <h1>Security assessment<br>report</h1>
     <p class="cover-format">{escape(format_label)} · Prepared for professional review</p></div>
-  <div class="cover-record"><span>Assessment</span><strong>{escape(metadata['assessment'])}</strong>
+  <div class="cover-record"><span>{escape(metadata.get('subject_kind', 'Assessment'))}</span><strong>{escape(metadata['assessment'])}</strong>
     <span>Exported</span><strong>{escape(metadata['exported'])}</strong></div>
   <p class="cover-caution">Sensitive assessment material. Share according to the engagement terms.</p>
 </section>"""

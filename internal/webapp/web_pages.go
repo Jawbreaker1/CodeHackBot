@@ -21,11 +21,21 @@ type analysisWebPage struct {
 	URL            string `json:"url"`
 	ScreenshotURL  string `json:"screenshot_url,omitempty"`
 	ScreenshotPath string `json:"-"`
+	LinksCaptured  bool   `json:"links_captured,omitempty"`
 	Comment        string `json:"comment,omitempty"`
 	FindingRefs    []int  `json:"finding_refs,omitempty"`
 }
 
 type analysisWebTransition struct {
+	SessionID string `json:"session_id"`
+	TaskID    string `json:"task_id"`
+	From      string `json:"from"`
+	To        string `json:"to"`
+}
+
+// A link was present in a captured page. It does not imply that the target
+// was opened or that the link was followed during the assessment.
+type analysisWebLink struct {
 	SessionID string `json:"session_id"`
 	TaskID    string `json:"task_id"`
 	From      string `json:"from"`
@@ -47,6 +57,11 @@ type browserManifest struct {
 		From string `json:"from"`
 		To   string `json:"to"`
 	} `json:"transitions"`
+	Links []struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+	} `json:"links"`
+	LinkScans []string `json:"link_scans"`
 }
 
 type webNote struct {
@@ -101,15 +116,16 @@ func readBrowserManifest(work, anchor string) *browserManifest {
 		return nil
 	}
 	var manifest browserManifest
-	if json.Unmarshal(data, &manifest) != nil || manifest.Version != 1 || len(manifest.Pages) > 40 || len(manifest.Transitions) > 120 {
+	if json.Unmarshal(data, &manifest) != nil || manifest.Version != 1 || len(manifest.Pages) > 40 || len(manifest.Transitions) > 120 || len(manifest.Links) > 160 || len(manifest.LinkScans) > 40 {
 		return nil
 	}
 	return &manifest
 }
 
-func browserAnalysis(root, sessionID string, anchors []browserAnchor) ([]analysisWebPage, []analysisWebTransition) {
+func browserAnalysis(root, sessionID string, anchors []browserAnchor) ([]analysisWebPage, []analysisWebTransition, []analysisWebLink) {
 	var pages []analysisWebPage
 	var transitions []analysisWebTransition
+	var links []analysisWebLink
 	notes := readWebNotes(root)
 	for _, anchor := range anchors {
 		work := filepath.Join(root, "tasks", anchor.TaskID, "work")
@@ -126,13 +142,19 @@ func browserAnalysis(root, sessionID string, anchors []browserAnchor) ([]analysi
 			continue
 		}
 		observed := map[string]bool{}
+		scanned := map[string]bool{}
+		for _, raw := range manifest.LinkScans {
+			if clean := observedURL(raw); clean != "" {
+				scanned[clean] = true
+			}
+		}
 		for _, page := range manifest.Pages {
 			cleanURL := observedURL(page.URL)
 			if cleanURL == "" || observed[cleanURL] {
 				continue
 			}
 			observed[cleanURL] = true
-			entry := analysisWebPage{SessionID: sessionID, TaskID: anchor.TaskID, URL: cleanURL, Comment: notes[noteKey(anchor.TaskID, cleanURL)]}
+			entry := analysisWebPage{SessionID: sessionID, TaskID: anchor.TaskID, URL: cleanURL, LinksCaptured: scanned[cleanURL], Comment: notes[noteKey(anchor.TaskID, cleanURL)]}
 			filename := page.Screenshot
 			if filepath.Base(filename) == filename && strings.HasPrefix(filename, "browser-page-") && strings.HasSuffix(filename, ".png") && len(filename) <= 24 {
 				imagePath := filepath.Join(filepath.Dir(anchor.Path), filename)
@@ -151,8 +173,16 @@ func browserAnalysis(root, sessionID string, anchors []browserAnchor) ([]analysi
 				transitions = append(transitions, analysisWebTransition{SessionID: sessionID, TaskID: anchor.TaskID, From: from, To: to})
 			}
 		}
+		for _, link := range manifest.Links {
+			from, to := observedURL(link.From), observedURL(link.To)
+			fromURL, fromErr := url.Parse(from)
+			toURL, toErr := url.Parse(to)
+			if observed[from] && from != to && fromErr == nil && toErr == nil && fromURL.Scheme == toURL.Scheme && fromURL.Host == toURL.Host {
+				links = append(links, analysisWebLink{SessionID: sessionID, TaskID: anchor.TaskID, From: from, To: to})
+			}
+		}
 	}
-	return pages, transitions
+	return pages, transitions, links
 }
 
 // A page is linked to a finding only when that finding cites the exact saved

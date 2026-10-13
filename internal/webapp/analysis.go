@@ -42,6 +42,7 @@ type analysisView struct {
 	Sessions         []analysisSessionSummary `json:"sessions,omitempty"`
 	WebPages         []analysisWebPage        `json:"web_pages,omitempty"`
 	WebTransitions   []analysisWebTransition  `json:"web_transitions,omitempty"`
+	WebLinks         []analysisWebLink        `json:"web_links,omitempty"`
 	GeneratedAt      time.Time                `json:"generated_at"`
 	FinishedAt       time.Time                `json:"finished_at,omitempty"`
 }
@@ -151,7 +152,7 @@ func (r *run) analysis() analysisView {
 	root, anchors := r.root, browserAnchors(state)
 	artifacts := registeredSourceArtifacts(state)
 	r.mu.RUnlock()
-	view.WebPages, view.WebTransitions = browserAnalysis(root, view.ID, anchors)
+	view.WebPages, view.WebTransitions, view.WebLinks = browserAnalysis(root, view.ID, anchors)
 	hydrateSourceLocations(root, artifacts, view.Findings)
 	linkPageFindings(view.WebPages, view.Findings)
 	return view
@@ -248,6 +249,7 @@ func buildCustomerAnalysis(id string, sessions []analysisView) analysisView {
 		view.Challenges = append(view.Challenges, session.Challenges...)
 		view.WebPages = append(view.WebPages, session.WebPages...)
 		view.WebTransitions = append(view.WebTransitions, session.WebTransitions...)
+		view.WebLinks = append(view.WebLinks, session.WebLinks...)
 	}
 	view.SessionCount = len(sessions)
 	if len(sessions) == 0 {

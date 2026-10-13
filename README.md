@@ -1,113 +1,75 @@
 # BirdHackBot
 
 <p align="center">
-  <img src="internal/webapp/static/birdhackbot-hero.png" alt="Detailed cybernetic raven with a red eye, the BirdHackBot emblem" width="520">
+  <img src="internal/webapp/static/birdhackbot-hero.png" alt="BirdHackBot cybernetic raven" width="520">
 </p>
 
-*Tell us what you're testing. Let's find out what holds up—and what doesn't.*
+**From questions to evidence.**
 
-BirdHackBot is a penetration-testing tool built for Kali Linux. Tell the coordinator what you want to investigate. It suggests a sensible route, sends independent tasks to workers in parallel, and changes the plan when new evidence calls for it. You can ask questions, choose which tests to run, and follow the work as it happens.
+BirdHackBot is an interactive penetration-testing harness built for Kali Linux. Describe a system or a security question in plain language. Its coordinator helps you choose a useful test, delegates independent work to specialist workers, and revises the plan as evidence arrives. You stay in the conversation, see what is running, and decide how much execution to approve.
 
-The operator sets the target boundaries and is responsible for authorization. BirdHackBot records those boundaries and offers three execution-approval levels: review every action, review risky actions, or approve everything within the session. You can stop all workers at any time.
-
-## See it in action
+The goal is practical: find weaknesses, check whether they are real, and make the results clear enough to act on. Kali tools, browser automation, source inspection, CVE research, and task-specific guidance give each investigation the capabilities it needs.
 
 [![Watch the 30-second BirdHackBot film](docs/media/birdhackbot-launch-poster.jpg)](docs/media/birdhackbot-launch.mp4)
 
-[Watch or download the 30-second film](docs/media/birdhackbot-launch.mp4) — 1080p with an original techno soundtrack. Turn on sound for the full experience.
+## An assessment you can follow
 
-These screenshots come from the current local web app. The new-session view shows the detailed raven; the smaller [bird-head icon](internal/webapp/static/logo-small.svg) stays in the navigation and favicon.
+The coordinator proposes a plan with an estimated depth and explains each step before workers act. Workers can investigate separate leads in parallel, use installed Kali tools or small task-local helpers, and return evidence for the coordinator to assess. A failed lead can change the next step; a promising one can be handed to another worker for an independent check.
 
-![A new BirdHackBot session with the detailed raven above the conversation](docs/screenshots/new-session.png)
+You can talk to the coordinator while work is underway, inspect worker activity and saved artifacts, or pause or stop a run. Approval settings let you review every action, review risky actions, or allow execution within the session. The operator defines scope and remains responsible for authorization.
 
-The coordinator conversation stays in the center, with plans and worker progress alongside it. This example uses a synthetic local test service.
+![Coordinator conversation, worker progress, and approval controls in a local test](docs/screenshots/coordinator-console.png)
 
-![Coordinator conversation with a changing plan, worker details, and the approval setting](docs/screenshots/coordinator-console.png)
+## Results that lead somewhere
 
-The Analysis view shows what was tested, where weaknesses were found, what still needs checking, and what to fix first. A customer folder can bring results from several sessions together.
+Every run keeps its scope, actions, outputs, captured screenshots, and conclusions together. Long investigations retain useful evidence outside the model's active context so workers and the coordinator can return to it. The Analysis workspace separates reproduced findings from leads that still need checking. It shows why a finding matters, the evidence behind it, and what to fix or test next. When browser work is recorded, you can explore opened pages, actual navigation, observed links, and their captures; missing link records are shown as gaps. Source-backed findings can show the relevant code lines and suggested correction.
 
-![Analysis of a synthetic test service with a verified finding, evidence, and recommended fix](docs/screenshots/assessment-analysis.png)
+Put related sessions in a customer folder to compare runs on the same system. The project view keeps each run's evidence distinct, tracks explicit retests, and helps reveal what remains untested. Its analysis guide answers questions about the saved results in plain language and can suggest a follow-up. A project-level follow-up opens a **new session in that folder**; a suggestion from one assessment can continue that assessment. Neither starts a test until you choose to send the request and approve the plan.
 
-## What you can do
+Ask the coordinator or analysis guide for an OWASP WSTG- or PTES-aligned report in Markdown or PDF. Reports link back to saved evidence; the analysis guide can also make a new, edited report draft while preserving the earlier version. PDF exports retain an editable Markdown source. Reports are drafts for professional review, and they identify missing evidence.
 
-- **Investigate interactively.** Ask about a system, explore an idea, or request a full assessment. The coordinator explains useful next tests and lets you choose before workers run them.
-- **Run independent work in parallel.** The coordinator can send separate tasks to two workers at once. It brings their results together, changes the plan when a test fails or reveals something new, and asks another worker to verify important findings.
-- **Find the right knowledge for the job.** The coordinator can research a product, look up relevant vulnerabilities, and suggest practical guides for each task. A worker loads the guidance it needs as the investigation develops. Guides inform the test; observations from the target decide the result.
-- **Use Kali's tools and source code.** Workers can run approved commands, inspect available source, and write a small helper when standard tools are insufficient. They check which tools and data are actually installed before relying on them.
-- **Examine web applications.** A delegated worker can run a task-local Playwright scenario through a dedicated browser action, capture screenshots and traces, and expose an optional live browser preview beside the chat.
-- **See what happened.** Each test saves the command, result, timing, and supporting files. The interface separates possible weaknesses from findings that another worker has checked against the target.
-- **Explore the results.** Analysis compares sessions in the same customer folder. It links findings to evidence, shows tested areas and gaps, and puts suggested fixes beside each risk.
-- **Create formal reports.** Ask for an OWASP WSTG- or PTES-aligned report in Markdown or PDF. Both formats include a findings overview and detailed evidence; PDFs add a cover, contents page, and print layout. Templates check that scope, test results, evidence, limitations, and review details are present. The report is saved with the session and linked directly in chat.
-- **Continue long investigations.** The coordinator and each worker keep track of their own work. Older details can be saved and brought back when needed. A local debug view shows exactly what information each model received.
-
-The web app and terminal UI share the same coordinator, workers, approvals, and saved evidence. The browser is the main place to explore a session; the CLI opens with a compact ASCII bird mark for terminal use.
+![Analysis of a local test service, showing a checked finding and recommended fix](docs/screenshots/assessment-analysis.png)
 
 ## Start on Kali Linux
 
-Install the baseline packages in the [Kali installation guide](docs/runbooks/kali-installation.md), then build from the repository checkout:
+Follow the [Kali installation guide](docs/runbooks/kali-installation.md) for the required baseline and optional assessment tools. From a checkout with Go 1.24.2 or newer:
 
 ```sh
 go build -buildvcs=false -o birdhackbot-web ./cmd/birdhackbot-web
 go build -buildvcs=false -o birdhackbot ./cmd/birdhackbot
-```
-
-Start the browser app and open the URL it prints:
-
-```sh
 ./birdhackbot-web
 ```
 
-It listens on `127.0.0.1:8080` by default. Run one web server at a time; stop the existing process before starting a replacement. The server is intended for local use and has no authentication or remote-deployment controls yet.
-
-For the terminal UI, run:
+Open the local URL printed by the server (`http://127.0.0.1:8080/` by default). Start with a conversation; there is no assessment form to complete. The terminal interface uses the same coordinator, workers, approvals, and session evidence:
 
 ```sh
 ./birdhackbot
 ```
 
-The first conversation can be exploratory. When you want workers to act, review the proposed target, tasks, and approval level. The terminal keeps worker activity in its status pane; `/plan`, `/workers`, `/findings`, and `/artifacts` show the saved details without filling the conversation with logs. `/settings`, `/permissions`, and `/resume` open selectable terminal dialogs; use the arrow keys and Enter to choose, or Esc to close. Ctrl-C stops active workers. Customer folders, image attachments, the live browser preview, and the visual Analysis workspace currently remain in the web app. See the [web application guide](docs/runbooks/web-application.md) and [tool capability guide](docs/runbooks/tool-capabilities.md) for the full workflows.
+The web app is the richer workspace for customer folders, attachments, browser previews, and Analysis. The [web application guide](docs/runbooks/web-application.md) covers both the everyday workflow and the terminal commands.
 
-## Choose a model
+## Choose how the model runs
 
-The web Settings panel can start a ChatGPT subscription sign-in. A local bridge connects BirdHackBot to the model; BirdHackBot still runs the tools and saves the evidence. This uses your Codex sign-in rather than an API key. The connection depends on your account access and may need updates if the provider changes its service. See the [subscription setup guide](docs/runbooks/subscription-bridge.md).
+- **ChatGPT subscription:** sign in from web Settings to use the local subscription bridge with your Codex account, without switching to API-key billing. Access depends on your account and the provider connection. See [subscription setup](docs/runbooks/subscription-bridge.md).
+- **Local model:** connect an OpenAI-compatible local endpoint. The included profile example supports Qwen 3.8; model, context window, and concurrency must match the actual local server. Copy [model-profiles.example.json](config/model-profiles.example.json) to `config/model-profiles.local.json` and edit your endpoint and model ID.
 
-For local models, configure an OpenAI-compatible endpoint. To switch between saved model profiles in the web UI or CLI, copy [the profile example](config/model-profiles.example.json) to `config/model-profiles.local.json` and set the local endpoint and model ID there. A subscription profile with `managed_bridge: true` starts its private loopback bridge with the web server, so it needs no separate bridge command or saved token path. Click the model name below the web composer, or enter `/settings` in the CLI, to choose a profile. Starting a new web model opens a new session so the histories remain separate. The saved Qwen 3.8 profile requests low reasoning; the Daybreak profile requests high. The model server's actual context and concurrency settings remain its own configuration.
+Switch configured profiles from the model selector beneath the web chat or `/settings` in the terminal. For an air-gapped deployment, use a local model and enforce the network boundary outside the app as well as setting `BIRDHACKBOT_RESEARCH_MODE=air_gapped`. The setting disables the app's connected research path; by itself it is not a network sandbox.
 
-For a fully air-gapped deployment, use a local model and block external network access in the deployment environment. Setting `BIRDHACKBOT_RESEARCH_MODE=air_gapped` disables the app's external observation tools and tells the coordinator and workers to use local sources; that setting alone cannot block network traffic.
+## Built for careful, evidence-led work
 
-## Work with sessions and results
+BirdHackBot records the operator's declared target boundaries and selected approval level. The operator remains responsible for authorization; formal engagement details can be retained with the session and report. Commands, tool output, and model-written conclusions remain available for review. A negative tool result is reported for what it actually tested.
 
-A new session starts as a conversation, without an assessment form. Describe what you know; the coordinator can suggest focused, balanced, or thorough work and rough time ranges. You choose which proposed tasks to run and may ask for a different plan. During execution, the chat shows approvals and short progress updates. The right panel separates worker progress, findings, saved files and screenshots, and activity. Open Artifacts for the evidence files you want to inspect; command logs stay in Activity. You can continue talking to the coordinator while workers run. Pause and Stop controls stay visible beside the chat; Pause stops active work and lets you resume from saved evidence, while Stop ends the current run. If a session is paused or interrupted, you can use Resume there or tell the coordinator to continue in the chat.
+The server binds to loopback by default and has no built-in authentication, target-network sandbox, or enforced target allowlist. Keep it inside an appropriate Kali assessment environment. Stronger validation on unfamiliar targets and end-to-end air-gapped deployment remain active work; see the [acceptance gates](docs/runbooks/acceptance-gates.md) for what has been demonstrated.
 
-Create customer folders from the left sidebar and drag sessions into them. You can reopen or delete sessions there. A completed assessment stays conversational: ask follow-up questions, request another in-scope round, or export a report without losing its earlier evidence. Reports and raw logs remain in that session's local folder.
+## Explore the project
 
-Analysis is separate from the chat. Open it from a session or customer folder to compare risks across assessments, follow a target's dated test history, explore the observed web navigation map and captured pages, and see which areas still need testing. When a new assessment starts on the same identified target, its coordinator receives a short, evidence-linked summary of earlier runs to guide useful follow-up work. A later run that omits an old finding does not mean it was fixed; an explicit retest is shown with its own evidence. Large web maps start with nearby pages; you can focus another page or expand the whole map. A page shows a finding only when that finding explicitly cites its screenshot. Code findings with a saved source reference appear in a collapsible code-review view, with the relevant lines, impact, and suggested correction. Open a finding to see why it matters, how it was checked, its supporting evidence, and the proposed fix. A software or CVE match or a source-only lead is not proof that a target is vulnerable. Reports remain drafts for professional review; if a required detail is missing, the report shows the gap instead of inventing an answer.
-
-## Where the project stands
-
-The coordinator and worker workflow, model connection, browser and terminal interfaces, saved sessions, long-session memory, evidence capture, Analysis, and report export are implemented. We have exercised them in local lab assessments. We still need broader tests on unfamiliar systems, stronger checks that available source matches the running software, and full validation of air-gapped operation. Those goals are tracked in [TASKS.md](TASKS.md) and the [acceptance gates](docs/runbooks/acceptance-gates.md).
-
-The current web server is loopback-only. It does not provide its own target network sandbox or enforce a target allowlist. The operator's selected scope and approvals govern execution; protect the Kali environment accordingly. The [operating rules](AGENTS.md) explain authorization, evidence handling, and safety boundaries.
-
-## Development and documentation
-
-```sh
-./scripts/ci.sh
-go test -race ./...
-```
-
-Keep changes tied to a demonstrated problem or agreed capability, and validate both the underlying logic and the operator path through the app.
-
-| Document | Purpose |
+| Guide | What it covers |
 | --- | --- |
-| [PROJECT.md](PROJECT.md) | Repository structure, conventions, and build commands |
+| [Web application](docs/runbooks/web-application.md) | Sessions, approvals, workers, browser work, and Analysis |
+| [Tool capabilities](docs/runbooks/tool-capabilities.md) | Kali commands, browser automation, research, and evidence |
 | [Architecture](docs/architecture.md) | Coordinator, worker, context, and evidence design |
-| [TASKS.md](TASKS.md) | Current work and validation status |
-| [ROADMAP.md](ROADMAP.md) | Longer-term product goals |
-| [DISCOVERIES.md](DISCOVERIES.md) | Decisions and findings from development |
-| [Kali installation](docs/runbooks/kali-installation.md) | Required platform packages and optional tools |
-| [Subscription setup](docs/runbooks/subscription-bridge.md) | ChatGPT sign-in and local bridge |
-| [Web application](docs/runbooks/web-application.md) | Session workflow and browser features |
-| [Acceptance gates](docs/runbooks/acceptance-gates.md) | What testing has and has not established |
+| [Kali installation](docs/runbooks/kali-installation.md) | Required platform setup and optional tools |
+| [PROJECT.md](PROJECT.md) | Repository structure, build, and test commands |
+| [TASKS.md](TASKS.md) | Current implementation work and validation |
 
-Earlier plans live under `docs/archive/`; old code is under `legacy/`. Neither defines the current implementation.
+Run `./scripts/ci.sh` for the repository's deterministic checks. Earlier plans and the pre-rebuild implementation are retained under `docs/archive/` and `legacy/` for reference.

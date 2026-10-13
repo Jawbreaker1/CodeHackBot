@@ -37,13 +37,14 @@ type Config struct {
 }
 
 type Server struct {
-	config  Config
-	mu      sync.RWMutex
-	runs    map[string]*run
-	intakes map[string]*intakeRun
-	seq     atomic.Uint64
-	loadErr error
-	login   *subscription.LoginManager
+	config             Config
+	mu                 sync.RWMutex
+	runs               map[string]*run
+	intakes            map[string]*intakeRun
+	analysisAssistants map[string]*analysisAssistantState
+	seq                atomic.Uint64
+	loadErr            error
+	login              *subscription.LoginManager
 }
 
 type intakeRun struct {
@@ -549,7 +550,7 @@ func NewServer(config Config) *Server {
 	if config.Limits == (assessment.Limits{}) {
 		config.Limits = assessment.DefaultLimits()
 	}
-	server := &Server{config: config, runs: make(map[string]*run), intakes: make(map[string]*intakeRun), login: &subscription.LoginManager{Home: codexHome()}}
+	server := &Server{config: config, runs: make(map[string]*run), intakes: make(map[string]*intakeRun), analysisAssistants: make(map[string]*analysisAssistantState), login: &subscription.LoginManager{Home: codexHome()}}
 	server.loadErr = server.restoreSessions()
 	return server
 }

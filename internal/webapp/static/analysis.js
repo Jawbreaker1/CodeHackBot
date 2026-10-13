@@ -1,5 +1,6 @@
 import {webPagesSection, bindWebPages} from './web-map.js';
 import {codeReviewSection} from './code-review.js';
+import {assistantSection, mountAssistant, loadAssistant, askAboutFinding} from './analysis-assistant.js';
 
 const app = document.getElementById('app');
 const params = new URLSearchParams(location.search);
@@ -38,7 +39,7 @@ function findingCard(f) {
   const confirmed = f.status === 'reproduced';
   const actionText = confirmed ? '<p>' + action + '</p>' : '<p>Confirm this observation on the current target before assigning a fix.</p><p><strong>If confirmed</strong><br>' + action + '</p>';
   const label = confirmed ? f.priority : 'Needs confirmation';
-  return '<article class="finding" data-priority="' + escapeHTML(f.priority) + '"><div class="finding-head"><h3>' + escapeHTML(f.title) + '</h3><span class="tag ' + escapeHTML(f.priority) + '">' + escapeHTML(f.latest_review?.verdict === 'remediated' ? 'Retested · remediated' : label) + '</span></div><div class="finding-answer"><strong>Why it matters</strong><p>' + escapeHTML(f.impact || 'Impact has not been recorded yet.') + '</p></div><div class="finding-answer"><strong>What to do</strong>' + (f.latest_review?.verdict === 'remediated' ? '<p>Review the linked retest and keep the control in place.</p>' : actionText) + '</div><div class="finding-meta"><span><strong>Original check</strong> ' + (confirmed ? 'reproduced' : 'not yet verified') + '</span><span><strong>Confidence</strong> ' + escapeHTML(f.confidence || 'not rated') + '</span></div>' + retest + cve + software + verification + '<details><summary>See how this was tested and how to fix it</summary>' + (f.scope ? '<strong>Scope</strong><p>' + escapeHTML(f.scope) + '</p>' : '') + '<strong>Why this priority</strong><p>' + escapeHTML(f.priority_reason) + '</p><strong>Reproduction</strong>' + list(f.steps) + '<strong>Evidence</strong>' + evidenceList(f.evidence, f.session_id) + '<strong>Full remediation</strong>' + list(f.remediation) + '</details>' + refs + (session ? '<div class="finding-session">' + session + '</div>' : '') + '</article>';
+  return '<article class="finding" data-priority="' + escapeHTML(f.priority) + '"><div class="finding-head"><h3>' + escapeHTML(f.title) + '</h3><span class="tag ' + escapeHTML(f.priority) + '">' + escapeHTML(f.latest_review?.verdict === 'remediated' ? 'Retested · remediated' : label) + '</span></div><div class="finding-answer"><strong>Why it matters</strong><p>' + escapeHTML(f.impact || 'Impact has not been recorded yet.') + '</p></div><div class="finding-answer"><strong>What to do</strong>' + (f.latest_review?.verdict === 'remediated' ? '<p>Review the linked retest and keep the control in place.</p>' : actionText) + '</div><div class="finding-meta"><span><strong>Original check</strong> ' + (confirmed ? 'reproduced' : 'not yet verified') + '</span><span><strong>Confidence</strong> ' + escapeHTML(f.confidence || 'not rated') + '</span></div><button type="button" class="finding-ask" data-ask-finding="' + escapeHTML(f.id) + '">Ask about this finding ↗</button>' + retest + cve + software + verification + '<details><summary>See how this was tested and how to fix it</summary>' + (f.scope ? '<strong>Scope</strong><p>' + escapeHTML(f.scope) + '</p>' : '') + '<strong>Why this priority</strong><p>' + escapeHTML(f.priority_reason) + '</p><strong>Reproduction</strong>' + list(f.steps) + '<strong>Evidence</strong>' + evidenceList(f.evidence, f.session_id) + '<strong>Full remediation</strong>' + list(f.remediation) + '</details>' + refs + (session ? '<div class="finding-session">' + session + '</div>' : '') + '</article>';
 }
 
 function findingExplorer(findings) {
@@ -169,11 +170,17 @@ function render(data) {
     '<header class="analysis-head"><div><div class="eyebrow">' + escapeHTML(data.kind === 'customer' ? 'Across customer sessions' : 'Assessment evidence') + '</div><h1>' + escapeHTML(title) + '</h1>' + goal + '<p>' + escapeHTML(data.summary || '') + '</p></div><div class="head-side"><span class="status" data-state="' + escapeHTML(data.status) + '">' + escapeHTML(displayStatus(data.status)) + '</span>' + (data.report_url ? '<a class="report-link" href="' + escapeHTML(data.report_url) + '" target="_blank" rel="noopener">Open formal report ↗</a>' : '') + '</div></header>' +
     '<section class="summary-grid" aria-label="Filter findings by risk">' + metric(risk.critical || 0,'Critical','critical') + metric(risk.high || 0,'High','high') + metric(risk.medium || 0,'Medium','medium') + metric(risk.low || 0,'Low','low') + metric(risk.reproduced || 0,'Reproduced','reproduced') + metric(risk.candidates || 0,'Need checking','candidates') + '</section><p class="metric-note">Select a number to see those findings. Severity counts include only reproduced findings.' + (data.kind === 'customer' ? ' Across sessions these are finding records, not a count of distinct weaknesses.' + (risk.remediated ? ' ' + risk.remediated + ' earlier finding(s) have an explicit remediation retest and are excluded from current risk counts.' : '') : '') + '</p>' +
     actionSection +
+    assistantSection() +
     targetHistorySection(data) +
     '<section class="section finding-workspace" id="findings"><div class="section-heading"><div><h2>' + findingHeading + '</h2><p>For each finding, see the impact, recommended fix, and supporting checks.</p></div><div class="finding-controls"><span class="workspace-count">' + findings.length + ' shown</span>' + (selectedRisk !== 'all' ? '<button type="button" class="clear-filter" id="clear-risk">Show all findings</button>' : '') + '</div></div>' + findingExplorer(findings) + '</section>' +
     codeReviewSection(allFindings, escapeHTML, selectedCode) +
     webPagesSection(data, visibleSessions, escapeHTML) +
     '<details class="analysis-more" id="analysis-details"><summary>Explore tests, open questions, and session history <span>↘</span></summary><div class="analysis-more-body">' + coverageSection(data) + sessionComparisonSection(data) + challengeSection(data, visibleSessions) + correlationSection(data, visibleSessions || []) + '<div class="columns"><div>' + conclusion + latestResult + '</div><aside><section class="side-card"><h2>Recorded limits and open questions · ' + gaps.length + '</h2>' + gapList + '</section></aside></div></div></details><p class="analysis-caveat">Only recorded work is shown. Review the evidence before sharing a conclusion; untested areas may still contain weaknesses.</p>';
+  mountAssistant(app.querySelector('#analysis-assistant'), data);
+  app.querySelectorAll('[data-ask-finding]').forEach(button => button.addEventListener('click', () => {
+    const finding = (data.findings || []).find(item => item.id === button.dataset.askFinding);
+    if (finding) askAboutFinding(finding);
+  }));
   app.querySelector('#show-details')?.addEventListener('click', () => {
     const details = app.querySelector('#analysis-details');
     details.open = true;
@@ -238,7 +245,15 @@ async function load() {
   try {
     const response = await fetch(path);
     if (!response.ok) throw new Error((await response.json()).error || response.statusText);
-    render(await response.json());
+    const data = await response.json();
+    const findingID = params.get('finding');
+    if (findingID) {
+      const index = (data.findings || []).findIndex(finding => finding.id === findingID);
+      if (index >= 0) selectedFinding = index;
+    }
+    render(data);
+    if (findingID) app.querySelector('#findings')?.scrollIntoView({block:'start'});
+    await loadAssistant(data);
   } catch (error) {
     app.innerHTML = '<p class="error">' + escapeHTML(error.message) + '</p>';
   }

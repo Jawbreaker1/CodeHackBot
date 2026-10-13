@@ -44,11 +44,19 @@ func (r *run) sessionMarkdown(w http.ResponseWriter, name, missing string) {
 var saveFormattedReport = reportexport.Save
 
 func (r *run) formattedReport(w http.ResponseWriter, name string) {
-	if !validSessionID(name) || (!strings.HasSuffix(name, ".md") && !strings.HasSuffix(name, ".pdf")) {
+	serveFormattedReport(w, r.root, name)
+}
+
+func validReportName(name string) bool {
+	return validSessionID(name) && filepath.Base(name) == name && (strings.HasSuffix(name, ".md") || strings.HasSuffix(name, ".pdf"))
+}
+
+func serveFormattedReport(w http.ResponseWriter, root, name string) {
+	if !validReportName(name) {
 		writeError(w, http.StatusNotFound, "report not found")
 		return
 	}
-	path := filepath.Join(r.root, "reports", name)
+	path := filepath.Join(root, "reports", name)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
