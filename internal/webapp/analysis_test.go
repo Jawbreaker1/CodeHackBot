@@ -49,8 +49,26 @@ func TestAnalysisShowsRecordedNextCheckInsteadOfGenericGapAction(t *testing.T) {
 		OpenLeads: []assessment.Lead{{ID: "version", Hypothesis: "The installed build may predate a fix.", NextCheck: check, Evidence: []string{"tasks/inspect/version.log"}}},
 	}}}
 	view := buildAnalysis("fixture", "lab", state, nil)
-	if len(view.NextChecks) != 1 || view.NextChecks[0] != check || len(view.NextActions) != 1 || view.NextActions[0] != check || len(view.Gaps) != 1 || !strings.Contains(view.Gaps[0], "Unverified lead") {
+	if len(view.NextChecks) != 1 || view.NextChecks[0] != check || len(view.NextActions) != 1 || view.NextActions[0].Kind != "investigate" || view.NextActions[0].Title != check || len(view.Gaps) != 1 || !strings.Contains(view.Gaps[0], "Unverified lead") {
 		t.Fatalf("analysis did not surface the recorded continuation: %+v", view)
+	}
+}
+
+func TestAnalysisActionsKeepFindingLanguageAndPriority(t *testing.T) {
+	findings := []analysisFinding{
+		{ID: "high", Title: "Saknar åtkomstkontroll", Status: "reproduced", Remediation: []string{"Begränsa åtkomsten och testa igen."}},
+		{ID: "candidate", Title: "Möjlig sessionsläcka", Status: "candidate"},
+	}
+	actions := nextActions(findings, nil, nil, []string{"Granska ett annat flöde."})
+	if len(actions) != 3 || actions[0].Kind != "fix" || actions[0].Title != findings[0].Title || actions[0].Detail != findings[0].Remediation[0] || actions[0].FindingID != findings[0].ID || actions[1].Kind != "verify" || actions[1].Title != findings[1].Title || actions[2].Kind != "investigate" || actions[2].Title != "Granska ett annat flöde." {
+		t.Fatalf("actions lost finding order or rewrote the operator language: %+v", actions)
+	}
+}
+
+func TestAnalysisSummaryUsesReadableSingularCounts(t *testing.T) {
+	summary := analysisSummary("completed", analysisRisk{Reproduced: 1, Candidates: 1}, 2, 0, 0)
+	if strings.Contains(summary, "1 candidate still need") || !strings.Contains(summary, "1 possible finding still needs review") {
+		t.Fatalf("singular finding summary is unclear: %s", summary)
 	}
 }
 

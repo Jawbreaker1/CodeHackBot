@@ -36,7 +36,7 @@ type analysisView struct {
 	Challenges       []analysisChallenge      `json:"challenges"`
 	Coverage         []analysisCoverage       `json:"coverage"`
 	Correlations     []analysisCorrelation    `json:"correlations"`
-	NextActions      []string                 `json:"next_actions"`
+	NextActions      []analysisAction         `json:"next_actions"`
 	NextChecks       []string                 `json:"next_checks,omitempty"`
 	Gaps             []string                 `json:"gaps"`
 	Sessions         []analysisSessionSummary `json:"sessions,omitempty"`
@@ -56,6 +56,15 @@ type analysisRisk struct {
 	Candidates int `json:"candidates"`
 	Reproduced int `json:"reproduced"`
 	Remediated int `json:"remediated"`
+}
+
+// An action keeps the recorded finding or next check separate from UI labels.
+// The client can present mixed-language assessment text without rewriting it.
+type analysisAction struct {
+	Kind      string `json:"kind"`
+	Title     string `json:"title"`
+	Detail    string `json:"detail,omitempty"`
+	FindingID string `json:"finding_id,omitempty"`
 }
 
 type analysisFinding struct {
@@ -421,11 +430,15 @@ func analysisSummary(status string, risk analysisRisk, findings, gaps, unresolve
 		return "No findings are recorded. Check test coverage before drawing conclusions about the target."
 	}
 	if risk.Reproduced > 0 {
-		confirmed := fmt.Sprintf("%d %s passed a recorded follow-up check.", risk.Reproduced, countNoun(risk.Reproduced, "finding", "findings"))
+		confirmed := fmt.Sprintf("%d %s passed a separate recorded check.", risk.Reproduced, countNoun(risk.Reproduced, "finding", "findings"))
 		if risk.Candidates == 0 {
 			return confirmed
 		}
-		return confirmed + fmt.Sprintf(" %d %s still need validation or review.", risk.Candidates, countNoun(risk.Candidates, "candidate", "candidates"))
+		need := "need"
+		if risk.Candidates == 1 {
+			need = "needs"
+		}
+		return confirmed + fmt.Sprintf(" %d possible %s still %s review.", risk.Candidates, countNoun(risk.Candidates, "finding", "findings"), need)
 	}
 	verb := "require"
 	pronoun := "they"
@@ -443,26 +456,31 @@ func countNoun(count int, one, many string) string {
 	return many
 }
 
-func nextActions(findings []analysisFinding, challenges []analysisChallenge, gaps, nextChecks []string) []string {
-	var actions []string
+func nextActions(findings []analysisFinding, challenges []analysisChallenge, gaps, nextChecks []string) []analysisAction {
+	var actions []analysisAction
 	for _, finding := range findings {
 		if finding.LatestReview != nil && finding.LatestReview.Verdict == "remediated" {
 			continue
 		}
-		action := "Check whether " + finding.Title + " affects the current target before assigning a fix."
+		action := analysisAction{Kind: "verify", Title: finding.Title, FindingID: finding.ID}
 		if finding.Status == "reproduced" {
-			action = "Prioritize a fix for " + finding.Title + ", then retest it."
+			action.Kind = "fix"
+			if len(finding.Remediation) > 0 {
+				action.Detail = finding.Remediation[0]
+			}
 		}
 		actions = append(actions, action)
 	}
 	for _, challenge := range challenges {
 		if challenge.Verdict == "inconclusive" {
-			actions = append(actions, "Review why the follow-up check could not settle: "+challenge.Claim)
+			actions = append(actions, analysisAction{Kind: "verify", Title: challenge.Claim, Detail: challenge.Reason})
 		}
 	}
-	actions = append(actions, nextChecks...)
-	if len(gaps) > 0 && len(nextChecks) == 0 {
-		actions = append(actions, "Review the recorded limits of this test before deciding what to check next.")
+	for _, check := range uniqueStrings(nextChecks) {
+		actions = append(actions, analysisAction{Kind: "investigate", Title: check})
 	}
-	return uniqueStrings(actions)
+	if len(gaps) > 0 && len(nextChecks) == 0 {
+		actions = append(actions, analysisAction{Kind: "review", Title: "Review test limits and open questions before deciding what to check next."})
+	}
+	return actions
 }

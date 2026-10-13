@@ -49,7 +49,13 @@ func reportOutcome(state State) (summary string, unreviewed bool) {
 		return fmt.Sprintf("Assessment status: %s. %d delegated task(s) completed; %d stopped after an operator-denied action. The denied actions did not execute. The recorded results list %d reproduced finding(s) and %d candidate(s); review their cited evidence and the unfinished task objectives below.", strings.ReplaceAll(state.Status, "_", " "), completed, blocked, reproduced, candidates), false
 	}
 	if len(state.Plans) > 0 && state.Plans[len(state.Plans)-1].Complete {
-		if value := strings.TrimSpace(state.Plans[len(state.Plans)-1].Summary); value != "" {
+		final := state.Plans[len(state.Plans)-1]
+		// The coordinator writes PlainSummary for the operator. Its longer
+		// Summary may focus on planning details or residual method gaps.
+		if value := strings.TrimSpace(final.PlainSummary); value != "" {
+			return reportSummary(value), false
+		}
+		if value := strings.TrimSpace(final.Summary); value != "" {
 			return reportSummary(value), false
 		}
 	}

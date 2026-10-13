@@ -11,6 +11,11 @@
 
 **Background and objective:** {{inline .Goal}}
 
+{{if .Findings}}**Findings recorded for review**
+
+{{range .Findings}}- **{{if .Severity}}{{inline .Severity}} · {{end}}{{inline .Status}}** — {{inline .Title}}
+{{end}}
+{{end}}
 {{.Summary}}
 
 **Priority actions:**
@@ -49,9 +54,13 @@ The methods below reflect only recorded worker activity. No exploitation or acce
 
 ### 2.2 Information gathering and assessment activity
 
-{{if .Results}}{{range .Results}}- **{{inline .Task.ID}} — {{inline .Status}}:** {{inline .Task.Goal}}
-{{end}}{{else}}No worker results were recorded.
+{{if .Rounds}}{{range .Rounds}}**Round {{.Number}} · {{inline .Phase}}**{{if .Purpose}} — {{inline .Purpose}}{{end}}
+{{range .Tasks}}- `{{inline .ID}}` — {{inline .Status}}
 {{end}}
+{{end}}{{else}}No worker tasks were proposed.
+{{end}}
+
+Full task goals, completion criteria, and execution references remain in the session's evidence index; proposed or approved tasks do not establish coverage.
 ### 2.3 Detailed findings and remediation
 
 {{if .Findings}}{{range $i, $f := .Findings}}#### F-{{inc $i}} · {{inline $f.Title}}

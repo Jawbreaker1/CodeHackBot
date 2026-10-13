@@ -30,6 +30,17 @@ func writeReport(root string, s State) error {
 	}
 	b.WriteString("## Executive summary\n\n")
 	summary, unreviewed := reportOutcome(s)
+	if len(findings) > 0 {
+		b.WriteString("**Findings recorded for review**\n\n")
+		for _, finding := range findings {
+			label := finding.Status
+			if finding.Severity != "" {
+				label = finding.Severity + " · " + label
+			}
+			fmt.Fprintf(&b, "- **%s** — %s\n", label, finding.Title)
+		}
+		b.WriteString("\n")
+	}
 	fmt.Fprintf(&b, "%s\n\n", summary)
 	if leads := CurrentOpenLeads(s.Plans); len(leads) > 0 {
 		b.WriteString("## Recommended continuation\n\nThese are open questions, not completed tests or confirmed vulnerabilities. Continue in this session after reviewing scope and the recorded evidence.\n\n")
@@ -39,29 +50,14 @@ func writeReport(root string, s State) error {
 		b.WriteString("\n")
 	}
 	b.WriteString("## Method and coverage\n\n")
-	b.WriteString("The sequence records each coordinator round and the tasks proposed, approved, or skipped. A proposed task does not establish coverage; completed work and execution references are detailed in the separate evidence index.\n\n")
-	for i, d := range s.Plans {
-		if len(d.Tasks) == 0 {
-			continue
+	b.WriteString("Each round shows its purpose and recorded task outcome. A proposed or approved task does not establish coverage. Full task goals, completion criteria, worker conclusions, and execution references are in `evidence-index.md`.\n\n")
+	for _, round := range reportRounds(s) {
+		fmt.Fprintf(&b, "### Round %d — %s\n\n", round.Number, round.Phase)
+		if round.Purpose != "" {
+			fmt.Fprintf(&b, "%s\n\n", round.Purpose)
 		}
-		phase := d.Phase
-		if phase == "" {
-			phase = "assessment"
-		}
-		fmt.Fprintf(&b, "### Round %d — %s\n\n", i+1, phase)
-		for _, task := range d.Tasks {
-			state := "proposed"
-			for _, id := range d.ApprovedTaskIDs {
-				if id == task.ID {
-					state = "approved"
-				}
-			}
-			for _, id := range d.SkippedTaskIDs {
-				if id == task.ID {
-					state = "skipped by operator"
-				}
-			}
-			fmt.Fprintf(&b, "- `%s` — **%s** — %s (done when: %s)\n", task.ID, state, task.Goal, task.DoneWhen)
+		for _, task := range round.Tasks {
+			fmt.Fprintf(&b, "- `%s` — **%s**\n", task.ID, task.Status)
 		}
 		b.WriteString("\n")
 	}
@@ -167,15 +163,8 @@ func writeReport(root string, s State) error {
 	for _, check := range readiness.Checks {
 		fmt.Fprintf(&b, "- **%s (%s):** %s\n", check.Label, check.Status, check.Detail)
 	}
-	b.WriteString("\n## Work performed and evidence\n\n")
-	b.WriteString("Detailed worker conclusions, unsuccessful attempts, and local evidence references are in `evidence-index.md` beside this report. Raw tool output and approval records remain in the task logs rather than being copied automatically into this overview. Review model-authored text for sensitive content before sharing.\n\n")
-	for _, r := range s.Results {
-		fmt.Fprintf(&b, "- `%s` — **%s**. %s\n", r.Task.ID, r.Status, r.Task.Goal)
-		if r.Error != "" {
-			fmt.Fprintf(&b, "  - Limitation: %s\n", r.Error)
-		}
-	}
-	b.WriteString("\n")
+	b.WriteString("\n## Evidence record\n\n")
+	b.WriteString("Detailed worker conclusions, unsuccessful attempts, and local evidence references are in `evidence-index.md` beside this report. Raw tool output and approval records remain in the task logs. Review model-authored text for sensitive content before sharing.\n\n")
 	b.WriteString("## Assessment metadata\n\n")
 	fmt.Fprintf(&b, "Model: `%s`. Calls: %d/%d; failed calls: %d; reported tokens: %d; calls without usage: %d.\n\n", s.Model, s.Usage.Calls, s.Limits.ModelCalls, s.Usage.FailedCalls, s.Usage.ReportedTokens, s.Usage.CallsWithoutUsage)
 	if s.ReasoningEffort != "" {
@@ -191,6 +180,56 @@ func writeReport(root string, s State) error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(root, "report.md"), []byte(b.String()), 0600)
+}
+
+type reportRound struct {
+	Number  int
+	Phase   string
+	Purpose string
+	Tasks   []reportTask
+}
+
+type reportTask struct {
+	ID     string
+	Status string
+}
+
+// The overview records what ran, while the evidence index retains full task
+// instructions and results. All report formats use this same view.
+func reportRounds(s State) []reportRound {
+	resultStatus := make(map[string]string, len(s.Results))
+	for _, result := range s.Results {
+		resultStatus[result.Task.ID] = result.Status
+	}
+	var rounds []reportRound
+	for i, decision := range s.Plans {
+		if len(decision.Tasks) == 0 {
+			continue
+		}
+		round := reportRound{Number: i + 1, Phase: decision.Phase, Purpose: strings.TrimSpace(decision.PlainSummary)}
+		if round.Phase == "" {
+			round.Phase = "assessment"
+		}
+		for _, task := range decision.Tasks {
+			status := "proposed"
+			for _, id := range decision.ApprovedTaskIDs {
+				if id == task.ID {
+					status = "approved"
+				}
+			}
+			for _, id := range decision.SkippedTaskIDs {
+				if id == task.ID {
+					status = "skipped by operator"
+				}
+			}
+			if recorded, ok := resultStatus[task.ID]; ok {
+				status = recorded
+			}
+			round.Tasks = append(round.Tasks, reportTask{ID: task.ID, Status: status})
+		}
+		rounds = append(rounds, round)
+	}
+	return rounds
 }
 
 func writeEvidenceIndex(root string, s State) error {

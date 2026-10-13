@@ -73,6 +73,80 @@ func TestReportsShowOpenLeadContinuationSeparatelyFromFindings(t *testing.T) {
 	}
 }
 
+func TestExecutiveSummaryShowsFindingsBeforeAnUnresolvedGap(t *testing.T) {
+	root := t.TempDir()
+	state := State{ID: "fixture", Status: "completed_with_gaps", Plans: []Decision{{
+		Complete: true,
+		Summary:  "A remaining endpoint was not tested.",
+		Findings: []Finding{{Title: "CSP permits inline scripts", Status: "candidate", Severity: "low", Impact: "The policy offers less protection.", Steps: []string{"Inspect the policy."}, Evidence: []string{"policy.log"}, Remediation: []string{"Tighten the policy."}}},
+	}}}
+	if err := writeReport(root, state); err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := os.ReadFile(filepath.Join(root, "report.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputs := [][]byte{canonical}
+	for _, format := range []ReportFormat{OWASPReport, PTESReport} {
+		formatted, err := RenderFormattedReport(state, format)
+		if err != nil {
+			t.Fatal(err)
+		}
+		outputs = append(outputs, formatted)
+	}
+	for _, output := range outputs {
+		text := string(output)
+		findings := strings.Index(text, "**Findings recorded for review**")
+		title := strings.Index(text, "CSP permits inline scripts")
+		gap := strings.Index(text, "A remaining endpoint was not tested.")
+		if findings < 0 || title < findings || gap < title {
+			t.Fatalf("executive summary omitted findings before the gap: %s", text)
+		}
+	}
+}
+
+func TestReportsPreferFinalOperatorSummaryAndKeepFullTasksInEvidenceIndex(t *testing.T) {
+	root := t.TempDir()
+	state := State{ID: "fixture", Status: "completed", Plans: []Decision{{
+		PlainSummary:    "Inspect the observed application boundary.",
+		Tasks:           []Task{{ID: "inspect", Goal: "Long technical worker instructions and every exploratory variant", DoneWhen: "Detailed completion criteria"}},
+		ApprovedTaskIDs: []string{"inspect"},
+	}, {
+		Complete:     true,
+		PlainSummary: "The application boundary was reviewed; no finding is established.",
+		Summary:      "A narrow method gap might need several more tests.",
+	}}, Results: []Result{{Task: Task{ID: "inspect", Goal: "Long technical worker instructions and every exploratory variant", DoneWhen: "Detailed completion criteria"}, Status: "done"}}}
+	if err := writeReport(root, state); err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := os.ReadFile(filepath.Join(root, "report.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, err := os.ReadFile(filepath.Join(root, "evidence-index.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputs := [][]byte{canonical}
+	for _, format := range []ReportFormat{OWASPReport, PTESReport} {
+		formatted, err := RenderFormattedReport(state, format)
+		if err != nil {
+			t.Fatal(err)
+		}
+		outputs = append(outputs, formatted)
+	}
+	for _, output := range outputs {
+		text := string(output)
+		if !strings.Contains(text, "The application boundary was reviewed") || strings.Contains(text, "narrow method gap might need") || !strings.Contains(text, "Inspect the observed application boundary") || !strings.Contains(text, "`inspect` —") || strings.Contains(text, "Long technical worker instructions") {
+			t.Fatalf("report did not prioritize the conclusion and compact method: %s", text)
+		}
+	}
+	if !strings.Contains(string(index), "Long technical worker instructions") || !strings.Contains(string(index), "Detailed completion criteria") {
+		t.Fatal("evidence index lost full worker assignment")
+	}
+}
+
 func TestReportKeepsRepeatedExecutionReferencesOutOfOverview(t *testing.T) {
 	root := t.TempDir()
 	result := Result{Task: Task{ID: "inspect", Goal: "Inspect the scoped system"}, Status: "done", Summary: "Inspection completed with recorded evidence."}

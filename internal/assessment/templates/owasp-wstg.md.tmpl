@@ -22,9 +22,14 @@ This is a point-in-time report of the recorded work. The OWASP WSTG provides rep
 
 ## 2. Executive summary
 
+{{if .Findings}}**Findings recorded for review**
+
+{{range .Findings}}- **{{if .Severity}}{{inline .Severity}} · {{end}}{{inline .Status}}** — {{inline .Title}}
+{{end}}
+{{end}}
 {{.Summary}}
 
-{{if .Findings}}Current findings: {{len .Findings}}. Technical details and remediation follow.{{else}}No findings were recorded; this does not establish that the scoped system is free of vulnerabilities.{{end}}
+{{if not .Findings}}No findings were recorded; this does not establish that the scoped system is free of vulnerabilities.{{end}}
 
 {{if .NextChecks}}### Recommended continuation
 
@@ -88,10 +93,12 @@ These verdicts refer to older sessions and cite evidence from this assessment. A
 {{end}}
 ## 4. Method and coverage
 
-The table of work below records assigned objectives and outcomes. Consult the canonical session report and evidence for exact commands and observations. A proposed, skipped, blocked, or failed task does not establish coverage.
+Each round shows its purpose and recorded task outcomes. Full task goals, completion criteria, and execution references are in the session's evidence index. A proposed or approved task does not establish coverage.
 
-{{if .Results}}{{range .Results}}- **{{inline .Task.ID}} — {{inline .Status}}:** {{inline .Task.Goal}}
-{{end}}{{else}}No worker results were recorded.
+{{if .Rounds}}{{range .Rounds}}**Round {{.Number}} · {{inline .Phase}}**{{if .Purpose}} — {{inline .Purpose}}{{end}}
+{{range .Tasks}}- `{{inline .ID}}` — {{inline .Status}}
+{{end}}
+{{end}}{{else}}No worker tasks were proposed.
 {{end}}
 ## 5. Limitations and unresolved gaps
 
