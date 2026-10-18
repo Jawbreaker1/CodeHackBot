@@ -10,6 +10,8 @@ For a material context-flow change, add a focused real-model smoke and inspect t
 
 Recorded 2026-09-29: three unchanged-runtime Daybreak Blue/high synthetic recall smokes completed after fixes. The earliest operator label was absent from the first model request, found in the saved conversation index, then read through the exact conversation reference before evidence-backed completion. Two runs saved a full session packet with 402 turns and inspected exact request messages below the 48 KiB smoke ceiling. Earlier failed diagnostics are retained in `sessions/context-live-20260929/` and `sessions/context-live-20260929-r2/`; successful snapshots are in `sessions/context-live-20260929-r3/` through `-r5/`. These runs are retrieval smoke evidence, not validation of arbitrary long assessments or semantic memory quality. See [the audit](../experiments/context-lifecycle-audit-2026-09-29.md).
 
+Recorded 2026-10-18: a coordinator pressure test first reproduced the loss of an earlier operator direction before saved worker prose was shortened. After reordering that projection, `./scripts/ci.sh` and focused assessment race checks passed. An opt-in Daybreak Blue/high smoke (`BHB_CONTEXT_LIVE_OPERATOR=1 go test -tags live ./internal/assessment -run '^TestLiveCoordinatorKeepsEarlierOperatorDirection$' -count=1 -v`) sent the bounded fictional packet and returned a valid decision that honored the saved-only boundary, proposed no target contact, and made no vulnerability claim. This is one diagnostic model response, not proof of long-session reliability.
+
 ## Current core cleanup gate
 
 Required deterministic checks:

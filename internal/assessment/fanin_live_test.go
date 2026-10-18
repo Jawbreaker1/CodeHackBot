@@ -86,3 +86,59 @@ func TestLiveCoordinatorReadsIndexedFanIn(t *testing.T) {
 	}
 	t.Logf("bounded request: %d bytes; next decision: %s", len(prompt), raw)
 }
+
+// Diagnostic model check for the bounded coordinator view. The fixture keeps
+// an earlier operator boundary while shortening saved worker prose; no target
+// contact or worker execution is part of this test.
+func TestLiveCoordinatorKeepsEarlierOperatorDirection(t *testing.T) {
+	if os.Getenv("BHB_CONTEXT_LIVE_OPERATOR") != "1" {
+		t.Skip("set BHB_CONTEXT_LIVE_OPERATOR=1 for the opt-in model check")
+	}
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame, err := behavior.Load(root, "assessment_coordinator", map[string]string{"approval_mode": "operator_selected_session_policy", "research_mode": "connected"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const earlierDirection = "User: Use saved observations only; do not contact the target or run new commands."
+	state := State{
+		Version: 1, ID: "fictional-context-continuity", Goal: "Explain what the fictional saved observations establish", Scope: "Fictional saved records only; no target contact", Model: "gpt-daybreak-blue-latest", Status: "running", Limits: DefaultLimits(),
+		OperatorMessages: []string{earlierDirection, "Assistant: " + strings.Repeat("I will review the saved result. ", 35), "User: What is supported by the records and what remains uncertain?"},
+		Plans:            []Decision{{Summary: "Review saved observations", Tasks: []Task{{ID: "review", Goal: "Interpret the fictional saved result"}}}},
+		Results:          []Result{{Task: Task{ID: "review", Goal: "Interpret the fictional saved result"}, Status: "done", Summary: "Both fictional identities received the same denial response; this does not establish an access-control weakness. " + strings.Repeat("The complete observation is retained in the saved result. ", 160)}},
+	}
+	full := coordinatorPrompt(state)
+	prompt, err := coordinatorPromptBounded(state, len(full)-2000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, earlierDirection) || len(prompt) >= len(full) {
+		t.Fatal("model request did not preserve the earlier operator direction under pressure")
+	}
+	home := os.Getenv("CODEX_HOME")
+	if home == "" {
+		home, err = os.UserHomeDir()
+		if err != nil {
+			t.Fatal(err)
+		}
+		home = filepath.Join(home, ".codex")
+	}
+	provider := subscription.Provider{Auth: &subscription.CodexAuth{Home: home}}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	completion, err := provider.Complete(ctx, subscription.Request{Model: "gpt-daybreak-blue-latest", ReasoningEffort: "high", Messages: []llmclient.Message{{Role: "system", Content: frame.PromptText()}, {Role: "user", Content: prompt}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := completion["choices"].([]any)[0].(map[string]any)["message"].(llmclient.Message).Content
+	decision, err := parseDecision(raw)
+	if err != nil {
+		t.Fatalf("invalid model response: %v: %s", err, raw)
+	}
+	if err := validateDecision(decision, state); err != nil {
+		t.Fatalf("invalid coordinator decision: %v: %s", err, raw)
+	}
+	t.Logf("bounded request: %d of %d bytes; inspect decision for operator boundary: %s", len(prompt), len(full), raw)
+}

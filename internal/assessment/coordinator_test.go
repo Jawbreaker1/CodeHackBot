@@ -311,6 +311,39 @@ func TestCoordinatorPromptKeepsSameRoleHistoryUntilBudgetPressure(t *testing.T) 
 	}
 }
 
+func TestCoordinatorCompactionKeepsOlderOperatorDirectionBeforeSavedWorkerProse(t *testing.T) {
+	const earlierDirection = "User: EARLIER_OPERATOR_DIRECTION keep the original review boundary"
+	state := State{
+		Version: 1, Goal: "review fixture", Scope: "synthetic only",
+		OperatorMessages: []string{
+			earlierDirection,
+			"Assistant: " + strings.Repeat("I will review the recorded result. ", 35),
+			"User: CURRENT_OPERATOR_DIRECTION compare the saved result",
+		},
+		Plans:   []Decision{{Summary: "review the recorded result", Tasks: []Task{{ID: "review"}}}},
+		Results: []Result{{Task: Task{ID: "review", Goal: "inspect recorded evidence"}, Status: "done", Summary: strings.Repeat("Recorded observation with a saved source. ", 180)}},
+	}
+	full := coordinatorPrompt(state)
+	budget := len(full) - 2000
+	bounded, err := coordinatorPromptBounded(state, budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bounded) > budget || !strings.Contains(bounded, earlierDirection) || !strings.Contains(bounded, "CURRENT_OPERATOR_DIRECTION") || !strings.Contains(bounded, `"status":"done"`) {
+		t.Fatalf("context pressure discarded operator direction before saved worker prose: bytes=%d budget=%d", len(bounded), budget)
+	}
+	var packet coordinatorModelPacket
+	if err := json.Unmarshal([]byte(bounded), &packet); err != nil {
+		t.Fatal(err)
+	}
+	if len(packet.Assessment.Results[0].Summary) >= len(state.Results[0].Summary) || packet.OmittedMessages == 0 {
+		t.Fatal("fixture did not shorten saved worker prose and assistant chatter")
+	}
+	if state.OperatorMessages[0] != earlierDirection || len(state.Results[0].Summary) < 5000 {
+		t.Fatal("bounded view changed durable state")
+	}
+}
+
 func TestCoordinatorRetainsObservedLeadAfterLongResultPreamble(t *testing.T) {
 	lead := "Observed available local resource: /opt/lab/candidates.txt"
 	state := State{Results: []Result{{Task: Task{ID: "triage"}, Status: "done", Summary: strings.Repeat("recorded observation ", 115) + lead}}}

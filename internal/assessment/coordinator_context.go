@@ -79,9 +79,10 @@ func coordinatorPromptBounded(state State, maxBytes int) (string, error) {
 	if len(prompt) <= maxBytes {
 		return prompt, nil
 	}
-	// Pressure relief stays ordered: historical discussion, then older result
-	// previews, then recent previews. The current goal, scope, task identities,
-	// latest operator message, and finding references are never discarded.
+	// Pressure relief stays ordered: older plan prose, assistant replies, then
+	// saved worker previews before earlier operator direction. The current goal,
+	// scope, task identities, latest operator message, and finding references
+	// are never discarded.
 	for i := 0; i < len(packet.Assessment.Plans)-2; i++ {
 		plan := &packet.Assessment.Plans[i]
 		plan.Summary = promptExcerpt(plan.Summary, 160)
@@ -105,24 +106,33 @@ func coordinatorPromptBounded(state State, maxBytes int) (string, error) {
 			break
 		}
 	}
-	for len(packet.Assessment.OperatorMessages) > 1 && len(prompt) > maxBytes {
-		remove := -1
-		for i := range packet.Assessment.OperatorMessages {
-			if i != protectedMessage {
-				remove = i
+	dropMessages := func(repliesOnly bool) {
+		for len(packet.Assessment.OperatorMessages) > 1 && len(prompt) > maxBytes {
+			remove := -1
+			for i, entry := range packet.Assessment.OperatorMessages {
+				if i == protectedMessage {
+					continue
+				}
+				message := strings.ToLower(strings.TrimSpace(entry))
+				if !repliesOnly || strings.HasPrefix(message, "assistant:") || strings.HasPrefix(message, "coordinator:") {
+					remove = i
+					break
+				}
+			}
+			if remove < 0 {
 				break
 			}
+			packet.Assessment.OperatorMessages = append(packet.Assessment.OperatorMessages[:remove], packet.Assessment.OperatorMessages[remove+1:]...)
+			packet.OmittedMessages++
+			if protectedMessage > remove {
+				protectedMessage--
+			}
+			prompt = encode()
 		}
-		if remove < 0 {
-			break
-		}
-		packet.Assessment.OperatorMessages = append(packet.Assessment.OperatorMessages[:remove], packet.Assessment.OperatorMessages[remove+1:]...)
-		packet.OmittedMessages++
-		if protectedMessage > remove {
-			protectedMessage--
-		}
-		prompt = encode()
 	}
+	// Earlier assistant replies have lower priority than operator direction.
+	// Preserve that direction while saved worker prose can still be shortened.
+	dropMessages(true)
 	for i := 0; i < oldCount; i++ {
 		packet.Assessment.Results[i].Summary = promptExcerptEnds(packet.Assessment.Results[i].Summary, 2048)
 	}
@@ -140,6 +150,9 @@ func coordinatorPromptBounded(state State, maxBytes int) (string, error) {
 	}
 	packet.ContextNotes = append(packet.ContextNotes, "Recent worker previews were shortened for this request; exact outcomes and registered evidence remain in saved task records.")
 	prompt = encode()
+	// Only after shortening saved worker prose should older operator turns
+	// leave this request. The latest operator direction stays protected.
+	dropMessages(false)
 	if len(prompt) > maxBytes {
 		for i := 0; i < oldCount; i++ {
 			packet.Assessment.Results[i].Summary = promptExcerptEnds(packet.Assessment.Results[i].Summary, 512)
