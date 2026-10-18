@@ -386,12 +386,12 @@ func TestServerRejectsDeletingRunningSession(t *testing.T) {
 
 func TestAgentContextWindowsKeepCoordinatorAndWorkersSeparate(t *testing.T) {
 	state := assessment.State{MaxInputBytes: 1000}
-	primary, all := agentContextWindows(state, contextWindowView{UsedBytes: 350, LimitBytes: 1000}, []workerView{
+	primary, all := agentContextWindows(state, contextWindowView{UsedBytes: 350, LimitBytes: 1000, ProviderInputTokens: 72}, []workerView{
 		{ID: "worker-a", Phase: "decision_started", ContextUsedBytes: 100, ContextLimitBytes: 1000},
 		{ID: "worker-b", Phase: "execution_started", ContextUsedBytes: 250, ContextLimitBytes: 1000},
 		{ID: "finished", Phase: "done", ContextUsedBytes: 900, ContextLimitBytes: 1000},
 	}, "running", true, false, nil)
-	if primary.Role != "coordinator" || primary.UsedBytes != 350 || primary.Percent != 35 || len(all) != 3 || all[1].WorkerID != "worker-a" || all[1].UsedBytes != 100 || all[2].WorkerID != "worker-b" || all[2].UsedBytes != 250 {
+	if primary.Role != "coordinator" || primary.UsedBytes != 350 || primary.Percent != 35 || primary.ProviderInputTokens != 72 || len(all) != 3 || all[1].WorkerID != "worker-a" || all[1].UsedBytes != 100 || all[2].WorkerID != "worker-b" || all[2].UsedBytes != 250 {
 		t.Fatalf("agent context windows were mixed: primary=%+v all=%+v", primary, all)
 	}
 	_, all = agentContextWindows(state, primary, []workerView{{ID: "waiting", Phase: "approval_required", ContextUsedBytes: 450}}, "running", true, false, nil)
@@ -440,6 +440,14 @@ func TestServerUsesModelLedIntakeAndCoordinatorChat(t *testing.T) {
 	chat := postJSON[assessmentView](t, httpServer.URL+"/api/v1/assessments/"+started.ID+"/messages", messageRequest{Text: "What is the worker doing right now?"})
 	if len(chat.Messages) < 4 || chat.Messages[len(chat.Messages)-1].Role != "assistant" || !strings.Contains(chat.Messages[len(chat.Messages)-1].Text, "waiting") {
 		t.Fatalf("coordinator chat = %#v", chat.Messages)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for chat.ContextWindow.ProviderInputTokens != 42 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+		chat = getJSON[assessmentView](t, httpServer.URL+"/api/v1/assessments/"+started.ID)
+	}
+	if chat.ContextWindow.ProviderInputTokens != 42 {
+		t.Fatalf("provider input tokens missing after coordinator requests settled: %+v", chat.ContextWindow)
 	}
 	_ = postStatus(t, httpServer.URL+"/api/v1/assessments/"+started.ID+"/stop", nil)
 	select {
@@ -945,7 +953,7 @@ func webModelFixture(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_, _ = fmt.Fprintf(w, `{"choices":[{"message":{"content":%q}}],"usage":{"total_tokens":1}}`, response)
+	_, _ = fmt.Fprintf(w, `{"choices":[{"message":{"content":%q}}],"usage":{"prompt_tokens":42,"total_tokens":43}}`, response)
 }
 
 func postJSON[T any](t *testing.T, url string, value any) T {

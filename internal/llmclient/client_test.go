@@ -74,6 +74,23 @@ func TestStructuredChatRetriesOneTransientFailureAndAccountsForBothRequests(t *t
 	}
 }
 
+func TestStructuredCompletionPreservesProviderInputTokens(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ready"}}],"usage":{"prompt_tokens":42,"completion_tokens":3,"total_tokens":45}}`))
+	}))
+	defer server.Close()
+	client := Client{BaseURL: server.URL, Model: "fixture"}
+	completion, err := client.ChatStructuredCompletion(context.Background(), []Message{{Role: "user", Content: "decide"}})
+	if err != nil || completion.Text != "ready" || completion.PromptTokens() != 42 {
+		t.Fatalf("completion=%+v err=%v", completion, err)
+	}
+	for _, raw := range []json.RawMessage{nil, []byte(`{}`), []byte(`{"prompt_tokens":-1}`), []byte(`{"prompt_tokens":"unknown"}`)} {
+		if got := (Completion{Usage: raw}).PromptTokens(); got != 0 {
+			t.Fatalf("unknown usage %s yielded %d tokens", raw, got)
+		}
+	}
+}
+
 func TestStructuredChatDoesNotRetryBadRequest(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -27,11 +27,11 @@ type Coordinator struct {
 	PlanApproval    func(context.Context, Decision) (PlanReview, error)
 	Emit            func(Event) // May be called concurrently by workers.
 	Limits          Limits
-	Budget          *ModelBudget    // Shared with live operator chat when supplied.
-	Conversation    func() []string // Durable operator conversation excerpts.
-	Approach        *Approach       // Selected during intake for a new assessment.
-	Snapshot        func(State)     // Read-only snapshot; called by the coordinator goroutine.
-	ContextSnapshot func(int, int)  // Current coordinator request bytes and application input ceiling.
+	Budget          *ModelBudget        // Shared with live operator chat when supplied.
+	Conversation    func() []string     // Durable operator conversation excerpts.
+	Approach        *Approach           // Selected during intake for a new assessment.
+	Snapshot        func(State)         // Read-only snapshot; called by the coordinator goroutine.
+	ContextSnapshot func(int, int, int) // Request bytes, application ceiling, and reported input tokens (zero when unavailable).
 }
 
 // LoadState reads the durable assessment snapshot without starting work. UI
@@ -406,17 +406,28 @@ func (c Coordinator) decide(ctx context.Context, root string, round, proposal in
 		if err := saveJSON(stem+"-request.json", messages); err != nil {
 			return Decision{}, err
 		}
-		if c.ContextSnapshot != nil {
-			used := 0
-			for _, message := range messages {
-				used += len(message.Content)
-			}
-			c.ContextSnapshot(used, c.LLM.InputByteLimit())
+		used := 0
+		for _, message := range messages {
+			used += len(message.Content)
 		}
-		text, err := c.LLM.ChatStructured(ctx, messages)
+		if c.ContextSnapshot != nil {
+			c.ContextSnapshot(used, c.LLM.InputByteLimit(), 0)
+		}
+		completion, err := c.LLM.ChatStructuredCompletion(ctx, messages)
+		tokens := completion.PromptTokens()
+		if saveErr := saveJSON(stem+"-usage.json", struct {
+			RequestInputBytes   int `json:"request_input_bytes"`
+			ProviderInputTokens int `json:"provider_input_tokens,omitempty"`
+		}{used, tokens}); saveErr != nil {
+			return Decision{}, fmt.Errorf("save coordinator request usage: %w", saveErr)
+		}
+		if c.ContextSnapshot != nil {
+			c.ContextSnapshot(used, c.LLM.InputByteLimit(), tokens)
+		}
 		if err != nil {
 			return Decision{}, fmt.Errorf("coordinator: %w", err)
 		}
+		text := completion.Text
 		if err := saveJSON(stem+"-response.json", text); err != nil {
 			return Decision{}, err
 		}

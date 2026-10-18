@@ -261,11 +261,30 @@ func (c Client) Chat(ctx context.Context, messages []Message) (string, error) {
 
 // ChatStructured sends a chat completion request for machine-readable control output.
 func (c Client) ChatStructured(ctx context.Context, messages []Message) (string, error) {
-	completion, err := c.completeWithTransientRetry(ctx, messages, ChatOptions{Profile: ProfileStructuredControl})
+	completion, err := c.ChatStructuredCompletion(ctx, messages)
 	if err != nil {
 		return "", err
 	}
 	return completion.Text, nil
+}
+
+// ChatStructuredCompletion also returns provider usage for callers that
+// measure an individual context packet. Missing usage remains unknown.
+func (c Client) ChatStructuredCompletion(ctx context.Context, messages []Message) (Completion, error) {
+	completion, err := c.completeWithTransientRetry(ctx, messages, ChatOptions{Profile: ProfileStructuredControl})
+	return completion, err
+}
+
+// PromptTokens is the provider-reported input count for this call, if present.
+// It is not a model context-window limit or an estimate from request bytes.
+func (c Completion) PromptTokens() int {
+	var usage struct {
+		PromptTokens *int `json:"prompt_tokens"`
+	}
+	if json.Unmarshal(c.Usage, &usage) != nil || usage.PromptTokens == nil || *usage.PromptTokens < 0 {
+		return 0
+	}
+	return *usage.PromptTokens
 }
 
 type chatStatusError struct {

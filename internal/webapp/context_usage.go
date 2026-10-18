@@ -48,7 +48,18 @@ func lastCoordinatorRequestContext(root string, limit int) contextWindowView {
 	for _, message := range messages {
 		used += len(message.Content)
 	}
-	return contextWindowView{UsedBytes: used, LimitBytes: limit}
+	view := contextWindowView{UsedBytes: used, LimitBytes: limit}
+	usageData, err := os.ReadFile(filepath.Join(root, strings.TrimSuffix(latest, "-request.json")+"-usage.json"))
+	if err == nil {
+		var usage struct {
+			RequestInputBytes   int `json:"request_input_bytes"`
+			ProviderInputTokens int `json:"provider_input_tokens"`
+		}
+		if json.Unmarshal(usageData, &usage) == nil && usage.RequestInputBytes == used && usage.ProviderInputTokens > 0 {
+			view.ProviderInputTokens = usage.ProviderInputTokens
+		}
+	}
+	return view
 }
 
 func measuredContext(used, limit int, role, id, status string, active bool) contextWindowView {
@@ -102,6 +113,7 @@ func agentContextWindows(state assessment.State, coordinator contextWindowView, 
 		coordinatorStatus = "finished"
 	}
 	primary := measuredContext(coordinator.UsedBytes, limit, "coordinator", "coordinator", coordinatorStatus, coordinatorActive)
+	primary.ProviderInputTokens = coordinator.ProviderInputTokens
 	all := []contextWindowView{primary}
 	for _, worker := range workers {
 		// The coordinator resumes from saved results, not from a finished or

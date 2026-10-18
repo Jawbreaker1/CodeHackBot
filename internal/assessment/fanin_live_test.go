@@ -73,6 +73,7 @@ func TestLiveCoordinatorReadsIndexedFanIn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Logf("provider usage for bounded request: %v", completion["usage"])
 	raw := completion["choices"].([]any)[0].(map[string]any)["message"].(llmclient.Message).Content
 	decision, err := parseDecision(raw)
 	if err != nil {
@@ -140,5 +141,5 @@ func TestLiveCoordinatorKeepsEarlierOperatorDirection(t *testing.T) {
 	if err := validateDecision(decision, state); err != nil {
 		t.Fatalf("invalid coordinator decision: %v: %s", err, raw)
 	}
-	t.Logf("bounded request: %d of %d bytes; inspect decision for operator boundary: %s", len(prompt), len(full), raw)
+	t.Logf("bounded request: %d of %d bytes; provider usage: %v; inspect decision for operator boundary: %s", len(prompt), len(full), completion["usage"], raw)
 }

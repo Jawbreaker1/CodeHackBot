@@ -486,18 +486,20 @@ type planApprovalView struct {
 	Tasks        []assessment.Task `json:"tasks"`
 }
 
-// Each coordinator or worker has its own request packet. These are bytes of
-// message text against the application input ceiling, not provider token counts.
+// Each coordinator or worker has its own request packet. Byte usage is against
+// the application input ceiling; the optional provider count is the last
+// reported input for that exact coordinator request, with no inferred limit.
 type contextWindowView struct {
-	UsedBytes      int    `json:"used_bytes"`
-	LimitBytes     int    `json:"limit_bytes"`
-	RemainingBytes int    `json:"remaining_bytes"`
-	Percent        int    `json:"percent"`
-	AgentID        string `json:"agent_id,omitempty"`
-	Role           string `json:"role,omitempty"`
-	Status         string `json:"status,omitempty"`
-	WorkerID       string `json:"worker_id,omitempty"`
-	Active         bool   `json:"active"`
+	UsedBytes           int    `json:"used_bytes"`
+	LimitBytes          int    `json:"limit_bytes"`
+	ProviderInputTokens int    `json:"provider_input_tokens,omitempty"`
+	RemainingBytes      int    `json:"remaining_bytes"`
+	Percent             int    `json:"percent"`
+	AgentID             string `json:"agent_id,omitempty"`
+	Role                string `json:"role,omitempty"`
+	Status              string `json:"status,omitempty"`
+	WorkerID            string `json:"worker_id,omitempty"`
+	Active              bool   `json:"active"`
 }
 
 type customerView struct {

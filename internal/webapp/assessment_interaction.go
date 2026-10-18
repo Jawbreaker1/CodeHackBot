@@ -117,14 +117,17 @@ func (s *Server) message(ctx context.Context, r *run, text string, refs []attach
 		for _, message := range prompt {
 			used += len(message.Content)
 		}
-		r.setCoordinatorContext(used, client.InputByteLimit())
+		r.setCoordinatorContext(used, client.InputByteLimit(), 0)
 		callCtx, cancel := context.WithCancel(ctx)
 		if runCtx != nil {
 			stop := context.AfterFunc(runCtx, cancel)
 			defer stop()
 		}
 		defer cancel()
-		rawReply, err = client.ChatStructured(callCtx, prompt)
+		var completion llmclient.Completion
+		completion, err = client.ChatStructuredCompletion(callCtx, prompt)
+		r.setCoordinatorContext(used, client.InputByteLimit(), completion.PromptTokens())
+		rawReply = completion.Text
 	}
 	var reply coordinatorChatReply
 	if err == nil {

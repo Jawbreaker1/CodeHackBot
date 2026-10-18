@@ -144,6 +144,54 @@ func TestOperatorCanRedirectProposedPlanBeforeExecution(t *testing.T) {
 	}
 }
 
+func TestCoordinatorSavesMeasuredRequestAndProviderTokens(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		answer, _ := json.Marshal(Decision{Summary: "Saved fixture evidence is sufficient.", Complete: true})
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{"content": string(answer)}}},
+			"usage":   map[string]int{"prompt_tokens": 321, "completion_tokens": 12, "total_tokens": 333},
+		})
+	}))
+	defer model.Close()
+	root := t.TempDir()
+	coordinator := testCoordinator(model.URL)
+	var snapshots [][3]int
+	coordinator.ContextSnapshot = func(used, limit, tokens int) {
+		snapshots = append(snapshots, [3]int{used, limit, tokens})
+	}
+	initial := State{Version: 1, Goal: "Review saved fixture", Scope: "synthetic only", Limits: DefaultLimits(), Results: []Result{{Task: Task{ID: "review", Goal: "Review fixture"}, Status: "done", Summary: "Nothing else is needed."}}}
+	state, err := coordinator.RunState(t.Context(), root, initial)
+	if err != nil || state.Status != "completed" {
+		t.Fatalf("run status=%q err=%v", state.Status, err)
+	}
+	requestData, err := os.ReadFile(filepath.Join(root, "coordinator-01-request.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var messages []llmclient.Message
+	if err := json.Unmarshal(requestData, &messages); err != nil {
+		t.Fatal(err)
+	}
+	used := 0
+	for _, message := range messages {
+		used += len(message.Content)
+	}
+	usageData, err := os.ReadFile(filepath.Join(root, "coordinator-01-usage.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var usage struct {
+		RequestInputBytes   int `json:"request_input_bytes"`
+		ProviderInputTokens int `json:"provider_input_tokens"`
+	}
+	if err := json.Unmarshal(usageData, &usage); err != nil {
+		t.Fatal(err)
+	}
+	if usage.RequestInputBytes != used || usage.ProviderInputTokens != 321 || len(snapshots) != 2 || snapshots[0] != [3]int{used, coordinator.LLM.InputByteLimit(), 0} || snapshots[1] != [3]int{used, coordinator.LLM.InputByteLimit(), 321} {
+		t.Fatalf("request telemetry mismatch: saved=%+v snapshots=%+v request_bytes=%d", usage, snapshots, used)
+	}
+}
+
 func TestCoordinatorPromptCompactsPriorExecutionBodies(t *testing.T) {
 	large := strings.Repeat("full shell script and output ", 10000)
 	state := State{

@@ -12,6 +12,8 @@ Recorded 2026-09-29: three unchanged-runtime Daybreak Blue/high synthetic recall
 
 Recorded 2026-10-18: a coordinator pressure test first reproduced the loss of an earlier operator direction before saved worker prose was shortened. After reordering that projection, `./scripts/ci.sh` and focused assessment race checks passed. An opt-in Daybreak Blue/high smoke (`BHB_CONTEXT_LIVE_OPERATOR=1 go test -tags live ./internal/assessment -run '^TestLiveCoordinatorKeepsEarlierOperatorDirection$' -count=1 -v`) sent the bounded fictional packet and returned a valid decision that honored the saved-only boundary, proposed no target contact, and made no vulnerability claim. This is one diagnostic model response, not proof of long-session reliability.
 
+Recorded later 2026-10-18: coordinator planning requests now save their measured input bytes and provider-reported input tokens together, when reported; the web context display keeps the app byte percentage and the last provider token count separate. Interactive coordinator chat records the same count in session metadata. Deterministic tests cover exact request pairing, absent usage, save/reload, and the web chat path. Full CI (including built TUI and web flows), full Go race tests, and repeated web chat race checks passed. A Daybreak Blue/high synthetic saved-evidence smoke returned a valid decision with `prompt_tokens: 6914` and preserved the operator's no-contact direction. This telemetry does not establish the provider's maximum window or justify raising input caps yet; worker token counts remain aggregate rather than per packet.
+
 ## Current core cleanup gate
 
 Required deterministic checks:
