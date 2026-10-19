@@ -1,0 +1,8 @@
+{
+  "servers": {
+    "example": {
+      "command": "/absolute/path/to/trusted-mcp-server",
+      "args": []
+    }
+  }
+}

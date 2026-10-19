@@ -93,6 +93,8 @@ In shell mode, `command` is the entire script and `args` must be absent. Executi
 
 The executor prepares an invocation before approval, snapshots caller-owned arguments/environment overrides, and resolves the working directory. Approval displays that invocation and directory. Execution is permitted by an explicit action decision or an operator-selected session policy. The same prepared plan is then executed and recorded.
 
+Optional local stdio MCP servers follow this path as well. The worker can list a configured server's advertised tools, inspect one schema, and call one tool with JSON arguments. Starting a server, listing tools, describing a schema, and calling a tool each enter the ordinary review and evidence flow. Connections live only for the worker run; server configuration is local, and tool descriptions/results are untrusted input. A server is not a scope or sandbox boundary. The [MCP guide](runbooks/mcp.md) describes setup and present limits.
+
 Commands receive closed stdin. On Unix, processes run in a separate session; cancellation kills the owned process group. This is not a sandbox against a deliberately escaping process. The deployment environment still supplies isolation.
 
 ## Evidence and task completion

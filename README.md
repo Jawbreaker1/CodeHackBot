@@ -8,7 +8,7 @@
 
 BirdHackBot is an interactive penetration-testing harness built for Kali Linux. Describe a system or a security question in plain language. Its coordinator helps you choose a useful test, delegates independent work to specialist workers, and revises the plan as evidence arrives. You stay in the conversation, see what is running, and decide how much execution to approve.
 
-The goal is practical: find weaknesses, check whether they are real, and make the results clear enough to act on. Kali tools, browser automation, source inspection, CVE research, and task-specific guidance give each investigation the capabilities it needs.
+The goal is practical: find weaknesses, check whether they are real, and make the results clear enough to act on. Kali tools, browser automation, source inspection, CVE research, optional MCP integrations, and task-specific guidance give each investigation the capabilities it needs.
 
 [![Watch the 30-second BirdHackBot film](docs/media/birdhackbot-launch-poster.jpg)](docs/media/birdhackbot-launch.mp4)
 
@@ -67,6 +67,7 @@ The server binds to loopback by default and has no built-in authentication, targ
 | --- | --- |
 | [Web application](docs/runbooks/web-application.md) | Sessions, approvals, workers, browser work, and Analysis |
 | [Tool capabilities](docs/runbooks/tool-capabilities.md) | Kali commands, browser automation, research, and evidence |
+| [MCP integrations](docs/runbooks/mcp.md) | Connect an optional local MCP server to assessment workers |
 | [Architecture](docs/architecture.md) | Coordinator, worker, context, and evidence design |
 | [Kali installation](docs/runbooks/kali-installation.md) | Required platform setup and optional tools |
 | [PROJECT.md](PROJECT.md) | Repository structure, build, and test commands |

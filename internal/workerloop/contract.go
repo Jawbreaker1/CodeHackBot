@@ -17,28 +17,32 @@ type PlanUpdate struct {
 // A plan may accompany any decision. It never changes the original goal,
 // done condition, scope, permissions or remaining budget.
 type Response struct {
-	Type            string      `json:"type"`
-	Command         string      `json:"command,omitempty"`
-	Args            []string    `json:"args,omitempty"`
-	UseShell        bool        `json:"use_shell,omitempty"`
-	Scenario        string      `json:"scenario,omitempty"`
-	ArtifactDir     string      `json:"artifact_dir,omitempty"`
-	CVE             string      `json:"cve,omitempty"`
-	Module          string      `json:"module,omitempty"`
-	Impact          string      `json:"impact,omitempty"`
-	Target          string      `json:"target,omitempty"`
-	Risk            string      `json:"risk,omitempty"`
-	Artifacts       []string    `json:"artifacts,omitempty"`
-	Summary         string      `json:"summary,omitempty"`
-	LeadHints       []string    `json:"lead_hints,omitempty"`
-	Question        string      `json:"question,omitempty"`
-	Strategy        string      `json:"strategy,omitempty"`
-	ContextRef      string      `json:"context_ref,omitempty"`
-	ContextQuery    string      `json:"context_query,omitempty"`
-	ContextStream   string      `json:"context_stream,omitempty"`
-	ContextOffset   int64       `json:"context_offset,omitempty"`
-	ContextKeepRefs *[]string   `json:"context_keep_refs,omitempty"`
-	Plan            *PlanUpdate `json:"plan,omitempty"`
+	Type            string          `json:"type"`
+	Command         string          `json:"command,omitempty"`
+	Args            []string        `json:"args,omitempty"`
+	UseShell        bool            `json:"use_shell,omitempty"`
+	Scenario        string          `json:"scenario,omitempty"`
+	ArtifactDir     string          `json:"artifact_dir,omitempty"`
+	CVE             string          `json:"cve,omitempty"`
+	Module          string          `json:"module,omitempty"`
+	MCPServer       string          `json:"mcp_server,omitempty"`
+	MCPTool         string          `json:"mcp_tool,omitempty"`
+	MCPArguments    json.RawMessage `json:"mcp_arguments,omitempty"`
+	MCPOffset       int             `json:"mcp_offset,omitempty"`
+	Impact          string          `json:"impact,omitempty"`
+	Target          string          `json:"target,omitempty"`
+	Risk            string          `json:"risk,omitempty"`
+	Artifacts       []string        `json:"artifacts,omitempty"`
+	Summary         string          `json:"summary,omitempty"`
+	LeadHints       []string        `json:"lead_hints,omitempty"`
+	Question        string          `json:"question,omitempty"`
+	Strategy        string          `json:"strategy,omitempty"`
+	ContextRef      string          `json:"context_ref,omitempty"`
+	ContextQuery    string          `json:"context_query,omitempty"`
+	ContextStream   string          `json:"context_stream,omitempty"`
+	ContextOffset   int64           `json:"context_offset,omitempty"`
+	ContextKeepRefs *[]string       `json:"context_keep_refs,omitempty"`
+	Plan            *PlanUpdate     `json:"plan,omitempty"`
 }
 
 func ParseResponse(text string) (Response, error) {
@@ -78,6 +82,29 @@ func ParseResponse(text string) (Response, error) {
 		if err := validateMetasploitLookup(r); err != nil {
 			return r, err
 		}
+	case "mcp_list", "mcp_describe", "mcp_call":
+		if strings.TrimSpace(r.MCPServer) == "" {
+			return r, fmt.Errorf("MCP action requires mcp_server")
+		}
+		if r.MCPOffset < 0 || (r.Type != "mcp_list" && r.MCPOffset != 0) {
+			return r, fmt.Errorf("mcp_offset is only available for mcp_list and must be nonnegative")
+		}
+		if r.Type == "mcp_list" && r.MCPTool != "" || r.Type != "mcp_list" && strings.TrimSpace(r.MCPTool) == "" {
+			return r, fmt.Errorf("MCP tool name is required for describe/call and omitted for list")
+		}
+		if r.Type == "mcp_call" {
+			if strings.TrimSpace(r.Summary) == "" || strings.TrimSpace(r.Impact) == "" || strings.TrimSpace(r.Target) == "" {
+				return r, fmt.Errorf("mcp_call requires summary, impact, and target")
+			}
+			if r.Risk != "" && r.Risk != "low" && r.Risk != "dangerous" && r.Risk != "unknown" {
+				return r, fmt.Errorf("MCP execution risk must be low, dangerous, or unknown")
+			}
+			if len(r.MCPArguments) > 16<<10 || len(r.MCPArguments) > 0 && (r.MCPArguments[0] != '{' || !json.Valid(r.MCPArguments)) {
+				return r, fmt.Errorf("mcp_arguments must be a JSON object of at most 16 KiB")
+			}
+		} else if len(r.MCPArguments) > 0 || r.Impact != "" || r.Target != "" || r.Risk != "" {
+			return r, fmt.Errorf("only mcp_call accepts arguments and execution impact fields")
+		}
 	case "step_complete", "blocked":
 		if strings.TrimSpace(r.Summary) == "" {
 			return r, fmt.Errorf("%s summary is required", r.Type)
@@ -107,8 +134,11 @@ func ParseResponse(text string) (Response, error) {
 	default:
 		return r, fmt.Errorf("unsupported response type %q", r.Type)
 	}
-	if r.Type != "bash" && r.Type != "browser_run" && (r.Command != "" || len(r.Args) != 0 || r.UseShell || r.Impact != "" || r.Target != "" || r.Risk != "") {
+	if r.Type != "bash" && r.Type != "browser_run" && r.Type != "mcp_call" && (r.Command != "" || len(r.Args) != 0 || r.UseShell || r.Impact != "" || r.Target != "" || r.Risk != "") {
 		return r, fmt.Errorf("only execution actions may contain execution fields")
+	}
+	if r.Type == "mcp_call" && (r.Command != "" || len(r.Args) != 0 || r.UseShell) {
+		return r, fmt.Errorf("mcp_call uses a server, tool and arguments, not command or args")
 	}
 	if r.Type == "browser_run" && (r.Command != "" || len(r.Args) != 0 || r.UseShell) {
 		return r, fmt.Errorf("browser_run uses scenario and artifact_dir, not command or args")
@@ -118,6 +148,9 @@ func ParseResponse(text string) (Response, error) {
 	}
 	if r.Type != "metasploit_lookup" && (r.CVE != "" || r.Module != "") {
 		return r, fmt.Errorf("only metasploit_lookup may set cve or module")
+	}
+	if r.Type != "mcp_list" && r.Type != "mcp_describe" && r.Type != "mcp_call" && (r.MCPServer != "" || r.MCPTool != "" || len(r.MCPArguments) != 0 || r.MCPOffset != 0) {
+		return r, fmt.Errorf("only MCP actions may use MCP fields")
 	}
 	if r.Type != "bash" && r.Type != "browser_run" && len(r.Artifacts) != 0 {
 		return r, fmt.Errorf("only execution actions may declare artifacts")

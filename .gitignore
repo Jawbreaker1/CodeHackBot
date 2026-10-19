@@ -81,6 +81,7 @@
 # Local Codex scratch
 /.codex
 /config/model-profiles.local.json
+/config/mcp-servers.local.json
 
 # OS files
 .DS_Store

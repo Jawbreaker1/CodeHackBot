@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -99,16 +100,39 @@ func (e Executor) Plan(action Action) (Plan, error) {
 }
 
 func (e Executor) RunPlanned(ctx context.Context, plan Plan) (Result, error) {
-	started := time.Now().UTC()
-	if err := writeLogStart(plan.LogPath, plan, started); err != nil {
-		return Result{}, fmt.Errorf("write initial log: %w", err)
-	}
-
 	cmd := buildCommand(ctx, plan.Action)
 	if strings.TrimSpace(plan.Action.Cwd) != "" {
 		cmd.Dir = plan.Action.Cwd
 	}
 	cmd.Env = append(os.Environ(), flattenEnv(plan.Action.Env)...)
+	return e.runPlanned(ctx, plan, func(stdout, stderr io.Writer) error {
+		cmd.Stdout, cmd.Stderr = stdout, stderr
+		return cmd.Run()
+	})
+}
+
+// PlanRecorded reserves the same approval and log contract for a non-shell
+// tool call. The invocation must describe the exact server, tool and arguments.
+func (e Executor) PlanRecorded(invocation, cwd string) (Plan, error) {
+	plan, err := e.Plan(Action{Command: "mcp", Cwd: cwd})
+	if err != nil {
+		return Plan{}, err
+	}
+	plan.Requested, plan.ActualExec, plan.ExecutionMode = invocation, invocation, "mcp"
+	return plan, nil
+}
+
+// RunRecorded captures a tool callback in the ordinary execution log. The
+// caller owns the external tool session and must honor ctx cancellation.
+func (e Executor) RunRecorded(ctx context.Context, plan Plan, run func(io.Writer, io.Writer) error) (Result, error) {
+	return e.runPlanned(ctx, plan, run)
+}
+
+func (e Executor) runPlanned(ctx context.Context, plan Plan, run func(io.Writer, io.Writer) error) (Result, error) {
+	started := time.Now().UTC()
+	if err := writeLogStart(plan.LogPath, plan, started); err != nil {
+		return Result{}, fmt.Errorf("write initial log: %w", err)
+	}
 
 	stdoutPath, stderrPath := plan.LogPath+".stdout", plan.LogPath+".stderr"
 	stdout, err := os.OpenFile(stdoutPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
@@ -121,9 +145,7 @@ func (e Executor) RunPlanned(ctx context.Context, plan Plan) (Result, error) {
 		return Result{}, fmt.Errorf("create stderr evidence: %w", err)
 	}
 	defer stderr.Close()
-	cmd.Stdout, cmd.Stderr = stdout, stderr
-
-	runErr := cmd.Run()
+	runErr := run(stdout, stderr)
 	finished := time.Now().UTC()
 	exitStatus := exitCode(runErr)
 	if err := errors.Join(stdout.Sync(), stderr.Sync(), stdout.Close(), stderr.Close()); err != nil {

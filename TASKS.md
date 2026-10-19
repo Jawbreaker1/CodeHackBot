@@ -1,6 +1,6 @@
 # Tasks
 
-Updated 2026-10-13. This file owns immediate implementation order and status.
+Updated 2026-10-19. This file owns immediate implementation order and status.
 
 ## Agreed sequence
 
@@ -12,6 +12,8 @@ Updated 2026-10-13. This file owns immediate implementation order and status.
 The product remains orchestrator-first. The first two steps establish its shared engine and model access. Keep each implementation small, runnable, and tied to its done condition. Priority clarification, 2026-09-19: complete and accept the agentic worker first, then complete and accept the orchestrator structure, before expanding knowledge/source capabilities. Completed cleanup and provider checks do not establish full worker acceptance.
 
 ## Current priority: foundation acceptance and capability proof
+
+2026-10-19 optional MCP integration: workers can discover, inspect, and call tools on configured local stdio MCP servers. Server startup and every tool operation use the shared approval, logging, and context path; catalog pages are bounded and schemas are fetched one at a time. Synthetic process and worker tests cover discovery, calling, denied startup, and evidence. Full CI and Go race tests pass. In one live Daybreak CLI smoke, the model selected list → describe → call on a local echo server and reported the returned value from three recorded actions. REA itself, remote MCP transports, a management UI, and MCP image-artifact rendering remain unvalidated or unimplemented; see the [MCP guide](docs/runbooks/mcp.md).
 
 2026-10-13 analysis follow-up routing: a project-level recommendation had opened an arbitrary older assessment and placed the proposed step in its composer. The project button now creates a new draft session in the same project, with an editable, source-labeled summary and next-step request. A recommendation from one assessment still opens that assessment for continuation. Neither path sends the draft or starts tests automatically. The project route no longer requires the analysis model to choose a historical session ID.
 

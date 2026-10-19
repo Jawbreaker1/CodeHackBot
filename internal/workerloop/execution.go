@@ -4,14 +4,66 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/approval"
 	ctxpacket "github.com/Jawbreaker1/CodeHackBot/internal/context"
+	"github.com/Jawbreaker1/CodeHackBot/internal/execx"
 )
 
 func (l Loop) execute(ctx context.Context, current *ctxpacket.WorkerPacket, response Response) (bool, error) {
+	isMCP := response.Type == "mcp_list" || response.Type == "mcp_describe" || response.Type == "mcp_call"
+	var recorded func(io.Writer, io.Writer) error
+	if isMCP {
+		if l.MCP == nil || !l.MCP.HasServer(response.MCPServer) {
+			current.RunningSummary = "MCP action rejected before execution: server is not configured"
+			return false, l.capture(current.Budget.Used, "post-validation", *current)
+		}
+		invocation := "mcp " + response.Type + " " + response.MCPServer + " [server: " + l.MCP.LaunchSpec(response.MCPServer) + "]"
+		if response.MCPTool != "" {
+			invocation += "/" + response.MCPTool
+		}
+		if response.Type == "mcp_list" {
+			invocation += fmt.Sprintf(" offset=%d", response.MCPOffset)
+		}
+		if response.Type == "mcp_call" {
+			invocation += " arguments=" + string(response.MCPArguments)
+		}
+		response.Command = invocation
+		if response.Summary == "" {
+			response.Summary = "Inspect the configured MCP server's advertised tools."
+		}
+		if response.Target == "" {
+			response.Target = "MCP server " + response.MCPServer
+		}
+		if response.Impact == "" {
+			response.Impact = "Starts the configured local MCP server and reads its tool metadata. Server startup may have effects outside this request."
+		}
+		if response.Risk == "" {
+			response.Risk = "unknown"
+		}
+		recorded = func(stdout, stderr io.Writer) error {
+			var data []byte
+			var err error
+			switch response.Type {
+			case "mcp_list":
+				data, err = l.MCP.List(ctx, response.MCPServer, response.MCPOffset)
+			case "mcp_describe":
+				data, err = l.MCP.Describe(ctx, response.MCPServer, response.MCPTool)
+			case "mcp_call":
+				data, err = l.MCP.Call(ctx, response.MCPServer, response.MCPTool, response.MCPArguments)
+			}
+			if len(data) > 0 {
+				_, _ = stdout.Write(data)
+			}
+			if err != nil {
+				_, _ = fmt.Fprintln(stderr, err)
+			}
+			return err
+		}
+	}
 	if response.Type == "browser_run" {
 		prepared, failure := prepareBrowserRun(response, current.OperatorState.WorkingDir)
 		if failure != nil {
@@ -31,16 +83,21 @@ func (l Loop) execute(ctx context.Context, current *ctxpacket.WorkerPacket, resp
 	if err := l.emitWithRationale(EventActionProposed, *current, response.Command, response.Summary); err != nil {
 		return false, err
 	}
-	action, failure := prepareAction(response, current.OperatorState.WorkingDir)
-	if failure != nil {
-		// Validation failures never replace actual execution evidence.
-		current.RunningSummary = "Action rejected before execution: " + failure.OutputSummary
-		return false, l.capture(current.Budget.Used, "post-validation", *current)
-	}
 	if l.Approver == nil {
 		return false, fmt.Errorf("execution requires an approver")
 	}
-	plan, err := l.Executor.Plan(action)
+	var plan execx.Plan
+	var err error
+	if isMCP {
+		plan, err = l.Executor.PlanRecorded(response.Command, current.OperatorState.WorkingDir)
+	} else {
+		action, failure := prepareAction(response, current.OperatorState.WorkingDir)
+		if failure != nil {
+			current.RunningSummary = "Action rejected before execution: " + failure.OutputSummary
+			return false, l.capture(current.Budget.Used, "post-validation", *current)
+		}
+		plan, err = l.Executor.Plan(action)
+	}
 	if err != nil {
 		return false, fmt.Errorf("prepare execution: %w", err)
 	}
@@ -100,7 +157,13 @@ func (l Loop) execute(ctx context.Context, current *ctxpacket.WorkerPacket, resp
 	if err := l.emit(EventExecutionStarted, *current, "execution started"); err != nil {
 		return false, err
 	}
-	result, execErr := l.Executor.RunPlanned(ctx, plan)
+	var result execx.Result
+	var execErr error
+	if isMCP {
+		result, execErr = l.Executor.RunRecorded(ctx, plan, recorded)
+	} else {
+		result, execErr = l.Executor.RunPlanned(ctx, plan)
+	}
 	if execErr != nil && result.LogPath == "" {
 		return false, fmt.Errorf("execution evidence unavailable: %w", execErr)
 	}

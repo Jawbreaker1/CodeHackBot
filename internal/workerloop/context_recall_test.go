@@ -29,7 +29,9 @@ func TestRecallContextFindsOffloadedResultAndReadsRegisteredLog(t *testing.T) {
 		t.Fatal(err)
 	}
 	packet := ctxpacket.WorkerPacket{RelevantRecentResults: results}
-	const budget = 4500
+	// Leave room for the platform-dependent absolute temporary path while
+	// keeping the budget small enough to require offloading old results.
+	const budget = 5000
 	view, err := packet.ModelView(budget)
 	if err != nil {
 		t.Fatal(err)
