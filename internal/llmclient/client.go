@@ -237,6 +237,11 @@ type Completion struct {
 	FinishReason     string
 	RawResponse      string
 	Usage            json.RawMessage
+	// Request measurements describe the exact call that produced this result.
+	// Provider-reported prompt tokens remain separate: text bytes are not tokens.
+	RequestTextBytes       int
+	RequestAttachmentBytes int
+	RequestMessageCount    int
 }
 
 type chatResponse struct {
@@ -324,7 +329,7 @@ func (c Client) Complete(ctx context.Context, messages []Message, opts ChatOptio
 	inputBytes := 0
 	attachmentBytes := 0
 	for _, message := range messages {
-		inputBytes += len(message.Content)
+		inputBytes += len(message.Content) + len(message.ReasoningContent)
 		for _, attachment := range message.Attachments {
 			attachmentBytes += len(attachment.Data)
 		}
@@ -395,9 +400,14 @@ func (c Client) Complete(ctx context.Context, messages []Message, opts ChatOptio
 			return Completion{}, err
 		}
 	}
-	if c.OnCompletion != nil {
-		defer func() { c.OnCompletion(completion, completionErr) }()
-	}
+	defer func() {
+		completion.RequestTextBytes = inputBytes
+		completion.RequestAttachmentBytes = attachmentBytes
+		completion.RequestMessageCount = len(messages)
+		if c.OnCompletion != nil {
+			c.OnCompletion(completion, completionErr)
+		}
+	}()
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return Completion{}, fmt.Errorf("chat request: %w", err)

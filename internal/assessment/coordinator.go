@@ -415,10 +415,7 @@ func (c Coordinator) decide(ctx context.Context, root string, round, proposal in
 		}
 		completion, err := c.LLM.ChatStructuredCompletion(ctx, messages)
 		tokens := completion.PromptTokens()
-		if saveErr := saveJSON(stem+"-usage.json", struct {
-			RequestInputBytes   int `json:"request_input_bytes"`
-			ProviderInputTokens int `json:"provider_input_tokens,omitempty"`
-		}{used, tokens}); saveErr != nil {
+		if saveErr := saveJSON(stem+"-usage.json", requestUsage(c.LLM, completion, err, used)); saveErr != nil {
 			return Decision{}, fmt.Errorf("save coordinator request usage: %w", saveErr)
 		}
 		if c.ContextSnapshot != nil {

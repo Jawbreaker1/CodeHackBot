@@ -71,6 +71,10 @@ func (c Coordinator) runWorker(ctx context.Context, root string, state State, ta
 		if onCompletion != nil {
 			onCompletion(done, err)
 		}
+		path := filepath.Join(dir, "model-usage", fmt.Sprintf("call-%03d.json", progress.modelCalls))
+		if saveErr := saveJSON(path, requestUsage(client, done, err, 0)); saveErr != nil {
+			progress.persistErr = fmt.Errorf("save worker model usage: %w", saveErr)
+		}
 	}
 	loop := workerloop.Loop{LLM: client, Executor: execx.Executor{LogDir: filepath.Join(dir, "logs")}, Approver: c.Approver(task), Inspector: contextinspect.Recorder{Dir: filepath.Join(dir, "context")}, Progress: progress}
 	if c.AskUser != nil {

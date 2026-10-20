@@ -1,6 +1,6 @@
 # Tasks
 
-Updated 2026-10-19. This file owns immediate implementation order and status.
+Updated 2026-10-20. This file owns immediate implementation order and status.
 
 ## Agreed sequence
 
@@ -12,6 +12,8 @@ Updated 2026-10-19. This file owns immediate implementation order and status.
 The product remains orchestrator-first. The first two steps establish its shared engine and model access. Keep each implementation small, runnable, and tied to its done condition. Priority clarification, 2026-09-19: complete and accept the agentic worker first, then complete and accept the orchestrator structure, before expanding knowledge/source capabilities. Completed cleanup and provider checks do not establish full worker acceptance.
 
 ## Current priority: foundation acceptance and capability proof
+
+2026-10-20 context-to-tokens refactor, measurement stage: baseline commit `c9eada9` was pushed before changes. Coordinator and assessment-worker calls now save request text/attachment sizes, message count, model identity, and provider-reported input tokens when available, without copying prompt content into the usage record. The existing byte admission and lossless offload/recall behavior remain unchanged. Full CI, CLI/web smoke tests, and affected-package race tests passed. Next, compare measured provider usage across Daybreak and Qwen requests of different content types, run a token estimator in shadow mode against the complete request, and switch projection only after long-session and live-model regression gates pass. Do not use the existing bytes/4 display approximation as an admission rule.
 
 2026-10-19 optional MCP integration: workers can discover, inspect, and call tools on configured local stdio MCP servers. Server startup and every tool operation use the shared approval, logging, and context path; catalog pages are bounded and schemas are fetched one at a time. Synthetic process and worker tests cover discovery, calling, denied startup, and evidence. Full CI and Go race tests pass. In one live Daybreak CLI smoke, the model selected list → describe → call on a local echo server and reported the returned value from three recorded actions. REA itself, remote MCP transports, a management UI, and MCP image-artifact rendering remain unvalidated or unimplemented; see the [MCP guide](docs/runbooks/mcp.md).
 

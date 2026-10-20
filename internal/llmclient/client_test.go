@@ -32,9 +32,11 @@ func TestMessageAttachmentsUseMultimodalWireContent(t *testing.T) {
 	}))
 	defer server.Close()
 	client := Client{BaseURL: server.URL, Model: "vision", HTTPClient: server.Client()}
+	var measured Completion
+	client.OnCompletion = func(done Completion, _ error) { measured = done }
 	got, err := client.Chat(context.Background(), []Message{{Role: "user", Content: "inspect", Attachments: []Attachment{{Filename: "screen.png", MIMEType: "image/png", Data: bytes.Repeat([]byte{0x01}, 4)}}}})
-	if err != nil || got != "seen" {
-		t.Fatalf("Chat() = %q, %v", got, err)
+	if err != nil || got != "seen" || measured.RequestTextBytes != len("inspect") || measured.RequestAttachmentBytes != 4 || measured.RequestMessageCount != 1 {
+		t.Fatalf("Chat() = %q, %v; measured=%+v", got, err, measured)
 	}
 }
 
@@ -56,6 +58,7 @@ func TestRequestLimitAndIncompleteControlOutput(t *testing.T) {
 
 func TestStructuredChatRetriesOneTransientFailureAndAccountsForBothRequests(t *testing.T) {
 	requests, reserved, completed := 0, 0, 0
+	var measurements []Completion
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
 		if requests == 1 {
@@ -67,9 +70,9 @@ func TestStructuredChatRetriesOneTransientFailureAndAccountsForBothRequests(t *t
 	defer server.Close()
 	client := Client{BaseURL: server.URL, Model: "fixture"}
 	client.BeforeRequest = func(context.Context) error { reserved++; return nil }
-	client.OnCompletion = func(Completion, error) { completed++ }
+	client.OnCompletion = func(done Completion, _ error) { completed++; measurements = append(measurements, done) }
 	answer, err := client.ChatStructured(context.Background(), []Message{{Role: "user", Content: "decide"}})
-	if err != nil || answer != `{"reply":"ready"}` || requests != 2 || reserved != 2 || completed != 2 {
+	if err != nil || answer != `{"reply":"ready"}` || requests != 2 || reserved != 2 || completed != 2 || len(measurements) != 2 || measurements[0].RequestTextBytes != len("decide") || measurements[1].RequestTextBytes != len("decide") {
 		t.Fatalf("answer=%q err=%v requests=%d reserved=%d completed=%d", answer, err, requests, reserved, completed)
 	}
 }
@@ -81,7 +84,7 @@ func TestStructuredCompletionPreservesProviderInputTokens(t *testing.T) {
 	defer server.Close()
 	client := Client{BaseURL: server.URL, Model: "fixture"}
 	completion, err := client.ChatStructuredCompletion(context.Background(), []Message{{Role: "user", Content: "decide"}})
-	if err != nil || completion.Text != "ready" || completion.PromptTokens() != 42 {
+	if err != nil || completion.Text != "ready" || completion.PromptTokens() != 42 || completion.RequestTextBytes != len("decide") || completion.RequestMessageCount != 1 || completion.RequestAttachmentBytes != 0 {
 		t.Fatalf("completion=%+v err=%v", completion, err)
 	}
 	for _, raw := range []json.RawMessage{nil, []byte(`{}`), []byte(`{"prompt_tokens":-1}`), []byte(`{"prompt_tokens":"unknown"}`)} {

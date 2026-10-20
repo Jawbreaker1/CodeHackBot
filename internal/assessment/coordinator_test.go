@@ -181,13 +181,16 @@ func TestCoordinatorSavesMeasuredRequestAndProviderTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 	var usage struct {
-		RequestInputBytes   int `json:"request_input_bytes"`
-		ProviderInputTokens int `json:"provider_input_tokens"`
+		RequestInputBytes   int    `json:"request_input_bytes"`
+		ProviderInputTokens int    `json:"provider_input_tokens"`
+		RequestMessageCount int    `json:"request_message_count"`
+		Model               string `json:"model"`
+		Succeeded           bool   `json:"succeeded"`
 	}
 	if err := json.Unmarshal(usageData, &usage); err != nil {
 		t.Fatal(err)
 	}
-	if usage.RequestInputBytes != used || usage.ProviderInputTokens != 321 || len(snapshots) != 2 || snapshots[0] != [3]int{used, coordinator.LLM.InputByteLimit(), 0} || snapshots[1] != [3]int{used, coordinator.LLM.InputByteLimit(), 321} {
+	if usage.RequestInputBytes != used || usage.ProviderInputTokens != 321 || usage.RequestMessageCount != len(messages) || usage.Model != "fixture-model" || !usage.Succeeded || len(snapshots) != 2 || snapshots[0] != [3]int{used, coordinator.LLM.InputByteLimit(), 0} || snapshots[1] != [3]int{used, coordinator.LLM.InputByteLimit(), 321} {
 		t.Fatalf("request telemetry mismatch: saved=%+v snapshots=%+v request_bytes=%d", usage, snapshots, used)
 	}
 }
@@ -677,9 +680,18 @@ func TestRecoverableWorkerFailureReachesNextPlanningRound(t *testing.T) {
 	defer server.Close()
 	coordinator := testCoordinator(server.URL)
 	coordinator.Limits = Limits{Workers: 1, Rounds: 2, Tasks: 2, StepsPerTask: 1, ModelCalls: 8}
-	state, err := coordinator.Run(context.Background(), t.TempDir(), "record a fixture observation", "synthetic fixture only")
+	root := t.TempDir()
+	state, err := coordinator.Run(context.Background(), root, "record a fixture observation", "synthetic fixture only")
 	if err != nil || state.Status != "completed_with_gaps" || len(state.Results) != 1 || state.Results[0].Status != "blocked" || len(state.Plans) != 2 {
 		t.Fatalf("worker failure stopped adaptation: state=%+v err=%v", state, err)
+	}
+	usageData, err := os.ReadFile(filepath.Join(root, "tasks", "first-attempt", "model-usage", "call-001.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var usage modelRequestUsage
+	if err := json.Unmarshal(usageData, &usage); err != nil || usage.Model != "fixture-model" || usage.RequestInputBytes == 0 || usage.RequestMessageCount == 0 || !usage.Succeeded {
+		t.Fatalf("worker usage record=%+v err=%v", usage, err)
 	}
 }
 
