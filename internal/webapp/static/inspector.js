@@ -389,11 +389,14 @@ export function renderWorkers(view, act, watch, showBrowser) {
     for (const q of questions) card.append(questionNode(q, act));
     const details = node('div');
     details.append(node('div', 'action-label', 'Task objective'), node('p', 'worker-detail', w.goal));
-    details.append(grid([
+    const workerFacts = [
       ['Model', view.model || 'Not reported'], ['Remaining budget', w.remaining_budget || 'Not reported'],
-      ['Context window', contextLabel(w)], ['Context remaining', w.context_limit_bytes ? formatBytes(Math.max(0, w.context_limit_bytes - w.context_used_bytes)) : 'Not reported'], ['Dependencies', (w.depends_on || []).join(', ') || 'None'],
-      ['Last exit', w.exit_status || '—'], ['Updated', w.updated_at ? new Date(w.updated_at).toLocaleTimeString() : '—'],
-    ]));
+      ['Input budget (bytes)', contextLabel(w)],
+      ['Remaining bytes', w.context_limit_bytes ? formatBytes(Math.max(0, w.context_limit_bytes - w.context_used_bytes)) : 'Not reported'],
+    ];
+    if (w.provider_input_tokens > 0) workerFacts.push(['Provider input tokens', `${Number(w.provider_input_tokens).toLocaleString()} · last completed request`]);
+    workerFacts.push(['Dependencies', (w.depends_on || []).join(', ') || 'None'], ['Last exit', w.exit_status || '—'], ['Updated', w.updated_at ? new Date(w.updated_at).toLocaleTimeString() : '—']);
+    details.append(grid(workerFacts));
     if (w.action) details.append(node('div', 'action-label', phase === 'execution_started' ? 'Running invocation' : 'Latest invocation'), node('pre', 'command', w.action));
     if (w.rationale) details.append(disclosure('Model summary', node('p', 'pre-wrap', w.rationale), 'worker-rationale-' + w.id));
     if (w.done_when) details.append(node('div', 'action-label', 'Completion criteria'), node('p', '', w.done_when));

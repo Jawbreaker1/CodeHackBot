@@ -70,6 +70,7 @@ type Event struct {
 	ContextUsedBytes    int                      `json:"context_used_bytes,omitempty"`
 	ContextLimitBytes   int                      `json:"context_limit_bytes,omitempty"`
 	ContextUsagePercent int                      `json:"context_usage_percent,omitempty"`
+	ProviderInputTokens int                      `json:"provider_input_tokens,omitempty"`
 	ModelCalls          int                      `json:"model_calls,omitempty"`
 	PlanSteps           []string                 `json:"plan_steps,omitempty"`
 	PlanSummary         string                   `json:"plan_summary,omitempty"`

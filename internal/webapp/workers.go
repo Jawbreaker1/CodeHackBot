@@ -36,6 +36,7 @@ type workerView struct {
 	ContextUsedBytes    int                       `json:"context_used_bytes,omitempty"`
 	ContextLimitBytes   int                       `json:"context_limit_bytes,omitempty"`
 	ContextUsagePercent int                       `json:"context_usage_percent,omitempty"`
+	ProviderInputTokens int                       `json:"provider_input_tokens,omitempty"`
 	ModelCalls          int                       `json:"model_calls"`
 	UpdatedAt           time.Time                 `json:"updated_at"`
 }
@@ -113,6 +114,7 @@ func (r *run) updateWorker(e assessment.Event) {
 	}
 	if e.ContextUsedBytes > 0 {
 		w.ContextUsedBytes = e.ContextUsedBytes
+		w.ProviderInputTokens = e.ProviderInputTokens
 	}
 	if e.ContextLimitBytes > 0 {
 		w.ContextLimitBytes = e.ContextLimitBytes

@@ -31,6 +31,20 @@ func TestAssessmentDashboardKeepsTerminalStatesVisible(t *testing.T) {
 	}
 }
 
+func TestAssessmentDashboardLabelsBytesAndReportedTokens(t *testing.T) {
+	d := newAssessmentDashboard()
+	d.apply(assessment.Event{TaskID: "inspect", Kind: "decision_started", ContextUsage: "10 KiB / 96 KiB", ContextUsedBytes: 10240})
+	d.apply(assessment.Event{TaskID: "inspect", Kind: "plan_finished", ContextUsage: "10 KiB / 96 KiB", ContextUsedBytes: 10240, ProviderInputTokens: 2310})
+	joined := strings.Join(d.compactSnapshot(), "\n")
+	if !strings.Contains(joined, "input bytes") || !strings.Contains(joined, "2310 tokens") {
+		t.Fatalf("context units unclear: %s", joined)
+	}
+	d.apply(assessment.Event{TaskID: "inspect", Kind: "decision_started", ContextUsage: "20 KiB / 96 KiB", ContextUsedBytes: 20480})
+	if strings.Contains(strings.Join(d.compactSnapshot(), "\n"), "2310 tokens") {
+		t.Fatal("old provider token count shown for a new request")
+	}
+}
+
 func TestDashboardTextCompactsMultilineMessages(t *testing.T) {
 	if got := dashboardText("one\ntwo\nthree", 50); got != "one two three" {
 		t.Fatalf("dashboard text = %q", got)

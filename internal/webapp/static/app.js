@@ -441,16 +441,16 @@ function renderOverview(view) {
     $('contextUsageLabel').textContent = context.used_bytes ? formatBytes(context.used_bytes) + ' / ' + formatBytes(context.limit_bytes) : 'No request yet';
     $('contextFill').style.width = percent + '%';
     $('contextFill').dataset.state = percent >= 90 ? 'high' : percent >= 75 ? 'warm' : '';
-    const providerTokens = context.provider_input_tokens > 0 ? ` · provider reported ${Number(context.provider_input_tokens).toLocaleString()} input tokens` : '';
-    $('contextUsageDetail').textContent = context.used_bytes ? `${context.active ? 'Current' : 'Last saved'} request · ${percent}% of app input limit${providerTokens}` : 'Waiting for coordinator request';
+    const providerTokens = context.provider_input_tokens > 0 ? ` · ${Number(context.provider_input_tokens).toLocaleString()} input tokens reported for the last completed request` : '';
+    $('contextUsageDetail').textContent = context.used_bytes ? `${context.active ? 'Current' : 'Last saved'} request · ${percent}% of app byte limit${providerTokens}` : 'Waiting for coordinator request';
     const agents = view.context_windows || [context];
     if (changed('context-breakdown', [view.id, agents])) {
-      const intro = node('p', 'context-explainer', 'Coordinator and current workers have separate contexts. Finished worker packets stay in Context for debugging. The percentage uses the app byte limit. A provider token count appears only when reported for the last completed request.');
+      const intro = node('p', 'context-explainer', 'Coordinator and current workers have separate contexts. The percentage still uses the app byte limit. Token counts come from the provider after a completed request; there is no token-limit percentage yet. Finished worker packets remain in Context for debugging.');
       const rows = agents.map(agent => {
         const row = node('div', 'context-agent');
         const name = node('span', 'context-agent-name', agent.role === 'worker' ? `Worker · ${agent.agent_id}` : 'Coordinator');
         const state = node('span', 'context-agent-status', agent.status === 'interrupted' ? 'Interrupted' : agent.status === 'waiting' ? 'Waiting for workers' : agent.status === 'thinking' ? 'Thinking' : agent.status === 'finished' ? 'Finished' : agent.status === 'idle' ? 'Idle' : phaseLabel(agent.status));
-        const measure = node('span', 'context-agent-measure', agent.used_bytes ? `${agent.active ? 'Current' : 'Last saved'} · ${formatBytes(agent.used_bytes)} / ${formatBytes(agent.limit_bytes)} · ${agent.percent}%${agent.provider_input_tokens > 0 ? ` · ${Number(agent.provider_input_tokens).toLocaleString()} input tokens reported` : ''}` : 'No request yet');
+        const measure = node('span', 'context-agent-measure', agent.used_bytes ? `${agent.active ? 'Current' : 'Last saved'} · ${formatBytes(agent.used_bytes)} / ${formatBytes(agent.limit_bytes)} app bytes · ${agent.percent}%${agent.provider_input_tokens > 0 ? ` · ${Number(agent.provider_input_tokens).toLocaleString()} provider input tokens` : ''}` : 'No request yet');
         row.append(name, state, measure);
         return row;
       });

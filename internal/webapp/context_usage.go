@@ -127,7 +127,9 @@ func agentContextWindows(state assessment.State, coordinator contextWindowView, 
 			workerLimit = state.MaxInputBytes
 		}
 		active := worker.Phase != "approval_required" && worker.Phase != "user_question" && worker.Phase != "waiting_user"
-		all = append(all, measuredContext(worker.ContextUsedBytes, workerLimit, "worker", worker.ID, worker.Phase, active))
+		entry := measuredContext(worker.ContextUsedBytes, workerLimit, "worker", worker.ID, worker.Phase, active)
+		entry.ProviderInputTokens = worker.ProviderInputTokens
+		all = append(all, entry)
 	}
 	return primary, all
 }

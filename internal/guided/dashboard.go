@@ -9,17 +9,18 @@ import (
 )
 
 type dashboardTask struct {
-	id         string
-	goal       string
-	doneWhen   string
-	dependsOn  []string
-	status     string
-	phase      string
-	detail     string
-	step       int
-	evidence   int
-	budget     string
-	contextUse string
+	id            string
+	goal          string
+	doneWhen      string
+	dependsOn     []string
+	status        string
+	phase         string
+	detail        string
+	step          int
+	evidence      int
+	budget        string
+	contextUse    string
+	contextTokens int
 }
 
 // assessmentDashboard is a presentation-only projection of coordinator
@@ -74,6 +75,9 @@ func (d *assessmentDashboard) apply(e assessment.Event) []string {
 	}
 	if e.ContextUsage != "" && e.ContextUsage != "(unset)" {
 		task.contextUse = e.ContextUsage
+	}
+	if e.ContextUsedBytes > 0 {
+		task.contextTokens = e.ProviderInputTokens
 	}
 	if e.Message != "" {
 		task.detail = e.Message
@@ -150,7 +154,10 @@ func (d *assessmentDashboard) compactSnapshot() []string {
 		lines = append(lines, dashboardText(task.id, 22)+" · "+task.status)
 		lines = append(lines, "  "+dashboardText(task.phase, 28))
 		if task.contextUse != "" {
-			lines = append(lines, "  context "+dashboardText(task.contextUse, 25))
+			lines = append(lines, "  input bytes "+dashboardText(task.contextUse, 25))
+			if task.contextTokens > 0 {
+				lines = append(lines, fmt.Sprintf("  provider input %d tokens (last completed request)", task.contextTokens))
+			}
 		}
 	}
 	return lines
@@ -185,7 +192,10 @@ func (d *assessmentDashboard) eventLine(task *dashboardTask) string {
 	}
 	contextUse := ""
 	if task.contextUse != "" {
-		contextUse = " context " + dashboardText(task.contextUse, 12)
+		contextUse = " input bytes " + dashboardText(task.contextUse, 12)
+		if task.contextTokens > 0 {
+			contextUse += fmt.Sprintf(" · %d provider tokens", task.contextTokens)
+		}
 	}
 	return fmt.Sprintf("  %-12s %-8s %-25s step %-3s budget %-9s evidence %-2d depends %-12s%s %s", task.id, task.status, task.phase, step, dashboardText(budget, 9), task.evidence, dashboardText(depends, 12), contextUse, detail)
 }

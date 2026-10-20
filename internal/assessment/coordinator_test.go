@@ -650,6 +650,8 @@ func TestCoordinatorDelegatesThenValidatesWithSharedBudgetAndEvidence(t *testing
 
 func TestRecoverableWorkerFailureReachesNextPlanningRound(t *testing.T) {
 	var coordinatorCalls int
+	var sawWorkerTokens atomic.Bool
+	var misattributedTokens atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Messages []llmclient.Message `json:"messages"`
@@ -675,10 +677,18 @@ func TestRecoverableWorkerFailureReachesNextPlanningRound(t *testing.T) {
 			return
 		}
 		// An invalid worker decision is a recorded, recoverable worker outcome.
-		reply(w, map[string]string{"type": "not-a-worker-decision"})
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"not-a-worker-decision\"}"}}],"usage":{"prompt_tokens":13,"total_tokens":20}}`))
 	}))
 	defer server.Close()
 	coordinator := testCoordinator(server.URL)
+	coordinator.Emit = func(e Event) {
+		if e.TaskID == "first-attempt" && e.Kind == "decision_started" && e.ProviderInputTokens > 0 {
+			misattributedTokens.Store(true)
+		}
+		if e.TaskID == "first-attempt" && e.ProviderInputTokens == 13 && e.ContextUsedBytes > 0 {
+			sawWorkerTokens.Store(true)
+		}
+	}
 	coordinator.Limits = Limits{Workers: 1, Rounds: 2, Tasks: 2, StepsPerTask: 1, ModelCalls: 8}
 	root := t.TempDir()
 	state, err := coordinator.Run(context.Background(), root, "record a fixture observation", "synthetic fixture only")
@@ -690,7 +700,7 @@ func TestRecoverableWorkerFailureReachesNextPlanningRound(t *testing.T) {
 		t.Fatal(err)
 	}
 	var usage modelRequestUsage
-	if err := json.Unmarshal(usageData, &usage); err != nil || usage.Model != "fixture-model" || usage.RequestInputBytes == 0 || usage.RequestMessageCount == 0 || !usage.Succeeded {
+	if err := json.Unmarshal(usageData, &usage); err != nil || usage.Model != "fixture-model" || usage.RequestInputBytes == 0 || usage.RequestMessageCount == 0 || usage.ProviderInputTokens != 13 || !usage.Succeeded || !sawWorkerTokens.Load() || misattributedTokens.Load() {
 		t.Fatalf("worker usage record=%+v err=%v", usage, err)
 	}
 }

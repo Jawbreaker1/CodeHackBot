@@ -68,6 +68,8 @@ func (c Coordinator) runWorker(ctx context.Context, root string, state State, ta
 	onCompletion := client.OnCompletion
 	client.OnCompletion = func(done llmclient.Completion, err error) {
 		progress.modelCalls++
+		progress.lastRequestInputBytes = done.RequestTextBytes
+		progress.lastProviderInputTokens = done.PromptTokens()
 		if onCompletion != nil {
 			onCompletion(done, err)
 		}
@@ -236,14 +238,16 @@ func isReusableHelperArtifact(path, tasksRoot, taskID string) bool {
 }
 
 type workerProgress struct {
-	coordinator      Coordinator
-	task             Task
-	statePath, model string
-	maxSteps         int
-	seen             map[string]bool
-	evidence         []ctxpacket.ExecutionResult
-	persistErr       error
-	modelCalls       int
+	coordinator             Coordinator
+	task                    Task
+	statePath, model        string
+	maxSteps                int
+	seen                    map[string]bool
+	evidence                []ctxpacket.ExecutionResult
+	persistErr              error
+	modelCalls              int
+	lastRequestInputBytes   int
+	lastProviderInputTokens int
 }
 
 func (p *workerProgress) save(packet ctxpacket.WorkerPacket, status, summary, failure string) error {
@@ -261,6 +265,10 @@ func (p *workerProgress) EmitProgress(event workerloop.ProgressEvent, packet ctx
 	if err := p.save(packet, packet.TaskRuntime.State, packet.RunningSummary, ""); err != nil {
 		p.persistErr = fmt.Errorf("persist worker %s: %w", p.task.ID, err)
 		return p.persistErr
+	}
+	providerTokens := 0
+	if event.Kind != workerloop.EventDecisionStarted && event.ContextUsedBytes > 0 && event.ContextUsedBytes == p.lastRequestInputBytes {
+		providerTokens = p.lastProviderInputTokens
 	}
 	p.coordinator.emit(Event{
 		TaskID:              p.task.ID,
@@ -280,6 +288,7 @@ func (p *workerProgress) EmitProgress(event workerloop.ProgressEvent, packet ctx
 		ContextUsedBytes:    event.ContextUsedBytes,
 		ContextLimitBytes:   event.ContextLimitBytes,
 		ContextUsagePercent: event.ContextUsagePercent,
+		ProviderInputTokens: providerTokens,
 		ModelCalls:          p.modelCalls,
 		PlanSteps:           append([]string(nil), packet.PlanState.Steps...),
 		PlanSummary:         packet.PlanState.Summary,

@@ -387,11 +387,11 @@ func TestServerRejectsDeletingRunningSession(t *testing.T) {
 func TestAgentContextWindowsKeepCoordinatorAndWorkersSeparate(t *testing.T) {
 	state := assessment.State{MaxInputBytes: 1000}
 	primary, all := agentContextWindows(state, contextWindowView{UsedBytes: 350, LimitBytes: 1000, ProviderInputTokens: 72}, []workerView{
-		{ID: "worker-a", Phase: "decision_started", ContextUsedBytes: 100, ContextLimitBytes: 1000},
+		{ID: "worker-a", Phase: "decision_started", ContextUsedBytes: 100, ContextLimitBytes: 1000, ProviderInputTokens: 28},
 		{ID: "worker-b", Phase: "execution_started", ContextUsedBytes: 250, ContextLimitBytes: 1000},
 		{ID: "finished", Phase: "done", ContextUsedBytes: 900, ContextLimitBytes: 1000},
 	}, "running", true, false, nil)
-	if primary.Role != "coordinator" || primary.UsedBytes != 350 || primary.Percent != 35 || primary.ProviderInputTokens != 72 || len(all) != 3 || all[1].WorkerID != "worker-a" || all[1].UsedBytes != 100 || all[2].WorkerID != "worker-b" || all[2].UsedBytes != 250 {
+	if primary.Role != "coordinator" || primary.UsedBytes != 350 || primary.Percent != 35 || primary.ProviderInputTokens != 72 || len(all) != 3 || all[1].WorkerID != "worker-a" || all[1].UsedBytes != 100 || all[1].ProviderInputTokens != 28 || all[2].WorkerID != "worker-b" || all[2].UsedBytes != 250 {
 		t.Fatalf("agent context windows were mixed: primary=%+v all=%+v", primary, all)
 	}
 	_, all = agentContextWindows(state, primary, []workerView{{ID: "waiting", Phase: "approval_required", ContextUsedBytes: 450}}, "running", true, false, nil)
