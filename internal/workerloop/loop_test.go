@@ -196,6 +196,38 @@ func TestModelRequestFitsAfterRecallWithLongConversation(t *testing.T) {
 	}
 }
 
+func TestWorkerProjectionUsesCompleteRequestTokenBudget(t *testing.T) {
+	packet := ctxpacket.NewInitialWorkerPacket(behavior.Frame{SystemPrompt: "fixture policy"}, testFoundation(), t.TempDir(), "fixture", "per_action", 20)
+	for i := 0; i < 12; i++ {
+		packet.RelevantRecentResults = append(packet.RelevantRecentResults, ctxpacket.ExecutionResult{
+			Action: fmt.Sprintf("inspect %d", i), OutputEvidence: strings.Repeat("saved observation ", 90),
+			LogRefs: []string{fmt.Sprintf("/logs/%d", i)},
+		})
+	}
+	count := func(messages []llmclient.Message) int {
+		return 12 + len(strings.Fields(messages[0].Content)) + len(strings.Fields(messages[1].Content))
+	}
+	full, err := packet.ModelView(1 << 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fullTokens := count([]llmclient.Message{{Role: "system", Content: full.BehaviorFrame.PromptText()}, {Role: "user", Content: buildUserPrompt(full)}})
+	loop := Loop{LLM: llmclient.Client{MaxInputBytes: 1 << 20, MaxInputTokens: fullTokens - 150, CountInputTokens: count}}
+	view, err := loop.modelView(&packet, buildUserPrompt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := []llmclient.Message{{Role: "system", Content: view.BehaviorFrame.PromptText()}, {Role: "user", Content: buildUserPrompt(view)}}
+	if count(request) > loop.LLM.MaxInputTokens || len(view.ContextNotes) == 0 || view.SessionFoundation.Goal != packet.SessionFoundation.Goal || len(packet.RelevantRecentResults) != 12 {
+		t.Fatalf("token projection lost the task or exceeded input budget: tokens=%d limit=%d", count(request), loop.LLM.MaxInputTokens)
+	}
+	loop.LLM.MaxInputTokens = fullTokens + 100
+	restored, err := loop.modelView(&packet, buildUserPrompt)
+	if err != nil || len(restored.RelevantRecentResults) != 12 || len(restored.ContextNotes) != 0 {
+		t.Fatalf("measured pressure permanently removed saved worker results: %v", err)
+	}
+}
+
 func TestProgressReviewReachesWorkerAndExecutionResetsIt(t *testing.T) {
 	plan := `{"type":"update_plan","plan":{"summary":"Review the fixture","steps":["inspect"],"active_step":"inspect"}}`
 	loop, packet, _ := fixtureWorker(t, 4, plan, plan, printAction, `{"type":"step_complete","summary":"Fixture observed"}`, completeEval)

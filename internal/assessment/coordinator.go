@@ -383,7 +383,7 @@ func roundUpdate(round int, d Decision) string {
 // budget. Nothing from the rejected proposal executes or becomes evidence.
 func (c Coordinator) decide(ctx context.Context, root string, round, proposal int, state State) (Decision, error) {
 	systemPrompt := c.Frame.PromptText()
-	prompt, err := coordinatorPromptBounded(state, c.LLM.InputByteLimit()-len(systemPrompt))
+	prompt, err := c.boundedPlanningPrompt(state, systemPrompt, "", "")
 	if err != nil {
 		return Decision{}, err
 	}
@@ -443,7 +443,7 @@ func (c Coordinator) decide(ctx context.Context, root string, round, proposal in
 					c.emit(Event{Kind: "planning", Message: "A material observation may be missing from the proposed plan; checking it before review."})
 					correction := fmt.Sprintf("An independent planning review found a possibly material, observed question missing from the proposal. This review is advice, not new evidence or permission. Reconsider the next tasks and open leads against the saved assessment and exact operator scope. Rank the questions and propose at most %d worker tasks this round; replace a lower-value task or defer it with a concrete reason rather than adding every check. Either assign a bounded, in-scope check or explicitly explain why the question must remain untested; do not claim the suggested weakness is confirmed. Review:\n%s", state.Limits.Workers, omission)
 					previous := promptExcerpt(text, 4096)
-					prompt, promptErr := coordinatorPromptBounded(state, c.LLM.InputByteLimit()-len(systemPrompt)-len(previous)-len(correction))
+					prompt, promptErr := c.boundedPlanningPrompt(state, systemPrompt, previous, correction)
 					if promptErr != nil {
 						return d, nil
 					}
@@ -477,13 +477,43 @@ func (c Coordinator) decide(ctx context.Context, root string, round, proposal in
 			correction += leadCorrectionContext(state, d)
 		}
 		previous := promptExcerpt(text, 4096)
-		prompt, promptErr := coordinatorPromptBounded(state, c.LLM.InputByteLimit()-len(systemPrompt)-len(previous)-len(correction))
+		prompt, promptErr := c.boundedPlanningPrompt(state, systemPrompt, previous, correction)
 		if promptErr != nil {
 			return Decision{}, promptErr
 		}
 		messages = []llmclient.Message{{Role: "system", Content: systemPrompt}, {Role: "user", Content: prompt}, {Role: "assistant", Content: previous}, {Role: "user", Content: correction}}
 	}
 	panic("unreachable")
+}
+
+// boundedPlanningPrompt measures the full outgoing request when a model
+// preflight counter is configured. The byte-only path remains unchanged for
+// providers without one; both paths use the same compaction order.
+func (c Coordinator) boundedPlanningPrompt(state State, system, previous, correction string) (string, error) {
+	if c.LLM.MaxInputTokens == 0 {
+		return coordinatorPromptBounded(state, c.LLM.InputByteLimit()-len(system)-len(previous)-len(correction))
+	}
+	if c.LLM.CountInputTokens == nil {
+		return "", fmt.Errorf("coordinator token budget requires a preflight counter")
+	}
+	var measureErr error
+	measure := func(prompt string) int {
+		messages := []llmclient.Message{{Role: "system", Content: system}, {Role: "user", Content: prompt}}
+		if previous != "" || correction != "" {
+			messages = append(messages, llmclient.Message{Role: "assistant", Content: previous}, llmclient.Message{Role: "user", Content: correction})
+		}
+		units, err := c.LLM.InputPressure(messages)
+		if err != nil {
+			measureErr = err
+			return llmclient.InputBudgetUnits + 1
+		}
+		return units
+	}
+	prompt, err := coordinatorPromptMeasured(state, llmclient.InputBudgetUnits, measure)
+	if measureErr != nil {
+		return "", measureErr
+	}
+	return prompt, err
 }
 
 func (c Coordinator) publish(state State) {

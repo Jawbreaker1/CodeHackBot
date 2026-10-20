@@ -107,6 +107,36 @@ func TestModelViewPreservesEvidenceAndPlansWithHeadroom(t *testing.T) {
 	}
 }
 
+func TestModelViewMeasuredUsesRequestUnitsAndRestoresHistory(t *testing.T) {
+	p := NewInitialWorkerPacket(behavior.Frame{SystemPrompt: "policy"}, session.Foundation{Goal: "review saved evidence"}, "/tmp", "fixture", "per_action", 20)
+	p.RecentConversation = []string{"User: Keep the original observation in view.", "Assistant: I will inspect it."}
+	for i := 0; i < 48; i++ {
+		p.RelevantRecentResults = append(p.RelevantRecentResults, ExecutionResult{
+			Action: fmt.Sprintf("read observation %d", i), OutputEvidence: strings.Repeat("recorded detail ", 80),
+			LogRefs: []string{fmt.Sprintf("/logs/%d", i)},
+		})
+		p.RecentConversation = append(p.RecentConversation, fmt.Sprintf("User: review item %d", i), "Assistant: noted with the saved evidence reference")
+	}
+	// This fixture stands in for a model tokenizer. Its units deliberately
+	// differ from bytes, so a byte-only implementation cannot pass the roomy
+	// assertion by accident.
+	requestUnits := func(v WorkerPacket) int { return 40 + len(strings.Fields(v.Render())) }
+	roomyLimit := requestUnits(p) + 100
+	roomy, err := p.ModelViewMeasured(roomyLimit, requestUnits)
+	if err != nil || len(roomy.RelevantRecentResults) != 48 || len(roomy.ContextNotes) != 0 || len(roomy.Render()) <= roomyLimit {
+		t.Fatalf("measured headroom was treated as bytes: err=%v results=%d notes=%v", err, len(roomy.RelevantRecentResults), roomy.ContextNotes)
+	}
+	tightLimit := requestUnits(roomy) - 120
+	tight, err := p.ModelViewMeasured(tightLimit, requestUnits)
+	if err != nil || requestUnits(tight) > tightLimit || len(tight.ContextNotes) == 0 || tight.SessionFoundation.Goal != p.SessionFoundation.Goal {
+		t.Fatalf("measured pressure did not preserve the contract: err=%v size=%d limit=%d", err, requestUnits(tight), tightLimit)
+	}
+	restored, err := p.ModelViewMeasured(roomyLimit, requestUnits)
+	if err != nil || len(restored.RelevantRecentResults) != 48 || len(restored.ContextNotes) != 0 || len(p.RelevantRecentResults) != 48 || len(restored.RecentConversation) != len(p.RecentConversation) {
+		t.Fatal("a measured projection changed durable history")
+	}
+}
+
 func TestModelViewAvoidsRepeatingLongShellInvocation(t *testing.T) {
 	p := NewInitialWorkerPacket(behavior.Frame{SystemPrompt: "policy"}, session.Foundation{Goal: "inspect fixture"}, "/tmp", "fixture", "per_action", 10)
 	script := "printf '%s' '" + strings.Repeat("recorded report detail ", 600) + "'"

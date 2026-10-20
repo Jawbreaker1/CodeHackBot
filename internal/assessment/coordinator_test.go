@@ -212,6 +212,58 @@ func TestCoordinatorPromptCompactsPriorExecutionBodies(t *testing.T) {
 	}
 }
 
+func TestCoordinatorPromptMeasuredUsesRequestUnitsAndRestoresHistory(t *testing.T) {
+	state := State{Version: 1, ID: "measured-context", Goal: "review saved observations", Scope: "fictional records only"}
+	for i := 0; i < 30; i++ {
+		state.OperatorMessages = append(state.OperatorMessages, fmt.Sprintf("User: observation %d %s", i, strings.Repeat("saved context detail ", 35)))
+	}
+	measure := func(prompt string) int { return 40 + len(strings.Fields(prompt)) }
+	full, err := coordinatorPromptMeasured(state, 100000, measure)
+	if err != nil || len(full) <= measure(full) || !strings.Contains(full, "observation 0") {
+		t.Fatalf("roomy measured view lost history: %v", err)
+	}
+	tightLimit := measure(full) - 200
+	tight, err := coordinatorPromptMeasured(state, tightLimit, measure)
+	if err != nil || measure(tight) > tightLimit || !strings.Contains(tight, "observation 29") || tight == full {
+		t.Fatalf("measured pressure lost latest direction or did not compact: err=%v units=%d limit=%d", err, measure(tight), tightLimit)
+	}
+	restored, err := coordinatorPromptMeasured(state, 100000, measure)
+	if err != nil || restored != full || len(state.OperatorMessages) != 30 {
+		t.Fatal("a measured coordinator projection changed saved dialogue")
+	}
+}
+
+func TestCoordinatorPlanningUsesCompleteRequestTokenBudget(t *testing.T) {
+	state := State{Version: 1, ID: "token-budget", Goal: "review fictional observations", Scope: "saved records only"}
+	for i := 0; i < 30; i++ {
+		state.OperatorMessages = append(state.OperatorMessages, fmt.Sprintf("User: note %d %s", i, strings.Repeat("saved observation ", 40)))
+	}
+	count := func(messages []llmclient.Message) int {
+		units := 12
+		for _, message := range messages {
+			units += len(strings.Fields(message.Content))
+		}
+		return units
+	}
+	system, previous, correction := "planning instructions", strings.Repeat("previous decision ", 50), "correct the proposal"
+	full := coordinatorPrompt(state)
+	fullTokens := count([]llmclient.Message{{Role: "system", Content: system}, {Role: "user", Content: full}, {Role: "assistant", Content: previous}, {Role: "user", Content: correction}})
+	coordinator := Coordinator{LLM: llmclient.Client{MaxInputBytes: 1 << 20, MaxInputTokens: fullTokens - 200, CountInputTokens: count}}
+	prompt, err := coordinator.boundedPlanningPrompt(state, system, previous, correction)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := []llmclient.Message{{Role: "system", Content: system}, {Role: "user", Content: prompt}, {Role: "assistant", Content: previous}, {Role: "user", Content: correction}}
+	if count(request) > coordinator.LLM.MaxInputTokens || !strings.Contains(prompt, "note 29") || prompt == full || !strings.Contains(prompt, state.Goal) {
+		t.Fatalf("planning request did not preserve the current goal and direction within token budget: %d/%d", count(request), coordinator.LLM.MaxInputTokens)
+	}
+	coordinator.LLM.MaxInputTokens = fullTokens + 100
+	restored, err := coordinator.boundedPlanningPrompt(state, system, previous, correction)
+	if err != nil || restored != full || len(state.OperatorMessages) != 30 {
+		t.Fatal("token-pressure planning changed the durable assessment")
+	}
+}
+
 func TestCoordinatorRetainsEvidenceCatalogWhileBoundingResultCards(t *testing.T) {
 	state := State{Version: 1, ID: "long-run", Goal: "review evidence", Scope: "fixture only"}
 	result := Result{Task: Task{ID: "worker-a", Goal: "inspect", DoneWhen: "evidence recorded"}, Status: "done", Summary: "five checks completed"}

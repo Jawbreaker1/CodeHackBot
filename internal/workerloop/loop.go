@@ -429,9 +429,12 @@ func (l Loop) capture(step int, stage string, p ctxpacket.WorkerPacket) error {
 }
 
 // modelView returns a bounded packet and records the exact text size of the
-// request that will be sent for the supplied prompt builder. The byte ceiling
-// is an application limit; it deliberately makes no claim about tokenization.
+// request that will be sent for the supplied prompt builder. Normal profiles
+// use the byte ceiling; a verified preflight counter may add a token budget.
 func (l Loop) modelView(p *ctxpacket.WorkerPacket, prompt func(ctxpacket.WorkerPacket) string) (ctxpacket.WorkerPacket, error) {
+	if l.LLM.MaxInputTokens > 0 {
+		return l.modelViewWithTokens(p, prompt)
+	}
 	limit := l.LLM.InputByteLimit()
 	// Reserve room for the decision/evaluation instructions and JSON quoting.
 	allowance := limit - 8192
@@ -467,6 +470,52 @@ func (l Loop) modelView(p *ctxpacket.WorkerPacket, prompt func(ctxpacket.WorkerP
 		}
 	}
 	return ctxpacket.WorkerPacket{}, fmt.Errorf("worker model context needs more than the %d-byte input ceiling after compaction", limit)
+}
+
+func (l Loop) modelViewWithTokens(p *ctxpacket.WorkerPacket, prompt func(ctxpacket.WorkerPacket) string) (ctxpacket.WorkerPacket, error) {
+	if l.LLM.CountInputTokens == nil {
+		return ctxpacket.WorkerPacket{}, fmt.Errorf("worker token budget requires a preflight counter")
+	}
+	var measureErr error
+	measure := func(view ctxpacket.WorkerPacket) int {
+		messages := []llmclient.Message{{Role: "system", Content: view.BehaviorFrame.PromptText()}, {Role: "user", Content: prompt(view)}}
+		units, err := l.LLM.InputPressure(messages)
+		if err != nil {
+			measureErr = err
+			return llmclient.InputBudgetUnits + 1
+		}
+		return units
+	}
+	// Context usage is written into the packet after projection and itself
+	// consumes a few tokens. Retry against the original packet if that field
+	// pushes the complete request over either input limit.
+	allowance := llmclient.InputBudgetUnits - 1000
+	for attempt := 0; attempt < 5; attempt++ {
+		view, err := p.ModelViewMeasured(allowance, measure)
+		if measureErr != nil {
+			return ctxpacket.WorkerPacket{}, measureErr
+		}
+		if err != nil {
+			return ctxpacket.WorkerPacket{}, err
+		}
+		used := modelInputBytes(view, prompt)
+		setContextUsage(&view, used, l.LLM.InputByteLimit())
+		used = modelInputBytes(view, prompt)
+		setContextUsage(&view, used, l.LLM.InputByteLimit())
+		pressure := measure(view)
+		if measureErr != nil {
+			return ctxpacket.WorkerPacket{}, measureErr
+		}
+		if pressure <= llmclient.InputBudgetUnits {
+			p.OperatorState = view.OperatorState
+			return view, nil
+		}
+		allowance -= pressure - llmclient.InputBudgetUnits + 1000
+		if allowance <= 0 {
+			break
+		}
+	}
+	return ctxpacket.WorkerPacket{}, fmt.Errorf("worker model context cannot fit the configured token and byte input limits after compaction")
 }
 
 func modelInputBytes(packet ctxpacket.WorkerPacket, prompt func(ctxpacket.WorkerPacket) string) int {

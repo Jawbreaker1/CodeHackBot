@@ -28,8 +28,15 @@ type Client struct {
 	// providers that support OpenAI-compatible json_schema response_format.
 	StructuredJSON bool
 	// MaxInputBytes bounds the combined message text before contacting a provider.
-	// It is an inspectable memory limit, not an exact provider token count.
+	// It remains a hard request guard when an optional token budget is active.
 	MaxInputBytes int
+	// MaxInputTokens is an explicit input allowance after reserving output and
+	// reasoning room. It is active only with a model-specific preflight counter.
+	MaxInputTokens int
+	// CountInputTokens must be safe for concurrent workers and count the
+	// complete outgoing messages, including roles, formatting and attachments.
+	// Do not use bytes/4 here.
+	CountInputTokens func([]Message) int
 	// AuthTokenFile is a local bridge credential, never a provider/API token.
 	AuthTokenFile string
 	// Hooks let one assessment bound and account for all coordinator/worker calls.
@@ -339,6 +346,18 @@ func (c Client) Complete(ctx context.Context, messages []Message, opts ChatOptio
 	}
 	if attachmentBytes > 16<<20 {
 		return Completion{}, fmt.Errorf("attachments are %d bytes; limit is %d; reduce attachments before retrying", attachmentBytes, 16<<20)
+	}
+	if c.MaxInputTokens > 0 {
+		if c.CountInputTokens == nil {
+			return Completion{}, fmt.Errorf("model input token limit requires a preflight counter")
+		}
+		count := c.CountInputTokens(messages)
+		if count <= 0 {
+			return Completion{}, fmt.Errorf("model input token counter returned no count")
+		}
+		if count > c.MaxInputTokens {
+			return Completion{}, fmt.Errorf("model input is %d tokens; limit is %d; reduce context before retrying", count, c.MaxInputTokens)
+		}
 	}
 
 	httpClient := c.HTTPClient

@@ -16,11 +16,20 @@ func (p WorkerPacket) Clone() WorkerPacket {
 	return copy
 }
 
-// ModelView bounds the complete rendered packet without changing persisted
-// observations. Goals, policy, scope, plan, current feedback and the latest
-// operator message are protected. If they alone exceed the allowance, stop.
-// This is a byte bound, not a provider-specific tokenizer or a semantic summary.
+// ModelView preserves the byte-budget behavior for callers without a model
+// token counter.
 func (p WorkerPacket) ModelView(maxBytes int) (WorkerPacket, error) {
+	return p.ModelViewMeasured(maxBytes, func(view WorkerPacket) int { return len(view.Render()) })
+}
+
+// ModelViewMeasured bounds a model projection without changing persisted
+// observations. The caller measures the same complete outgoing request after
+// every reduction, so token-aware callers can use the model's own count while
+// retaining the established compaction order and protected fields.
+func (p WorkerPacket) ModelViewMeasured(limit int, measure func(WorkerPacket) int) (WorkerPacket, error) {
+	if limit <= 0 || measure == nil {
+		return WorkerPacket{}, fmt.Errorf("worker context needs a positive budget and a size measurement")
+	}
 	v := p.Clone()
 	v.TaskRuntime.CurrentTarget, v.TaskRuntime.MissingFact = "", ""
 	v.ContextNotes = nil
@@ -52,14 +61,14 @@ func (p WorkerPacket) ModelView(maxBytes int) (WorkerPacket, error) {
 	for i := range v.RelevantRecentResults {
 		dedupeInvocation(&v.RelevantRecentResults[i])
 	}
-	size := func() int { return len(v.Render()) }
-	if size() <= maxBytes {
+	size := func() int { return measure(v) }
+	if size() <= limit {
 		return v, nil
 	}
 	v.ContextNotes = []string{"This request reached its context budget. Older details were shortened or offloaded; full records remain in session state and referenced logs. Use recall_context to search and read prior output, conversation, or plan revisions."}
 	// Only a request that exceeds its allowance starts compaction. Shorten older
 	// results first, preserving their observations and references where possible.
-	for i := len(v.RelevantRecentResults) - 1; i >= 0 && size() > maxBytes; i-- {
+	for i := len(v.RelevantRecentResults) - 1; i >= 0 && size() > limit; i-- {
 		if pinnedResult(v.PinnedResultRefs, v.RelevantRecentResults[i]) {
 			continue
 		}
@@ -71,14 +80,14 @@ func (p WorkerPacket) ModelView(maxBytes int) (WorkerPacket, error) {
 			v.RelevantRecentResults[i].ArtifactRefs = v.RelevantRecentResults[i].ArtifactRefs[:2]
 		}
 	}
-	for i := 0; i < len(v.PlanHistory)-1 && size() > maxBytes; i++ {
+	for i := 0; i < len(v.PlanHistory)-1 && size() > limit; i++ {
 		revision := &v.PlanHistory[i]
 		revision.Plan.Summary = excerpt(revision.Plan.Summary, 256)
 		revision.Plan.Steps = nil
 		revision.Plan.StepPurposes = nil
 		revision.Plan.ReplanConditions = nil
 	}
-	for i := len(v.RelevantRecentResults) - 1; i >= 0 && size() > maxBytes; i-- {
+	for i := len(v.RelevantRecentResults) - 1; i >= 0 && size() > limit; i-- {
 		if pinnedResult(v.PinnedResultRefs, v.RelevantRecentResults[i]) {
 			continue
 		}
@@ -94,7 +103,7 @@ func (p WorkerPacket) ModelView(maxBytes int) (WorkerPacket, error) {
 			break
 		}
 	}
-	for len(v.RecentConversation) > 1 && size() > maxBytes {
+	for len(v.RecentConversation) > 1 && size() > limit {
 		remove := -1
 		for i := range v.RecentConversation {
 			if i != protectedTurn {
@@ -110,17 +119,17 @@ func (p WorkerPacket) ModelView(maxBytes int) (WorkerPacket, error) {
 			protectedTurn--
 		}
 	}
-	if size() > maxBytes {
+	if size() > limit {
 		v.OlderConversationSummary = "(omitted for context budget; retained in session state)"
 	}
 	// Retrievals are supporting material, never higher-priority instructions.
 	for i := range v.MemoryBankRetrievals {
-		if size() <= maxBytes {
+		if size() <= limit {
 			break
 		}
 		v.MemoryBankRetrievals[i] = excerpt(v.MemoryBankRetrievals[i], 1024)
 	}
-	if size() > maxBytes {
+	if size() > limit {
 		v.LatestExecutionResult.Action = excerpt(v.LatestExecutionResult.Action, 1024)
 		v.LatestExecutionResult.ActualExec = excerpt(v.LatestExecutionResult.ActualExec, 2048)
 		v.LatestExecutionResult.OutputEvidence = excerpt(v.LatestExecutionResult.OutputEvidence, 4096)
@@ -128,18 +137,18 @@ func (p WorkerPacket) ModelView(maxBytes int) (WorkerPacket, error) {
 	}
 	// Historical plan revisions have a fixed-size floor after field pruning.
 	// Keep the latest revision and count earlier ones omitted from this view.
-	for size() > maxBytes && len(v.PlanHistory) > 1 {
+	for size() > limit && len(v.PlanHistory) > 1 {
 		v.PlanHistory = v.PlanHistory[1:]
 		v.OffloadedPlanCount++
 	}
 	// Pinned results earn space before unpinned cards; no pin overrides the
 	// hard limit. Full results remain in the authoritative packet and logs.
-	for size() > maxBytes && pruneOldestResult(&v, false) {
+	for size() > limit && pruneOldestResult(&v, false) {
 	}
-	if size() > maxBytes {
+	if size() > limit {
 		v.ContextRecall.Content = excerpt(v.ContextRecall.Content, 2048)
 	}
-	for i := len(v.RelevantRecentResults) - 1; i >= 0 && size() > maxBytes; i-- {
+	for i := len(v.RelevantRecentResults) - 1; i >= 0 && size() > limit; i-- {
 		if !pinnedResult(v.PinnedResultRefs, v.RelevantRecentResults[i]) {
 			continue
 		}
@@ -148,16 +157,16 @@ func (p WorkerPacket) ModelView(maxBytes int) (WorkerPacket, error) {
 		v.RelevantRecentResults[i].OutputEvidence = excerpt(v.RelevantRecentResults[i].OutputEvidence, 2048)
 		v.RelevantRecentResults[i].OutputSummary = excerpt(v.RelevantRecentResults[i].OutputSummary, 768)
 	}
-	for i := len(v.RelevantRecentResults) - 1; i >= 0 && size() > maxBytes; i-- {
+	for i := len(v.RelevantRecentResults) - 1; i >= 0 && size() > limit; i-- {
 		if pinnedResult(v.PinnedResultRefs, v.RelevantRecentResults[i]) {
 			v.RelevantRecentResults[i].OutputEvidence = "(omitted; consult log_refs)"
 			v.RelevantRecentResults[i].OutputSummary = excerpt(v.RelevantRecentResults[i].OutputSummary, 256)
 		}
 	}
-	for size() > maxBytes && pruneOldestResult(&v, true) {
+	for size() > limit && pruneOldestResult(&v, true) {
 	}
-	if size() > maxBytes {
-		return WorkerPacket{}, fmt.Errorf("worker context needs %d bytes after compaction; allowance is %d; shorten the task or supporting material", size(), maxBytes)
+	if size() > limit {
+		return WorkerPacket{}, fmt.Errorf("worker context needs %d budget units after compaction; allowance is %d; shorten the task or supporting material", size(), limit)
 	}
 	return v, nil
 }

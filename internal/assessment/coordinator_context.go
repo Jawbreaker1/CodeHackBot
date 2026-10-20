@@ -11,7 +11,14 @@ import (
 // Recent outcomes and evidence used by findings stay in view. Older task logs
 // remain in the session instead of being resent on every planning round.
 func coordinatorPromptBounded(state State, maxBytes int) (string, error) {
-	if maxBytes <= 0 {
+	return coordinatorPromptMeasured(state, maxBytes, func(prompt string) int { return len(prompt) })
+}
+
+// coordinatorPromptMeasured applies the same protected-field and offload
+// order with a caller-supplied request measurement. A token-aware caller must
+// include its fixed system and correction messages in that measurement.
+func coordinatorPromptMeasured(state State, limit int, measure func(string) int) (string, error) {
+	if limit <= 0 || measure == nil {
 		return "", fmt.Errorf("coordinator context has no input allowance")
 	}
 	packet := coordinatorPayload(state)
@@ -20,7 +27,7 @@ func coordinatorPromptBounded(state State, maxBytes int) (string, error) {
 		return string(data)
 	}
 	prompt := encode()
-	if len(prompt) <= maxBytes {
+	if measure(prompt) <= limit {
 		return prompt, nil
 	}
 	// Historical project context is useful, but current-run evidence and the
@@ -29,7 +36,7 @@ func coordinatorPromptBounded(state State, maxBytes int) (string, error) {
 		packet.ProjectHistory = nil
 		packet.ContextNotes = append(packet.ContextNotes, "Earlier project sessions were omitted from this bounded request; their saved evidence remains available in the project directory.")
 		prompt = encode()
-		if len(prompt) <= maxBytes {
+		if measure(prompt) <= limit {
 			return prompt, nil
 		}
 	}
@@ -76,7 +83,7 @@ func coordinatorPromptBounded(state State, maxBytes int) (string, error) {
 		packet.ContextNotes = append(packet.ContextNotes, "Older workers are compact navigation entries. Full results and evidence remain under tasks/<task-id>/; delegate a focused evidence read when an older detail matters.")
 	}
 	prompt = encode()
-	if len(prompt) <= maxBytes {
+	if measure(prompt) <= limit {
 		return prompt, nil
 	}
 	// Pressure relief stays ordered: older plan prose, assistant replies, then
@@ -95,7 +102,7 @@ func coordinatorPromptBounded(state State, maxBytes int) (string, error) {
 	}
 	packet.ContextNotes = append(packet.ContextNotes, "Older plan prose and gaps were shortened to fit the planning request; the saved assessment retains them.")
 	prompt = encode()
-	if len(prompt) <= maxBytes {
+	if measure(prompt) <= limit {
 		return prompt, nil
 	}
 	protectedMessage := -1
@@ -107,7 +114,7 @@ func coordinatorPromptBounded(state State, maxBytes int) (string, error) {
 		}
 	}
 	dropMessages := func(repliesOnly bool) {
-		for len(packet.Assessment.OperatorMessages) > 1 && len(prompt) > maxBytes {
+		for len(packet.Assessment.OperatorMessages) > 1 && measure(prompt) > limit {
 			remove := -1
 			for i, entry := range packet.Assessment.OperatorMessages {
 				if i == protectedMessage {
@@ -137,7 +144,7 @@ func coordinatorPromptBounded(state State, maxBytes int) (string, error) {
 		packet.Assessment.Results[i].Summary = promptExcerptEnds(packet.Assessment.Results[i].Summary, 2048)
 	}
 	prompt = encode()
-	if len(prompt) <= maxBytes {
+	if measure(prompt) <= limit {
 		return prompt, nil
 	}
 	for i := oldCount; i < len(packet.Assessment.Results); i++ {
@@ -153,7 +160,7 @@ func coordinatorPromptBounded(state State, maxBytes int) (string, error) {
 	// Only after shortening saved worker prose should older operator turns
 	// leave this request. The latest operator direction stays protected.
 	dropMessages(false)
-	if len(prompt) > maxBytes {
+	if measure(prompt) > limit {
 		for i := 0; i < oldCount; i++ {
 			packet.Assessment.Results[i].Summary = promptExcerptEnds(packet.Assessment.Results[i].Summary, 512)
 		}
@@ -163,24 +170,24 @@ func coordinatorPromptBounded(state State, maxBytes int) (string, error) {
 		packet.ContextNotes = append(packet.ContextNotes, "Distant worker conclusions and superseded finding revisions are short navigation entries; use saved results and plans for omitted details.")
 		prompt = encode()
 	}
-	if len(prompt) > maxBytes {
+	if measure(prompt) > limit {
 		for i := oldCount; i < len(packet.Assessment.Results); i++ {
 			packet.Assessment.Results[i].Summary = promptExcerptEnds(packet.Assessment.Results[i].Summary, 1024)
 		}
 		packet.ContextNotes = append(packet.ContextNotes, "Recent worker prose was shortened at both ends; exact observations remain in the evidence index and saved task records.")
 		prompt = encode()
 	}
-	if len(prompt) > maxBytes {
-		for len(packet.Assessment.Plans) > 1 && len(prompt) > maxBytes {
+	if measure(prompt) > limit {
+		for len(packet.Assessment.Plans) > 1 && measure(prompt) > limit {
 			packet.Assessment.Plans = packet.Assessment.Plans[1:]
 			packet.OmittedPlans++
 			prompt = encode()
 		}
 	}
-	if len(prompt) > maxBytes {
+	if measure(prompt) > limit {
 		// Older results may become navigation entries, but never silently
 		// discard one member of the current batch to fit the request.
-		for oldCount > 0 && len(prompt) > maxBytes {
+		for oldCount > 0 && measure(prompt) > limit {
 			remove := -1
 			for i, result := range packet.Assessment.Results[:oldCount] {
 				if len(packet.RecordedEvidence[result.Task.ID]) == 0 {
@@ -197,7 +204,7 @@ func coordinatorPromptBounded(state State, maxBytes int) (string, error) {
 			prompt = encode()
 		}
 	}
-	if len(prompt) > maxBytes {
+	if measure(prompt) > limit {
 		// A large parallel batch must still reach the next decision. Keep an
 		// outcome card for every worker and offload previews and excess source
 		// paths to the already-saved result.json files. Findings and open leads
@@ -206,8 +213,8 @@ func coordinatorPromptBounded(state State, maxBytes int) (string, error) {
 		packet.ContextNotes = append(packet.ContextNotes, "Worker previews and uncited evidence paths were offloaded for this request. Every result_ref names a full saved task result; delegate a focused read before relying on omitted observations or citing their evidence.")
 		prompt = encode()
 	}
-	if len(prompt) > maxBytes {
-		return "", fmt.Errorf("coordinator context needs %d bytes after compaction; allowance is %d; narrow the planning question or use a larger model profile", len(prompt), maxBytes)
+	if measure(prompt) > limit {
+		return "", fmt.Errorf("coordinator context needs %d budget units after compaction; allowance is %d; narrow the planning question or use a larger model profile", measure(prompt), limit)
 	}
 	return prompt, nil
 }

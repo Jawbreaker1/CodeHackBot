@@ -132,6 +132,17 @@ func TestCoordinatorLongHistoryKeepsCurrentWorkAtFixedBudget(t *testing.T) {
 	if full.OmittedMessages != 0 || full.OmittedPlans != 0 || full.OmittedResults != 0 || len(full.Assessment.Plans) != 160 || len(full.Assessment.Results) != 160 || len(full.Assessment.OperatorMessages) != 322 {
 		t.Fatal("history did not return when a larger request allowance became available")
 	}
+	// Exercise the same 160-round history under a non-byte measurement. The
+	// newest direction must survive even when the model's token allowance,
+	// rather than the application byte ceiling, starts offloading history.
+	units := func(prompt string) int { return 20 + len(strings.Fields(prompt)) }
+	measured, err := coordinatorPromptMeasured(state, units(restored)*3/4, units)
+	if err != nil || !strings.Contains(measured, "CURRENT_DIRECTION") || !strings.Contains(measured, "task-159") || measured == restored {
+		t.Fatalf("long token-measured projection lost current work: %v", err)
+	}
+	if again, err := coordinatorPromptMeasured(state, units(restored)+100, units); err != nil || again != restored {
+		t.Fatal("long history did not rehydrate after token pressure")
+	}
 }
 
 func TestCoordinatorCompactionAcrossWorkerRoundsAndResume(t *testing.T) {
