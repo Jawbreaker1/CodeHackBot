@@ -285,7 +285,12 @@ func (a App) runPlain(ctx context.Context) error {
 			c.Print("Local response budget: %d output tokens, up to 10 minutes per request. Ctrl-C remains available.\n", prefs.MaxOutputTokens)
 		}
 		if prefs.Provider == "subscription" {
-			c.Print("Selected task context and evidence will be sent to OpenAI (input ceiling: %d bytes; requested output ceiling: %d tokens, provider limit may be lower).\n", prefs.MaxInputBytes, client.MaxOutputTokens)
+			assessmentClient := client.WithDaybreakAssessmentBudget()
+			if assessmentClient.MaxInputTokens > 0 {
+				c.Print("Selected task context and evidence will be sent to OpenAI (assessment input allowance: %d tokens, with a %d-byte hard guard; requested output ceiling: %d tokens, provider limit may be lower).\n", assessmentClient.MaxInputTokens, assessmentClient.InputByteLimit(), client.MaxOutputTokens)
+			} else {
+				c.Print("Selected task context and evidence will be sent to OpenAI (input ceiling: %d bytes; requested output ceiling: %d tokens, provider limit may be lower).\n", prefs.MaxInputBytes, client.MaxOutputTokens)
+			}
 		}
 		c.Print("This runtime does not enforce a network allowlist or filesystem sandbox. Use only the reviewed, authorized scope. Reports are drafts for review.\n")
 		answer, err := c.Ask(ctx, "Type start to begin the reviewed assessment, or press Enter to cancel")

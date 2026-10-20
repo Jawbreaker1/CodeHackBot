@@ -492,6 +492,7 @@ type planApprovalView struct {
 type contextWindowView struct {
 	UsedBytes           int    `json:"used_bytes"`
 	LimitBytes          int    `json:"limit_bytes"`
+	LimitTokens         int    `json:"limit_tokens,omitempty"`
 	ProviderInputTokens int    `json:"provider_input_tokens,omitempty"`
 	RemainingBytes      int    `json:"remaining_bytes"`
 	Percent             int    `json:"percent"`

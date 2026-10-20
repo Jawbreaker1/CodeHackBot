@@ -228,6 +228,30 @@ func TestWorkerProjectionUsesCompleteRequestTokenBudget(t *testing.T) {
 	}
 }
 
+func TestDaybreakWorkerKeepsUsefulTextBeyondFormerByteCeiling(t *testing.T) {
+	packet := ctxpacket.NewInitialWorkerPacket(behavior.Frame{SystemPrompt: "fixture policy"}, testFoundation(), t.TempDir(), "gpt-daybreak-blue-latest", "per_action", 20)
+	packet.RelevantRecentResults = append(packet.RelevantRecentResults, ctxpacket.ExecutionResult{Action: "first observation", OutputSummary: "Earlier unresolved lead remains relevant", LogRefs: []string{"/logs/first"}})
+	for i := 0; i < 180; i++ {
+		packet.RelevantRecentResults = append(packet.RelevantRecentResults, ctxpacket.ExecutionResult{
+			Action: fmt.Sprintf("inspect %d", i), OutputEvidence: strings.Repeat("routine recorded observation with evidence. ", 20),
+			LogRefs: []string{fmt.Sprintf("/logs/%d", i)},
+		})
+	}
+	client := (llmclient.Client{Model: "gpt-daybreak-blue-latest", AuthTokenFile: "bridge", MaxInputBytes: llmclient.SubscriptionInputByteLimit}).WithDaybreakAssessmentBudget()
+	loop := Loop{LLM: client}
+	view, err := loop.modelView(&packet, buildUserPrompt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := []llmclient.Message{{Role: "system", Content: view.BehaviorFrame.PromptText()}, {Role: "user", Content: buildUserPrompt(view)}}
+	if got := modelInputBytes(view, buildUserPrompt); got <= llmclient.SubscriptionInputByteLimit || got > client.InputByteLimit() {
+		t.Fatalf("worker request bytes = %d; expected useful text beyond the former byte ceiling", got)
+	}
+	if got := client.CountInputTokens(request); got > client.MaxInputTokens || len(view.RelevantRecentResults) != len(packet.RelevantRecentResults) || view.OffloadedResultCount != 0 {
+		t.Fatalf("worker compacted text that fit: tokens=%d/%d retained=%d/%d offloaded=%d", got, client.MaxInputTokens, len(view.RelevantRecentResults), len(packet.RelevantRecentResults), view.OffloadedResultCount)
+	}
+}
+
 func TestProgressReviewReachesWorkerAndExecutionResetsIt(t *testing.T) {
 	plan := `{"type":"update_plan","plan":{"summary":"Review the fixture","steps":["inspect"],"active_step":"inspect"}}`
 	loop, packet, _ := fixtureWorker(t, 4, plan, plan, printAction, `{"type":"step_complete","summary":"Fixture observed"}`, completeEval)

@@ -169,9 +169,9 @@ func (r *run) snapshot(state assessment.State) {
 	_ = r.persistOrStop()
 }
 
-func (r *run) setCoordinatorContext(used, limit, providerInputTokens int) {
+func (r *run) setCoordinatorContext(used, limit, limitTokens, providerInputTokens int) {
 	r.mu.Lock()
-	r.coordinatorContext = contextWindowView{UsedBytes: used, LimitBytes: limit, ProviderInputTokens: providerInputTokens}
+	r.coordinatorContext = contextWindowView{UsedBytes: used, LimitBytes: limit, LimitTokens: limitTokens, ProviderInputTokens: providerInputTokens}
 	r.updatedAt = time.Now().UTC()
 	r.mu.Unlock()
 	_ = r.persistOrStop()

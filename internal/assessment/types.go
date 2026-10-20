@@ -178,6 +178,7 @@ type State struct {
 	ReasoningEffort      string          `json:"reasoning_effort,omitempty"`
 	MaxOutputTokens      int             `json:"max_output_tokens,omitempty"`
 	MaxInputBytes        int             `json:"max_input_bytes,omitempty"`
+	MaxInputTokens       int             `json:"max_input_tokens,omitempty"`
 	Status               string          `json:"status"`
 	StartedAt            time.Time       `json:"started_at"`
 	FinishedAt           time.Time       `json:"finished_at,omitempty"`

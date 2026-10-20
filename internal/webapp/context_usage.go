@@ -114,6 +114,10 @@ func agentContextWindows(state assessment.State, coordinator contextWindowView, 
 	}
 	primary := measuredContext(coordinator.UsedBytes, limit, "coordinator", "coordinator", coordinatorStatus, coordinatorActive)
 	primary.ProviderInputTokens = coordinator.ProviderInputTokens
+	primary.LimitTokens = coordinator.LimitTokens
+	if primary.LimitTokens > 0 && primary.ProviderInputTokens > 0 {
+		primary.Percent = min(100, primary.ProviderInputTokens*100/primary.LimitTokens)
+	}
 	all := []contextWindowView{primary}
 	for _, worker := range workers {
 		// The coordinator resumes from saved results, not from a finished or
@@ -129,6 +133,10 @@ func agentContextWindows(state assessment.State, coordinator contextWindowView, 
 		active := worker.Phase != "approval_required" && worker.Phase != "user_question" && worker.Phase != "waiting_user"
 		entry := measuredContext(worker.ContextUsedBytes, workerLimit, "worker", worker.ID, worker.Phase, active)
 		entry.ProviderInputTokens = worker.ProviderInputTokens
+		entry.LimitTokens = state.MaxInputTokens
+		if entry.LimitTokens > 0 && entry.ProviderInputTokens > 0 {
+			entry.Percent = min(100, entry.ProviderInputTokens*100/entry.LimitTokens)
+		}
 		all = append(all, entry)
 	}
 	return primary, all

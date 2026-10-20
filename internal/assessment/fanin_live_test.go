@@ -51,12 +51,19 @@ func TestLiveCoordinatorReadsIndexedFanIn(t *testing.T) {
 		state.Results = append(state.Results, result)
 	}
 	state.Plans = []Decision{plan}
-	prompt, err := coordinatorPromptBounded(state, 48*1024)
+	// Keep this probe's deliberately tight byte cap while exercising the same
+	// complete-request token projection used by a Daybreak assessment.
+	coordinator := Coordinator{LLM: (llmclient.Client{Model: "gpt-daybreak-blue-latest", AuthTokenFile: "probe", MaxInputBytes: 48 * 1024}).WithDaybreakAssessmentBudget()}
+	prompt, err := coordinator.boundedPlanningPrompt(state, frame.PromptText(), "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(prompt, "result_ref") || !strings.Contains(prompt, "Indigo cue") || strings.Contains(prompt, "Recorded synthetic observation. Recorded synthetic observation.") {
 		t.Fatal("the live request did not use the compact result index")
+	}
+	request := []llmclient.Message{{Role: "system", Content: frame.PromptText()}, {Role: "user", Content: prompt}}
+	if len(frame.PromptText())+len(prompt) > coordinator.LLM.InputByteLimit() || coordinator.LLM.CountInputTokens(request) > coordinator.LLM.MaxInputTokens {
+		t.Fatal("the projected coordinator request exceeded its byte or token allowance")
 	}
 	home := os.Getenv("CODEX_HOME")
 	if home == "" {
@@ -69,7 +76,7 @@ func TestLiveCoordinatorReadsIndexedFanIn(t *testing.T) {
 	provider := subscription.Provider{Auth: &subscription.CodexAuth{Home: home}}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	completion, err := provider.Complete(ctx, subscription.Request{Model: "gpt-daybreak-blue-latest", ReasoningEffort: "high", Messages: []llmclient.Message{{Role: "system", Content: frame.PromptText()}, {Role: "user", Content: prompt}}})
+	completion, err := provider.Complete(ctx, subscription.Request{Model: "gpt-daybreak-blue-latest", ReasoningEffort: "high", Messages: request})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -27,11 +27,11 @@ type Coordinator struct {
 	PlanApproval    func(context.Context, Decision) (PlanReview, error)
 	Emit            func(Event) // May be called concurrently by workers.
 	Limits          Limits
-	Budget          *ModelBudget        // Shared with live operator chat when supplied.
-	Conversation    func() []string     // Durable operator conversation excerpts.
-	Approach        *Approach           // Selected during intake for a new assessment.
-	Snapshot        func(State)         // Read-only snapshot; called by the coordinator goroutine.
-	ContextSnapshot func(int, int, int) // Request bytes, application ceiling, and reported input tokens (zero when unavailable).
+	Budget          *ModelBudget             // Shared with live operator chat when supplied.
+	Conversation    func() []string          // Durable operator conversation excerpts.
+	Approach        *Approach                // Selected during intake for a new assessment.
+	Snapshot        func(State)              // Read-only snapshot; called by the coordinator goroutine.
+	ContextSnapshot func(int, int, int, int) // Request bytes, byte ceiling, token ceiling (zero if absent), reported input tokens.
 }
 
 // LoadState reads the durable assessment snapshot without starting work. UI
@@ -108,6 +108,7 @@ func PrepareContinuation(initial State, request string, increment Limits) (State
 }
 
 func (c Coordinator) run(ctx context.Context, root string, initial State) (state State, runErr error) {
+	c.LLM = c.LLM.WithDaybreakAssessmentBudget()
 	goal, scope := initial.Goal, initial.Scope
 	if goal == "" || scope == "" || c.Approver == nil {
 		return state, fmt.Errorf("goal, scope, and an approver are required")
@@ -138,6 +139,7 @@ func (c Coordinator) run(ctx context.Context, root string, initial State) (state
 	state.ReasoningEffort = c.LLM.ReasoningEffort
 	state.MaxOutputTokens = c.LLM.MaxOutputTokens
 	state.MaxInputBytes = c.LLM.InputByteLimit()
+	state.MaxInputTokens = c.LLM.MaxInputTokens
 	if _, err := recoverInterruptedBatch(root, &state); err != nil {
 		return state, err
 	}
@@ -411,7 +413,7 @@ func (c Coordinator) decide(ctx context.Context, root string, round, proposal in
 			used += len(message.Content)
 		}
 		if c.ContextSnapshot != nil {
-			c.ContextSnapshot(used, c.LLM.InputByteLimit(), 0)
+			c.ContextSnapshot(used, c.LLM.InputByteLimit(), c.LLM.MaxInputTokens, 0)
 		}
 		completion, err := c.LLM.ChatStructuredCompletion(ctx, messages)
 		tokens := completion.PromptTokens()
@@ -419,7 +421,7 @@ func (c Coordinator) decide(ctx context.Context, root string, round, proposal in
 			return Decision{}, fmt.Errorf("save coordinator request usage: %w", saveErr)
 		}
 		if c.ContextSnapshot != nil {
-			c.ContextSnapshot(used, c.LLM.InputByteLimit(), tokens)
+			c.ContextSnapshot(used, c.LLM.InputByteLimit(), c.LLM.MaxInputTokens, tokens)
 		}
 		if err != nil {
 			return Decision{}, fmt.Errorf("coordinator: %w", err)

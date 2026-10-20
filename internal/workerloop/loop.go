@@ -43,6 +43,7 @@ func (l *Loop) SetProgressSink(sink ProgressSink) { l.Progress = sink }
 // Run is shared by standalone and delegated workers. The model may update its
 // plan at any turn. Only the original goal evaluator can establish completion.
 func (l Loop) Run(ctx context.Context, packet ctxpacket.WorkerPacket, maxSteps int) (out Outcome, runErr error) {
+	l.LLM = l.LLM.WithDaybreakAssessmentBudget()
 	current := packet.Clone()
 	if current.Budget.Limit == 0 {
 		current.Budget.Limit = max(1, maxSteps)

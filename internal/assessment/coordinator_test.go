@@ -155,9 +155,9 @@ func TestCoordinatorSavesMeasuredRequestAndProviderTokens(t *testing.T) {
 	defer model.Close()
 	root := t.TempDir()
 	coordinator := testCoordinator(model.URL)
-	var snapshots [][3]int
-	coordinator.ContextSnapshot = func(used, limit, tokens int) {
-		snapshots = append(snapshots, [3]int{used, limit, tokens})
+	var snapshots [][4]int
+	coordinator.ContextSnapshot = func(used, limit, limitTokens, tokens int) {
+		snapshots = append(snapshots, [4]int{used, limit, limitTokens, tokens})
 	}
 	initial := State{Version: 1, Goal: "Review saved fixture", Scope: "synthetic only", Limits: DefaultLimits(), Results: []Result{{Task: Task{ID: "review", Goal: "Review fixture"}, Status: "done", Summary: "Nothing else is needed."}}}
 	state, err := coordinator.RunState(t.Context(), root, initial)
@@ -190,7 +190,7 @@ func TestCoordinatorSavesMeasuredRequestAndProviderTokens(t *testing.T) {
 	if err := json.Unmarshal(usageData, &usage); err != nil {
 		t.Fatal(err)
 	}
-	if usage.RequestInputBytes != used || usage.ProviderInputTokens != 321 || usage.RequestMessageCount != len(messages) || usage.Model != "fixture-model" || !usage.Succeeded || len(snapshots) != 2 || snapshots[0] != [3]int{used, coordinator.LLM.InputByteLimit(), 0} || snapshots[1] != [3]int{used, coordinator.LLM.InputByteLimit(), 321} {
+	if usage.RequestInputBytes != used || usage.ProviderInputTokens != 321 || usage.RequestMessageCount != len(messages) || usage.Model != "fixture-model" || !usage.Succeeded || len(snapshots) != 2 || snapshots[0] != [4]int{used, coordinator.LLM.InputByteLimit(), 0, 0} || snapshots[1] != [4]int{used, coordinator.LLM.InputByteLimit(), 0, 321} {
 		t.Fatalf("request telemetry mismatch: saved=%+v snapshots=%+v request_bytes=%d", usage, snapshots, used)
 	}
 }
@@ -261,6 +261,24 @@ func TestCoordinatorPlanningUsesCompleteRequestTokenBudget(t *testing.T) {
 	restored, err := coordinator.boundedPlanningPrompt(state, system, previous, correction)
 	if err != nil || restored != full || len(state.OperatorMessages) != 30 {
 		t.Fatal("token-pressure planning changed the durable assessment")
+	}
+}
+
+func TestDaybreakCoordinatorKeepsUsefulTextBeyondFormerByteCeiling(t *testing.T) {
+	state := State{Goal: "Review the saved observations", Scope: "Synthetic records only"}
+	for i := 0; i < 180; i++ {
+		state.OperatorMessages = append(state.OperatorMessages, fmt.Sprintf("User: saved note %d %s", i, strings.Repeat("routine evidence remains available. ", 30)))
+	}
+	full := coordinatorPrompt(state)
+	client := (llmclient.Client{Model: "gpt-daybreak-blue-latest", AuthTokenFile: "bridge", MaxInputBytes: llmclient.SubscriptionInputByteLimit}).WithDaybreakAssessmentBudget()
+	coordinator := Coordinator{LLM: client}
+	prompt, err := coordinator.boundedPlanningPrompt(state, "planning instructions", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := []llmclient.Message{{Role: "system", Content: "planning instructions"}, {Role: "user", Content: prompt}}
+	if len(prompt) <= llmclient.SubscriptionInputByteLimit || prompt != full || client.CountInputTokens(request) > client.MaxInputTokens {
+		t.Fatalf("coordinator pruned fitting context: bytes=%d tokens=%d/%d", len(prompt), client.CountInputTokens(request), client.MaxInputTokens)
 	}
 }
 

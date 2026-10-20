@@ -438,19 +438,21 @@ function renderOverview(view) {
   $('contextWindow').classList.toggle('hidden', !hasContext);
   if (hasContext) {
     const percent = Math.max(0, Math.min(100, Number(context.percent) || 0));
-    $('contextUsageLabel').textContent = context.used_bytes ? formatBytes(context.used_bytes) + ' / ' + formatBytes(context.limit_bytes) : 'No request yet';
+    const tokenMeasured = context.limit_tokens > 0 && context.provider_input_tokens > 0;
+    $('contextUsageLabel').textContent = tokenMeasured ? `${Number(context.provider_input_tokens).toLocaleString()} / ${Number(context.limit_tokens).toLocaleString()} tokens` : context.used_bytes ? formatBytes(context.used_bytes) + ' / ' + formatBytes(context.limit_bytes) : 'No request yet';
     $('contextFill').style.width = percent + '%';
     $('contextFill').dataset.state = percent >= 90 ? 'high' : percent >= 75 ? 'warm' : '';
-    const providerTokens = context.provider_input_tokens > 0 ? ` · ${Number(context.provider_input_tokens).toLocaleString()} input tokens reported for the last completed request` : '';
-    $('contextUsageDetail').textContent = context.used_bytes ? `${context.active ? 'Current' : 'Last saved'} request · ${percent}% of app byte limit${providerTokens}` : 'Waiting for coordinator request';
+    const providerTokens = context.provider_input_tokens > 0 ? ` · ${Number(context.provider_input_tokens).toLocaleString()} provider input tokens` : '';
+    $('contextUsageDetail').textContent = context.used_bytes ? `${tokenMeasured ? 'Last completed request' : context.active ? 'Current request' : 'Last saved request'} · ${percent}% of ${tokenMeasured ? 'token allowance' : 'app byte limit'} · ${formatBytes(context.used_bytes)} / ${formatBytes(context.limit_bytes)} bytes${tokenMeasured ? '' : providerTokens}` : 'Waiting for coordinator request';
     const agents = view.context_windows || [context];
     if (changed('context-breakdown', [view.id, agents])) {
-      const intro = node('p', 'context-explainer', 'Coordinator and current workers have separate contexts. The percentage still uses the app byte limit. Token counts come from the provider after a completed request; there is no token-limit percentage yet. Finished worker packets remain in Context for debugging.');
+      const intro = node('p', 'context-explainer', 'Coordinator and current workers have separate contexts. Daybreak percentages use provider tokens for the last completed request; before then, they use the app byte limit. Finished worker packets remain in Context for debugging.');
       const rows = agents.map(agent => {
         const row = node('div', 'context-agent');
         const name = node('span', 'context-agent-name', agent.role === 'worker' ? `Worker · ${agent.agent_id}` : 'Coordinator');
         const state = node('span', 'context-agent-status', agent.status === 'interrupted' ? 'Interrupted' : agent.status === 'waiting' ? 'Waiting for workers' : agent.status === 'thinking' ? 'Thinking' : agent.status === 'finished' ? 'Finished' : agent.status === 'idle' ? 'Idle' : phaseLabel(agent.status));
-        const measure = node('span', 'context-agent-measure', agent.used_bytes ? `${agent.active ? 'Current' : 'Last saved'} · ${formatBytes(agent.used_bytes)} / ${formatBytes(agent.limit_bytes)} app bytes · ${agent.percent}%${agent.provider_input_tokens > 0 ? ` · ${Number(agent.provider_input_tokens).toLocaleString()} provider input tokens` : ''}` : 'No request yet');
+        const measuredTokens = agent.limit_tokens > 0 && agent.provider_input_tokens > 0;
+        const measure = node('span', 'context-agent-measure', agent.used_bytes ? `${measuredTokens ? 'Last completed' : agent.active ? 'Current' : 'Last saved'} · ${measuredTokens ? `${Number(agent.provider_input_tokens).toLocaleString()} / ${Number(agent.limit_tokens).toLocaleString()} tokens` : `${formatBytes(agent.used_bytes)} / ${formatBytes(agent.limit_bytes)} app bytes`} · ${agent.percent}%${measuredTokens ? ` · ${formatBytes(agent.used_bytes)} input text` : agent.provider_input_tokens > 0 ? ` · ${Number(agent.provider_input_tokens).toLocaleString()} provider input tokens` : ''}` : 'No request yet');
         row.append(name, state, measure);
         return row;
       });

@@ -214,6 +214,7 @@ func (s *Server) restoreRun(customer, root string) error {
 	coordinatorContext := record.CoordinatorContext
 	if coordinatorContext.LimitBytes == 0 {
 		coordinatorContext = lastCoordinatorRequestContext(root, state.MaxInputBytes)
+		coordinatorContext.LimitTokens = state.MaxInputTokens
 	}
 	current := &run{permissionMode: record.PermissionMode.Normalized(), id: id, customer: customer, root: root, client: client, profileID: record.ModelProfile, goal: state.Goal, scope: state.Scope, status: status, state: state, coordinatorContext: coordinatorContext, resume: true, done: make(chan struct{}), approvals: make(map[string]*pendingApproval), questions: make(map[string]*pendingQuestion), sequence: record.Sequence, events: events, workers: workers, messages: append([]intakeMessage(nil), record.Messages...), updatedAt: updated}
 	if record.PostRunUsage != nil {

@@ -25,6 +25,7 @@ Current active docs are intentionally minimal:
 - `docs/runbooks/comparative-evaluation.md`
 - `docs/strategies/catalog.md` and its selectively read worker guides
 - `docs/architecture.md`
+- `docs/third-party-licenses.md`
 
 `TASKS.md` owns status, `docs/architecture.md` owns contracts, and `ROADMAP.md` owns future direction. Update the relevant active docs with behavior changes; archive superseded designs instead of retaining conflicting instructions. Assessments are dated evidence, not implementation status.
 

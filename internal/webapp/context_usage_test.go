@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/Jawbreaker1/CodeHackBot/internal/assessment"
 	"github.com/Jawbreaker1/CodeHackBot/internal/llmclient"
 )
 
@@ -38,5 +39,20 @@ func TestLastCoordinatorRequestContextRestoresMeasuredPacket(t *testing.T) {
 	}
 	if restored := lastCoordinatorRequestContext(root, 128<<10); restored.ProviderInputTokens != 15 {
 		t.Fatalf("lost matching provider token count: %+v", restored)
+	}
+}
+
+func TestTokenAwareContextWindowUsesProviderCountAfterCompletion(t *testing.T) {
+	state := assessment.State{MaxInputBytes: 1000, MaxInputTokens: 100}
+	primary, all := agentContextWindows(state, contextWindowView{UsedBytes: 350, LimitBytes: 1000, LimitTokens: 100, ProviderInputTokens: 72}, []workerView{
+		{ID: "measured", Phase: "decision_started", ContextUsedBytes: 100, ContextLimitBytes: 1000, ProviderInputTokens: 28},
+		{ID: "pending", Phase: "decision_started", ContextUsedBytes: 250, ContextLimitBytes: 1000},
+	}, "running", true, false, nil)
+	if primary.LimitTokens != 100 || primary.Percent != 72 || len(all) != 3 || all[1].Percent != 28 || all[2].Percent != 25 {
+		t.Fatalf("token/byte display did not distinguish completed and pending requests: primary=%+v all=%+v", primary, all)
+	}
+	chat, _ := agentContextWindows(state, contextWindowView{UsedBytes: 350, LimitBytes: 1000, ProviderInputTokens: 72}, nil, "completed", false, false, nil)
+	if chat.LimitTokens != 0 || chat.Percent != 35 {
+		t.Fatalf("byte-governed follow-up chat inherited the assessment token limit: %+v", chat)
 	}
 }
