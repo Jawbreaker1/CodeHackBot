@@ -1,5 +1,12 @@
 # Discoveries
 
+## Daybreak token-budget live smoke — 2026-10-20
+
+- A fresh, focused, non-intrusive `opensverige.se` assessment was run through the web UI in project `opensverige`: `web-assessment-20261020-133621.446121578-000002`. It completed in 28 minutes 50 seconds with two reviewed rounds, three workers, 30 model calls, no failed calls, and a saved report and evidence index. The second round ran an API-publication worker and a bounded TLS worker concurrently. An operator message during their run was acknowledged, and the coordinator ended after that round as requested.
+- Daybreak provider usage was persisted for all three coordinator planning calls (9,585, 18,119, and 27,601 input tokens) and all worker calls. The largest recorded worker input was 31,586 tokens. Worker context snapshots remained separate and passed their recorded validations. The web meter showed bytes during a pending call and provider tokens after completion. This run did not approach the 128,000-token allowance or exercise compaction, so it does not validate near-limit behavior or long-session recovery.
+- The report kept a missing CSP as a low-severity candidate without demonstrated impact; a suspected community-API disclosure was refuted against current public-page and policy evidence. It recorded the untested external membership service and other coverage gaps. The report's cited execution logs exist. This is one end-to-end smoke test of orchestration, context accounting, and reporting, not acceptance evidence for pentest effectiveness or absence of target vulnerabilities.
+- Live use exposed a stale "Coordinator input bytes" heading above a token value. The heading is now "Coordinator context". In-assessment chat remains byte-budgeted by design, including attachment-bearing conversations; token-driven admission currently applies to text-only assessment planning and workers.
+
 ## Vulnerability research source check — 2026-10-10
 
 - The installed Kali host has SearchSploit/Exploit-DB (`exploitdb 20260205-0kali1`, about 10 MB of exploit index) and Metasploit (`metasploit-framework 6.4.112-0kali1`). A local SearchSploit query for a known CVE returned entries; these are useful exploit/module leads, not comprehensive or necessarily current CVE coverage. No imported local NVD, OSV, or CISA KEV snapshot was found in the locations checked during this inventory. Air-gapped research remains limited to the installed catalogs and any snapshots an operator later provisions.
