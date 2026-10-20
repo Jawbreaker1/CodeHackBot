@@ -19,17 +19,32 @@ import (
 	"github.com/Jawbreaker1/CodeHackBot/internal/llmclient"
 	"github.com/Jawbreaker1/CodeHackBot/internal/session"
 	"github.com/Jawbreaker1/CodeHackBot/internal/sessionstate"
+	"github.com/Jawbreaker1/CodeHackBot/internal/subscription"
 )
 
 // Opt-in real-model diagnostic: the required observation is absent from the
 // bounded request but present in the worker's saved result catalog and log.
 func TestLiveOffloadedResultRecall(t *testing.T) {
 	if os.Getenv("BHB_CONTEXT_LIVE_OFFLOAD") != "1" {
-		t.Skip("set BHB_CONTEXT_LIVE_OFFLOAD=1 with a local bridge token file")
+		t.Skip("set BHB_CONTEXT_LIVE_OFFLOAD=1 for a self-contained subscription smoke")
 	}
 	tokenFile := os.Getenv("BHB_CONTEXT_TOKEN_FILE")
+	baseURL := "http://127.0.0.1:8787/v1"
 	if tokenFile == "" {
-		t.Fatal("BHB_CONTEXT_TOKEN_FILE is required")
+		home := os.Getenv("CODEX_HOME")
+		if home == "" {
+			userHome, err := os.UserHomeDir()
+			if err != nil {
+				t.Fatal(err)
+			}
+			home = filepath.Join(userHome, ".codex")
+		}
+		bridge, err := subscription.StartLocalBridge(t.Context(), home)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer bridge.Close()
+		tokenFile, baseURL = bridge.TokenFile, bridge.BaseURL
 	}
 	root := os.Getenv("BHB_CONTEXT_RUN_DIR")
 	if root == "" {
@@ -56,11 +71,11 @@ func TestLiveOffloadedResultRecall(t *testing.T) {
 		session.Foundation{Goal: goal, ReportingRequirement: "cite the exact saved observation"}, root, "gpt-daybreak-blue-latest", "denied", 8,
 	)
 	packet.CurrentStep.DoneCondition = "Report the exact verification tag and the registered stdout log reference"
-	for i := 0; i < 400; i++ {
+	for i := 0; i < 80; i++ {
 		ref := filepath.Join(logDir, fmt.Sprintf("routine-%03d", i))
 		packet.RelevantRecentResults = append(packet.RelevantRecentResults, ctxpacket.ExecutionResult{
 			Action: fmt.Sprintf("routine saved observation %03d", i), ActualExec: fmt.Sprintf("read synthetic note %03d", i),
-			ExitStatus: "0", OutputSummary: "Routine synthetic observation with no verification tag.",
+			ExitStatus: "0", OutputSummary: strings.Repeat("Routine synthetic observation with no verification tag. ", 8),
 			OutputEvidence: strings.Repeat("ordinary recorded detail ", 18), LogRefs: []string{ref},
 		})
 	}
@@ -69,7 +84,7 @@ func TestLiveOffloadedResultRecall(t *testing.T) {
 		OutputSummary: "Earlier source-status observation stored in the registered stdout log; exact tag is not in this preview.",
 		LogRefs:       []string{oldRef},
 	})
-	inputBytes := 48 * 1024
+	inputBytes := llmclient.DaybreakAssessmentInputBytes
 	if configured := os.Getenv("BHB_CONTEXT_INPUT_BYTES"); configured != "" {
 		value, err := strconv.Atoi(configured)
 		if err != nil || value <= 0 {
@@ -77,8 +92,18 @@ func TestLiveOffloadedResultRecall(t *testing.T) {
 		}
 		inputBytes = value
 	}
-	client := llmclient.Client{BaseURL: "http://127.0.0.1:8787/v1", Model: "gpt-daybreak-blue-latest", AuthTokenFile: tokenFile, ReasoningEffort: "high", MaxInputBytes: inputBytes}
-	initial, err := packet.ModelView(client.InputByteLimit() - 8192)
+	inputTokens := 18_000
+	if configured := os.Getenv("BHB_CONTEXT_INPUT_TOKENS"); configured != "" {
+		value, err := strconv.Atoi(configured)
+		if err != nil || value <= 0 {
+			t.Fatalf("invalid BHB_CONTEXT_INPUT_TOKENS %q", configured)
+		}
+		inputTokens = value
+	}
+	client := llmclient.Client{BaseURL: baseURL, Model: "gpt-daybreak-blue-latest", AuthTokenFile: tokenFile, ReasoningEffort: "high",
+		MaxInputBytes: inputBytes, MaxInputTokens: inputTokens, CountInputTokens: llmclient.DaybreakTextInputTokens}
+	loop := Loop{LLM: client, Executor: execx.Executor{LogDir: logDir}, Approver: approval.StaticApprover{Decision: approval.DecisionDeny}, Inspector: contextinspect.Recorder{Dir: filepath.Join(root, "context")}}
+	initial, err := loop.modelView(&packet, buildUserPrompt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +117,6 @@ func TestLiveOffloadedResultRecall(t *testing.T) {
 	if err := sessionstate.Save(filepath.Join(root, "session-initial.json"), sessionstate.State{Status: "running", Model: client.Model, MaxSteps: 8, Packet: packet}); err != nil {
 		t.Fatal(err)
 	}
-	loop := Loop{LLM: client, Executor: execx.Executor{LogDir: logDir}, Approver: approval.StaticApprover{Decision: approval.DecisionDeny}, Inspector: contextinspect.Recorder{Dir: filepath.Join(root, "context")}}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	out, runErr := loop.Run(ctx, packet, 8)

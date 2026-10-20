@@ -59,6 +59,9 @@ func coordinatorPromptMeasured(state State, limit int, measure func(string) int)
 		}
 	}
 	oldCount := recentBatchStart(packet.Assessment)
+	if oldCount > 0 {
+		packet.ContextNotes = append(packet.ContextNotes, "Older workers may be compact navigation entries. Full results and evidence remain under tasks/<task-id>/; delegate a focused evidence read when an older detail matters.")
+	}
 	for i := 0; i < oldCount; i++ {
 		result := &packet.Assessment.Results[i]
 		result.Task.Goal = promptExcerpt(result.Task.Goal, 320)
@@ -78,9 +81,13 @@ func coordinatorPromptMeasured(state State, limit int, measure func(string) int)
 		} else {
 			packet.RecordedEvidence[result.Task.ID] = kept
 		}
-	}
-	if oldCount > 0 {
-		packet.ContextNotes = append(packet.ContextNotes, "Older workers are compact navigation entries. Full results and evidence remain under tasks/<task-id>/; delegate a focused evidence read when an older detail matters.")
+		// Remove only as much history as is needed. A long assessment can cross
+		// the budget by one result; clearing every older preview at once would
+		// throw away useful context despite substantial remaining headroom.
+		prompt = encode()
+		if measure(prompt) <= limit {
+			return prompt, nil
+		}
 	}
 	prompt = encode()
 	if measure(prompt) <= limit {
