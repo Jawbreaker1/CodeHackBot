@@ -165,13 +165,21 @@ func (s *Server) newRun(customer, goal, scope string) (*run, error) {
 		return nil, fmt.Errorf("create assessment directory: %w", err)
 	}
 	current := &run{id: id, customer: customer, root: root, client: s.config.LLM, profileID: s.config.DefaultProfile, goal: goal, scope: scope, status: "draft", done: make(chan struct{}), approvals: make(map[string]*pendingApproval), questions: make(map[string]*pendingQuestion), updatedAt: time.Now().UTC()}
-	s.mu.Lock()
-	s.runs[id] = current
-	s.mu.Unlock()
-	if err := current.persist(); err != nil {
+	if err := s.publishRun(current); err != nil {
+		_ = os.RemoveAll(root)
 		return nil, fmt.Errorf("save assessment session: %w", err)
 	}
 	return current, nil
+}
+
+func (s *Server) publishRun(current *run) error {
+	if err := current.persist(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.runs[current.id] = current
+	s.mu.Unlock()
+	return nil
 }
 
 func (s *Server) assessmentRoute(w http.ResponseWriter, r *http.Request) {

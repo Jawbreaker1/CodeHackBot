@@ -3,7 +3,9 @@ package assessment
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -25,6 +27,13 @@ type SourceLine struct {
 	Text   string `json:"text"`
 }
 
+type SourcePathKind string
+
+const (
+	SourceFilePath SourcePathKind = "file"
+	SourceWebPath  SourcePathKind = "web"
+)
+
 const maxSourceArtifactBytes = 1 << 20
 
 func readSourceArtifact(ref string) (SourceArtifact, error) {
@@ -40,8 +49,14 @@ func readSourceArtifact(ref string) (SourceArtifact, error) {
 	if err := json.Unmarshal(data, &artifact); err != nil {
 		return SourceArtifact{}, fmt.Errorf("source artifact is not structured JSON: %w", err)
 	}
-	if artifact.Version != 1 || strings.TrimSpace(artifact.Repository) == "" || strings.TrimSpace(artifact.Revision) == "" || !filepath.IsLocal(artifact.Path) || filepath.Clean(artifact.Path) != artifact.Path || len(artifact.Lines) == 0 || len(artifact.Lines) > 300 {
-		return SourceArtifact{}, fmt.Errorf("source artifact metadata or line count is invalid")
+	if artifact.Version != 1 || strings.TrimSpace(artifact.Repository) == "" || strings.TrimSpace(artifact.Revision) == "" {
+		return SourceArtifact{}, fmt.Errorf("source artifact version, repository, or revision is invalid")
+	}
+	if ClassifySourcePath(artifact.Repository, artifact.Path) == "" {
+		return SourceArtifact{}, fmt.Errorf("source artifact path must be a clean relative file path, or a root-relative URL path for an HTTP(S) repository")
+	}
+	if len(artifact.Lines) == 0 || len(artifact.Lines) > 300 {
+		return SourceArtifact{}, fmt.Errorf("source artifact line count is invalid")
 	}
 	previous := 0
 	for _, line := range artifact.Lines {
@@ -51,6 +66,35 @@ func readSourceArtifact(ref string) (SourceArtifact, error) {
 		previous = line.Number
 	}
 	return artifact, nil
+}
+
+// ClassifySourcePath keeps logical source locations separate from the local
+// artifact filename. The path is never used to open a file or fetch a URL.
+func ClassifySourcePath(repository, sourcePath string) SourcePathKind {
+	parsedPath, err := url.Parse(sourcePath)
+	if err != nil || parsedPath.Scheme != "" || parsedPath.Host != "" {
+		return ""
+	}
+	if filepath.IsLocal(sourcePath) && filepath.Clean(sourcePath) == sourcePath {
+		return SourceFilePath
+	}
+	repoURL, err := url.Parse(repository)
+	if err != nil || (repoURL.Scheme != "http" && repoURL.Scheme != "https") || repoURL.Host == "" {
+		return ""
+	}
+	cleanPath := strings.TrimSuffix(sourcePath, "/")
+	if strings.HasPrefix(sourcePath, "/") && !strings.HasPrefix(sourcePath, "//") &&
+		!strings.ContainsAny(sourcePath, "\\?#") && (sourcePath == "/" || path.Clean(cleanPath) == cleanPath) {
+		return SourceWebPath
+	}
+	return ""
+}
+
+func (location SourceLocation) SourceLabel() string {
+	if ClassifySourcePath(location.Repository, location.Path) == SourceWebPath {
+		return "Web page"
+	}
+	return "Source file"
 }
 
 // The registered artifact owns provenance metadata. The coordinator selects

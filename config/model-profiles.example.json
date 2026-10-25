@@ -8,6 +8,7 @@
       "model": "gpt-daybreak-blue-latest",
       "managed_bridge": true,
       "reasoning_effort": "high",
+      "max_workers": 10,
       "max_input_bytes": 131072
     },
     {
@@ -17,6 +18,7 @@
       "base_url": "http://127.0.0.1:1234/v1",
       "model": "qwen/qwen3.8-27b",
       "reasoning_effort": "low",
+      "max_workers": 2,
       "structured_json": true,
       "max_input_bytes": 98304,
       "max_output_tokens": 32768,

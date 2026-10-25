@@ -49,6 +49,7 @@ type Server struct {
 
 type intakeRun struct {
 	permissionMode approval.Mode
+	workerCeiling  int
 	mu             sync.RWMutex
 	id             string
 	root           string
@@ -304,6 +305,7 @@ type messageView struct {
 
 type intakeView struct {
 	PermissionMode  approval.Mode       `json:"permission_mode"`
+	MaxWorkers      int                 `json:"max_workers"`
 	ID              string              `json:"id"`
 	Customer        string              `json:"customer,omitempty"`
 	Title           string              `json:"title"`
@@ -349,6 +351,7 @@ type modelRequest struct {
 type intakeStartRequest struct {
 	Customer   string `json:"customer"`
 	ApproachID string `json:"approach_id,omitempty"`
+	MaxWorkers int    `json:"max_workers,omitempty"`
 }
 
 type intakeCustomerRequest struct {

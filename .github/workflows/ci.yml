@@ -13,7 +13,7 @@ jobs:
   rebuild-root:
     name: Rebuild Root
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -24,6 +24,17 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install browser test dependencies
+        run: |
+          npm ci --prefix tools/playwright-runner --ignore-scripts
+          cd tools/playwright-runner
+          npx playwright install --with-deps --only-shell chromium
 
       - name: Run Deterministic CI
         env:

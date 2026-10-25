@@ -36,8 +36,8 @@ def call(base, path, method="GET", value=None):
 
 def run_session(base, customer, goal, mode="per_action"):
     expect_approval = mode != "full_access"
-    status, intake = call(base, "/api/v1/intake")
-    assert status == 200 and intake["status"] == "conversation", intake
+    status, intake = call(base, "/api/v1/intake", "POST")
+    assert status == 201 and intake["status"] == "conversation", intake
     if mode != "per_action":
         _, intake = call(base, f"/api/v1/intake/{intake['id']}/permissions", "POST", {"mode": mode, "acknowledge": True})
     _, intake = call(base, f"/api/v1/intake/{intake['id']}/messages", "POST", {"text": goal})
@@ -82,7 +82,7 @@ def run_session(base, customer, goal, mode="per_action"):
 
 
 def run_pending_approval_switch(base):
-    _, intake = call(base, "/api/v1/intake")
+    _, intake = call(base, "/api/v1/intake", "POST")
     _, intake = call(base, f"/api/v1/intake/{intake['id']}/messages", "POST", {"text": "record mode-switch web fixture"})
     _, view = call(base, f"/api/v1/intake/{intake['id']}/start", "POST", {"customer": "permissions"})
     assessment_id = view["id"]
@@ -185,10 +185,11 @@ def main():
             assert [session["id"] for session in customer["sessions"]] == [second["id"]], customer
             _, report = call_text(base, customer["report_url"])
             assert first["id"] not in report and second["id"] in report, report
-            _, draft = call(base, "/api/v1/intake")
+            _, draft = call(base, "/api/v1/intake", "POST")
             status, _ = call(base, f"/api/v1/intake/{draft['id']}", "DELETE")
             assert status == 204
             assert not (root / "sessions" / "intake" / draft["id"]).exists()
+            subprocess.run(["node", str(Path(__file__).with_name("check_web_ui.mjs")), base], check=True, timeout=60)
             print("web application: HTTP lifecycle, approval modes, customer aggregation, and session deletion passed", flush=True)
     finally:
         if process is not None and process.poll() is None:

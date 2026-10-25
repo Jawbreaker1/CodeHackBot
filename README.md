@@ -26,7 +26,7 @@ Every run keeps its scope, actions, outputs, captured screenshots, and conclusio
 
 Put related sessions in a customer folder to compare runs on the same system. The project view keeps each run's evidence distinct, tracks explicit retests, and helps reveal what remains untested. Its analysis guide answers questions about the saved results in plain language and can suggest a follow-up. A project-level follow-up opens a **new session in that folder**; a suggestion from one assessment can continue that assessment. Neither starts a test until you choose to send the request and approve the plan.
 
-Ask the coordinator or analysis guide for an OWASP WSTG- or PTES-aligned report in Markdown or PDF. Reports link back to saved evidence; the analysis guide can also make a new, edited report draft while preserving the earlier version. PDF exports retain an editable Markdown source. Reports are drafts for professional review, and they identify missing evidence.
+Ask the coordinator or analysis guide for an OWASP WSTG- or PTES-aligned report in Markdown or PDF. Reports link back to saved evidence; the analysis guide can revise the summary and editorial notes while the recorded findings, open questions, and evidence are rebuilt from the session. Earlier versions stay available, with the latest marked in the analysis conversation. PDF exports retain an editable Markdown source. Reports are drafts for professional review, and they identify missing evidence.
 
 ![Analysis of a local test service, showing a checked finding and recommended fix](docs/screenshots/assessment-analysis.png)
 

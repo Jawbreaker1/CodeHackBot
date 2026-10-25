@@ -129,6 +129,32 @@ func TestAnalysisAssistantSnapshotKeepsFocusWhenOtherSourcesAreOmitted(t *testin
 	}
 }
 
+func TestAnalysisAssistantSnapshotDoesNotRateUnconfirmedImpact(t *testing.T) {
+	view := analysisView{Kind: "assessment", ID: "run-1", Findings: []analysisFinding{
+		{ID: "candidate", Status: "candidate", Title: "Unconfirmed behavior", Severity: "high", Confidence: "high"},
+		{ID: "verified", Status: "reproduced", Title: "Reproduced issue", Severity: "medium", Confidence: "high"},
+	}}
+	snapshot, _, _, err := analysisAssistantSnapshot(view, "", 16*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var packet struct {
+		Sources []struct {
+			ID     string `json:"id"`
+			Detail struct {
+				Severity   string `json:"severity"`
+				Confidence string `json:"confidence"`
+			} `json:"detail"`
+		} `json:"sources"`
+	}
+	if err := json.Unmarshal([]byte(snapshot), &packet); err != nil {
+		t.Fatal(err)
+	}
+	if len(packet.Sources) < 4 || packet.Sources[2].ID != "F1" || packet.Sources[2].Detail.Severity != "" || packet.Sources[2].Detail.Confidence != "" || packet.Sources[3].ID != "F2" || packet.Sources[3].Detail.Severity != "medium" {
+		t.Fatalf("assistant snapshot confused candidate and reproduced ratings: %+v", packet.Sources)
+	}
+}
+
 func TestAnalysisAssistantSnapshotNamesViewScopeWithinLocalModelBudget(t *testing.T) {
 	for _, kind := range []string{"assessment", "customer"} {
 		view := analysisView{Kind: kind, ID: "run-1", Customer: "lab", SessionCount: 1, Summary: "Saved test summary"}

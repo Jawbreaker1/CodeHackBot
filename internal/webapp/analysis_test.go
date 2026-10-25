@@ -67,8 +67,11 @@ func TestAnalysisActionsKeepFindingLanguageAndPriority(t *testing.T) {
 
 func TestAnalysisSummaryUsesReadableSingularCounts(t *testing.T) {
 	summary := analysisSummary("completed", analysisRisk{Reproduced: 1, Candidates: 1}, 2, 0, 0)
-	if strings.Contains(summary, "1 candidate still need") || !strings.Contains(summary, "1 possible finding still needs review") {
+	if !strings.Contains(summary, "1 candidate observation still needs review") {
 		t.Fatalf("singular finding summary is unclear: %s", summary)
+	}
+	if summary := analysisSummary("completed", analysisRisk{Candidates: 2}, 2, 0, 0); !strings.Contains(summary, "2 candidate observations need confirmation before becoming findings") {
+		t.Fatalf("unconfirmed observations were presented as findings: %s", summary)
 	}
 }
 

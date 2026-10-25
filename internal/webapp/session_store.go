@@ -53,6 +53,7 @@ type sessionRecord struct {
 	Scope              string               `json:"scope,omitempty"`
 	Target             string               `json:"target,omitempty"`
 	Approach           *assessment.Approach `json:"approach,omitempty"`
+	Limits             assessment.Limits    `json:"limits,omitempty"`
 	Model              string               `json:"model,omitempty"`
 	ModelProfile       string               `json:"model_profile,omitempty"`
 	Status             string               `json:"status,omitempty"`
@@ -139,7 +140,7 @@ func (s *Server) restoreIntakes(root string) error {
 		conversation := intake.Conversation{}
 		conversation.SetBehaviorContext(s.config.Frame.PromptText())
 		conversation.RestoreMessages(record.Conversation)
-		current := &intakeRun{permissionMode: record.PermissionMode.Normalized(), id: record.ID, root: sessionRoot, customer: record.Customer, client: client, profileID: record.ModelProfile, conversation: conversation, messages: append([]intakeMessage(nil), record.Messages...), proposal: cloneDraft(record.Proposal), assessmentID: record.AssessmentID, events: append([]eventRecord(nil), record.Events...), updatedAt: record.UpdatedAt}
+		current := &intakeRun{permissionMode: record.PermissionMode.Normalized(), id: record.ID, root: sessionRoot, customer: record.Customer, client: client, profileID: record.ModelProfile, workerCeiling: s.workerCeiling(record.ModelProfile), conversation: conversation, messages: append([]intakeMessage(nil), record.Messages...), proposal: cloneDraft(record.Proposal), assessmentID: record.AssessmentID, events: append([]eventRecord(nil), record.Events...), updatedAt: record.UpdatedAt}
 		s.mu.Lock()
 		s.intakes[current.id] = current
 		s.mu.Unlock()
@@ -163,7 +164,7 @@ func (s *Server) restoreRun(customer, root string) error {
 				// session record was written. It is not a resumable session.
 				return nil
 			}
-			state = assessment.State{Version: 1, ID: record.ID, Goal: record.Goal, Scope: record.Scope, Approach: record.Approach, Model: record.Model, Status: "draft"}
+			state = assessment.State{Version: 1, ID: record.ID, Goal: record.Goal, Scope: record.Scope, Approach: record.Approach, Limits: record.Limits, Model: record.Model, Status: "draft"}
 		} else {
 			return fmt.Errorf("restore assessment %s: %w", filepath.Base(root), err)
 		}
@@ -322,7 +323,7 @@ func (r *run) persist() error {
 	if r.postRunBudget != nil {
 		postRunUsage = r.postRunBudget.Usage()
 	}
-	record := sessionRecord{PermissionMode: r.permissionMode.Normalized(), Version: sessionRecordVersion, Kind: "assessment", ID: r.id, Customer: r.customer, Goal: r.goal, Scope: r.scope, Target: r.state.Target, Approach: r.state.Approach, Model: r.client.Model, ModelProfile: r.profileID, Status: r.status, Usage: &usage, PostRunUsage: &postRunUsage, CoordinatorContext: r.coordinatorContext, Messages: append([]intakeMessage(nil), r.messages...), Events: append([]eventRecord(nil), r.events...), Workers: workers, Sequence: r.sequence, UpdatedAt: r.updatedAt}
+	record := sessionRecord{PermissionMode: r.permissionMode.Normalized(), Version: sessionRecordVersion, Kind: "assessment", ID: r.id, Customer: r.customer, Goal: r.goal, Scope: r.scope, Target: r.state.Target, Approach: r.state.Approach, Limits: r.state.Limits, Model: r.client.Model, ModelProfile: r.profileID, Status: r.status, Usage: &usage, PostRunUsage: &postRunUsage, CoordinatorContext: r.coordinatorContext, Messages: append([]intakeMessage(nil), r.messages...), Events: append([]eventRecord(nil), r.events...), Workers: workers, Sequence: r.sequence, UpdatedAt: r.updatedAt}
 	root := r.root
 	r.mu.RUnlock()
 	return atomicWriteJSON(filepath.Join(root, "session.json"), record)

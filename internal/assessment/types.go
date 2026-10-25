@@ -11,6 +11,7 @@ import (
 	"time"
 
 	ctxpacket "github.com/Jawbreaker1/CodeHackBot/internal/context"
+	"github.com/Jawbreaker1/CodeHackBot/internal/researchrecord"
 )
 
 type Limits struct {
@@ -94,32 +95,35 @@ type EvidenceView struct {
 }
 
 type Result struct {
-	Task            Task                        `json:"task"`
-	Status          string                      `json:"status"`
-	Summary         string                      `json:"summary"`
-	LeadHints       []string                    `json:"lead_hints,omitempty"`
-	Error           string                      `json:"error,omitempty"`
-	Evidence        []ctxpacket.ExecutionResult `json:"evidence"`
-	DeniedExecution *ctxpacket.DeniedExecution  `json:"denied_execution,omitempty"`
-	Verification    *VerificationResult         `json:"verification,omitempty"`
+	Task            Task                                 `json:"task"`
+	Status          string                               `json:"status"`
+	Summary         string                               `json:"summary"`
+	LeadHints       []string                             `json:"lead_hints,omitempty"`
+	Error           string                               `json:"error,omitempty"`
+	Evidence        []ctxpacket.ExecutionResult          `json:"evidence"`
+	DeniedExecution *ctxpacket.DeniedExecution           `json:"denied_execution,omitempty"`
+	Verification    *VerificationResult                  `json:"verification,omitempty"`
+	Software        []researchrecord.SoftwareObservation `json:"software_observations,omitempty"`
+	Advisories      []researchrecord.AdvisoryAssessment  `json:"advisory_assessments,omitempty"`
 }
 
 // Findings are model-authored drafts, never independent verification claims.
 type Finding struct {
-	Title            string           `json:"title"`
-	RelatedPrior     []string         `json:"related_prior,omitempty"` // Explicit project-history finding IDs; never proof of equivalence.
-	Status           string           `json:"status"`                  // candidate or reproduced
-	Severity         string           `json:"severity,omitempty"`      // critical, high, medium, low, or info
-	Confidence       string           `json:"confidence,omitempty"`    // high, medium, or low
-	CVEIDs           []string         `json:"cve_ids,omitempty"`
-	AffectedSoftware []string         `json:"affected_software,omitempty"`
-	References       []string         `json:"references,omitempty"`
-	SourceLocations  []SourceLocation `json:"source_locations,omitempty"`
-	ValidationTask   string           `json:"validation_task,omitempty"`
-	Impact           string           `json:"impact"`
-	Steps            []string         `json:"steps"`
-	Evidence         []string         `json:"evidence"`
-	Remediation      []string         `json:"remediation"`
+	Title                string           `json:"title"`
+	RelatedPrior         []string         `json:"related_prior,omitempty"` // Explicit project-history finding IDs; never proof of equivalence.
+	Status               string           `json:"status"`                  // candidate, confirmed_exposure, or reproduced
+	Severity             string           `json:"severity,omitempty"`      // critical, high, medium, low, or info
+	Confidence           string           `json:"confidence,omitempty"`    // high, medium, or low
+	CVEIDs               []string         `json:"cve_ids,omitempty"`
+	AdvisoryAssessmentID string           `json:"advisory_assessment_id,omitempty"`
+	AffectedSoftware     []string         `json:"affected_software,omitempty"`
+	References           []string         `json:"references,omitempty"`
+	SourceLocations      []SourceLocation `json:"source_locations,omitempty"`
+	ValidationTask       string           `json:"validation_task,omitempty"`
+	Impact               string           `json:"impact"`
+	Steps                []string         `json:"steps"`
+	Evidence             []string         `json:"evidence"`
+	Remediation          []string         `json:"remediation"`
 }
 
 // SourceLocation ties a code observation to a registered source artifact.
@@ -314,7 +318,7 @@ func validateDecision(d Decision, state State) error {
 		if f.Title == "" || f.Impact == "" || len(f.Steps) == 0 || len(f.Remediation) == 0 || len(f.Evidence) == 0 {
 			return fmt.Errorf("finding lacks reproducible reporting fields")
 		}
-		if f.Status != "candidate" && f.Status != "reproduced" {
+		if f.Status != "candidate" && f.Status != "confirmed_exposure" && f.Status != "reproduced" {
 			return fmt.Errorf("unknown finding status %q", f.Status)
 		}
 		if f.Severity != "" && !validFindingSeverity(f.Severity) {
@@ -339,9 +343,6 @@ func validateDecision(d Decision, state State) error {
 			}
 		}
 		for _, source := range f.SourceLocations {
-			if strings.TrimSpace(source.Repository) == "" || strings.TrimSpace(source.Revision) == "" || !filepath.IsLocal(source.Path) || filepath.Clean(source.Path) != source.Path || source.StartLine < 1 || (source.EndLine != 0 && source.EndLine < source.StartLine) {
-				return fmt.Errorf("finding has an invalid source location")
-			}
 			if !artifacts[source.ArtifactRef] || !slices.Contains(f.Evidence, source.ArtifactRef) {
 				return fmt.Errorf("finding source location needs a cited, registered source artifact")
 			}
@@ -352,13 +353,19 @@ func validateDecision(d Decision, state State) error {
 		if len(f.CVEIDs) > 0 && len(f.References) == 0 {
 			return fmt.Errorf("finding with CVE leads needs a recorded research source")
 		}
-		if f.Status == "reproduced" {
+		if f.Status == "confirmed_exposure" && !confirmedExposureRecord(state, f) {
+			if advisory, ok := AdvisoryForFinding(state, f); ok && !strings.HasPrefix(advisory.ID, f.ValidationTask+":") {
+				return fmt.Errorf("confirmed exposure must cite an advisory assessment created by validation task %q, not %q; include that worker's registered advisory evidence in references", f.ValidationTask, f.AdvisoryAssessmentID)
+			}
+			return fmt.Errorf("confirmed exposure needs a matching affected advisory, strong build observation, and cited sources from its validation task")
+		}
+		if f.Status == "reproduced" || f.Status == "confirmed_exposure" {
 			r := known[f.ValidationTask]
 			if r.Status != "done" || !hasEarlierObservedTask(state, f.ValidationTask, known) || len(r.Evidence) == 0 {
-				return fmt.Errorf("reproduced finding needs a completed later-round validation task")
+				return fmt.Errorf("confirmed finding needs a completed later-round validation task")
 			}
 			if r.Task.Verification == nil || strings.TrimSpace(r.Task.Verification.Claim) == "" || strings.TrimSpace(r.Task.Verification.Alternative) == "" || r.Verification == nil || r.Verification.Verdict != "supported" || strings.TrimSpace(r.Verification.AlternativeResult) == "" || strings.TrimSpace(r.Verification.Reason) == "" || len(r.Verification.Evidence) == 0 {
-				return fmt.Errorf("reproduced finding needs a supported challenge verdict from its validation worker")
+				return fmt.Errorf("confirmed finding needs a supported challenge verdict from its validation worker")
 			}
 			ownEvidence := false
 			verifiedLogs := map[string]bool{}
@@ -373,7 +380,7 @@ func validateDecision(d Decision, state State) error {
 				}
 			}
 			if !ownEvidence {
-				return fmt.Errorf("reproduced finding must cite its validation task execution log")
+				return fmt.Errorf("confirmed finding must cite its validation task execution log")
 			}
 			challengeEvidence := false
 			for _, ref := range r.Verification.Evidence {
@@ -387,7 +394,7 @@ func validateDecision(d Decision, state State) error {
 				}
 			}
 			if !challengeEvidence {
-				return fmt.Errorf("reproduced finding must cite the challenge verdict's execution log")
+				return fmt.Errorf("confirmed finding must cite the challenge verdict's execution log")
 			}
 		}
 	}

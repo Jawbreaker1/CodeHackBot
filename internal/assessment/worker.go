@@ -84,6 +84,8 @@ func (c Coordinator) runWorker(ctx context.Context, root string, state State, ta
 	}
 	outcome, workerErr := loop.Run(ctx, packet, state.Limits.StepsPerTask)
 	r.Evidence = progress.evidence
+	software, advisories, recordErr := acceptResearchRecords(task.ID, state.Results, r.Evidence, outcome.Software, outcome.Advisories)
+	r.Software, r.Advisories = software, advisories
 	r.DeniedExecution = outcome.Packet.DeniedExecution
 	r.Summary = outcome.Summary
 	if r.Summary == "" {
@@ -108,6 +110,9 @@ func (c Coordinator) runWorker(ctx context.Context, root string, state State, ta
 	if workerErr != nil {
 		r.Error = workerErr.Error()
 	}
+	if recordErr != nil {
+		noteResearchRecordError(&r, recordErr)
+	}
 	if err := progress.save(outcome.Packet, r.Status, r.Summary, r.Error); err != nil {
 		return r, err
 	}
@@ -131,6 +136,13 @@ func (c Coordinator) runWorker(ctx context.Context, root string, state State, ta
 		EvidenceCount: len(r.Evidence),
 	})
 	return r, nil
+}
+
+// Optional research metadata must not erase a completed task or its challenge
+// verdict. Invalid records are discarded by acceptResearchRecords and cannot
+// support a confirmed exposure; the coordinator sees the gap in the summary.
+func noteResearchRecordError(result *Result, err error) {
+	result.Summary += "\nStructured research records were not saved: " + err.Error() + ". Review the cited execution evidence before making an advisory applicability finding."
 }
 
 func siblingTaskBoundaries(plan Decision, currentID string) []string {

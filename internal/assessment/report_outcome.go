@@ -38,15 +38,18 @@ func reportOutcome(state State) (summary string, unreviewed bool) {
 			}
 		}
 		findings, _ := reviewFindings(state)
-		candidates, reproduced := 0, 0
+		candidates, reproduced, exposures := 0, 0, 0
 		for _, finding := range findings {
-			if finding.Status == "reproduced" {
+			switch finding.Status {
+			case "reproduced":
 				reproduced++
-			} else {
+			case "confirmed_exposure":
+				exposures++
+			default:
 				candidates++
 			}
 		}
-		return fmt.Sprintf("Assessment status: %s. %d delegated task(s) completed; %d stopped after an operator-denied action. The denied actions did not execute. The recorded results list %d reproduced finding(s) and %d candidate(s); review their cited evidence and the unfinished task objectives below.", strings.ReplaceAll(state.Status, "_", " "), completed, blocked, reproduced, candidates), false
+		return fmt.Sprintf("Assessment status: %s. %d delegated task(s) completed; %d stopped after an operator-denied action. The denied actions did not execute. The recorded results list %d reproduced finding(s), %d confirmed exposure(s) without exploitation, and %d candidate(s); review their cited evidence and the unfinished task objectives below.", strings.ReplaceAll(state.Status, "_", " "), completed, blocked, reproduced, exposures, candidates), false
 	}
 	if len(state.Plans) > 0 && state.Plans[len(state.Plans)-1].Complete {
 		final := state.Plans[len(state.Plans)-1]

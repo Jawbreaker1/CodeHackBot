@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/Jawbreaker1/CodeHackBot/internal/researchrecord"
 )
 
 type PlanUpdate struct {
@@ -17,32 +19,34 @@ type PlanUpdate struct {
 // A plan may accompany any decision. It never changes the original goal,
 // done condition, scope, permissions or remaining budget.
 type Response struct {
-	Type            string          `json:"type"`
-	Command         string          `json:"command,omitempty"`
-	Args            []string        `json:"args,omitempty"`
-	UseShell        bool            `json:"use_shell,omitempty"`
-	Scenario        string          `json:"scenario,omitempty"`
-	ArtifactDir     string          `json:"artifact_dir,omitempty"`
-	CVE             string          `json:"cve,omitempty"`
-	Module          string          `json:"module,omitempty"`
-	MCPServer       string          `json:"mcp_server,omitempty"`
-	MCPTool         string          `json:"mcp_tool,omitempty"`
-	MCPArguments    json.RawMessage `json:"mcp_arguments,omitempty"`
-	MCPOffset       int             `json:"mcp_offset,omitempty"`
-	Impact          string          `json:"impact,omitempty"`
-	Target          string          `json:"target,omitempty"`
-	Risk            string          `json:"risk,omitempty"`
-	Artifacts       []string        `json:"artifacts,omitempty"`
-	Summary         string          `json:"summary,omitempty"`
-	LeadHints       []string        `json:"lead_hints,omitempty"`
-	Question        string          `json:"question,omitempty"`
-	Strategy        string          `json:"strategy,omitempty"`
-	ContextRef      string          `json:"context_ref,omitempty"`
-	ContextQuery    string          `json:"context_query,omitempty"`
-	ContextStream   string          `json:"context_stream,omitempty"`
-	ContextOffset   int64           `json:"context_offset,omitempty"`
-	ContextKeepRefs *[]string       `json:"context_keep_refs,omitempty"`
-	Plan            *PlanUpdate     `json:"plan,omitempty"`
+	Type            string                               `json:"type"`
+	Command         string                               `json:"command,omitempty"`
+	Args            []string                             `json:"args,omitempty"`
+	UseShell        bool                                 `json:"use_shell,omitempty"`
+	Scenario        string                               `json:"scenario,omitempty"`
+	ArtifactDir     string                               `json:"artifact_dir,omitempty"`
+	CVE             string                               `json:"cve,omitempty"`
+	Module          string                               `json:"module,omitempty"`
+	MCPServer       string                               `json:"mcp_server,omitempty"`
+	MCPTool         string                               `json:"mcp_tool,omitempty"`
+	MCPArguments    json.RawMessage                      `json:"mcp_arguments,omitempty"`
+	MCPOffset       int                                  `json:"mcp_offset,omitempty"`
+	Impact          string                               `json:"impact,omitempty"`
+	Target          string                               `json:"target,omitempty"`
+	Risk            string                               `json:"risk,omitempty"`
+	Artifacts       []string                             `json:"artifacts,omitempty"`
+	Summary         string                               `json:"summary,omitempty"`
+	LeadHints       []string                             `json:"lead_hints,omitempty"`
+	Software        []researchrecord.SoftwareObservation `json:"software_observations,omitempty"`
+	Advisories      []researchrecord.AdvisoryAssessment  `json:"advisory_assessments,omitempty"`
+	Question        string                               `json:"question,omitempty"`
+	Strategy        string                               `json:"strategy,omitempty"`
+	ContextRef      string                               `json:"context_ref,omitempty"`
+	ContextQuery    string                               `json:"context_query,omitempty"`
+	ContextStream   string                               `json:"context_stream,omitempty"`
+	ContextOffset   int64                                `json:"context_offset,omitempty"`
+	ContextKeepRefs *[]string                            `json:"context_keep_refs,omitempty"`
+	Plan            *PlanUpdate                          `json:"plan,omitempty"`
 }
 
 func ParseResponse(text string) (Response, error) {
@@ -157,6 +161,12 @@ func ParseResponse(text string) (Response, error) {
 	}
 	if r.Type != "step_complete" && len(r.LeadHints) != 0 {
 		return r, fmt.Errorf("only step_complete may contain lead hints")
+	}
+	if r.Type != "step_complete" && (len(r.Software) != 0 || len(r.Advisories) != 0) {
+		return r, fmt.Errorf("only step_complete may contain software and advisory observations")
+	}
+	if len(r.Software) > 4 || len(r.Advisories) > 8 {
+		return r, fmt.Errorf("step_complete may contain at most four software and eight advisory observations")
 	}
 	if len(r.LeadHints) > 3 {
 		return r, fmt.Errorf("step_complete may contain at most three lead hints")

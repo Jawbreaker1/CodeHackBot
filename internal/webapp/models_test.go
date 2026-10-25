@@ -62,17 +62,17 @@ func TestConfiguredProfilesRouteAndRestoreEntireClient(t *testing.T) {
 	if !catalog.ProfilesEnabled || len(catalog.Models) != 2 || catalog.Models[1].Model != "qwen/qwen3.8-27b" {
 		t.Fatalf("model menu = %+v", catalog)
 	}
-	first := getJSON[intakeView](t, app.URL+"/api/v1/intake")
-	if first.ModelProfile != "daybreak" {
+	first := postJSON[intakeView](t, app.URL+"/api/v1/intake", nil)
+	if first.ModelProfile != "daybreak" || first.MaxWorkers != 10 {
 		t.Fatalf("default intake = %+v", first)
 	}
 	_ = postJSON[intakeView](t, app.URL+"/api/v1/intake/"+first.ID+"/messages", intakeMessageRequest{Text: "Plan a scoped test"})
 	if call := <-daybreakCalls; call.Model != "gpt-daybreak-blue-latest" || call.ReasoningEffort != "high" {
 		t.Fatalf("default provider request = %+v", call)
 	}
-	second := getJSON[intakeView](t, app.URL+"/api/v1/intake")
+	second := postJSON[intakeView](t, app.URL+"/api/v1/intake", nil)
 	second = postJSON[intakeView](t, app.URL+"/api/v1/intake/"+second.ID+"/model", modelRequest{Profile: "qwen38"})
-	if second.ModelProfile != "qwen38" || second.Model != "qwen/qwen3.8-27b" {
+	if second.ModelProfile != "qwen38" || second.Model != "qwen/qwen3.8-27b" || second.MaxWorkers != 2 {
 		t.Fatalf("selected profile = %+v", second)
 	}
 	if got := server.getIntake(second.ID).client.InputByteLimit(); got != llmclient.Qwen38LabInputByteLimit {
@@ -91,7 +91,7 @@ func TestConfiguredProfilesRouteAndRestoreEntireClient(t *testing.T) {
 	restored := httptest.NewServer(NewServer(config))
 	defer restored.Close()
 	view := getJSON[intakeView](t, restored.URL+"/api/v1/intake/"+second.ID)
-	if view.ModelProfile != "qwen38" || view.Model != "qwen/qwen3.8-27b" {
+	if view.ModelProfile != "qwen38" || view.Model != "qwen/qwen3.8-27b" || view.MaxWorkers != 2 {
 		t.Fatalf("restored profile = %+v", view)
 	}
 	_ = postJSON[intakeView](t, restored.URL+"/api/v1/intake/"+second.ID+"/messages", intakeMessageRequest{Text: "Continue the scoped test"})

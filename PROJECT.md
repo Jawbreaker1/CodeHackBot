@@ -56,6 +56,7 @@ The `legacy/` tree is also non-authoritative: it is preserved as historical refe
 - `./scripts/ci.sh` runs the deterministic local/GitHub CI checks.
 - CI includes `scripts/check_guided_app.py`: the built application runs in a real terminal against a deterministic local model fixture. Python 3 and a Unix PTY are required.
 - CI includes `scripts/check_webapp.py`: the built browser binary is started on loopback and exercised through HTTP against the same deterministic model fixture, including two sessions aggregated under one customer report.
+- The web check also runs `scripts/check_web_ui.mjs` in headless Chromium using the existing Playwright runner dependency. It clicks through new-session, model-selection, reload, and reopening controls against that isolated server; CI checks frontend JavaScript syntax and the web-map unit tests too.
 - CI includes `scripts/check_review_workflow_lab.py`: the synthetic two-role editorial target must reproduce its seeded workflow flaw while a fixed control rejects the same post-approval edit.
 - CI includes `scripts/check_safe_documents_lab.py`: the synthetic document target must serve its public file and reject traversal attempts to a private fixture.
 - Rebuild-root tests now exist for the implemented core packages.

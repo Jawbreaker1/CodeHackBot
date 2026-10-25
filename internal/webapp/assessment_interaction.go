@@ -52,7 +52,7 @@ func (s *Server) message(ctx context.Context, r *run, text string, refs []attach
 		if limits == (assessment.Limits{}) {
 			limits = assessment.DefaultLimits()
 		}
-		r.budget = assessment.NewModelBudget(limits.ModelCalls, r.state.Usage)
+		r.budget = assessment.NewModelBudget(limits.ModelCalls, r.state.Usage, limits.Workers)
 	}
 	budget := r.budget
 	if postRun {

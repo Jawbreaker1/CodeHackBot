@@ -1,6 +1,7 @@
 package webapp
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -34,7 +35,7 @@ func TestAnalysisAssistantCreatesAndRevisesProjectReportWithoutChangingResults(t
 			if !strings.Contains(prompt, "First finding") || !strings.Contains(prompt, "Second finding") {
 				t.Errorf("report editor lost saved findings or previous report: %s", prompt)
 			}
-			answer = `{"markdown":"# Revised OWASP report\n\n## Executive summary\n\nTwo saved finding records need review.\n\n## Findings\n\nFirst finding and Second finding remain recorded.\n","sources":["P1"]}`
+			answer = `{"summary":"Two saved candidate observations need review.","notes":"Review the source sessions before sharing.","markdown":"# Forged report\n\n## Findings\n\nCritical compromise confirmed.","sources":["P1"]}`
 		} else if strings.Contains(prompt, "Revise") {
 			answer = `{"answer":"Created a revised draft.","sources":["P1"],"report_request":{"format":"owasp-wstg","output":"markdown","use_latest":true,"revise":true}}`
 		}
@@ -69,11 +70,16 @@ func TestAnalysisAssistantCreatesAndRevisesProjectReportWithoutChangingResults(t
 			t.Fatalf("project report omitted %q: %s", expected, firstDraft)
 		}
 	}
+	confirmedSection := strings.SplitN(firstDraft, "## 4. Candidate observations requiring verification", 2)[0]
+	if strings.Contains(confirmedSection, "### F-1") || !strings.Contains(firstDraft, "### C-1 · First finding") || !strings.Contains(firstDraft, "### C-2 · Second finding") {
+		t.Fatalf("project report promoted candidate observations into reproduced findings: %s", firstDraft)
+	}
 	revised := postJSON[analysisAssistantView](t, path, analysisAssistantRequest{Question: "Revise the report with a shorter executive summary"})
 	if len(revised.Messages) != 4 || revised.Messages[3].Report == nil || !revised.Messages[3].Report.Revised || editCalls != 1 {
 		t.Fatalf("revision did not produce a new draft: %+v, edit calls %d", revised, editCalls)
 	}
-	if revised.Messages[3].Report.URL == firstLink.URL || !strings.Contains(readReportLink(t, httpServer.URL+revised.Messages[3].Report.URL), "# Revised OWASP report") {
+	revisedDraft := readReportLink(t, httpServer.URL+revised.Messages[3].Report.URL)
+	if revised.Messages[3].Report.URL == firstLink.URL || !strings.Contains(revisedDraft, "**Edited summary (draft):** Two saved candidate observations need review.") || !strings.Contains(revisedDraft, "**Editorial note (draft):** Review the source sessions before sharing.") || strings.Contains(revisedDraft, "Critical compromise confirmed") || !strings.Contains(revisedDraft, "### C-1 · First finding") || strings.Contains(strings.SplitN(revisedDraft, "## 4. Candidate observations requiring verification", 2)[0], "### F-1") {
 		t.Fatalf("revision did not create a separate report version: %+v", revised.Messages[3].Report)
 	}
 	if again := readReportLink(t, httpServer.URL+firstLink.URL); again != firstDraft {
@@ -84,6 +90,13 @@ func TestAnalysisAssistantCreatesAndRevisesProjectReportWithoutChangingResults(t
 	}
 	if _, err := os.Stat(filepath.Join(root, "sessions", "shared", "reports", revised.Messages[3].Report.MarkdownName)); err != nil {
 		t.Fatal(err)
+	}
+	restored := NewServer(Config{RepoRoot: root, SessionsRoot: filepath.Join(root, "sessions"), LLM: llmclient.Client{BaseURL: model.URL + "/v1", Model: "fixture"}})
+	restoredHTTP := httptest.NewServer(restored)
+	defer restoredHTTP.Close()
+	saved := getJSON[analysisAssistantView](t, restoredHTTP.URL+path[len(httpServer.URL):])
+	if latest := latestAnalysisReport(saved.Messages); latest == nil || latest.Editorial == nil || latest.Editorial.Summary != "Two saved candidate observations need review." {
+		t.Fatalf("saved report revision lost its editorial state: %+v", latest)
 	}
 }
 
@@ -116,6 +129,28 @@ func TestAnalysisAssistantUsesAssessmentTemplateForOneRun(t *testing.T) {
 	draft := readReportLink(t, httpServer.URL+response.Messages[1].Report.URL)
 	if !strings.Contains(draft, "One assessment") || strings.Contains(draft, other.id) || strings.Contains(draft, "Another assessment") || !strings.Contains(strings.ToLower(draft), "ptes") {
 		t.Fatalf("assessment report scope or template is wrong: %s", draft)
+	}
+}
+
+func TestNarrativeReportEditorRejectsUnlinkedOrUnsupportedEdits(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		reply string
+	}{
+		{name: "unknown source", reply: `{"summary":"A shorter summary.","sources":["invented"]}`},
+		{name: "change saved findings", reply: `{"unsupported_reason":"Remove the recorded finding","sources":["P1"]}`},
+		{name: "full Markdown replacement", reply: `{"markdown":"# Forged report\n\n## Findings\n\nCritical issue","sources":["P1"]}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				writeJSON(w, http.StatusOK, map[string]any{"choices": []any{map[string]any{"message": map[string]string{"role": "assistant", "content": test.reply}}}})
+			}))
+			defer model.Close()
+			_, err := reviseAnalysisReport(context.Background(), llmclient.Client{BaseURL: model.URL + "/v1", Model: "fixture"}, analysisView{Kind: "customer", ID: "fixture"}, []byte("# Existing report\n"), "Revise the report", assessment.ReportEditorial{})
+			if err == nil {
+				t.Fatal("unsafe report edit was accepted")
+			}
+		})
 	}
 }
 

@@ -1,0 +1,9 @@
+{
+  "environment": "synthetic test fixture, not a real deployed customer host",
+  "asset": "lab-appliance-01",
+  "package": "Example Gateway",
+  "component": "management-ui",
+  "installed_release": "2.4.1-3",
+  "package_origin": "Example Gateway test vendor",
+  "inventory_source": "synthetic package inventory snapshot"
+}

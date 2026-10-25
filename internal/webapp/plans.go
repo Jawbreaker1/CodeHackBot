@@ -95,7 +95,7 @@ func coordinatorPlans(state assessment.State, workers map[string]workerView) []c
 func planSignal(plan coordinatorPlanView, state assessment.State, index int) string {
 	if plan.Status == "complete" {
 		for _, finding := range state.Plans[index].Findings {
-			if finding.Status == "reproduced" {
+			if finding.Status == "reproduced" || finding.Status == "confirmed_exposure" {
 				return "verified_final"
 			}
 		}
@@ -127,7 +127,7 @@ func planSignal(plan coordinatorPlanView, state assessment.State, index int) str
 		if !selected[finding.ValidationTask] {
 			continue
 		}
-		if finding.Status == "reproduced" {
+		if finding.Status == "reproduced" || finding.Status == "confirmed_exposure" {
 			return "verified"
 		}
 		if finding.Status == "candidate" {

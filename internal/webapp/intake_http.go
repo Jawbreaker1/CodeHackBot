@@ -17,8 +17,8 @@ import (
 
 func (s *Server) intakeRoute(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/api/v1/intake" {
-		if r.Method != http.MethodGet {
-			methodNotAllowed(w, http.MethodGet)
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w, http.MethodPost)
 			return
 		}
 		current, err := s.newIntake()
@@ -26,7 +26,7 @@ func (s *Server) intakeRoute(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, current.view())
+		writeJSON(w, http.StatusCreated, current.view())
 		return
 	}
 	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/intake/"), "/"), "/")
@@ -137,7 +137,7 @@ func (s *Server) intakeRoute(w http.ResponseWriter, r *http.Request) {
 		if !decodeJSON(w, r, &input) {
 			return
 		}
-		currentView, err := s.startIntake(current, input.Customer, input.ApproachID)
+		currentView, err := s.startIntake(current, input.Customer, input.ApproachID, input.MaxWorkers)
 		if err != nil {
 			writeError(w, http.StatusConflict, err.Error())
 			return
@@ -165,19 +165,30 @@ func (s *Server) intakeRoute(w http.ResponseWriter, r *http.Request) {
 func (s *Server) newIntake() (*intakeRun, error) {
 	id := fmt.Sprintf("intake-%s-%06d", time.Now().UTC().Format("20060102-150405.000000000"), s.seq.Add(1))
 	root := filepath.Join(s.config.SessionsRoot, "intake", id)
-	if err := os.MkdirAll(root, 0700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(root), 0700); err != nil {
+		return nil, fmt.Errorf("create intake parent directory: %w", err)
+	}
+	if err := os.Mkdir(root, 0700); err != nil {
 		return nil, fmt.Errorf("create intake session directory: %w", err)
 	}
 	conversation := intake.Conversation{}
 	conversation.SetBehaviorContext(s.config.Frame.PromptText())
-	current := &intakeRun{id: id, root: root, client: s.config.LLM, profileID: s.config.DefaultProfile, conversation: conversation, updatedAt: time.Now().UTC()}
-	s.mu.Lock()
-	s.intakes[current.id] = current
-	s.mu.Unlock()
-	if err := current.persist(); err != nil {
+	current := &intakeRun{id: id, root: root, client: s.config.LLM, profileID: s.config.DefaultProfile, workerCeiling: s.workerCeiling(s.config.DefaultProfile), conversation: conversation, updatedAt: time.Now().UTC()}
+	if err := s.publishIntake(current); err != nil {
+		_ = os.RemoveAll(root)
 		return nil, err
 	}
 	return current, nil
+}
+
+func (s *Server) publishIntake(current *intakeRun) error {
+	if err := current.persist(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.intakes[current.id] = current
+	s.mu.Unlock()
+	return nil
 }
 
 func (s *Server) getIntake(id string) *intakeRun {
@@ -258,7 +269,7 @@ func (s *Server) intakeMessage(ctx context.Context, current *intakeRun, text str
 	return nil
 }
 
-func (s *Server) startIntake(current *intakeRun, customer, approachID string) (assessmentView, error) {
+func (s *Server) startIntake(current *intakeRun, customer, approachID string, maxWorkers int) (assessmentView, error) {
 	customer = strings.TrimSpace(customer)
 	current.mu.Lock()
 	if customer == "" {
@@ -295,6 +306,20 @@ func (s *Server) startIntake(current *intakeRun, customer, approachID string) (a
 		return assessmentView{}, fmt.Errorf("the selected investigation approach is unavailable")
 	}
 	client := current.client
+	workerCeiling := current.workerCeiling
+	if workerCeiling == 0 {
+		workerCeiling = assessment.DefaultLimits().Workers
+	}
+	if maxWorkers == 0 {
+		maxWorkers = assessment.DefaultLimits().Workers
+		if maxWorkers > workerCeiling {
+			maxWorkers = workerCeiling
+		}
+	}
+	if maxWorkers < 1 || maxWorkers > workerCeiling {
+		current.mu.Unlock()
+		return assessmentView{}, fmt.Errorf("choose 1 to %d parallel workers for this model", workerCeiling)
+	}
 	current.customer = customer
 	current.busy = true
 	current.mu.Unlock()
@@ -317,6 +342,13 @@ func (s *Server) startIntake(current *intakeRun, customer, approachID string) (a
 	}
 	created.mu.Lock()
 	created.state.Approach = selectedApproach
+	created.state.Limits = s.config.Limits
+	if created.state.Limits == (assessment.Limits{}) {
+		created.state.Limits = assessment.DefaultLimits()
+	}
+	created.state.Limits.Workers = maxWorkers
+	created.state.Limits.Tasks = max(created.state.Limits.Tasks, maxWorkers*4)
+	created.state.Limits.ModelCalls = max(created.state.Limits.ModelCalls, maxWorkers*64)
 	created.state.Target = canonicalTarget(proposal.Target)
 	if created.state.Target == "" {
 		created.state.Target = legacyHostname(proposal.Scope)
@@ -386,7 +418,7 @@ func (r *intakeRun) view() intakeView {
 	} else if len(r.messages) > 0 && r.messages[0].Role == "user" {
 		title = compactTitle(r.messages[0].Text)
 	}
-	return intakeView{PermissionMode: r.permissionMode.Normalized(), ID: r.id, Customer: r.customer, Title: title, Model: r.client.Model, ModelProfile: r.profileID, ModelConfigured: strings.TrimSpace(r.client.BaseURL) != "" && strings.TrimSpace(r.client.Model) != "", ModelBusy: r.busy, CanChangeModel: !r.busy && r.assessmentID == "" && (r.profileID == "" || len(r.messages) == 0), Status: status, Messages: messageViews(r.messages, "intake", r.id), Proposal: cloneDraft(r.proposal), PendingTool: pending, Events: append([]eventRecord(nil), r.events...), AssessmentID: r.assessmentID}
+	return intakeView{PermissionMode: r.permissionMode.Normalized(), MaxWorkers: r.workerCeiling, ID: r.id, Customer: r.customer, Title: title, Model: r.client.Model, ModelProfile: r.profileID, ModelConfigured: strings.TrimSpace(r.client.BaseURL) != "" && strings.TrimSpace(r.client.Model) != "", ModelBusy: r.busy, CanChangeModel: !r.busy && r.assessmentID == "" && (r.profileID == "" || len(r.messages) == 0), Status: status, Messages: messageViews(r.messages, "intake", r.id), Proposal: cloneDraft(r.proposal), PendingTool: pending, Events: append([]eventRecord(nil), r.events...), AssessmentID: r.assessmentID}
 }
 
 func (r *intakeRun) recordObservation(event assessment.Event) {

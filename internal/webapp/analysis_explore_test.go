@@ -49,6 +49,14 @@ func TestInconclusiveChallengeVisibleWithoutFinding(t *testing.T) {
 	}
 }
 
+func TestRefutedChallengeIsHistoryNotAnActionableFinding(t *testing.T) {
+	state := assessment.State{Scope: "https://app.example.test", Status: "completed", Plans: []assessment.Decision{{Complete: true, Findings: []assessment.Finding{{Title: "Claim contradicted by check", Status: "candidate", Severity: "high", ValidationTask: "verify"}}}}, Results: []assessment.Result{{Task: assessment.Task{ID: "verify", Verification: &assessment.VerificationRequest{Claim: "private response is public", Alternative: "access is denied"}}, Status: "done", Verification: &assessment.VerificationResult{Verdict: "refuted", AlternativeResult: "access was denied", Reason: "the protected response was not returned", Evidence: []string{"verify.log"}}}}}
+	view := buildAnalysis("one", "project", state, nil)
+	if len(view.Findings) != 0 || view.Risk.Reproduced != 0 || view.Risk.Candidates != 0 || len(view.NextActions) != 0 || len(view.Challenges) != 1 || view.Challenges[0].Verdict != "refuted" {
+		t.Fatalf("refuted claim was presented as a finding or action: %+v", view)
+	}
+}
+
 func TestRecordedSoftwareCorrelatesAcrossDifferentScopesWithoutMergingFindings(t *testing.T) {
 	groups := correlateFindings([]analysisFinding{
 		{SessionID: "one", Scope: "https://one.example.test", Title: "First observation", Status: "candidate", AffectedSoftware: []string{"Acme App 2.0"}},

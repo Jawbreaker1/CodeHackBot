@@ -9,7 +9,7 @@ import (
 
 func writeReport(root string, s State) error {
 	var b strings.Builder
-	findings, legacyClaims := reviewFindings(s)
+	findings, candidates, legacyClaims := reportFindingGroups(s)
 	fmt.Fprintf(&b, "# Security assessment — %s\n\n", s.ID)
 	fmt.Fprintf(&b, "**Status:** **%s**  \n**Objective:** %s  \n**Scope:** %s\n\n", strings.ReplaceAll(s.Status, "_", " "), s.Goal, s.Scope)
 	if !s.StartedAt.IsZero() {
@@ -24,14 +24,14 @@ func writeReport(root string, s State) error {
 			fmt.Fprintf(&b, "- %s\n", request)
 		}
 	}
-	b.WriteString("\nThis draft is compiled from model-authored findings and recorded evidence for professional review. A reproduced status means a later worker challenged the claim and recorded a supported verdict with its own execution log; it is not independent professional confirmation that every claim is correct. The operator is responsible for authorization and target boundaries; the runtime does not enforce network scope isolation. Completion does not establish absence of vulnerabilities.\n\n")
+	b.WriteString("\nThis draft is compiled from model-authored findings and recorded evidence for professional review. A reproduced status means a later worker challenged the claim with a recorded check. A confirmed exposure means the deployed software and advisory applicability were checked, but exploitation was not demonstrated. Neither status replaces professional review. Completion does not establish absence of vulnerabilities.\n\n")
 	if legacyClaims {
-		b.WriteString("Earlier reproduction claims without a supported challenge and cited execution log are presented here as candidates requiring recheck. The saved session record is unchanged.\n\n")
+		b.WriteString("Earlier reproduction claims without a supported challenge and cited execution log appear under candidate observations requiring recheck. The saved session record is unchanged.\n\n")
 	}
 	b.WriteString("## Executive summary\n\n")
 	summary, unreviewed := reportOutcome(s)
 	if len(findings) > 0 {
-		b.WriteString("**Findings recorded for review**\n\n")
+		b.WriteString("**Confirmed findings and exposures recorded for review**\n\n")
 		for _, finding := range findings {
 			label := finding.Status
 			if finding.Severity != "" {
@@ -42,6 +42,49 @@ func writeReport(root string, s State) error {
 		b.WriteString("\n")
 	}
 	fmt.Fprintf(&b, "%s\n\n", summary)
+	if len(findings) == 0 {
+		b.WriteString("No confirmed findings or exposures were recorded. This does not establish that the scoped system is free of vulnerabilities.\n\n")
+	}
+	if len(candidates) > 0 {
+		b.WriteString("## Candidate observations requiring verification\n\nThese are not established vulnerabilities or recommended fixes. Review the saved evidence and confirm security impact before promoting one to a finding.\n\n")
+		for i, candidate := range candidates {
+			fmt.Fprintf(&b, "### C-%d · %s\n\nStatus: candidate — unconfirmed.\n\n", i+1, candidate.Title)
+			if candidate.Impact != "" {
+				fmt.Fprintf(&b, "Possible impact, if confirmed: %s\n\n", candidate.Impact)
+			}
+			if candidate.ValidationTask != "" {
+				fmt.Fprintf(&b, "Validation task: `%s`\n\n", candidate.ValidationTask)
+			}
+			if len(candidate.Steps) > 0 {
+				b.WriteString("Recorded checks:\n\n")
+				for j, step := range candidate.Steps {
+					fmt.Fprintf(&b, "%d. %s\n", j+1, step)
+				}
+				b.WriteString("\n")
+			}
+			if len(candidate.SourceLocations) > 0 {
+				b.WriteString("Recorded source locations (confirm the deployed revision separately):\n\n")
+				for _, source := range candidate.SourceLocations {
+					fmt.Fprintf(&b, "- %s: %s:%d · %s @ %s · source artifact: %s\n", source.SourceLabel(), source.Path, source.StartLine, source.Repository, source.Revision, source.ArtifactRef)
+				}
+				b.WriteString("\n")
+			}
+			if len(candidate.Evidence) > 0 {
+				b.WriteString("Evidence references:\n\n")
+				for _, ref := range candidate.Evidence {
+					fmt.Fprintf(&b, "- %s\n", ref)
+				}
+				b.WriteString("\n")
+			}
+			if len(candidate.Remediation) > 0 {
+				b.WriteString("Possible correction, only if confirmed:\n\n")
+				for _, step := range candidate.Remediation {
+					fmt.Fprintf(&b, "- %s\n", step)
+				}
+				b.WriteString("\n")
+			}
+		}
+	}
 	if leads := CurrentOpenLeads(s.Plans); len(leads) > 0 {
 		b.WriteString("## Recommended continuation\n\nThese are open questions, not completed tests or confirmed vulnerabilities. Continue in this session after reviewing scope and the recorded evidence.\n\n")
 		for i, lead := range leads {
@@ -63,7 +106,7 @@ func writeReport(root string, s State) error {
 	}
 	b.WriteString("## Findings\n\n")
 	if len(findings) == 0 {
-		b.WriteString("No findings were recorded. This is not a claim that the scoped system has no vulnerabilities.\n\n")
+		b.WriteString("No confirmed findings or exposures were recorded. This is not a claim that the scoped system has no vulnerabilities.\n\n")
 	}
 	if len(s.Plans) > 0 {
 		for _, f := range findings {
@@ -86,10 +129,21 @@ func writeReport(root string, s State) error {
 			if len(f.CVEIDs) > 0 {
 				fmt.Fprintf(&b, "CVE references: %s\n\n", strings.Join(f.CVEIDs, ", "))
 			}
+			if f.Status == "confirmed_exposure" {
+				advisoryLabel := f.AdvisoryAssessmentID
+				if advisory, ok := AdvisoryForFinding(s, f); ok {
+					advisoryLabel = advisory.AdvisoryID + " (`" + f.AdvisoryAssessmentID + "`)"
+				}
+				fmt.Fprintf(&b, "Advisory assessment: %s\n\nExploit status: **not tested or reproduced**. The recorded conclusion concerns the affected deployment.\n\n", advisoryLabel)
+			}
 			if len(f.AffectedSoftware) > 0 {
 				fmt.Fprintf(&b, "Affected software: %s\n\n", strings.Join(f.AffectedSoftware, ", "))
 			}
-			fmt.Fprintf(&b, "Impact: %s\n\nSteps to reproduce:\n\n", f.Impact)
+			stepLabel := "Steps to reproduce"
+			if f.Status == "confirmed_exposure" {
+				stepLabel = "Steps to verify exposure"
+			}
+			fmt.Fprintf(&b, "Impact: %s\n\n%s:\n\n", f.Impact, stepLabel)
 			for i, step := range f.Steps {
 				fmt.Fprintf(&b, "%d. %s\n", i+1, step)
 			}
@@ -100,7 +154,7 @@ func writeReport(root string, s State) error {
 					if source.EndLine > 0 && source.EndLine != source.StartLine {
 						end = fmt.Sprintf("–%d", source.EndLine)
 					}
-					fmt.Fprintf(&b, "- %s:%d%s · %s @ %s · source artifact: %s\n", source.Path, source.StartLine, end, source.Repository, source.Revision, source.ArtifactRef)
+					fmt.Fprintf(&b, "- %s: %s:%d%s · %s @ %s · source artifact: %s\n", source.SourceLabel(), source.Path, source.StartLine, end, source.Repository, source.Revision, source.ArtifactRef)
 				}
 			}
 			b.WriteString("\nRemediation:\n\n")

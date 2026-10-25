@@ -7,9 +7,15 @@
 
 ## 1. Executive summary
 
-{{inline .View.Summary}}
+{{if .SummaryEdited}}**Edited summary (draft):** {{inline .View.Summary}}
 
-**Recorded result counts:** {{.View.Risk.Reproduced}} reproduced finding records; {{.View.Risk.Candidates}} possible finding records requiring review. Similar records across sessions are not automatically distinct weaknesses.
+Review this wording against the recorded sessions.
+{{else}}{{inline .View.Summary}}
+{{end}}
+{{if .EditorialNotes}}**Editorial note (draft):** {{inline .EditorialNotes}}
+{{end}}
+
+**Recorded result counts:** {{.View.Risk.Reproduced}} reproduced finding records; {{.View.Risk.Exposures}} confirmed software exposures without exploitation; {{.View.Risk.Candidates}} candidate observations requiring review. Similar records across sessions are not automatically distinct weaknesses.
 
 {{if .View.NextActions}}**Suggested next actions:**
 {{range .View.NextActions}}- {{inline .Title}}{{if .Detail}} — {{inline .Detail}}{{end}}
@@ -20,19 +26,22 @@ This project view combines the saved sessions listed below. Each session keeps i
 
 {{range .View.Sessions}}- **{{inline .ID}}** — {{inline .Goal}}. Target: {{if .Target}}{{inline .Target}}{{else}}Not recorded{{end}}. Scope: {{if .Scope}}{{inline .Scope}}{{else}}Not recorded{{end}}. Status: {{inline .Status}}. Recorded tests: {{.Tests}}.
 {{end}}
-## 3. Findings for review
+## 3. Confirmed findings and exposures for review
 
-{{if .View.Findings}}{{range $i, $f := .View.Findings}}### F-{{inc $i}} · {{inline $f.Title}}
+{{if .Confirmed}}{{range $i, $f := .Confirmed}}### F-{{inc $i}} · {{inline $f.Title}}
 
 - **Saved finding ID:** `{{$f.ID}}`
 - **Session:** `{{$f.SessionID}}`
 - **Status:** {{inline $f.Status}}
+{{if eq $f.Status "confirmed_exposure"}}- **Advisory assessment:** {{if $f.AdvisoryID}}{{inline $f.AdvisoryID}} {{end}}(`{{$f.AdvisoryAssessmentID}}`)
+- **Exploit status:** Not tested or reproduced; this concerns the affected deployment.
+{{end}}
 - **Severity:** {{if $f.Severity}}{{inline $f.Severity}}{{else}}Not rated{{end}}
 - **Confidence:** {{if $f.Confidence}}{{inline $f.Confidence}}{{else}}Not rated{{end}}
 
 **Why it matters:** {{if $f.Impact}}{{inline $f.Impact}}{{else}}Impact was not recorded.{{end}}
 
-{{if $f.Steps}}**Recorded reproduction:**
+{{if $f.Steps}}**{{if eq $f.Status "confirmed_exposure"}}Exposure verification{{else}}Recorded reproduction{{end}}:**
 {{range $f.Steps}}- {{inline .}}
 {{end}}{{end}}
 {{if $f.Evidence}}**Evidence references:**
@@ -43,13 +52,35 @@ This project view combines the saved sessions listed below. Each session keeps i
 {{end}}{{end}}
 {{with $f.LatestReview}}**Latest explicit retest:** {{inline .Verdict}} in session `{{.SessionID}}` — {{inline .Reason}}
 {{end}}
-{{end}}{{else}}No findings were recorded. This does not establish that the systems in scope are secure.
+{{end}}{{else}}No confirmed findings or exposures were recorded. This does not establish that the systems in scope are secure.
 {{end}}
-## 4. Open questions and limits
+## 4. Candidate observations requiring verification
+
+These are not established vulnerabilities or recommended fixes. They remain linked to their source sessions for further testing.
+
+{{if .Candidates}}{{range $i, $f := .Candidates}}### C-{{inc $i}} · {{inline $f.Title}}
+
+- **Source session:** `{{$f.SessionID}}`
+- **Status:** candidate — unconfirmed
+
+**Possible impact, if confirmed:** {{if $f.Impact}}{{inline $f.Impact}}{{else}}Not established.{{end}}
+
+{{if $f.Steps}}**Recorded checks:**
+{{range $f.Steps}}- {{inline .}}
+{{end}}{{end}}
+{{if $f.Evidence}}**Evidence references:**
+{{range $f.Evidence}}- {{inline .}}
+{{end}}{{end}}
+{{if $f.Remediation}}**Possible correction, only if confirmed:**
+{{range $f.Remediation}}- {{inline .}}
+{{end}}{{end}}
+{{end}}{{else}}No candidate observations were recorded.
+{{end}}
+## 5. Open questions and limits
 
 {{if .View.Gaps}}{{range .View.Gaps}}- {{inline .}}
 {{end}}{{else}}No additional open questions were recorded. Untested areas may still contain weaknesses.
 {{end}}
-## 5. Reporting basis
+## 6. Reporting basis
 
-{{.FormatNote}} A reproduced finding means the saved assessment includes a separate recorded check, not that every claim has been independently reviewed by a professional. A later session that does not mention an earlier finding does not prove it was fixed. Review the underlying session reports and registered evidence before distributing this draft.
+{{.FormatNote}} A reproduced finding has a separate recorded challenge. A confirmed exposure links an affected installed build to an advisory, but does not establish successful exploitation. Neither replaces professional review. A later session that does not mention an earlier finding does not prove it was fixed. Review the underlying session reports and registered evidence before distributing this draft.

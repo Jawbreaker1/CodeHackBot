@@ -19,18 +19,38 @@ var customerAnalysisReportTemplate = template.Must(template.New("customer-analys
 }).ParseFS(customerReportTemplateFiles, "templates/customer-analysis.md.tmpl"))
 
 type customerAnalysisReportData struct {
-	View        analysisView
-	FormatLabel string
-	FormatNote  string
+	View           analysisView
+	Confirmed      []analysisFinding
+	Candidates     []analysisFinding
+	SummaryEdited  bool
+	EditorialNotes string
+	FormatLabel    string
+	FormatNote     string
 }
 
 // renderCustomerAnalysisReport uses the same saved analysis that the project
 // view displays. It does not merge similar findings or change session evidence.
 func renderCustomerAnalysisReport(view analysisView, format assessment.ReportFormat) ([]byte, error) {
+	return renderCustomerAnalysisReportWithEditorial(view, format, assessment.ReportEditorial{})
+}
+
+func renderCustomerAnalysisReportWithEditorial(view analysisView, format assessment.ReportFormat, editorial assessment.ReportEditorial) ([]byte, error) {
 	if view.Kind != "customer" || !format.Valid() {
 		return nil, fmt.Errorf("unsupported project report request")
 	}
 	data := customerAnalysisReportData{View: view}
+	if editorial.Summary != "" {
+		data.View.Summary = editorial.Summary
+		data.SummaryEdited = true
+	}
+	data.EditorialNotes = editorial.Notes
+	for _, finding := range view.Findings {
+		if finding.Status == "reproduced" || finding.Status == "confirmed_exposure" {
+			data.Confirmed = append(data.Confirmed, finding)
+		} else {
+			data.Candidates = append(data.Candidates, finding)
+		}
+	}
 	if format == assessment.OWASPReport {
 		data.FormatLabel = "OWASP WSTG-aligned"
 		data.FormatNote = "OWASP WSTG guides the report structure; this does not establish that every WSTG test was performed."

@@ -1,7 +1,6 @@
 package webapp
 
 import (
-	"path/filepath"
 	"slices"
 	"strings"
 
@@ -9,14 +8,15 @@ import (
 )
 
 type analysisSourceLocation struct {
-	Repository  string               `json:"repository"`
-	Revision    string               `json:"revision"`
-	Path        string               `json:"path"`
-	StartLine   int                  `json:"start_line"`
-	EndLine     int                  `json:"end_line,omitempty"`
-	ArtifactRef string               `json:"artifact_ref"`
-	ArtifactURL string               `json:"artifact_url,omitempty"`
-	Lines       []analysisSourceLine `json:"lines,omitempty"`
+	Kind        assessment.SourcePathKind `json:"kind"`
+	Repository  string                    `json:"repository"`
+	Revision    string                    `json:"revision"`
+	Path        string                    `json:"path"`
+	StartLine   int                       `json:"start_line"`
+	EndLine     int                       `json:"end_line,omitempty"`
+	ArtifactRef string                    `json:"artifact_ref"`
+	ArtifactURL string                    `json:"artifact_url,omitempty"`
+	Lines       []analysisSourceLine      `json:"lines,omitempty"`
 }
 
 type analysisSourceLine struct {
@@ -28,10 +28,12 @@ type analysisSourceLine struct {
 func analysisSources(locations []assessment.SourceLocation) []analysisSourceLocation {
 	var out []analysisSourceLocation
 	for _, location := range locations {
-		if strings.TrimSpace(location.Repository) == "" || strings.TrimSpace(location.Revision) == "" || !filepath.IsLocal(location.Path) || location.StartLine < 1 || location.ArtifactRef == "" {
+		kind := assessment.ClassifySourcePath(location.Repository, location.Path)
+		if strings.TrimSpace(location.Repository) == "" || strings.TrimSpace(location.Revision) == "" || kind == "" || location.StartLine < 1 || location.ArtifactRef == "" {
 			continue
 		}
 		out = append(out, analysisSourceLocation{
+			Kind:       kind,
 			Repository: location.Repository, Revision: location.Revision, Path: location.Path,
 			StartLine: location.StartLine, EndLine: location.EndLine, ArtifactRef: location.ArtifactRef,
 		})

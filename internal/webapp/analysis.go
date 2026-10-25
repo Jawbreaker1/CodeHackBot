@@ -56,6 +56,7 @@ type analysisRisk struct {
 	Unrated    int `json:"unrated"`
 	Candidates int `json:"candidates"`
 	Reproduced int `json:"reproduced"`
+	Exposures  int `json:"confirmed_exposures"`
 	Remediated int `json:"remediated"`
 }
 
@@ -69,30 +70,32 @@ type analysisAction struct {
 }
 
 type analysisFinding struct {
-	ID               string                   `json:"id"`
-	SessionID        string                   `json:"session_id,omitempty"`
-	Target           string                   `json:"target,omitempty"`
-	Scope            string                   `json:"scope,omitempty"`
-	Title            string                   `json:"title"`
-	RelatedPrior     []string                 `json:"related_prior,omitempty"`
-	LatestReview     *analysisPriorReview     `json:"latest_review,omitempty"`
-	Status           string                   `json:"status"`
-	RecordedStatus   string                   `json:"recorded_status,omitempty"`
-	Verification     *analysisVerification    `json:"verification,omitempty"`
-	Severity         string                   `json:"severity,omitempty"`
-	Confidence       string                   `json:"confidence,omitempty"`
-	Priority         string                   `json:"priority"`
-	PriorityScore    int                      `json:"priority_score"`
-	PriorityReason   string                   `json:"priority_reason"`
-	ValidationTask   string                   `json:"validation_task,omitempty"`
-	Impact           string                   `json:"impact"`
-	Steps            []string                 `json:"steps"`
-	Evidence         []string                 `json:"evidence"`
-	Remediation      []string                 `json:"remediation"`
-	CVEIDs           []string                 `json:"cve_ids,omitempty"`
-	AffectedSoftware []string                 `json:"affected_software,omitempty"`
-	References       []string                 `json:"references,omitempty"`
-	SourceLocations  []analysisSourceLocation `json:"source_locations,omitempty"`
+	ID                   string                   `json:"id"`
+	SessionID            string                   `json:"session_id,omitempty"`
+	Target               string                   `json:"target,omitempty"`
+	Scope                string                   `json:"scope,omitempty"`
+	Title                string                   `json:"title"`
+	RelatedPrior         []string                 `json:"related_prior,omitempty"`
+	LatestReview         *analysisPriorReview     `json:"latest_review,omitempty"`
+	Status               string                   `json:"status"`
+	RecordedStatus       string                   `json:"recorded_status,omitempty"`
+	Verification         *analysisVerification    `json:"verification,omitempty"`
+	Severity             string                   `json:"severity,omitempty"`
+	Confidence           string                   `json:"confidence,omitempty"`
+	Priority             string                   `json:"priority"`
+	PriorityScore        int                      `json:"priority_score"`
+	PriorityReason       string                   `json:"priority_reason"`
+	ValidationTask       string                   `json:"validation_task,omitempty"`
+	Impact               string                   `json:"impact"`
+	Steps                []string                 `json:"steps"`
+	Evidence             []string                 `json:"evidence"`
+	Remediation          []string                 `json:"remediation"`
+	CVEIDs               []string                 `json:"cve_ids,omitempty"`
+	AdvisoryAssessmentID string                   `json:"advisory_assessment_id,omitempty"`
+	AdvisoryID           string                   `json:"advisory_id,omitempty"`
+	AffectedSoftware     []string                 `json:"affected_software,omitempty"`
+	References           []string                 `json:"references,omitempty"`
+	SourceLocations      []analysisSourceLocation `json:"source_locations,omitempty"`
 }
 
 type analysisPriorReview struct {
@@ -166,11 +169,16 @@ func buildAnalysis(id, customer string, state assessment.State, inputs []analysi
 	}
 	view.ReportURL = "/api/v1/assessments/" + id + "/report"
 	if len(inputs) == 0 {
-		for _, finding := range assessment.CurrentFindings(state.Plans) {
+		for _, finding := range assessment.ReportableFindings(state) {
 			inputs = append(inputs, analysisFindingInput{SessionID: id, Target: view.Target, Scope: state.Scope, Finding: finding})
 		}
 	}
 	view.Findings = prioritizeFindings(inputs)
+	for i := range view.Findings {
+		if advisory, ok := assessment.AdvisoryForFinding(state, assessment.Finding{AdvisoryAssessmentID: view.Findings[i].AdvisoryAssessmentID}); ok {
+			view.Findings[i].AdvisoryID = advisory.AdvisoryID
+		}
+	}
 	latestReviews := map[string]analysisPriorReview{}
 	for _, plan := range state.Plans {
 		for _, review := range plan.PriorReviews {
@@ -202,12 +210,12 @@ func buildAnalysis(id, customer string, state assessment.State, inputs []analysi
 				}
 			}
 		}
-		if finding.Status == "reproduced" && assessment.SupportedChallengeForFinding(state.Results, assessment.Finding{ValidationTask: finding.ValidationTask, Evidence: finding.Evidence}) == nil {
+		if (finding.Status == "reproduced" || finding.Status == "confirmed_exposure") && (assessment.SupportedChallengeForFinding(state.Results, assessment.Finding{ValidationTask: finding.ValidationTask, Evidence: finding.Evidence}) == nil || finding.Status == "confirmed_exposure" && !assessment.SupportedExposureForFinding(state, assessment.Finding{AdvisoryAssessmentID: finding.AdvisoryAssessmentID, ValidationTask: finding.ValidationTask, CVEIDs: finding.CVEIDs, AffectedSoftware: finding.AffectedSoftware, Evidence: finding.Evidence, References: finding.References})) {
 			finding.RecordedStatus = finding.Status
 			finding.Status = "candidate"
 			finding.Priority = "review"
 			finding.PriorityScore, _, _ = findingPriority(assessment.Finding{Status: "candidate", Severity: finding.Severity, Confidence: finding.Confidence})
-			finding.PriorityReason = "Earlier reproduction claim has no supported challenge verdict"
+			finding.PriorityReason = "Earlier confirmation claim lacks a supported challenge or exposure record"
 		}
 	}
 	sortAnalysisFindings(view.Findings)
@@ -299,7 +307,7 @@ func prioritizeFindings(inputs []analysisFindingInput) []analysisFinding {
 		}
 		seen[key] = struct{}{}
 		score, priority, reason := findingPriority(f)
-		findings = append(findings, analysisFinding{ID: analysisFindingID(input.SessionID, f), SessionID: input.SessionID, Target: input.Target, Scope: input.Scope, Title: f.Title, RelatedPrior: append([]string(nil), f.RelatedPrior...), Status: f.Status, Severity: f.Severity, Confidence: f.Confidence, Priority: priority, PriorityScore: score, PriorityReason: reason, ValidationTask: f.ValidationTask, Impact: f.Impact, Steps: append([]string(nil), f.Steps...), Evidence: append([]string(nil), f.Evidence...), Remediation: append([]string(nil), f.Remediation...), CVEIDs: append([]string(nil), f.CVEIDs...), AffectedSoftware: append([]string(nil), f.AffectedSoftware...), References: append([]string(nil), f.References...), SourceLocations: analysisSources(f.SourceLocations)})
+		findings = append(findings, analysisFinding{ID: analysisFindingID(input.SessionID, f), SessionID: input.SessionID, Target: input.Target, Scope: input.Scope, Title: f.Title, RelatedPrior: append([]string(nil), f.RelatedPrior...), Status: f.Status, Severity: f.Severity, Confidence: f.Confidence, Priority: priority, PriorityScore: score, PriorityReason: reason, ValidationTask: f.ValidationTask, Impact: f.Impact, Steps: append([]string(nil), f.Steps...), Evidence: append([]string(nil), f.Evidence...), Remediation: append([]string(nil), f.Remediation...), CVEIDs: append([]string(nil), f.CVEIDs...), AdvisoryAssessmentID: f.AdvisoryAssessmentID, AffectedSoftware: append([]string(nil), f.AffectedSoftware...), References: append([]string(nil), f.References...), SourceLocations: analysisSources(f.SourceLocations)})
 	}
 	sortAnalysisFindings(findings)
 	return findings
@@ -321,12 +329,12 @@ func sortAnalysisFindings(findings []analysisFinding) {
 
 func findingPriority(f assessment.Finding) (int, string, string) {
 	severity := map[string]int{"critical": 40, "high": 30, "medium": 20, "low": 10, "info": 1}[f.Severity]
-	status := map[string]int{"reproduced": 6, "candidate": 0}[f.Status]
+	status := map[string]int{"reproduced": 6, "confirmed_exposure": 6, "candidate": 0}[f.Status]
 	confidence := map[string]int{"high": 3, "medium": 2, "low": 1}[f.Confidence]
 	score := severity + status + confidence
 	label := "review"
 	switch {
-	case f.Status != "reproduced":
+	case f.Status != "reproduced" && f.Status != "confirmed_exposure":
 		label = "review"
 	case f.Severity == "critical":
 		label = "critical"
@@ -367,6 +375,8 @@ func summarizeRisk(findings []analysisFinding) analysisRisk {
 		}
 		if finding.Status == "reproduced" {
 			risk.Reproduced++
+		} else if finding.Status == "confirmed_exposure" {
+			risk.Exposures++
 		}
 		switch finding.Severity {
 		case "critical":
@@ -431,8 +441,22 @@ func analysisSummary(status string, risk analysisRisk, findings, gaps, unresolve
 		}
 		return "No findings are recorded. Check test coverage before drawing conclusions about the target."
 	}
-	if risk.Reproduced > 0 {
-		confirmed := fmt.Sprintf("%d %s passed a separate recorded check.", risk.Reproduced, countNoun(risk.Reproduced, "finding", "findings"))
+	if risk.Reproduced+risk.Exposures > 0 {
+		parts := []string{}
+		if risk.Reproduced > 0 {
+			parts = append(parts, fmt.Sprintf("%d reproduced %s", risk.Reproduced, countNoun(risk.Reproduced, "finding", "findings")))
+		}
+		if risk.Exposures > 0 {
+			parts = append(parts, fmt.Sprintf("%d confirmed software %s", risk.Exposures, countNoun(risk.Exposures, "exposure", "exposures")))
+		}
+		checkText := "have recorded checks"
+		if risk.Reproduced+risk.Exposures == 1 {
+			checkText = "has a recorded check"
+		}
+		confirmed := strings.Join(parts, " and ") + " " + checkText + "."
+		if risk.Exposures > 0 {
+			confirmed += " Confirmed exposures do not mean exploitation was tested."
+		}
 		if risk.Candidates == 0 {
 			return confirmed
 		}
@@ -440,15 +464,13 @@ func analysisSummary(status string, risk analysisRisk, findings, gaps, unresolve
 		if risk.Candidates == 1 {
 			need = "needs"
 		}
-		return confirmed + fmt.Sprintf(" %d possible %s still %s review.", risk.Candidates, countNoun(risk.Candidates, "finding", "findings"), need)
+		return confirmed + fmt.Sprintf(" %d candidate %s still %s review.", risk.Candidates, countNoun(risk.Candidates, "observation", "observations"), need)
 	}
-	verb := "require"
-	pronoun := "they"
+	verb := "need"
 	if activeFindings == 1 {
-		verb = "requires"
-		pronoun = "it"
+		verb = "needs"
 	}
-	return fmt.Sprintf("%d possible %s %s confirmation before %s can be treated as verified.", activeFindings, countNoun(activeFindings, "finding", "findings"), verb, pronoun)
+	return fmt.Sprintf("%d candidate %s %s confirmation before becoming findings.", activeFindings, countNoun(activeFindings, "observation", "observations"), verb)
 }
 
 func countNoun(count int, one, many string) string {
@@ -465,7 +487,7 @@ func nextActions(findings []analysisFinding, challenges []analysisChallenge, gap
 			continue
 		}
 		action := analysisAction{Kind: "verify", Title: finding.Title, FindingID: finding.ID}
-		if finding.Status == "reproduced" {
+		if finding.Status == "reproduced" || finding.Status == "confirmed_exposure" {
 			action.Kind = "fix"
 			if len(finding.Remediation) > 0 {
 				action.Detail = finding.Remediation[0]

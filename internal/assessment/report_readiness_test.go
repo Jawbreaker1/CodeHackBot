@@ -54,6 +54,9 @@ func TestReportReadinessUsesSavedOutcomeAndActualFindingEvidence(t *testing.T) {
 	if got := reportCheck(t, r, "findings").Status; got != "recorded" {
 		t.Fatalf("finding evidence status = %s", got)
 	}
+	if detail := reportCheck(t, r, "findings").Detail; !strings.Contains(detail, "0 reproduced finding(s), 0 confirmed exposure(s) without exploitation, and 1 candidate observation(s)") {
+		t.Fatalf("candidate was described as a confirmed finding: %s", detail)
+	}
 	if err := os.Remove(ref); err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +71,7 @@ func TestReportReadinessUsesSavedOutcomeAndActualFindingEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(text), "Finding evidence (needs_attention)") || !strings.Contains(string(text), "accessible, registered evidence files") {
+	if !strings.Contains(string(text), "Claim evidence (needs_attention)") || !strings.Contains(string(text), "accessible, registered evidence files") {
 		t.Fatalf("report omitted the visible evidence gap: %s", text)
 	}
 }

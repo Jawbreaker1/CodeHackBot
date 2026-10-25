@@ -172,7 +172,7 @@ function detailHTML(page, pages, links, findings, runs, data, escapeHTML) {
   const otherCaptures = captures.length > 1 ? `<details class="web-map-captures"><summary>All ${captures.length} saved captures</summary><ul>${captures.map((capture, index) => `<li><a href="${escapeHTML(capture.screenshot_url)}" target="_blank" rel="noopener">Capture ${index + 1} · ${escapeHTML(capture.task_id)} ↗</a>${(capture.finding_refs || []).length ? ' · cited by a finding' : ''}</li>`).join('')}</ul></details>` : '';
   const findingsHTML = linked.length ? linked.map(index => {
     const finding = findings[index];
-    const status = finding.status === 'reproduced' ? 'Reproduced' : 'Needs confirmation';
+    const status = finding.status === 'reproduced' ? 'Reproduced' : finding.status === 'confirmed_exposure' ? 'Affected software; exploit not tested' : 'Needs confirmation';
     return `<article class="web-map-finding"><span class="tag ${escapeHTML(finding.priority)}">${status}</span><h4>${escapeHTML(finding.title)}</h4><p>${escapeHTML(finding.impact || 'Impact not recorded.')}</p><button type="button" data-web-finding="${index}">Open finding ↗</button></article>`;
   }).join('') : '<p class="web-map-empty">No finding cites a screenshot of this page. Other recorded findings may still concern it. <a href="#findings">Review all findings ↑</a></p>';
   const outgoing = [...new Set(links.filter(link => link.from === page.url).map(link => link.to))];

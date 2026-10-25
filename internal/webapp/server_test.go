@@ -104,6 +104,49 @@ func TestServerRejectsCrossOriginAssessmentMutation(t *testing.T) {
 	}
 }
 
+func TestIntakeCreationRequiresPost(t *testing.T) {
+	server := NewServer(Config{RepoRoot: t.TempDir()})
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+
+	if status, _ := requestJSON(t, http.MethodGet, httpServer.URL+"/api/v1/intake", nil); status != http.StatusMethodNotAllowed {
+		t.Fatalf("GET created an intake session: status=%d", status)
+	}
+	if len(server.intakes) != 0 {
+		t.Fatal("GET published an intake session")
+	}
+	status, body := requestJSON(t, http.MethodPost, httpServer.URL+"/api/v1/intake", nil)
+	if status != http.StatusCreated {
+		t.Fatalf("POST status=%d body=%s", status, body)
+	}
+	var created intakeView
+	if err := json.Unmarshal([]byte(body), &created); err != nil || created.ID == "" {
+		t.Fatalf("POST did not return a new session: %+v, %v", created, err)
+	}
+	if server.getIntake(created.ID) == nil {
+		t.Fatal("saved intake was not published")
+	}
+	if _, err := os.Stat(filepath.Join(server.config.SessionsRoot, "intake", created.ID, "session.json")); err != nil {
+		t.Fatalf("published intake has no saved metadata: %v", err)
+	}
+}
+
+func TestFailedInitialSessionSaveDoesNotPublish(t *testing.T) {
+	server := NewServer(Config{RepoRoot: t.TempDir()})
+	blocked := t.TempDir()
+	if err := os.Mkdir(filepath.Join(blocked, "session.json"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	intake := &intakeRun{id: "failed-intake", root: blocked}
+	if err := server.publishIntake(intake); err == nil || server.getIntake(intake.id) != nil {
+		t.Fatalf("failed intake save was published: %v", err)
+	}
+	assessment := &run{id: "failed-assessment", root: blocked}
+	if err := server.publishRun(assessment); err == nil || server.getRun(assessment.id) != nil {
+		t.Fatalf("failed assessment save was published: %v", err)
+	}
+}
+
 func TestCompletedAssessmentLinksSeparateEvidenceIndex(t *testing.T) {
 	server := NewServer(Config{RepoRoot: t.TempDir()})
 	current, err := server.newRun("customer", "review evidence", "synthetic fixture")
@@ -190,7 +233,7 @@ func TestServerDeletesDraftSessions(t *testing.T) {
 	httpServer := httptest.NewServer(server)
 	defer httpServer.Close()
 
-	intake := getJSON[intakeView](t, httpServer.URL+"/api/v1/intake")
+	intake := postJSON[intakeView](t, httpServer.URL+"/api/v1/intake", nil)
 	staleIntake := server.getIntake(intake.ID)
 	intakeRoot := filepath.Join(sessions, "intake", intake.ID)
 	status, body := requestJSON(t, http.MethodDelete, httpServer.URL+"/api/v1/intake/"+intake.ID, nil)
@@ -236,7 +279,7 @@ func TestAssigningDraftToCustomerFolderPersistsAndIndexesIt(t *testing.T) {
 	httpServer := httptest.NewServer(server)
 	defer httpServer.Close()
 
-	draft := getJSON[intakeView](t, httpServer.URL+"/api/v1/intake")
+	draft := postJSON[intakeView](t, httpServer.URL+"/api/v1/intake", nil)
 	assigned := postJSON[intakeView](t, httpServer.URL+"/api/v1/intake/"+draft.ID+"/customer", intakeCustomerRequest{Customer: "example-lab"})
 	if assigned.Customer != "example-lab" {
 		t.Fatalf("assigned draft = %#v", assigned)
@@ -273,7 +316,7 @@ func TestNamedFolderGroupsDraftAndAssessmentAcrossRestart(t *testing.T) {
 	if !validCustomerID(folder.ID) || folder.Title != "Client Alpha review" {
 		t.Fatalf("created folder = %+v", folder)
 	}
-	draft := getJSON[intakeView](t, httpServer.URL+"/api/v1/intake")
+	draft := postJSON[intakeView](t, httpServer.URL+"/api/v1/intake", nil)
 	run := postJSON[assessmentView](t, httpServer.URL+"/api/v1/assessments", createRequest{Customer: "original", Goal: "Review fixture", Scope: "synthetic only"})
 	postJSON[intakeView](t, httpServer.URL+"/api/v1/intake/"+draft.ID+"/customer", intakeCustomerRequest{Customer: folder.ID})
 	postJSON[assessmentView](t, httpServer.URL+"/api/v1/assessments/"+run.ID+"/customer", intakeCustomerRequest{Customer: folder.ID})
@@ -419,7 +462,7 @@ func TestServerUsesModelLedIntakeAndCoordinatorChat(t *testing.T) {
 	httpServer := httptest.NewServer(server)
 	defer httpServer.Close()
 
-	view := getJSON[intakeView](t, httpServer.URL+"/api/v1/intake")
+	view := postJSON[intakeView](t, httpServer.URL+"/api/v1/intake", nil)
 	if view.Status != "conversation" || !view.ModelConfigured {
 		t.Fatalf("intake view = %#v", view)
 	}
@@ -483,7 +526,7 @@ func TestServerAcceptsVisualAttachmentsAndServesLocalEvidence(t *testing.T) {
 	server := NewServer(Config{RepoRoot: root, SessionsRoot: filepath.Join(root, "sessions"), LLM: llmclient.Client{BaseURL: model.URL + "/v1", Model: "vision-fixture"}})
 	httpServer := httptest.NewServer(server)
 	defer httpServer.Close()
-	initial := getJSON[intakeView](t, httpServer.URL+"/api/v1/intake")
+	initial := postJSON[intakeView](t, httpServer.URL+"/api/v1/intake", nil)
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	if err := writer.WriteField("text", "Please inspect this screenshot."); err != nil {
@@ -619,7 +662,7 @@ func TestServerApprovesModelSelectedLocalObservationBeforeProposal(t *testing.T)
 	httpServer := httptest.NewServer(server)
 	defer httpServer.Close()
 
-	initial := getJSON[intakeView](t, httpServer.URL+"/api/v1/intake")
+	initial := postJSON[intakeView](t, httpServer.URL+"/api/v1/intake", nil)
 	resultCh := make(chan intakeView, 1)
 	errCh := make(chan error, 1)
 	go func() {
@@ -791,7 +834,7 @@ func TestServerRestoresIntakeTranscriptAndSessionModel(t *testing.T) {
 	config := Config{RepoRoot: root, SessionsRoot: sessions, LLM: llmclient.Client{BaseURL: model.URL + "/v1", Model: "first-model"}}
 	first := NewServer(config)
 	firstHTTP := httptest.NewServer(first)
-	intake := getJSON[intakeView](t, firstHTTP.URL+"/api/v1/intake")
+	intake := postJSON[intakeView](t, firstHTTP.URL+"/api/v1/intake", nil)
 	selected := postJSON[intakeView](t, firstHTTP.URL+"/api/v1/intake/"+intake.ID+"/model", modelRequest{Model: "qwen/qwen3.8-27b"})
 	if selected.Model != "qwen/qwen3.8-27b" || !selected.CanChangeModel {
 		t.Fatalf("model selection = %#v", selected)

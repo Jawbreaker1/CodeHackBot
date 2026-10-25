@@ -55,7 +55,7 @@ func (s *Server) start(current *run, continuation ...string) error {
 		limits = assessment.DefaultLimits()
 	}
 	preparedState := current.state
-	current.budget = assessment.NewModelBudget(limits.ModelCalls, current.state.Usage)
+	current.budget = assessment.NewModelBudget(limits.ModelCalls, current.state.Usage, limits.Workers)
 	current.started, current.status, current.runCtx, current.cancel, current.failCancel, current.done, current.updatedAt = true, "starting", ctx, cancel, cancelCause, make(chan struct{}), time.Now().UTC()
 	current.mu.Unlock()
 	if request != "" {
@@ -106,7 +106,7 @@ func (s *Server) runAssessment(ctx context.Context, current *run) {
 		Frame:          s.config.Frame,
 		Target:         target,
 		ProjectHistory: initial.ProjectHistory,
-		Limits:         s.config.Limits,
+		Limits:         initial.Limits,
 		Approach:       initial.Approach,
 		Emit:           current.emit,
 		Approver: func(task assessment.Task) approval.Approver {

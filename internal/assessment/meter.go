@@ -29,8 +29,12 @@ type ModelBudget struct {
 	closed   bool
 }
 
-func NewModelBudget(limit int, usage Usage) *ModelBudget {
-	budget := &ModelBudget{limit: limit, usage: usage, slots: make(chan struct{}, 2)}
+func NewModelBudget(limit int, usage Usage, concurrency ...int) *ModelBudget {
+	slots := DefaultLimits().Workers
+	if len(concurrency) > 0 && concurrency[0] > 0 {
+		slots = concurrency[0]
+	}
+	budget := &ModelBudget{limit: limit, usage: usage, slots: make(chan struct{}, slots)}
 	budget.idle = sync.NewCond(&budget.mu)
 	return budget
 }

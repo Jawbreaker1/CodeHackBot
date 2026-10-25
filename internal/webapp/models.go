@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Jawbreaker1/CodeHackBot/internal/assessment"
 	"github.com/Jawbreaker1/CodeHackBot/internal/llmclient"
 	"github.com/Jawbreaker1/CodeHackBot/internal/localauth"
 	"github.com/Jawbreaker1/CodeHackBot/internal/subscription"
@@ -41,6 +42,7 @@ type ModelProfile struct {
 	MaxOutputTokens       int    `json:"max_output_tokens,omitempty"`
 	MaxInputBytes         int    `json:"max_input_bytes,omitempty"`
 	RequestTimeoutSeconds int    `json:"request_timeout_seconds,omitempty"`
+	MaxWorkers            int    `json:"max_workers,omitempty"`
 }
 
 type ModelProfilesFile struct {
@@ -82,7 +84,7 @@ func LoadModelProfiles(path string) (ModelProfilesFile, error) {
 		if profile.Provider == "subscription" && !profile.ManagedBridge && profile.TokenFile == "" {
 			return ModelProfilesFile{}, fmt.Errorf("subscription profile %s needs a local token_file", profile.ID)
 		}
-		if profile.MaxInputBytes < 0 || profile.MaxOutputTokens < 0 || profile.RequestTimeoutSeconds < 0 {
+		if profile.MaxInputBytes < 0 || profile.MaxOutputTokens < 0 || profile.RequestTimeoutSeconds < 0 || profile.MaxWorkers < 0 || profile.MaxWorkers > 10 {
 			return ModelProfilesFile{}, fmt.Errorf("profile %s has a negative request limit", profile.ID)
 		}
 	}
@@ -125,6 +127,20 @@ func (s *Server) profile(id string) (ModelProfile, bool) {
 		}
 	}
 	return ModelProfile{}, false
+}
+
+func (s *Server) workerCeiling(profileID string) int {
+	profile, ok := s.profile(profileID)
+	if !ok {
+		return assessment.DefaultLimits().Workers
+	}
+	if profile.MaxWorkers > 0 {
+		return profile.MaxWorkers
+	}
+	if profile.Provider == "subscription" {
+		return 10
+	}
+	return assessment.DefaultLimits().Workers
 }
 
 func (s *Server) models(w http.ResponseWriter, r *http.Request) {
@@ -235,6 +251,7 @@ func (s *Server) changeIntakeProfile(current *intakeRun, id string) error {
 		return fmt.Errorf("start a new session to use another model after the conversation begins")
 	}
 	current.client, current.profileID = profile.client(), id
+	current.workerCeiling = s.workerCeiling(id)
 	current.updatedAt = time.Now().UTC()
 	current.mu.Unlock()
 	return current.persist()

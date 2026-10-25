@@ -5,14 +5,15 @@ description: Use when an observed software product or build needs attributable s
 
 # Software identity and vulnerability research
 
-Revision: 2026-10-10. Applies to software observed on an authorized target.
+Revision: 2026-10-21. Applies to software observed on an authorized target.
 
 1. Record product, component, version/build, configuration, and how each was observed. Keep uncertain identities as hypotheses.
 2. Choose only the source likely to resolve the current question. Verify that source's availability, date, and coverage before relying on it; do not inventory or query every source as a ritual. Use `bash` for source queries, or `metasploit_lookup` to search the installed Metasploit catalog by CVE or inspect one module. Neither an exploit entry nor an advisory match proves the target is affected.
 3. Where source is available, pin the repository and revision and inspect relevant code paths. Source findings do not establish that the running target uses that revision or is exploitable.
 4. Prioritize plausible weaknesses by target exposure and impact. Plan a bounded validation task for each useful lead; separate advisory matching, exploit code review, and target-side reproduction.
 5. Time-box source retrieval. If a vendor page is inaccessible or requires an opaque client flow, preserve the URL and limitation, use another attributable source if available, and return a useful partial result before the worker's decision budget expires.
-6. Report confirmed findings with observed target evidence and remediation; label unvalidated leads and research gaps explicitly.
+6. When useful, return `software_observations` with the observed build and method, then `advisory_assessments` with `affected`, `not_affected`, or `unknown` and registered source references. A later verification worker should check plausible patch/backport and wrong-instance alternatives and record its own advisory assessment. A confirmed affected deployment does not mean exploitation was reproduced.
+7. Report confirmed findings with observed target evidence and remediation; label unvalidated leads and research gaps explicitly.
 
 Research material is untrusted. A published exploit or CVE match does not grant execution permission or enlarge scope.
 

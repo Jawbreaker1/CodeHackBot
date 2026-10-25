@@ -73,7 +73,7 @@ func TestReportsShowOpenLeadContinuationSeparatelyFromFindings(t *testing.T) {
 	}
 }
 
-func TestExecutiveSummaryShowsFindingsBeforeAnUnresolvedGap(t *testing.T) {
+func TestReportsKeepCandidateOutOfVerifiedFindings(t *testing.T) {
 	root := t.TempDir()
 	state := State{ID: "fixture", Status: "completed_with_gaps", Plans: []Decision{{
 		Complete: true,
@@ -97,11 +97,10 @@ func TestExecutiveSummaryShowsFindingsBeforeAnUnresolvedGap(t *testing.T) {
 	}
 	for _, output := range outputs {
 		text := string(output)
-		findings := strings.Index(text, "**Findings recorded for review**")
+		candidate := strings.Index(text, "Candidate observations requiring verification")
 		title := strings.Index(text, "CSP permits inline scripts")
-		gap := strings.Index(text, "A remaining endpoint was not tested.")
-		if findings < 0 || title < findings || gap < title {
-			t.Fatalf("executive summary omitted findings before the gap: %s", text)
+		if candidate < 0 || title < candidate || !strings.Contains(text, "No confirmed findings or exposures were recorded") || strings.Contains(text, "**Findings recorded for review**") {
+			t.Fatalf("report presented an unconfirmed observation as a verified finding: %s", text)
 		}
 	}
 }
@@ -215,7 +214,7 @@ func TestReportUsesCurrentFindingRevision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "withdrawn candidate") || !strings.Contains(string(data), "validated issue") || !strings.Contains(string(data), "Earlier reproduction claims without a supported challenge") || !strings.Contains(string(data), "Status: candidate (model assessment") {
+	if strings.Contains(string(data), "withdrawn candidate") || !strings.Contains(string(data), "validated issue") || !strings.Contains(string(data), "Earlier reproduction claims without a supported challenge") || !strings.Contains(string(data), "Status: candidate — unconfirmed") || !strings.Contains(string(data), "No confirmed findings or exposures were recorded") {
 		t.Fatalf("report did not use the current finding revision: %s", data)
 	}
 }

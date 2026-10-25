@@ -489,6 +489,16 @@ function renderOverview(view) {
     $('proposalScope').textContent = view.proposal.scope;
     if (!$('customer').value.trim() || view.customer) $('customer').value = view.customer || '';
   }
+  if (changed('workerCeiling', [view.id, view.max_workers])) {
+    const ceiling = Math.max(1, Math.min(10, Number(view.max_workers) || 2));
+    $('maxWorkers').replaceChildren(...Array.from({length: ceiling}, (_, index) => {
+      const option = document.createElement('option');
+      option.value = String(index + 1);
+      option.textContent = `${index + 1} ${index === 0 ? 'worker' : 'workers'}`;
+      return option;
+    }));
+    $('maxWorkers').value = String(Math.min(2, ceiling));
+  }
   if (changed('approaches', [view.id, view.proposal?.approaches])) {
     const options = view.proposal?.approaches || [];
     $('approachSection').classList.toggle('hidden', !options.length);
@@ -796,7 +806,7 @@ $('startForm').onsubmit = async event => {
   const token = selection;
   starting = true; $('start').disabled = true; updateComposer();
   try {
-    const view = await api('/api/v1/intake/' + encodeURIComponent(current.id) + '/start', {method:'POST', body:JSON.stringify({customer:$('customer').value.trim(), approach_id:document.querySelector('#approachOptions input:checked')?.value || ''})});
+    const view = await api('/api/v1/intake/' + encodeURIComponent(current.id) + '/start', {method:'POST', body:JSON.stringify({customer:$('customer').value.trim(), approach_id:document.querySelector('#approachOptions input:checked')?.value || '', max_workers:Number($('maxWorkers').value)})});
     if (token !== selection) return;
     eventRecords = new Map();
     renderView(view); localStorage.setItem('birdhackbot.selectedSession', sessionPath(view)); refreshSidebar(); setInspector(true);
@@ -807,7 +817,12 @@ $('stop').onclick = () => act('stop', {}, $('assessmentStatus').parentElement);
 $('resume').onclick = () => act('start', {}, $('assessmentStatus').parentElement);
 $('runToggle').onclick = () => act(activeStatuses.includes(current?.status) ? 'pause' : 'start', {}, $('runControls'));
 $('stopRun').onclick = () => act('stop', {}, $('runControls'));
-$('newAssessment').onclick = () => navigate('/api/v1/intake');
+$('newAssessment').onclick = async () => {
+  try {
+    const draft = await api('/api/v1/intake', {method:'POST'});
+    await navigate('/api/v1/intake/' + encodeURIComponent(draft.id));
+  } catch (error) { showError(error); }
+};
 $('newFolder').onclick = () => { $('folderTitle').value = ''; $('folderError').textContent = ''; $('folderDialog').showModal(); $('folderTitle').focus(); };
 $('closeFolder').onclick = $('cancelFolder').onclick = () => $('folderDialog').close();
 $('folderForm').onsubmit = async event => {
@@ -828,7 +843,7 @@ $('modelForm').onsubmit = async event => {
 	$('modelApply').disabled = true;
 	try {
 		if (current.can_change_model === false) {
-			const draft = await api('/api/v1/intake');
+			const draft = await api('/api/v1/intake', {method:'POST'});
 			await api('/api/v1/intake/' + encodeURIComponent(draft.id) + '/model', {method:'POST', body: JSON.stringify(profileMode ? {profile:selected} : {model:selected})});
 			$('modelDialog').close(); clearError();
 			await navigate('/api/v1/intake/' + encodeURIComponent(draft.id));

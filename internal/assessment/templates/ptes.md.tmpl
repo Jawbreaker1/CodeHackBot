@@ -2,26 +2,39 @@
 
 **Assessment:** {{inline .ID}}  
 **Status:** {{inline .Status}}  
-**Draft:** Compiled from model-authored findings and recorded evidence; professional review required. A reproduced status indicates a later worker challenged the claim and cited its own execution log, not independent professional confirmation of every claim.
+**Draft:** Compiled from model-authored findings and recorded evidence; professional review required. A reproduced status has a later recorded challenge. A confirmed exposure establishes an affected deployment from recorded build and advisory evidence; exploitation was not demonstrated.
 
-{{if .LegacyClaims}}**Historical claim review:** Earlier reproduction claims without a supported challenge and cited execution log appear here as candidates requiring recheck. The saved session record is unchanged.
+{{if .LegacyClaims}}**Historical claim review:** Earlier reproduction claims without a supported challenge and cited execution log appear under candidate observations requiring recheck. The saved session record is unchanged.
 {{end}}
 
 ## 1. Executive summary
 
 **Background and objective:** {{inline .Goal}}
 
-{{if .Findings}}**Findings recorded for review**
+{{if .Findings}}**Confirmed findings and exposures recorded for review**
 
 {{range .Findings}}- **{{if .Severity}}{{inline .Severity}} · {{end}}{{inline .Status}}** — {{inline .Title}}
 {{end}}
 {{end}}
-{{.Summary}}
+{{if .SummaryEdited}}**Edited summary (draft):** {{inline .Summary}}
+
+Review this wording against the recorded results.
+{{else}}{{.Summary}}
+{{end}}
+{{if .EditorialNotes}}**Editorial note (draft):** {{inline .EditorialNotes}}
+{{end}}
 
 **Priority actions:**
 
 {{if .Findings}}{{range .Findings}}{{range .Remediation}}- {{inline .}}
-{{end}}{{end}}{{else}}Review the recorded coverage and unresolved gaps before deciding on further testing.{{end}}
+{{end}}{{end}}{{else}}Review candidate observations, recorded coverage, and unresolved gaps before deciding on further testing.{{end}}
+
+{{if .Candidates}}### Candidate observations requiring verification
+
+These are not established vulnerabilities or recommended fixes. Review the saved evidence and confirm security impact before promoting one to a finding.
+{{range .Candidates}}- **{{inline .Title}}** — follow up on the recorded observation; status: unconfirmed.{{if .ValidationTask}} Validation task: `{{inline .ValidationTask}}`.{{end}}
+{{end}}
+{{end}}
 
 {{if .NextChecks}}### Recommended continuation
 
@@ -35,7 +48,7 @@ These questions remain open. The checks below are proposals, not completed tests
 {{if .Findings}}| ID | Finding | Severity | State |
 | --- | --- | --- | --- |
 {{range $i, $f := .Findings}}| F-{{inc $i}} | {{cell $f.Title}} | {{if $f.Severity}}{{cell $f.Severity}}{{else}}Not rated{{end}} | {{cell $f.Status}} |
-{{end}}{{else}}No current findings were recorded.
+{{end}}{{else}}No confirmed findings or exposures were recorded.
 {{end}}
 
 ## 2. Technical report
@@ -69,6 +82,11 @@ Full task goals, completion criteria, and execution references remain in the ses
 **Severity:** {{if $f.Severity}}{{inline $f.Severity}}{{else}}Not rated{{end}}  
 **Confidence:** {{if $f.Confidence}}{{inline $f.Confidence}}{{else}}Not rated{{end}}  
 **Affected software:** {{if $f.AffectedSoftware}}{{join $f.AffectedSoftware ", "}}{{else}}Not established{{end}}  
+{{if eq $f.Status "confirmed_exposure"}}**Advisory assessment:** {{with index $.AdvisoryIDs $f.AdvisoryAssessmentID}}{{inline .}} {{end}}(`{{$f.AdvisoryAssessmentID}}`)
+
+**Exploit status:** Not tested or reproduced; this finding concerns the affected deployment.
+
+{{end}}
 **Validation task:** {{if $f.ValidationTask}}{{inline $f.ValidationTask}}{{else}}Not recorded{{end}}
 {{with index $.Verifications $f.ValidationTask}}
 **Verification challenge:** {{inline .Claim}}
@@ -80,11 +98,11 @@ Full task goals, completion criteria, and execution references remain in the ses
 
 **Impact:** {{inline $f.Impact}}
 
-**Reproduction:**
+**{{if eq $f.Status "confirmed_exposure"}}Exposure verification{{else}}Reproduction{{end}}:**
 {{range $j, $step := $f.Steps}}{{inc $j}}. {{inline $step}}
 {{end}}
 {{if $f.SourceLocations}}**Recorded source locations** (confirm the deployed revision separately):
-{{range $f.SourceLocations}}- {{inline .Path}}:{{.StartLine}}{{if .EndLine}}–{{.EndLine}}{{end}} · {{inline .Repository}} @ {{inline .Revision}} · source artifact: {{inline .ArtifactRef}}
+{{range $f.SourceLocations}}- {{.SourceLabel}}: {{inline .Path}}:{{.StartLine}}{{if .EndLine}}–{{.EndLine}}{{end}} · {{inline .Repository}} @ {{inline .Revision}} · source artifact: {{inline .ArtifactRef}}
 {{end}}{{end}}
 **Evidence:**
 {{range $f.Evidence}}- {{inline .}}
@@ -96,16 +114,42 @@ Full task goals, completion criteria, and execution references remain in the ses
 **Research references:**
 {{range $f.References}}- {{inline .}}
 {{end}}{{end}}
-{{end}}{{else}}No current findings were recorded. This does not establish absence of vulnerabilities.
+{{end}}{{else}}No confirmed findings or exposures were recorded. This does not establish absence of vulnerabilities.
 {{end}}
-{{if .PriorReviews}}### 2.4 Follow-up on earlier project findings
+### 2.4 Candidate observations requiring verification
+
+These are not established vulnerabilities. Confirm the security effect before assigning a fix; the recorded observations and source references are retained for follow-up.
+
+{{if .Candidates}}{{range $i, $f := .Candidates}}#### C-{{inc $i}} · {{inline $f.Title}}
+
+**Status:** candidate — unconfirmed
+
+**Possible impact, if confirmed:** {{inline $f.Impact}}
+
+**Validation task:** {{if $f.ValidationTask}}{{inline $f.ValidationTask}}{{else}}Not recorded{{end}}
+
+{{if $f.Steps}}**Recorded checks:**
+{{range $j, $step := $f.Steps}}{{inc $j}}. {{inline $step}}
+{{end}}{{end}}
+{{if $f.SourceLocations}}**Recorded source locations** (confirm the deployed revision separately):
+{{range $f.SourceLocations}}- {{.SourceLabel}}: {{inline .Path}}:{{.StartLine}}{{if .EndLine}}–{{.EndLine}}{{end}} · {{inline .Repository}} @ {{inline .Revision}} · source artifact: {{inline .ArtifactRef}}
+{{end}}{{end}}
+{{if $f.Evidence}}**Evidence references:**
+{{range $f.Evidence}}- {{inline .}}
+{{end}}{{end}}
+{{if $f.Remediation}}**Possible correction, only if confirmed:**
+{{range $f.Remediation}}- {{inline .}}
+{{end}}{{end}}
+{{end}}{{else}}No candidate observations were recorded.
+{{end}}
+{{if .PriorReviews}}### 2.5 Follow-up on earlier project findings
 
 These verdicts refer to older sessions and cite evidence from this assessment. A later scan omitting an older finding is not proof of remediation.
 
 {{range .PriorReviews}}- **{{inline .Verdict}}** — `{{inline .FindingID}}`: {{inline .Reason}}. Worker: `{{inline .ValidationTask}}`. Evidence: {{join .Evidence ", "}}
 {{end}}
 {{end}}
-### {{if .PriorReviews}}2.5{{else}}2.4{{end}} Limitations and unresolved gaps
+### {{if .PriorReviews}}2.6{{else}}2.5{{end}} Limitations and unresolved gaps
 
 {{range .Results}}{{if .DeniedExecution}}- Operator denied the proposed action for `{{inline .Task.ID}}`: {{inline .DeniedExecution.Summary}} (target: {{inline .DeniedExecution.Target}}). It did not execute; approval record: `{{inline .DeniedExecution.AuditRef}}`. This does not imply that later planned tests were proposed or denied.
 {{end}}{{end}}

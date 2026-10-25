@@ -14,15 +14,51 @@ func DisplayFindings(state State) []Finding {
 // older, unchallenged reproduction claim from being presented as confirmed in
 // a newly rendered report.
 func reviewFindings(state State) ([]Finding, bool) {
-	findings := append([]Finding(nil), CurrentFindings(state.Plans)...)
+	findings := ReportableFindings(state)
 	legacyClaims := false
 	for i := range findings {
-		if findings[i].Status == "reproduced" && SupportedChallengeForFinding(state.Results, findings[i]) == nil {
+		if (findings[i].Status == "reproduced" || findings[i].Status == "confirmed_exposure") && (SupportedChallengeForFinding(state.Results, findings[i]) == nil || findings[i].Status == "confirmed_exposure" && !confirmedExposureRecord(state, findings[i])) {
 			findings[i].Status = "candidate"
 			legacyClaims = true
 		}
 	}
 	return findings, legacyClaims
+}
+
+// reportFindingGroups keeps unconfirmed observations available for follow-up
+// without presenting them as established vulnerabilities in formal reports.
+func reportFindingGroups(state State) (verified, candidates []Finding, legacyClaims bool) {
+	findings, legacyClaims := reviewFindings(state)
+	for _, finding := range findings {
+		if finding.Status == "reproduced" || finding.Status == "confirmed_exposure" {
+			verified = append(verified, finding)
+		} else {
+			candidates = append(candidates, finding)
+		}
+	}
+	return verified, candidates, legacyClaims
+}
+
+// ReportableFindings omits claims whose own completed validation check
+// refuted them. The saved plan and verification evidence remain available
+// for the test history, but the claim is not an actionable finding.
+func ReportableFindings(state State) []Finding {
+	var findings []Finding
+	for _, finding := range CurrentFindings(state.Plans) {
+		refuted := false
+		if finding.ValidationTask != "" {
+			for _, result := range state.Results {
+				if result.Task.ID == finding.ValidationTask && result.Status == "done" && result.Task.Verification != nil && result.Verification != nil && result.Verification.Verdict == "refuted" {
+					refuted = true
+					break
+				}
+			}
+		}
+		if !refuted {
+			findings = append(findings, finding)
+		}
+	}
+	return findings
 }
 
 // SupportedChallengeForFinding returns the completed worker result only when

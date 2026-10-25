@@ -40,16 +40,27 @@ type formattedReport struct {
 	Started              string
 	Finished             string
 	Summary              string
+	SummaryEdited        bool
+	EditorialNotes       string
 	UnreviewedResults    bool
 	LegacyClaims         bool
 	Findings             []Finding
+	Candidates           []Finding
 	PriorReviews         []PriorReview
 	NextChecks           []Lead
 	Gaps                 []string
 	Results              []Result
 	Rounds               []reportRound
 	Verifications        map[string]*formattedVerification
+	AdvisoryIDs          map[string]string
 	Readiness            ReportReadiness
+}
+
+// ReportEditorial changes only narrative text. Factual sections are always
+// rebuilt from saved assessment state when a draft is revised.
+type ReportEditorial struct {
+	Summary string `json:"summary,omitempty"`
+	Notes   string `json:"notes,omitempty"`
 }
 
 type formattedVerification struct {
@@ -62,19 +73,28 @@ type formattedVerification struct {
 // RenderFormattedReport applies a fixed report structure to the saved
 // coordinator findings. The result is still a draft requiring operator review.
 func RenderFormattedReport(state State, format ReportFormat) ([]byte, error) {
+	return RenderFormattedReportWithEditorial(state, format, ReportEditorial{})
+}
+
+func RenderFormattedReportWithEditorial(state State, format ReportFormat, editorial ReportEditorial) ([]byte, error) {
 	if !format.Valid() {
 		return nil, fmt.Errorf("unsupported report format %q", format)
 	}
-	findings, legacyClaims := reviewFindings(state)
+	findings, candidates, legacyClaims := reportFindingGroups(state)
 	data := formattedReport{
 		ID: state.ID, Status: state.Status, Goal: state.Goal, Scope: state.Scope, ContinuationRequests: state.ContinuationRequests,
-		Findings: findings, PriorReviews: CurrentPriorReviews(state.Plans), LegacyClaims: legacyClaims, Results: state.Results, Rounds: reportRounds(state), Verifications: map[string]*formattedVerification{},
+		Findings: findings, Candidates: candidates, PriorReviews: CurrentPriorReviews(state.Plans), LegacyClaims: legacyClaims, Results: state.Results, Rounds: reportRounds(state), Verifications: map[string]*formattedVerification{}, AdvisoryIDs: map[string]string{},
 		NextChecks: CurrentOpenLeads(state.Plans),
 		Readiness:  AssessReportReadiness(state),
 	}
 	for _, result := range state.Results {
 		if result.Task.Verification != nil && result.Verification != nil {
 			data.Verifications[result.Task.ID] = &formattedVerification{Claim: result.Task.Verification.Claim, AlternativeResult: result.Verification.AlternativeResult, Verdict: result.Verification.Verdict, Reason: result.Verification.Reason}
+		}
+	}
+	for _, finding := range findings {
+		if advisory, ok := AdvisoryForFinding(state, finding); ok {
+			data.AdvisoryIDs[finding.AdvisoryAssessmentID] = advisory.AdvisoryID
 		}
 	}
 	if !state.StartedAt.IsZero() {
@@ -84,6 +104,11 @@ func RenderFormattedReport(state State, format ReportFormat) ([]byte, error) {
 		data.Finished = state.FinishedAt.UTC().Format("2006-01-02 15:04 UTC")
 	}
 	data.Summary, data.UnreviewedResults = reportOutcome(state)
+	if editorial.Summary != "" && !data.UnreviewedResults {
+		data.Summary = editorial.Summary
+		data.SummaryEdited = true
+	}
+	data.EditorialNotes = editorial.Notes
 	if !data.UnreviewedResults {
 		data.Gaps = ReportGaps(state)
 	}

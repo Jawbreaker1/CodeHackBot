@@ -45,8 +45,24 @@ func TestFormattedReportDowngradesUnchallengedHistoricalReproduction(t *testing.
 			t.Fatal(err)
 		}
 		text := string(output)
-		if !strings.Contains(text, "Old claim") || !strings.Contains(text, "candidates requiring recheck") || !strings.Contains(text, "candidate") || strings.Contains(text, "**Status:** reproduced") {
+		if !strings.Contains(text, "Old claim") || !strings.Contains(text, "candidate observations requiring recheck") || !strings.Contains(text, "candidate — unconfirmed") || !strings.Contains(text, "No confirmed findings or exposures were recorded") || strings.Contains(text, "**Status:** reproduced") {
 			t.Fatalf("%s presented an old claim as reproduced: %s", format, text)
+		}
+	}
+}
+
+func TestRefutedValidationStaysOutOfFormalFindings(t *testing.T) {
+	state := State{ID: "fixture", Status: "completed", Plans: []Decision{{Complete: true, Findings: []Finding{{Title: "Claim contradicted by check", Status: "candidate", Severity: "high", ValidationTask: "verify"}}}}, Results: []Result{{Task: Task{ID: "verify", Verification: &VerificationRequest{Claim: "private response is public", Alternative: "access is denied"}}, Status: "done", Verification: &VerificationResult{Verdict: "refuted", AlternativeResult: "access was denied", Reason: "protected response was not returned", Evidence: []string{"verify.log"}}}}}
+	if got := DisplayFindings(state); len(got) != 0 {
+		t.Fatalf("refuted claim stayed in displayed findings: %+v", got)
+	}
+	for _, format := range []ReportFormat{OWASPReport, PTESReport} {
+		output, err := RenderFormattedReport(state, format)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(output), "Claim contradicted by check") {
+			t.Fatalf("%s report listed a refuted claim as a finding: %s", format, output)
 		}
 	}
 }
@@ -66,15 +82,18 @@ func TestIncompleteReportDoesNotPresentAnUnreviewedPlanAsConclusion(t *testing.T
 }
 
 func TestFindingsOverviewIsReadableMarkdownTable(t *testing.T) {
-	state := State{Plans: []Decision{{Complete: true, Findings: []Finding{{Title: "Access | role boundary", Severity: "high", Status: "candidate"}}}}}
+	state := State{Plans: []Decision{{Complete: true, Findings: []Finding{
+		{Title: "Access | role boundary", Severity: "high", Status: "candidate"},
+		{Title: "Confirmed | issue", Severity: "high", Status: "reproduced", ValidationTask: "verify", Evidence: []string{"verify.log"}},
+	}}}, Results: []Result{{Task: Task{ID: "verify", Verification: &VerificationRequest{Claim: "boundary fails", Alternative: "access is denied"}}, Status: "done", Evidence: []ctxpacket.ExecutionResult{{LogRefs: []string{"verify.log"}}}, Verification: &VerificationResult{Verdict: "supported", AlternativeResult: "fresh response matched", Reason: "access was not denied", Evidence: []string{"verify.log"}}}}}
 	for _, format := range []ReportFormat{OWASPReport, PTESReport} {
 		output, err := RenderFormattedReport(state, format)
 		if err != nil {
 			t.Fatal(err)
 		}
 		text := string(output)
-		if !strings.Contains(text, "| ID | Finding | Severity | State |") || !strings.Contains(text, "| F-1 | Access \\| role boundary | high | candidate |") || !strings.Contains(text, "#### F-1 · Access | role boundary") {
-			t.Fatalf("%s findings overview lost its table or detail: %s", format, text)
+		if !strings.Contains(text, "| ID | Finding | Severity | State |") || !strings.Contains(text, "| F-1 | Confirmed \\| issue | high | reproduced |") || !strings.Contains(text, "#### F-1 · Confirmed | issue") || !strings.Contains(text, "C-1 · Access | role boundary") || strings.Contains(text, "| F-2 | Access") {
+			t.Fatalf("%s did not separate verified findings from candidates: %s", format, text)
 		}
 	}
 }

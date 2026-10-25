@@ -42,7 +42,9 @@ export async function loadAssistant(data) {
 
 export function askAboutFinding(finding) {
   focus = {id: finding.id, title: finding.title};
-  draft = 'What does this finding mean, and what should we do next?';
+  draft = (finding.status === 'reproduced' || finding.status === 'confirmed_exposure')
+    ? 'What does this finding mean, and what should we do next?'
+    : 'What does this observation show, and what would confirm its security impact?';
   renderAssistant();
   element?.scrollIntoView({block:'start', behavior:'smooth'});
   element?.querySelector('textarea')?.focus();
@@ -59,7 +61,8 @@ function renderAssistant() {
     ? ['What matters most here?', 'What changed between the runs?', 'Create an OWASP report as PDF']
     : ['What matters most in this assessment?', 'Which findings are confirmed?', 'Create an OWASP report as PDF'];
   const messages = view.messages || [];
-  const transcript = messages.length ? '<div class="assistant-transcript" role="log" aria-label="Analysis conversation">' + messages.map(message => {
+  const latestReportIndex = messages.findLastIndex(message => message.report);
+  const transcript = messages.length ? '<div class="assistant-transcript" role="log" aria-label="Analysis conversation">' + messages.map((message, index) => {
     const sources = message.sources?.length ? '<div class="assistant-sources"><span>From saved results</span>' + message.sources.map(source => {
       const href = String(source.url || '').startsWith('/') ? source.url : '#analysis-assistant';
       return '<a href="' + escapeHTML(href) + '">' + escapeHTML(source.label) + ' ↗</a>';
@@ -70,7 +73,7 @@ function renderAssistant() {
         (projectView ? 'Start a follow-up session ↗' : 'Continue this assessment ↗') + '</button>'
       : '';
     const report = message.report && String(message.report.url || '').startsWith('/api/v1/')
-      ? '<div class="assistant-report"><a href="' + escapeHTML(message.report.url) + '" target="_blank" rel="noopener">Open ' + escapeHTML(message.report.output === 'pdf' ? 'PDF' : 'Markdown') + ' report ↗</a>' +
+      ? '<div class="assistant-report"><span class="report-version"' + (index === latestReportIndex ? ' data-latest="true"' : '') + '>' + (index === latestReportIndex ? 'Latest report' : 'Earlier version') + (message.report.revised ? ' · edited' : '') + '</span><a href="' + escapeHTML(message.report.url) + '" target="_blank" rel="noopener">Open ' + escapeHTML(message.report.output === 'pdf' ? 'PDF' : 'Markdown') + ' ↗</a>' +
         (message.report.output === 'pdf' && String(message.report.markdown_url || '').startsWith('/api/v1/')
           ? '<a href="' + escapeHTML(message.report.markdown_url) + '" target="_blank" rel="noopener">Open editable Markdown ↗</a>' : '') + '</div>'
       : '';
@@ -101,7 +104,7 @@ function renderAssistant() {
     button.disabled = true;
     button.textContent = 'Creating follow-up session…';
     try {
-      const createdResponse = await fetch('/api/v1/intake');
+      const createdResponse = await fetch('/api/v1/intake', {method: 'POST'});
       const created = await createdResponse.json();
       if (!createdResponse.ok || !created.id) throw new Error(created.error || 'Could not create the follow-up session.');
       const assignedResponse = await fetch('/api/v1/intake/' + encodeURIComponent(created.id) + '/customer', {

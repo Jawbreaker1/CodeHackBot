@@ -44,6 +44,10 @@ check_no_tracked_runtime_artifacts
 run ./scripts/architecture_guardrails.sh
 run go vet ./...
 run go test ./...
+for js_file in internal/webapp/static/*.js; do
+  run node --check "$js_file"
+done
+run node --test internal/webapp/static/web-map.test.mjs
 run go build -buildvcs=false -o /tmp/birdhackbot-ci ./cmd/birdhackbot
 run go build -buildvcs=false -o /tmp/birdhackbot-orchestrator-ci ./cmd/birdhackbot-orchestrator
 run go build -buildvcs=false -o /tmp/birdhackbot-web-ci ./cmd/birdhackbot-web

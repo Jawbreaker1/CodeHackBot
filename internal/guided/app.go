@@ -418,7 +418,7 @@ func (a App) runAssessmentWithFrame(ctx context.Context, c *Console, prefs prefe
 	if initial.Limits != (assessment.Limits{}) {
 		limits = initial.Limits
 	}
-	budget := assessment.NewModelBudget(limits.ModelCalls, initial.Usage)
+	budget := assessment.NewModelBudget(limits.ModelCalls, initial.Usage, limits.Workers)
 	chatClient := budget.Client(client)
 	runner := assessment.Coordinator{LLM: client, Budget: budget, Frame: frame, Limits: limits, Approach: initial.Approach, Emit: c.Progress, Approver: func(task assessment.Task) approval.Approver {
 		return taskApprover{console: c, task: task, scope: scope}

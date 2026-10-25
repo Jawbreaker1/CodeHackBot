@@ -87,7 +87,8 @@ func AssessReportReadiness(state State) ReportReadiness {
 		add("outcomes", "Test outcomes", "recorded", fmt.Sprintf("%d %s recorded; only completed tests establish coverage.", len(state.Results), label))
 	}
 
-	findings, legacyClaims := reviewFindings(state)
+	verified, candidates, legacyClaims := reportFindingGroups(state)
+	claims := append(append([]Finding(nil), verified...), candidates...)
 	registered := map[string]bool{}
 	for _, result := range state.Results {
 		for _, evidence := range result.Evidence {
@@ -100,7 +101,7 @@ func AssessReportReadiness(state State) ReportReadiness {
 		}
 	}
 	unsupported := 0
-	for _, finding := range findings {
+	for _, finding := range claims {
 		if strings.TrimSpace(finding.Title) == "" || strings.TrimSpace(finding.Impact) == "" || len(finding.Steps) == 0 || len(finding.Remediation) == 0 || len(finding.Evidence) == 0 {
 			unsupported++
 			continue
@@ -115,13 +116,21 @@ func AssessReportReadiness(state State) ReportReadiness {
 	}
 	switch {
 	case unsupported > 0:
-		add("findings", "Finding evidence", "needs_attention", fmt.Sprintf("%d finding(s) need required fields or accessible, registered evidence files.", unsupported))
+		add("findings", "Claim evidence", "needs_attention", fmt.Sprintf("%d finding or candidate observation record(s) need required fields or accessible, registered evidence files.", unsupported))
 	case legacyClaims:
-		add("findings", "Finding evidence", "needs_attention", "A historical reproduction claim lacks a supported challenge and is shown as a candidate requiring recheck.")
-	case len(findings) == 0:
-		add("findings", "Finding evidence", "recorded", "No finding claims are recorded; this is not evidence of a clean target.")
+		add("findings", "Claim evidence", "needs_attention", "A historical confirmation claim lacks a supported challenge or exposure record and is shown as a candidate requiring recheck.")
+	case len(claims) == 0:
+		add("findings", "Claim evidence", "recorded", "No finding or candidate observation is recorded; this is not evidence of a clean target.")
 	default:
-		add("findings", "Finding evidence", "recorded", fmt.Sprintf("%d finding(s) have required fields and accessible registered references; claim accuracy still needs review.", len(findings)))
+		reproduced, exposures := 0, 0
+		for _, finding := range verified {
+			if finding.Status == "confirmed_exposure" {
+				exposures++
+			} else {
+				reproduced++
+			}
+		}
+		add("findings", "Claim evidence", "recorded", fmt.Sprintf("%d reproduced finding(s), %d confirmed exposure(s) without exploitation, and %d candidate observation(s) have required fields and accessible registered references; claim accuracy still needs review.", reproduced, exposures, len(candidates)))
 	}
 
 	unresolved := false

@@ -58,3 +58,75 @@ func TestCancellationStopsProcessGroup(t *testing.T) {
 	}
 	t.Fatal("child is still running after worker cancellation")
 }
+
+func TestCancellationAllowsGracefulCheckpoint(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dir := t.TempDir()
+	started := filepath.Join(dir, "started")
+	checkpoint := filepath.Join(dir, "checkpoint")
+	done := make(chan Result, 1)
+	go func() {
+		result, _ := (Executor{LogDir: dir}).Run(ctx, Action{
+			Command: "trap 'printf saved > checkpoint; exit 0' TERM; printf ready > started; while :; do sleep 0.1; done",
+			Cwd:     dir, UseShell: true,
+		})
+		done <- result
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := os.Stat(started); err != nil {
+		t.Fatal("fixture did not start")
+	}
+	cancel()
+	select {
+	case result := <-done:
+		if result.FailureClass != "execution_interrupted" {
+			t.Fatalf("result=%+v", result)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("executor did not return after cancellation")
+	}
+	if data, err := os.ReadFile(checkpoint); err != nil || string(data) != "saved" {
+		t.Fatalf("graceful checkpoint missing: data=%q err=%v", data, err)
+	}
+}
+
+func TestCancellationKillsProcessThatIgnoresTerminate(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dir := t.TempDir()
+	started := filepath.Join(dir, "started")
+	done := make(chan Result, 1)
+	go func() {
+		result, _ := (Executor{LogDir: dir}).Run(ctx, Action{
+			Command: "trap '' TERM; printf ready > started; while :; do :; done",
+			Cwd:     dir, UseShell: true,
+		})
+		done <- result
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := os.Stat(started); err != nil {
+		t.Fatal("fixture did not start")
+	}
+	cancel()
+	select {
+	case result := <-done:
+		if result.FailureClass != "execution_interrupted" {
+			t.Fatalf("result=%+v", result)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("SIGTERM-resistant process survived cancellation")
+	}
+}
