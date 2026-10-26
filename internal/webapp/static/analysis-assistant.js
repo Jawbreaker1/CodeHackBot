@@ -1,4 +1,10 @@
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const publicSourceURL = value => {
+  try {
+    const parsed = new URL(String(value));
+    return ['http:', 'https:'].includes(parsed.protocol) ? parsed.href : '#analysis-assistant';
+  } catch { return '#analysis-assistant'; }
+};
 const assistantPath = data => data.kind === 'customer'
   ? '/api/v1/customers/' + encodeURIComponent(data.id) + '/analysis/assistant'
   : '/api/v1/assessments/' + encodeURIComponent(data.id) + '/analysis/assistant';
@@ -63,11 +69,17 @@ function renderAssistant() {
   const messages = view.messages || [];
   const latestReportIndex = messages.findLastIndex(message => message.report);
   const transcript = messages.length ? '<div class="assistant-transcript" role="log" aria-label="Analysis conversation">' + messages.map((message, index) => {
-    const sources = message.sources?.length ? '<div class="assistant-sources"><span>From saved results</span>' + message.sources.map(source => {
+    const savedSources = (message.sources || []).filter(source => source.kind !== 'web');
+    const webSources = (message.sources || []).filter(source => source.kind === 'web');
+    const sources = (savedSources.length ? '<div class="assistant-sources"><span>From saved results</span>' + savedSources.map(source => {
       const href = String(source.url || '').startsWith('/') ? source.url : '#analysis-assistant';
       return '<a href="' + escapeHTML(href) + '">' + escapeHTML(source.label) + ' ↗</a>';
-    }).join('') + '</div>' : '';
-    const savedRefs = (message.sources || []).slice(0, 2).map(source => source.label + ' (' + source.url + ')').join('; ');
+    }).join('') + '</div>' : '') + (webSources.length ? '<div class="assistant-sources"><span>Public web sources · background, not a tested finding</span>' + webSources.map(source => {
+      const href = publicSourceURL(source.url);
+      const date = source.retrieved_at ? ' · checked ' + String(source.retrieved_at).slice(0, 10) : '';
+      return '<a href="' + escapeHTML(href) + '" target="_blank" rel="noopener noreferrer">' + escapeHTML(source.label + date) + ' ↗</a>';
+    }).join('') + '</div>' : '');
+    const savedRefs = savedSources.slice(0, 2).map(source => source.label + ' (' + source.url + ')').join('; ');
     const handoff = message.next_step && (projectView || message.session_id)
       ? '<button type="button" class="assistant-handoff" data-session="' + escapeHTML(message.session_id || '') + '" data-draft="' + escapeHTML(message.next_step) + '" data-summary="' + escapeHTML(message.text) + '" data-sources="' + escapeHTML(savedRefs) + '">' +
         (projectView ? 'Start a follow-up session ↗' : 'Continue this assessment ↗') + '</button>'
@@ -83,10 +95,11 @@ function renderAssistant() {
   const options = models.length ? models.map(item => '<option value="' + escapeHTML(item.id) + '"' + (item.id === selectedProfile ? ' selected' : '') + '>' + escapeHTML(item.label || item.id) + '</option>').join('') : '';
   element.innerHTML = '<div class="assistant-heading"><div><h2>' + heading + '</h2><p>' + scope + ' Ask for an OWASP or PTES report in Markdown or PDF, or a revised draft.</p></div>' +
     '<label class="assistant-model">Model ' + (options ? '<select id="assistant-model">' + options + '</select>' : '<span>' + escapeHTML(view.model || 'Loading…') + '</span>') + '</label></div>' +
-    transcript + (busy ? '<p class="assistant-working" role="status"><span class="assistant-pulse"></span>Reading the saved results…</p>' : '') +
+    transcript + (busy ? '<p class="assistant-working" role="status"><span class="assistant-pulse"></span>Checking the saved results and relevant sources…</p>' : '') +
     (error ? '<p class="assistant-error" role="alert">' + escapeHTML(error) + '</p>' : '') +
     '<form id="assistant-form"><div class="assistant-compose">' + (focus ? '<div class="assistant-focus">About: ' + escapeHTML(focus.title) + ' <button type="button" id="assistant-clear-focus" aria-label="Clear selected finding">×</button></div>' : '') +
-    '<textarea id="assistant-question" rows="2" maxlength="1500" placeholder="Ask a question about this analysis" aria-label="Question about the analysis">' + escapeHTML(draft) + '</textarea><div class="assistant-compose-bottom"><span>Answers link back to the saved results. No test runs from here.</span><button type="submit"' + (busy ? ' disabled' : '') + '>Ask ↗</button></div></div></form>';
+    '<textarea id="assistant-question" rows="2" maxlength="1500" placeholder="Ask a question about this analysis" aria-label="Question about the analysis">' + escapeHTML(draft) + '</textarea>' +
+    '<div class="assistant-compose-bottom"><span>' + (view.web_search_available ? 'The guide can search the web, check CVE records, and read public pages. No tests run from here.' : view.research_available ? 'The guide can check public CVE records and known public pages. Broader web search is not set up yet.' : 'Answers link back to saved results. External research is unavailable.') + '</span><button type="submit"' + (busy ? ' disabled' : '') + '>Ask ↗</button></div></div></form>';
   element.querySelectorAll('[data-starter]').forEach(button => button.onclick = () => {
     draft = button.dataset.starter;
     renderAssistant();
@@ -113,7 +126,7 @@ function renderAssistant() {
       if (!assignedResponse.ok) throw new Error((await assignedResponse.json()).error || 'Could not place the follow-up session in this project.');
       const followup = 'Follow up on the saved analysis for project ' + analysis.id + '.\n\n' +
         'Suggested next step: ' + button.dataset.draft + '\n\n' +
-        'Analysis summary (review against saved evidence): ' + button.dataset.summary.slice(0, 700) + '\n\n' +
+        'Guide summary (review against saved evidence; external background is not a tested finding): ' + button.dataset.summary.slice(0, 700) + '\n\n' +
         'Saved references: ' + button.dataset.sources.slice(0, 500);
       sessionStorage.setItem('birdhackbot.analysisHandoff', JSON.stringify({intake: created.id, draft: followup}));
       location.href = '/?intake=' + encodeURIComponent(created.id);

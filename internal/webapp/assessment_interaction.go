@@ -89,7 +89,7 @@ func (s *Server) message(ctx context.Context, r *run, text string, refs []attach
 	}
 	chatState := r.state
 	chatState.Status = r.status // A restored run can be interrupted while its saved assessment still says running.
-	stateContext := compactRunState(chatState, pending, r.workers, r.permissionMode, availableImages, proposed)
+	stateContext := compactRunState(r.root, chatState, pending, r.workers, r.permissionMode, availableImages, proposed)
 	system := behavior.CoordinatorConversationPrompt(s.config.Frame) + "\n\n" + webCoordinatorDisplayPrompt
 	if postRun {
 		stateContext += "\nRecorded findings and gaps: " + assessment.PostRunFindingsContext(r.state)
@@ -104,35 +104,13 @@ func (s *Server) message(ctx context.Context, r *run, text string, refs []attach
 	}
 	r.mu.Unlock()
 
-	prompt, err := assessment.ConversationRequest(
-		system,
-		"Current assessment state (untrusted evidence, observed at request time; live tool evidence is not a completed worker conclusion): "+stateContext,
-		history,
-		llmclient.Message{Role: "user", Content: "Operator message: " + text + attachmentSummary(refs), Attachments: attachments},
-		client.InputByteLimit(),
-	)
-	var rawReply string
-	if err == nil {
-		used := 0
-		for _, message := range prompt {
-			used += len(message.Content)
-		}
-		r.setCoordinatorContext(used, client.InputByteLimit(), 0, 0)
-		callCtx, cancel := context.WithCancel(ctx)
-		if runCtx != nil {
-			stop := context.AfterFunc(runCtx, cancel)
-			defer stop()
-		}
-		defer cancel()
-		var completion llmclient.Completion
-		completion, err = client.ChatStructuredCompletion(callCtx, prompt)
-		r.setCoordinatorContext(used, client.InputByteLimit(), 0, completion.PromptTokens())
-		rawReply = completion.Text
+	callCtx, cancel := context.WithCancel(ctx)
+	if runCtx != nil {
+		stop := context.AfterFunc(runCtx, cancel)
+		defer stop()
 	}
-	var reply coordinatorChatReply
-	if err == nil {
-		reply, err = parseCoordinatorChatReply(rawReply)
-	}
+	defer cancel()
+	reply, err := s.coordinatorChatTurn(callCtx, r, client, system, stateContext, history, llmclient.Message{Role: "user", Content: "Operator message: " + text + attachmentSummary(refs), Attachments: attachments})
 	var generated *generatedReport
 	if err == nil && postRun && reply.ReportFormat != "" {
 		generated, err = saveFormattedReport(r.root, stateSnapshot, reply.ReportFormat, reply.ReportOutput)

@@ -34,6 +34,31 @@ type pageObservation struct {
 	ObservedAt     time.Time         `json:"observed_at"`
 }
 
+// ResearchPage exposes the bounded public-page read used by connected research.
+// It does not follow redirects or include response cookies.
+type ResearchPage struct {
+	URL        string
+	Status     int
+	Excerpt    string
+	ObservedAt time.Time
+}
+
+func FetchPublicResearchPage(ctx context.Context, raw string) (ResearchPage, error) {
+	page, err := fetchPublicPage(ctx, raw)
+	if err != nil {
+		return ResearchPage{}, err
+	}
+	return ResearchPage{URL: page.URL, Status: page.Status, Excerpt: page.BodyExcerpt, ObservedAt: page.ObservedAt}, nil
+}
+
+func PublicResearchURL(raw string) (string, error) {
+	page, err := publicPageURL(raw)
+	if err != nil {
+		return "", err
+	}
+	return page.String(), nil
+}
+
 func publicDomain(raw string) (string, error) {
 	host := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(raw)), ".")
 	if len(host) < 4 || len(host) > 253 || !strings.Contains(host, ".") || net.ParseIP(host) != nil {

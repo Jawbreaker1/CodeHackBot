@@ -49,7 +49,7 @@ func TestPublicObservationRejectsInternalFetchTargets(t *testing.T) {
 
 func TestAirGappedIntakeRejectsExternalObservationBeforeApproval(t *testing.T) {
 	inspection := Inspection{Workspace: t.TempDir(), EvidenceDir: t.TempDir()}
-	for _, call := range []ToolCall{{Name: "dns_lookup", Host: "example.com"}, {Name: "web_fetch", URL: "https://example.com/"}} {
+	for _, call := range []ToolCall{{Name: "dns_lookup", Host: "example.com"}, {Name: "web_fetch", URL: "https://example.com/"}, {Name: "vulnerability_search", Query: "PHP"}} {
 		result, err := inspection.Run(context.Background(), call)
 		if err != nil || result.Status != "failed" || result.Error == "" || result.EvidenceRef != "" {
 			t.Fatalf("air-gapped call=%+v result=%+v err=%v", call, result, err)
@@ -66,6 +66,7 @@ func TestConnectedObservationShowsExactTargetBeforeContact(t *testing.T) {
 	}{
 		{ToolCall{Name: "dns_lookup", Host: "example.com"}, "example.com"},
 		{ToolCall{Name: "web_fetch", URL: "https://example.com/"}, "https://example.com/"},
+		{ToolCall{Name: "vulnerability_search", Query: "PHP"}, "NVD public index"},
 	} {
 		result, err := inspection.Run(context.Background(), test.call)
 		if err != nil || result.Status != "denied" || result.EvidenceRef != "" {

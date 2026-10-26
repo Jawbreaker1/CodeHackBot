@@ -1,4 +1,4 @@
-import {$, node, badge, disclosure, richText, eventNode, phaseLabel, preview, replacePreservingDetails, renderWorkers, renderCoordinatorPlans, renderFindings, renderArtifacts} from './inspector.js';
+import {$, node, badge, disclosure, richText, eventNode, phaseLabel, isTerminal, preview, replacePreservingDetails, renderWorkers, renderCoordinatorPlans, renderFindings, renderArtifacts} from './inspector.js';
 
 let current = null;
 let selection = 0;
@@ -85,15 +85,25 @@ function renderModelOptions(models, selected) {
     const label = node('label', 'model-option' + (item.id === selected ? ' active' : ''));
     const radio = document.createElement('input');
     radio.type = 'radio'; radio.name = 'model-choice'; radio.value = item.id; radio.checked = item.id === selected;
+		radio.onchange = updateModelWorkerSetting;
 		const copy = node('span', '', item.label || item.id);
 		if (profileMode) {
-      copy.append(node('small', '', `${item.provider === 'subscription' ? 'ChatGPT plan' : 'Local model'} · ${item.model}`));
+      copy.append(node('small', '', `${item.provider === 'subscription' ? 'ChatGPT plan' : 'Local model'} · ${item.model} · up to ${item.max_workers} workers`));
       if (item.provider === 'subscription') copy.append(node('small', 'model-connection', (subscriptionStates[item.connection] || ['Connection unknown'])[0]));
     }
 		else if (item.current) copy.append(node('small', '', 'Configured provider model'));
     label.append(radio, copy);
     return label;
   }));
+}
+function updateModelWorkerSetting() {
+  const selected = document.querySelector('#modelOptions input[name="model-choice"]:checked')?.value;
+  const profile = profileMode ? modelCatalog.find(item => item.id === selected) : null;
+  $('modelWorkerSetting').classList.toggle('hidden', !profile);
+  if (!profile) return;
+  $('modelMaxWorkers').value = String(profile.max_workers);
+  $('modelWorkerSave').disabled = true;
+  $('modelWorkerStatus').textContent = '';
 }
 async function openModelPicker() {
 	const dialog = $('modelDialog');
@@ -109,11 +119,13 @@ async function openModelPicker() {
 		$('modelCustom').parentElement.classList.toggle('hidden', profileMode);
 		$('modelApply').textContent = current?.can_change_model === false ? 'Use in new session' : 'Use model';
 		renderModelOptions(modelCatalog, profileMode ? (current?.model_profile || data.current || '') : (current?.model || data.current || ''));
+		updateModelWorkerSetting();
 		if (data.catalog_error) $('modelDialogHint').textContent += ' ' + data.catalog_error;
 	} catch (error) {
 		profileMode = false;
 		$('modelCustom').parentElement.classList.remove('hidden');
 		renderModelOptions([], current?.model || '');
+		updateModelWorkerSetting();
     $('modelDialogHint').textContent = error.message;
   }
 }
@@ -184,7 +196,7 @@ function chatApprovalNode(item, kind) {
   const box = node('article', 'chat-approval');
   box.setAttribute('aria-live', 'assertive');
   const observation = kind === 'observation';
-  const observationNames = {host_system: 'Identify this computer’s operating system', local_network: 'Inspect this computer’s network metadata', list_directory: 'List files in the workspace', dns_lookup: 'Look up public DNS', web_fetch: 'Read a public page'};
+  const observationNames = {host_system: 'Identify this computer’s operating system', local_network: 'Inspect this computer’s network metadata', list_directory: 'List files in the workspace', dns_lookup: 'Look up public DNS', web_fetch: 'Read a public page', vulnerability_search: 'Search public vulnerability records', web_search: 'Find public sources'};
   const title = observation ? item.summary || observationNames[item.tool.name] || 'Review coordinator observation' : item.summary || 'Review worker execution';
   box.append(node('div', 'chat-approval-title', title));
   const impact = observation ? item.impact || 'Read-only observation; review its exact target below.' : item.impact || 'The worker has not explained the effects. Review the command before approving.';
@@ -432,27 +444,36 @@ function renderOverview(view) {
   $('assessmentApproach').classList.toggle('hidden', !view.approach);
   $('assessmentApproach').textContent = view.approach ? `${view.approach.label} investigation · initial estimate ${view.approach.estimate}` : '';
   $('assessmentMetrics').classList.toggle('hidden', !assessment);
-  $('assessmentMetrics').textContent = (view.usage?.calls || 0) + ' assessment calls · ' + (view.post_run_usage?.calls || 0) + ' follow-up calls · ' + (view.plans || 0) + ' plans';
+  const workers = view.workers || [];
+  const workingCount = workers.filter(worker => !isTerminal(worker.phase)).length;
+  const finishedCount = workers.filter(worker => ['done', 'task_completed', 'completed'].includes(worker.phase)).length;
+  const reviewCount = workers.length - workingCount - finishedCount;
+  const workSummary = [];
+  if (workingCount) workSummary.push(`${workingCount} working`);
+  if (reviewCount) workSummary.push(`${reviewCount} needs review`);
+  if (finishedCount) workSummary.push(`${finishedCount} finished`);
+  $('assessmentMetrics').textContent = workSummary.join(' · ') || 'No workers yet';
   const context = view.context_window || {};
-  const hasContext = !!(assessment && context.limit_bytes > 0);
+  const hasContext = !!(assessment && (context.limit_bytes > 0 || context.limit_tokens > 0));
   $('contextWindow').classList.toggle('hidden', !hasContext);
   if (hasContext) {
     const percent = Math.max(0, Math.min(100, Number(context.percent) || 0));
     const tokenMeasured = context.limit_tokens > 0 && context.provider_input_tokens > 0;
-    $('contextUsageLabel').textContent = tokenMeasured ? `${Number(context.provider_input_tokens).toLocaleString()} / ${Number(context.limit_tokens).toLocaleString()} tokens` : context.used_bytes ? formatBytes(context.used_bytes) + ' / ' + formatBytes(context.limit_bytes) : 'No request yet';
-    $('contextFill').style.width = percent + '%';
+    const reportedTokens = context.provider_input_tokens > 0;
+    $('contextUsageLabel').textContent = tokenMeasured ? `${Number(context.provider_input_tokens).toLocaleString()} / ${Number(context.limit_tokens).toLocaleString()} tokens` : reportedTokens ? `${Number(context.provider_input_tokens).toLocaleString()} tokens` : context.active ? 'Measuring…' : 'Tokens unavailable';
+    $('contextFill').parentElement.classList.toggle('hidden', !tokenMeasured);
+    $('contextFill').style.width = tokenMeasured ? percent + '%' : '0%';
     $('contextFill').dataset.state = percent >= 90 ? 'high' : percent >= 75 ? 'warm' : '';
-    const providerTokens = context.provider_input_tokens > 0 ? ` · ${Number(context.provider_input_tokens).toLocaleString()} provider input tokens` : '';
-    $('contextUsageDetail').textContent = context.used_bytes ? `${tokenMeasured ? 'Last completed request' : context.active ? 'Current request' : 'Last saved request'} · ${percent}% of ${tokenMeasured ? 'token allowance' : 'app byte limit'} · ${formatBytes(context.used_bytes)} / ${formatBytes(context.limit_bytes)} bytes${tokenMeasured ? '' : providerTokens}` : 'Waiting for coordinator request';
+    $('contextUsageDetail').textContent = tokenMeasured ? `Last completed request · ${percent}% of token allowance` : reportedTokens ? 'Last completed request · model token limit unavailable' : context.active ? 'Current request · token count pending' : context.used_bytes ? 'This request has no reported token count' : 'Waiting for coordinator request';
     const agents = view.context_windows || [context];
     if (changed('context-breakdown', [view.id, agents])) {
-      const intro = node('p', 'context-explainer', 'Coordinator and current workers have separate contexts. Daybreak percentages use provider tokens for the last completed request; before then, they use the app byte limit. Finished worker packets remain in Context for debugging.');
+      const intro = node('p', 'context-explainer', 'The coordinator and current workers have separate contexts. Token counts describe the last completed request. Detailed request sizes remain in the Context debugger.');
       const rows = agents.map(agent => {
         const row = node('div', 'context-agent');
         const name = node('span', 'context-agent-name', agent.role === 'worker' ? `Worker · ${agent.agent_id}` : 'Coordinator');
         const state = node('span', 'context-agent-status', agent.status === 'interrupted' ? 'Interrupted' : agent.status === 'waiting' ? 'Waiting for workers' : agent.status === 'thinking' ? 'Thinking' : agent.status === 'finished' ? 'Finished' : agent.status === 'idle' ? 'Idle' : phaseLabel(agent.status));
         const measuredTokens = agent.limit_tokens > 0 && agent.provider_input_tokens > 0;
-        const measure = node('span', 'context-agent-measure', agent.used_bytes ? `${measuredTokens ? 'Last completed' : agent.active ? 'Current' : 'Last saved'} · ${measuredTokens ? `${Number(agent.provider_input_tokens).toLocaleString()} / ${Number(agent.limit_tokens).toLocaleString()} tokens` : `${formatBytes(agent.used_bytes)} / ${formatBytes(agent.limit_bytes)} app bytes`} · ${agent.percent}%${measuredTokens ? ` · ${formatBytes(agent.used_bytes)} input text` : agent.provider_input_tokens > 0 ? ` · ${Number(agent.provider_input_tokens).toLocaleString()} provider input tokens` : ''}` : 'No request yet');
+        const measure = node('span', 'context-agent-measure', measuredTokens ? `${Number(agent.provider_input_tokens).toLocaleString()} / ${Number(agent.limit_tokens).toLocaleString()} tokens · ${agent.percent}%` : agent.provider_input_tokens > 0 ? `${Number(agent.provider_input_tokens).toLocaleString()} tokens · limit unavailable` : agent.active ? 'Token count pending' : 'Token count unavailable');
         row.append(name, state, measure);
         return row;
       });
@@ -488,16 +509,6 @@ function renderOverview(view) {
     $('proposalGoal').textContent = view.proposal.goal;
     $('proposalScope').textContent = view.proposal.scope;
     if (!$('customer').value.trim() || view.customer) $('customer').value = view.customer || '';
-  }
-  if (changed('workerCeiling', [view.id, view.max_workers])) {
-    const ceiling = Math.max(1, Math.min(10, Number(view.max_workers) || 2));
-    $('maxWorkers').replaceChildren(...Array.from({length: ceiling}, (_, index) => {
-      const option = document.createElement('option');
-      option.value = String(index + 1);
-      option.textContent = `${index + 1} ${index === 0 ? 'worker' : 'workers'}`;
-      return option;
-    }));
-    $('maxWorkers').value = String(Math.min(2, ceiling));
   }
   if (changed('approaches', [view.id, view.proposal?.approaches])) {
     const options = view.proposal?.approaches || [];
@@ -806,7 +817,7 @@ $('startForm').onsubmit = async event => {
   const token = selection;
   starting = true; $('start').disabled = true; updateComposer();
   try {
-    const view = await api('/api/v1/intake/' + encodeURIComponent(current.id) + '/start', {method:'POST', body:JSON.stringify({customer:$('customer').value.trim(), approach_id:document.querySelector('#approachOptions input:checked')?.value || '', max_workers:Number($('maxWorkers').value)})});
+    const view = await api('/api/v1/intake/' + encodeURIComponent(current.id) + '/start', {method:'POST', body:JSON.stringify({customer:$('customer').value.trim(), approach_id:document.querySelector('#approachOptions input:checked')?.value || ''})});
     if (token !== selection) return;
     eventRecords = new Map();
     renderView(view); localStorage.setItem('birdhackbot.selectedSession', sessionPath(view)); refreshSidebar(); setInspector(true);
@@ -833,6 +844,34 @@ $('folderForm').onsubmit = async event => {
   } catch (error) { $('folderError').textContent = error.message; }
 };
 $('model').onclick = openModelPicker;
+$('modelMaxWorkers').replaceChildren(...Array.from({length: 10}, (_, index) => {
+  const option = document.createElement('option');
+  option.value = String(index + 1);
+  option.textContent = `${index + 1} ${index === 0 ? 'worker' : 'workers'}`;
+  return option;
+}));
+$('modelMaxWorkers').onchange = () => {
+  const selected = document.querySelector('#modelOptions input[name="model-choice"]:checked')?.value;
+  const profile = modelCatalog.find(item => item.id === selected);
+  $('modelWorkerSave').disabled = !profile || Number($('modelMaxWorkers').value) === profile.max_workers;
+  $('modelWorkerStatus').textContent = '';
+};
+$('modelWorkerSave').onclick = async () => {
+  const selected = document.querySelector('#modelOptions input[name="model-choice"]:checked')?.value;
+  const profile = modelCatalog.find(item => item.id === selected);
+  if (!profile) return;
+  $('modelWorkerSave').disabled = true;
+  try {
+    const result = await api('/api/v1/models/' + encodeURIComponent(selected) + '/workers', {method:'PUT', body:JSON.stringify({max_workers:Number($('modelMaxWorkers').value)})});
+    profile.max_workers = result.max_workers;
+    renderModelOptions(modelCatalog, selected);
+    updateModelWorkerSetting();
+    $('modelWorkerStatus').textContent = `Saved for ${profile.label || profile.id}. Running assessments keep their current limit.`;
+  } catch (error) {
+    $('modelWorkerSave').disabled = false;
+    $('modelWorkerStatus').textContent = error.message;
+  }
+};
 for (const button of document.querySelectorAll('[data-close-model]')) button.onclick = () => $('modelDialog').close();
 $('modelForm').onsubmit = async event => {
   event.preventDefault();

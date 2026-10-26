@@ -1,5 +1,13 @@
 # Third-party notices
 
+SearXNG is an optional, separately installed local search service, not bundled
+into BirdHackBot. The tested installation uses SearXNG 2026.10.25 at commit
+`54ca1d9cfb08674f66261d7f351b063558dfcc62` under its
+[AGPL-3.0-or-later license](https://github.com/searxng/searxng/blob/master/LICENSE).
+BirdHackBot talks to its local JSON search endpoint and can use another
+compatible search adapter in the future. Search engines enabled in SearXNG
+remain external services with their own terms.
+
 BirdHackBot uses [tiktoken-go/tokenizer v0.7.0](https://github.com/tiktoken-go/tokenizer) for offline Daybreak text-token counting. Its license is reproduced below.
 
 MIT License

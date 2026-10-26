@@ -1,6 +1,7 @@
 package webapp
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,6 +13,66 @@ import (
 	"github.com/Jawbreaker1/CodeHackBot/internal/llmclient"
 	"github.com/Jawbreaker1/CodeHackBot/internal/localauth"
 )
+
+func TestModelWorkerSettingPersistsAndUpdatesDrafts(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "models.json")
+	profiles := ModelProfilesFile{Default: "daybreak", Profiles: []ModelProfile{
+		{ID: "daybreak", Label: "Daybreak", Provider: "subscription", Model: "gpt-daybreak-blue-latest", ManagedBridge: true, MaxWorkers: 4},
+		{ID: "qwen38", Label: "Qwen", Provider: "local", BaseURL: "http://127.0.0.1:1234/v1", Model: "qwen/qwen3.8-27b", MaxWorkers: 2},
+	}}
+	if err := atomicWriteJSON(path, profiles); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(Config{RepoRoot: root, SessionsRoot: filepath.Join(root, "sessions"), DefaultProfile: profiles.Default, Profiles: profiles.Profiles, ModelProfilesPath: path})
+	app := httptest.NewServer(server)
+	defer app.Close()
+	draft := postJSON[intakeView](t, app.URL+"/api/v1/intake", nil)
+	if draft.MaxWorkers != 4 {
+		t.Fatalf("initial draft limit = %d", draft.MaxWorkers)
+	}
+	put := func(profile string, count int) int {
+		t.Helper()
+		body, _ := json.Marshal(map[string]int{"max_workers": count})
+		request, err := http.NewRequest(http.MethodPut, app.URL+"/api/v1/models/"+profile+"/workers", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Content-Type", "application/json")
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		return response.StatusCode
+	}
+	if got := put("daybreak", 7); got != http.StatusOK {
+		t.Fatalf("save worker limit status = %d", got)
+	}
+	if got := getJSON[intakeView](t, app.URL+"/api/v1/intake/"+draft.ID).MaxWorkers; got != 7 {
+		t.Fatalf("existing draft limit = %d", got)
+	}
+	catalog := getJSON[struct {
+		Models []modelOption `json:"models"`
+	}](t, app.URL+"/api/v1/models")
+	if catalog.Models[0].MaxWorkers != 7 || catalog.Models[1].MaxWorkers != 2 {
+		t.Fatalf("model limits = %+v", catalog.Models)
+	}
+	saved, err := LoadModelProfiles(path)
+	if err != nil || saved.Profiles[0].MaxWorkers != 7 || saved.Profiles[1].MaxWorkers != 2 {
+		t.Fatalf("saved model limits = %+v, %v", saved, err)
+	}
+	restarted := NewServer(Config{RepoRoot: root, SessionsRoot: filepath.Join(root, "sessions"), DefaultProfile: saved.Default, Profiles: saved.Profiles, ModelProfilesPath: path})
+	if got := restarted.getIntake(draft.ID).workerCeiling; got != 7 {
+		t.Fatalf("restored draft limit = %d", got)
+	}
+	if got := put("daybreak", 11); got != http.StatusBadRequest {
+		t.Fatalf("invalid worker limit status = %d", got)
+	}
+	if got := put("unknown", 3); got != http.StatusNotFound {
+		t.Fatalf("unknown profile status = %d", got)
+	}
+}
 
 func TestConfiguredProfilesRouteAndRestoreEntireClient(t *testing.T) {
 	type request struct {

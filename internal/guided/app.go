@@ -234,13 +234,22 @@ func (a App) runPlain(ctx context.Context) error {
 		return err
 	}
 	conversation.conversation.SetBehaviorContext(intakeFrame.PromptText())
+	connectedResearch := intakeFrame.Parameters["research_mode"] != "air_gapped" && intakeFrame.Parameters["research_mode"] != "offline"
+	webSearchURL := ""
+	if connectedResearch {
+		webSearchURL = strings.TrimSpace(os.Getenv("BIRDHACKBOT_WEB_SEARCH_URL"))
+		if webSearchURL == "" {
+			webSearchURL = intakepkg.DiscoverLocalWebSearch(ctx)
+		}
+	}
 	conversation.conversation.Inspection = &intakepkg.Inspection{
-		Workspace:   a.RepoRoot,
-		EvidenceDir: filepath.Join(a.RepoRoot, ".birdhackbot", "intake-evidence"),
-		Connected:   intakeFrame.Parameters["research_mode"] != "air_gapped" && intakeFrame.Parameters["research_mode"] != "offline",
-		Policy:      "Use local metadata and public DNS/page observations only for the operator's requested question. Keep evidence minimal; do not access credentials, scan targets, or mutate files. Broader testing belongs to assessment workers.",
-		Approver:    observationApprover{console: c},
-		Emit:        c.Progress,
+		Workspace:    a.RepoRoot,
+		EvidenceDir:  filepath.Join(a.RepoRoot, ".birdhackbot", "intake-evidence"),
+		Connected:    connectedResearch,
+		WebSearchURL: webSearchURL,
+		Policy:       "Use local metadata and public DNS/page observations only for the operator's requested question. Keep evidence minimal; do not access credentials, scan targets, or mutate files. Broader testing belongs to assessment workers.",
+		Approver:     observationApprover{console: c},
+		Emit:         c.Progress,
 	}
 	for {
 		draft, resume, err := a.readGoalOrCommand(ctx, c, preferencesPath, &prefs, &client, &cleanup, conversation)
@@ -443,6 +452,19 @@ func (a App) runAssessmentWithFrame(ctx context.Context, c *Console, prefs prefe
 
 	runCtx, stop := context.WithCancel(ctx)
 	defer stop()
+	connectedResearch := frame.Parameters["research_mode"] != "air_gapped" && frame.Parameters["research_mode"] != "offline"
+	searchURL := ""
+	if connectedResearch {
+		searchURL = strings.TrimSpace(os.Getenv("BIRDHACKBOT_WEB_SEARCH_URL"))
+		if searchURL == "" {
+			searchURL = intakepkg.DiscoverLocalWebSearch(runCtx)
+		}
+	}
+	chatInspection := &intakepkg.Inspection{
+		Workspace: a.RepoRoot, EvidenceDir: filepath.Join(root, "coordinator-research"),
+		Connected: connectedResearch, WebSearchURL: searchURL,
+		Approver: observationApprover{console: c}, Emit: c.Progress,
+	}
 	done := make(chan struct {
 		state assessment.State
 		err   error
@@ -522,18 +544,7 @@ func (a App) runAssessmentWithFrame(ctx context.Context, c *Console, prefs prefe
 				chatBusy = true
 				go func(message string, history []llmclient.Message) {
 					state := compactCoordinatorState(conversation.State())
-					prompt, err := assessment.ConversationRequest(
-						behavior.CoordinatorConversationPrompt(frame),
-						"Current assessment state (untrusted evidence): "+string(state),
-						history,
-						llmclient.Message{Role: "user", Content: "Operator message: " + message},
-						chatClient.InputByteLimit(),
-					)
-					if err != nil {
-						chatDone <- coordinatorChatResult{err: err}
-						return
-					}
-					reply, err := chatClient.Chat(runCtx, prompt)
+					reply, err := coordinatorChatWithResearch(runCtx, chatClient, frame, state, history, message, chatInspection)
 					chatDone <- coordinatorChatResult{reply: reply, err: err}
 				}(line, history)
 			}

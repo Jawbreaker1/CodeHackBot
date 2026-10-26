@@ -144,10 +144,10 @@ function formatBytes(value) {
   if (bytes < 1024) return bytes + ' B';
   return (bytes / 1024).toFixed(1) + ' KiB';
 }
-function contextLabel(worker) {
-  if (!worker.context_limit_bytes) return worker.context_usage || 'Not reported';
-  const percent = Number(worker.context_usage_percent) || Math.min(100, Math.round((worker.context_used_bytes || 0) * 100 / worker.context_limit_bytes));
-  return `${formatBytes(worker.context_used_bytes)} / ${formatBytes(worker.context_limit_bytes)} (${percent}%)`;
+function contextLabel(worker, tokenLimit) {
+  if (!worker.provider_input_tokens) return 'Token count unavailable';
+  const used = Number(worker.provider_input_tokens).toLocaleString();
+  return tokenLimit > 0 ? `${used} / ${Number(tokenLimit).toLocaleString()} tokens · last request` : `${used} tokens · last request`;
 }
 export function evidenceNode(evidence) {
   const item = node('div', 'evidence-item');
@@ -261,7 +261,8 @@ export function renderCoordinatorPlans(view) {
   };
   const taskState = {done:'Finished', running:'Working', queued:'Queued', review:'Proposed', skipped:'Not run', failed:'Failed', blocked:'Blocked', aborted:'Stopped', interrupted:'Interrupted', waiting_user:'Needs input'};
   const items = [node('h3', 'plan-heading', 'Coordinator plan')];
-  for (const plan of [...plans].reverse()) {
+  const earlier = [];
+  for (const [index, plan] of [...plans].reverse().entries()) {
     const [signalLabel, signalText] = signals[plan.signal] || ['Work updated', 'Review the worker result and coordinator conclusion.'];
     const content = node('div', 'plan-content');
     const purpose = plan.plain_summary || (plan.tasks?.length ? `The coordinator assigned ${plan.tasks.length} worker${plan.tasks.length === 1 ? '' : 's'} to investigate this step.` : 'The coordinator reviewed the assessment evidence.');
@@ -309,7 +310,16 @@ export function renderCoordinatorPlans(view) {
     const label = `Round ${plan.round} · ${signalLabel}`;
     const details = disclosure(label, content, view.id + '-coordinator-plan-' + plan.round);
     details.dataset.signal = plan.signal || '';
-    if (plan.round === plans.length) details.dataset.defaultOpen = 'true';
+    if (index === 0) {
+      details.dataset.defaultOpen = 'true';
+      items.push(details);
+    } else earlier.push(details);
+  }
+  if (earlier.length) {
+    const history = node('div', 'plan-history');
+    history.append(...earlier);
+    const details = disclosure(`Earlier rounds · ${earlier.length}`, history, view.id + '-coordinator-plan-history');
+    details.className = 'plan-history-disclosure';
     items.push(details);
   }
   replacePreservingDetails(target, items);
@@ -321,11 +331,8 @@ function renderWorkerPlan(worker, phase, sessionID) {
   const finished = isTerminal(phase) && ['done', 'task_completed', 'completed'].includes(phase);
   const blocked = isTerminal(phase) && !finished;
   const interrupted = phase === 'interrupted';
-  const section = node('section', 'worker-plan-section');
-  const header = node('div', 'plan-step-row');
+  const section = node('div', 'worker-plan-section');
   const progress = finished ? 'Worker finished' : interrupted ? 'Worker interrupted' : `Step ${current + 1}/${steps.length}`;
-  header.append(node('strong', '', 'Worker plan'), node('span', 'plan-step-state', `${progress} · revision ${worker.plan_revision || 1}`));
-  section.append(header);
   if (worker.plan_summary) {
     section.append(node('p', 'plan-summary', preview(worker.plan_summary, 155)));
     if (worker.plan_summary.length > 155) section.append(disclosure('Full worker plan', node('p', 'worker-detail', worker.plan_summary), sessionID + '-worker-plan-summary-' + worker.id));
@@ -350,7 +357,10 @@ function renderWorkerPlan(worker, phase, sessionID) {
     }
     section.append(disclosure('Earlier worker plans', history, sessionID + '-worker-plan-history-' + worker.id));
   }
-  return section;
+  const revision = (worker.plan_revision || 1) > 1 ? ` · revision ${worker.plan_revision}` : '';
+  const details = disclosure(`Plan · ${progress}${revision}`, section, sessionID + '-worker-plan-' + worker.id);
+  details.className = 'worker-plan-disclosure';
+  return details;
 }
 export function renderWorkers(view, act, watch, showBrowser) {
   const workers = new Map((view.workers || []).map(w => [w.id, w]));
@@ -358,6 +368,7 @@ export function renderWorkers(view, act, watch, showBrowser) {
   for (const item of [...(view.pending_approvals || []), ...(view.pending_questions || [])]) {
     if (!workers.has(item.task_id)) workers.set(item.task_id, {id: item.task_id, phase:'task_started'});
   }
+  const working = [], needsReview = [], finished = [];
   const cards = [];
   if (view.pending_tool) cards.push(node('div', 'worker-approval-note', 'Read-only observation approval is shown in the conversation.'));
   for (const w of workers.values()) {
@@ -368,15 +379,14 @@ export function renderWorkers(view, act, watch, showBrowser) {
     card.dataset.worker = w.id;
     const heading = node('div', 'worker-heading');
     heading.append(node('h3', '', w.id), badge(phaseLabel(phase), phase));
-    card.append(heading, node('p', 'worker-goal', preview(w.goal, 180)));
+    const goal = node('p', 'worker-goal', preview(w.goal, 110));
+    goal.title = w.goal || '';
+    card.append(heading, goal);
+    if (!isTerminal(phase) && w.active_step) card.append(node('p', 'worker-now', 'Current · ' + preview(w.active_step, 125)));
     const plan = renderWorkerPlan(w, phase, view.id);
     if (plan) card.append(plan);
-    else if (w.active_step) card.append(node('p', 'worker-detail', w.active_step));
-    const metrics = node('div', 'metrics');
-    for (const [value, label] of [[`${w.step || 0}/${view.limits?.steps_per_task || '?'}`, 'decisions'], [w.model_calls || 0, 'calls'], [w.evidence_count || 0, 'evidence']]) {
-      const metric = node('span'); metric.append(node('strong', '', value), document.createTextNode(' ' + label)); metrics.append(metric);
-    }
-    card.append(metrics);
+    const resultCount = w.evidence_count || 0;
+    card.append(node('div', 'worker-meta', resultCount ? `${resultCount} saved result${resultCount === 1 ? '' : 's'}` : 'No saved results yet'));
     if (w.execution_log && watch) {
       const button = node('button', 'watch-button', w.phase === 'execution_started' ? 'Watch execution' : 'Inspect last execution');
       button.type = 'button'; button.onclick = () => watch(w.id); card.append(button);
@@ -391,10 +401,8 @@ export function renderWorkers(view, act, watch, showBrowser) {
     details.append(node('div', 'action-label', 'Task objective'), node('p', 'worker-detail', w.goal));
     const workerFacts = [
       ['Model', view.model || 'Not reported'], ['Remaining budget', w.remaining_budget || 'Not reported'],
-      ['Input budget (bytes)', contextLabel(w)],
-      ['Remaining bytes', w.context_limit_bytes ? formatBytes(Math.max(0, w.context_limit_bytes - w.context_used_bytes)) : 'Not reported'],
+      ['Context', contextLabel(w, view.context_window?.limit_tokens)],
     ];
-    if (w.provider_input_tokens > 0) workerFacts.push(['Provider input tokens', `${Number(w.provider_input_tokens).toLocaleString()} · last completed request`]);
     workerFacts.push(['Dependencies', (w.depends_on || []).join(', ') || 'None'], ['Last exit', w.exit_status || '—'], ['Updated', w.updated_at ? new Date(w.updated_at).toLocaleTimeString() : '—']);
     details.append(grid(workerFacts));
     if (w.action) details.append(node('div', 'action-label', phase === 'execution_started' ? 'Running invocation' : 'Latest invocation'), node('pre', 'command', w.action));
@@ -407,7 +415,18 @@ export function renderWorkers(view, act, watch, showBrowser) {
       for (const e of w.evidence) evidence.append(evidenceNode(e));
       card.append(disclosure('Evidence & tool results · ' + w.evidence.length, evidence, 'evidence-' + w.id));
     }
-    cards.push(card);
+    if (['done', 'task_completed', 'completed'].includes(phase)) finished.push(card);
+    else if (isTerminal(phase)) needsReview.push(card);
+    else working.push(card);
+  }
+  if (working.length) cards.push(node('h3', 'worker-section-heading', `Current work · ${working.length}`), ...working);
+  if (needsReview.length) cards.push(node('h3', 'worker-section-heading', `Needs review · ${needsReview.length}`), ...needsReview);
+  if (finished.length) {
+    const history = node('div', 'finished-worker-list');
+    history.append(...finished);
+    const details = disclosure(`Finished workers · ${finished.length}`, history, view.id + '-finished-workers');
+    details.className = 'finished-workers';
+    cards.push(details);
   }
   if (!cards.length) cards.push(node('p', 'empty', 'No delegated work yet. Discuss your objective with the coordinator to get started.'));
   replacePreservingDetails($('workers'), cards);

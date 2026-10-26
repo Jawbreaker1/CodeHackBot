@@ -26,6 +26,8 @@ Every run keeps its scope, actions, outputs, captured screenshots, and conclusio
 
 Put related sessions in a customer folder to compare runs on the same system. The project view keeps each run's evidence distinct, tracks explicit retests, and helps reveal what remains untested. Its analysis guide answers questions about the saved results in plain language and can suggest a follow-up. A project-level follow-up opens a **new session in that folder**; a suggestion from one assessment can continue that assessment. Neither starts a test until you choose to send the request and approve the plan.
 
+In connected mode, the analysis guide can check public CVE records and read known public pages. For broader questions, it can search through a locally running SearXNG instance, which BirdHackBot detects automatically on port 8888. It reads selected result pages before citing them and keeps outside research separate from test evidence. The search service is optional; see the [web application guide](docs/runbooks/web-application.md) for setup and limits. External reading is unavailable in air-gapped mode.
+
 Ask the coordinator or analysis guide for an OWASP WSTG- or PTES-aligned report in Markdown or PDF. Reports link back to saved evidence; the analysis guide can revise the summary and editorial notes while the recorded findings, open questions, and evidence are rebuilt from the session. Earlier versions stay available, with the latest marked in the analysis conversation. PDF exports retain an editable Markdown source. Reports are drafts for professional review, and they identify missing evidence.
 
 ![Analysis of a local test service, showing a checked finding and recommended fix](docs/screenshots/assessment-analysis.png)
@@ -53,7 +55,7 @@ The web app is the richer workspace for customer folders, attachments, browser p
 - **ChatGPT subscription:** sign in from web Settings to use the local subscription bridge with your Codex account, without switching to API-key billing. Access depends on your account and the provider connection. See [subscription setup](docs/runbooks/subscription-bridge.md).
 - **Local model:** connect an OpenAI-compatible local endpoint. The included profile example supports Qwen 3.8; model, context window, and concurrency must match the actual local server. Copy [model-profiles.example.json](config/model-profiles.example.json) to `config/model-profiles.local.json` and edit your endpoint and model ID.
 
-Switch configured profiles from the model selector beneath the web chat or `/settings` in the terminal. For an air-gapped deployment, use a local model and enforce the network boundary outside the app as well as setting `BIRDHACKBOT_RESEARCH_MODE=air_gapped`. The setting disables the app's connected research path; by itself it is not a network sandbox.
+Switch configured profiles from the model selector beneath the web chat or `/settings` in the terminal. In the web model settings, set the maximum parallel workers once per model; new assessments use that limit automatically, and the coordinator decides how many workers the work needs. For an air-gapped deployment, use a local model and enforce the network boundary outside the app as well as setting `BIRDHACKBOT_RESEARCH_MODE=air_gapped`. The setting disables the app's connected research path; by itself it is not a network sandbox.
 
 ## Built for careful, evidence-led work
 

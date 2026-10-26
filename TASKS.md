@@ -1,6 +1,6 @@
 # Tasks
 
-Updated 2026-10-22. This file owns immediate implementation order and status.
+Updated 2026-10-26. This file owns immediate implementation order and status.
 
 ## Agreed sequence
 
@@ -12,6 +12,8 @@ Updated 2026-10-22. This file owns immediate implementation order and status.
 The product remains orchestrator-first. The first two steps establish its shared engine and model access. Keep each implementation small, runnable, and tied to its done condition. Priority clarification, 2026-09-19: complete and accept the agentic worker first, then complete and accept the orchestrator structure, before expanding knowledge/source capabilities. Completed cleanup and provider checks do not establish full worker acceptance.
 
 ## Current priority: foundation acceptance and capability proof
+
+2026-10-26 Analysis current research: connected sessions use shared NVD CVE search and the coordinator's bounded public `web_fetch`. The guide may search for a public product/component/CVE or read up to two exact public source URLs, then cites selected results separately from saved assessment references. A local SearXNG adapter now discovers broader public pages; the web server detects it automatically on port 8888. The model selects only returned URLs, and the guide cites a result only after reading its destination page. Search hits do not become target findings. Air-gapped mode disables this path. The hidden external search MCP remains removed. SearXNG 2026.10.25 was installed outside the repo in an isolated user-local virtualenv and enabled as a loopback user service. Real PHP and OWASP searches returned relevant sources; full CI and a live Daybreak Blue question through the real search and page reader passed. Search engine availability can still vary; a failed lookup is shown as a research gap.
 
 2026-10-22 web session lifecycle and CI: creating an intake now requires POST, and new intake/assessment sessions enter the in-memory index only after their initial record is saved. A failed initial save leaves no published session. CI now checks frontend JavaScript syntax and runs a headless Chromium test against the built app's isolated fixture server, covering new-session clicks, model selection, reload, and reopening. Full deterministic CI passed. This is a web lifecycle regression gate, not a live-model assessment.
 

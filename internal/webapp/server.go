@@ -27,21 +27,26 @@ import (
 )
 
 type Config struct {
-	RepoRoot       string
-	SessionsRoot   string
-	LLM            llmclient.Client
-	Profiles       []ModelProfile
-	DefaultProfile string
-	Frame          behavior.Frame
-	Limits         assessment.Limits
+	RepoRoot          string
+	SessionsRoot      string
+	WebSearchURL      string
+	LLM               llmclient.Client
+	Profiles          []ModelProfile
+	ModelProfilesPath string
+	DefaultProfile    string
+	Frame             behavior.Frame
+	Limits            assessment.Limits
 }
 
 type Server struct {
 	config             Config
 	mu                 sync.RWMutex
+	workerMu           sync.RWMutex
+	workerOverrides    map[string]int
 	runs               map[string]*run
 	intakes            map[string]*intakeRun
 	analysisAssistants map[string]*analysisAssistantState
+	analysisResearcher analysisResearcher
 	seq                atomic.Uint64
 	loadErr            error
 	login              *subscription.LoginManager
@@ -556,7 +561,12 @@ func NewServer(config Config) *Server {
 	if config.Limits == (assessment.Limits{}) {
 		config.Limits = assessment.DefaultLimits()
 	}
-	server := &Server{config: config, runs: make(map[string]*run), intakes: make(map[string]*intakeRun), analysisAssistants: make(map[string]*analysisAssistantState), login: &subscription.LoginManager{Home: codexHome()}}
+	server := &Server{config: config, workerOverrides: make(map[string]int), runs: make(map[string]*run), intakes: make(map[string]*intakeRun), analysisAssistants: make(map[string]*analysisAssistantState), login: &subscription.LoginManager{Home: codexHome()}}
+	pageResearcher := publicPageResearcher{}
+	if strings.TrimSpace(config.WebSearchURL) != "" {
+		pageResearcher.webSearch = searxNGSearch{baseURL: strings.TrimSpace(config.WebSearchURL)}
+	}
+	server.analysisResearcher = pageResearcher
 	server.loadErr = server.restoreSessions()
 	return server
 }
@@ -609,6 +619,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/api/v1/models" {
 		s.models(w, r)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/api/v1/models/") {
+		s.modelWorkers(w, r)
 		return
 	}
 	if strings.HasPrefix(r.URL.Path, "/api/v1/subscription/login/") {

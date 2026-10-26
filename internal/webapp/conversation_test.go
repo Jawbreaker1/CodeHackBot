@@ -23,6 +23,48 @@ func TestParseCoordinatorChatReplyKeepsMessageField(t *testing.T) {
 	}
 }
 
+func TestCompactRunStatePreservesLiveWorkerInterpretationAndOutput(t *testing.T) {
+	root := t.TempDir()
+	logs := filepath.Join(root, "tasks", "worker", "logs")
+	if err := os.MkdirAll(logs, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stdout := filepath.Join(logs, "command.log.stdout")
+	content := strings.Repeat("routine progress line\n", 200) + "53/tcp open domain\n80/tcp open http\nNmap done: 1 host scanned\n"
+	if err := os.WriteFile(stdout, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "private.stderr")
+	if err := os.WriteFile(outside, []byte("private marker"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	linked := filepath.Join(logs, "command.log.stderr")
+	if err := os.Symlink(outside, linked); err != nil {
+		t.Fatal(err)
+	}
+	workers := map[string]workerView{"worker": {
+		ID: "worker", Phase: "running", PlanSummary: "The tool completed; a wrapper check reported the wrong status.",
+		EvidenceCount: 1, Evidence: []assessment.EvidenceView{{Summary: "exit status 124", LogRefs: []string{stdout, linked}}},
+	}}
+	encoded := compactRunState(root, assessment.State{}, nil, workers, "", nil, nil)
+	var state struct {
+		Workers []workerProgress `json:"live_workers"`
+	}
+	if err := json.Unmarshal([]byte(encoded), &state); err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Workers) != 1 {
+		t.Fatalf("want one live worker, got %d", len(state.Workers))
+	}
+	worker := state.Workers[0]
+	if !strings.Contains(worker.PlanSummary, "tool completed") || !strings.Contains(worker.RecentOutput, "80/tcp open http") {
+		t.Fatalf("lost the worker's interpretation or observed result: %+v", worker)
+	}
+	if strings.Contains(worker.RecentOutput, "private marker") || len(worker.RecentOutput) > 1500 {
+		t.Fatalf("live output escaped its path or size bounds: %q", worker.RecentOutput)
+	}
+}
+
 func TestStoppingAssessmentCancelsLiveCoordinatorChat(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})

@@ -10,13 +10,13 @@ import (
 	"github.com/Jawbreaker1/CodeHackBot/internal/intake"
 )
 
-func TestAssessmentStartsWithSelectedWorkerLimit(t *testing.T) {
+func TestAssessmentStartsWithModelWorkerLimit(t *testing.T) {
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{}"}}]}`))
 	}))
 	defer model.Close()
 	root := t.TempDir()
-	server := NewServer(Config{RepoRoot: root, SessionsRoot: filepath.Join(root, "sessions"), DefaultProfile: "daybreak", Profiles: []ModelProfile{{ID: "daybreak", Provider: "subscription", BaseURL: model.URL + "/v1", Model: "fixture"}}})
+	server := NewServer(Config{RepoRoot: root, SessionsRoot: filepath.Join(root, "sessions"), DefaultProfile: "daybreak", Profiles: []ModelProfile{{ID: "daybreak", Provider: "subscription", BaseURL: model.URL + "/v1", Model: "fixture", MaxWorkers: 6}}})
 	draft, err := server.newIntake()
 	if err != nil {
 		t.Fatal(err)
@@ -24,10 +24,10 @@ func TestAssessmentStartsWithSelectedWorkerLimit(t *testing.T) {
 	draft.mu.Lock()
 	draft.proposal = &intake.Draft{Goal: "Inspect three independent fixtures", Scope: "synthetic fixtures only"}
 	draft.mu.Unlock()
-	if _, err := server.startIntake(draft, "lab", "", 11); err == nil {
+	if _, err := server.startIntake(draft, "lab", "", 7); err == nil {
 		t.Fatal("worker count above the model ceiling was accepted")
 	}
-	view, err := server.startIntake(draft, "lab", "", 6)
+	view, err := server.startIntake(draft, "lab", "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -18,19 +18,22 @@ import (
 // Inspection offers fixed, read-only coordinator observations. Broader target
 // work and arbitrary commands remain owned by assessment workers.
 type Inspection struct {
-	Workspace   string
-	EvidenceDir string
-	Policy      string
-	Connected   bool
-	Approver    approval.Approver
-	Emit        func(assessment.Event)
+	Workspace    string
+	EvidenceDir  string
+	Policy       string
+	Connected    bool
+	WebSearchURL string
+	Approver     approval.Approver
+	Emit         func(assessment.Event)
+	fetchPage    func(context.Context, string) (pageObservation, error)
 }
 
 type ToolCall struct {
-	Name string `json:"name"`
-	Path string `json:"path,omitempty"`
-	Host string `json:"host,omitempty"`
-	URL  string `json:"url,omitempty"`
+	Name  string `json:"name"`
+	Path  string `json:"path,omitempty"`
+	Host  string `json:"host,omitempty"`
+	URL   string `json:"url,omitempty"`
+	Query string `json:"query,omitempty"`
 }
 
 type Observation struct {
@@ -42,11 +45,15 @@ type Observation struct {
 }
 
 const localInspectionScope = "Local observation: directory entry names/types within the configured workspace, this host's operating-system metadata, and kernel network metadata. Host metadata is limited to fixed read-only queries (uname, hostname, and /etc/os-release when present). No arbitrary commands, credential files, other file contents, device probes, or mutations."
-const connectedInspectionScope = " Connected observation also offers DNS lookup for a named public domain and one bounded HTTP/HTTPS page fetch from a public address. No credentials, custom headers, redirects to other hosts, private-network fetches, active scans, or mutations."
+const connectedInspectionScope = " Connected observation also offers DNS lookup for a named public domain, a bounded HTTP/HTTPS page fetch, and public NVD vulnerability search. Search results are leads, not proof about a target. No credentials, custom headers, redirects to other hosts, private-network fetches, active scans, or mutations."
 
 func (i *Inspection) Scope() string {
 	if i.Connected {
-		return localInspectionScope + connectedInspectionScope
+		scope := localInspectionScope + connectedInspectionScope
+		if i.WebSearchURL != "" {
+			scope += " Broad web search discovers public-page candidates through the configured local search service; read a selected page before citing its contents."
+		}
+		return scope
 	}
 	return localInspectionScope + " External DNS and web fetch are unavailable in air-gapped mode."
 }
@@ -119,6 +126,26 @@ func (i *Inspection) Run(ctx context.Context, call ToolCall) (Observation, error
 		}
 		call.URL = parsed.String()
 		target, summary, impact = call.URL, "Read public page "+call.URL, "Sends one ordinary HTTP GET to this public page. No login, form submission, or file change."
+	case "vulnerability_search":
+		if !i.Connected {
+			observation.Error = "public vulnerability search is unavailable in air-gapped mode"
+			return observation, nil
+		}
+		if call.Path != "" || call.Host != "" || call.URL != "" || len(call.Query) < 2 || len(call.Query) > 100 {
+			observation.Error = "vulnerability_search accepts only a short public query"
+			return observation, nil
+		}
+		target, summary, impact = "NVD public index", "Search NVD for "+call.Query, "Queries the public vulnerability index. Matches do not prove that a target is affected."
+	case "web_search":
+		if !i.Connected || i.WebSearchURL == "" {
+			observation.Error = "broad web search is unavailable in this session"
+			return observation, nil
+		}
+		if call.Path != "" || call.Host != "" || call.URL != "" || len(call.Query) < 1 || len(call.Query) > 200 {
+			observation.Error = "web_search accepts only a short public query"
+			return observation, nil
+		}
+		target, summary, impact = "public search index", "Search public web for "+call.Query, "Queries the configured search service. Results are leads; read a selected public page before citing its contents."
 	default:
 		observation.Error = "unknown coordinator observation tool"
 		return observation, nil
@@ -159,7 +186,15 @@ func (i *Inspection) Run(ctx context.Context, call ToolCall) (Observation, error
 	case "dns_lookup":
 		observation.Data, err = lookupPublicDNS(ctx, call.Host)
 	case "web_fetch":
-		observation.Data, err = fetchPublicPage(ctx, call.URL)
+		fetch := i.fetchPage
+		if fetch == nil {
+			fetch = fetchPublicPage
+		}
+		observation.Data, err = fetch(ctx, call.URL)
+	case "vulnerability_search":
+		observation.Data, err = SearchPublicVulnerabilities(ctx, call.Query)
+	case "web_search":
+		observation.Data, err = SearchWeb(ctx, i.WebSearchURL, call.Query, nil)
 	}
 	if err != nil {
 		observation.Error = err.Error()

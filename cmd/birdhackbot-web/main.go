@@ -15,6 +15,7 @@ import (
 	"github.com/Jawbreaker1/CodeHackBot/internal/assessment"
 	"github.com/Jawbreaker1/CodeHackBot/internal/behavior"
 	"github.com/Jawbreaker1/CodeHackBot/internal/buildinfo"
+	"github.com/Jawbreaker1/CodeHackBot/internal/intake"
 	"github.com/Jawbreaker1/CodeHackBot/internal/llmclient"
 	"github.com/Jawbreaker1/CodeHackBot/internal/reporoot"
 	"github.com/Jawbreaker1/CodeHackBot/internal/subscription"
@@ -80,13 +81,17 @@ func main() {
 			profilesPath = candidate
 		}
 	}
-	config := webapp.Config{RepoRoot: root, SessionsRoot: *sessions, LLM: client, Frame: frame, Limits: assessment.DefaultLimits()}
+	webSearchURL := strings.TrimSpace(os.Getenv("BIRDHACKBOT_WEB_SEARCH_URL"))
+	if webSearchURL == "" && researchMode == "connected" {
+		webSearchURL = intake.DiscoverLocalWebSearch(stopContext)
+	}
+	config := webapp.Config{RepoRoot: root, SessionsRoot: *sessions, WebSearchURL: webSearchURL, LLM: client, Frame: frame, Limits: assessment.DefaultLimits()}
 	if profilesPath != "" {
 		profiles, err := webapp.LoadModelProfiles(profilesPath)
 		if err != nil {
 			fatal(fmt.Errorf("load model profiles %s: %w", profilesPath, err))
 		}
-		config.Profiles, config.DefaultProfile = profiles.Profiles, profiles.Default
+		config.Profiles, config.DefaultProfile, config.ModelProfilesPath = profiles.Profiles, profiles.Default, profilesPath
 	}
 	closeBridge, err := attachManagedBridge(stopContext, config.Profiles)
 	if err != nil {

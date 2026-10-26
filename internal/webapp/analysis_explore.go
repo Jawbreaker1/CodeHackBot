@@ -23,6 +23,7 @@ type analysisCoverageTest struct {
 	TaskID    string `json:"task_id"`
 	Goal      string `json:"goal"`
 	Status    string `json:"status"`
+	Summary   string `json:"summary,omitempty"`
 }
 
 type analysisCoverageFinding struct {
@@ -48,7 +49,7 @@ type analysisCorrelationMatch struct {
 func coverageForAssessment(id string, state assessment.State, findings []analysisFinding, challenges []analysisChallenge) analysisCoverage {
 	coverage := analysisCoverage{Scope: state.Scope, SessionIDs: []string{id}, Gaps: uniqueStrings(assessment.ReportGaps(state))}
 	for _, result := range state.Results {
-		coverage.Tests = append(coverage.Tests, analysisCoverageTest{SessionID: id, TaskID: result.Task.ID, Goal: result.Task.Goal, Status: result.Status})
+		coverage.Tests = append(coverage.Tests, analysisCoverageTest{SessionID: id, TaskID: result.Task.ID, Goal: result.Task.Goal, Status: result.Status, Summary: assistantExcerpt(result.Summary, 2400)})
 	}
 	for _, finding := range findings {
 		coverage.WeakPoints = append(coverage.WeakPoints, analysisCoverageFinding{SessionID: id, Title: finding.Title, Status: finding.Status, Severity: finding.Severity})

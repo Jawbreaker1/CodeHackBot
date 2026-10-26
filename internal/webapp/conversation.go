@@ -3,12 +3,15 @@ package webapp
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/Jawbreaker1/CodeHackBot/internal/approval"
 	"github.com/Jawbreaker1/CodeHackBot/internal/assessment"
+	"github.com/Jawbreaker1/CodeHackBot/internal/intake"
 )
 
 // A progress reply sees the same live observations as the worker inspector,
@@ -17,11 +20,13 @@ type workerProgress struct {
 	ID             string                   `json:"id"`
 	Phase          string                   `json:"phase"`
 	ActiveStep     string                   `json:"active_step"`
+	PlanSummary    string                   `json:"plan_summary,omitempty"`
 	EvidenceCount  int                      `json:"evidence_count"`
 	LatestEvidence *assessment.EvidenceView `json:"latest_evidence,omitempty"`
+	RecentOutput   string                   `json:"recent_output,omitempty"`
 }
 
-const webCoordinatorDisplayPrompt = `Return one JSON object with "text" (your plain-language reply), optional "display_artifact_refs" (up to three exact paths from available_images), and optional "revise_plan":true. Explain what the recorded evidence establishes, why the current step matters, and the most useful next step when relevant; keep the reply short and respect a different path chosen by the operator. If pending_plan is present and the operator directs a different course before workers start, set revise_plan:true and explain that you are preparing a revised proposal. Do not set it for a question about the plan, or when no plan is awaiting review. A revised proposal still needs the normal plan review and action permissions. Select images only when they help answer the operator; never invent a path. The application validates each reference and displays accepted images beneath your reply. If no image helps, omit display_artifact_refs. Do not put Markdown image syntax in text.`
+const webCoordinatorDisplayPrompt = `Return one JSON object with "text" (your plain-language reply; it may be empty only when requesting an advertised research tool), optional "display_artifact_refs" (up to three exact paths from available_images), and optional "revise_plan":true. Explain what the recorded evidence establishes, why the current step matters, and the most useful next step when relevant; keep the reply short and respect a different path chosen by the operator. If pending_plan is present and the operator directs a different course before workers start, set revise_plan:true and explain that you are preparing a revised proposal. Do not set it for a question about the plan, or when no plan is awaiting review. A revised proposal still needs the normal plan review and action permissions. Select images only when they help answer the operator; never invent a path. The application validates each reference and displays accepted images beneath your reply. If no image helps, omit display_artifact_refs. Do not put Markdown image syntax in text.`
 
 type coordinatorChatReply struct {
 	Text                string                  `json:"text"`
@@ -31,6 +36,7 @@ type coordinatorChatReply struct {
 	ReportOutput        reportOutput            `json:"report_output,omitempty"`
 	ContinueAssessment  bool                    `json:"continue_assessment,omitempty"`
 	RevisePlan          bool                    `json:"revise_plan,omitempty"`
+	Tool                *intake.ToolCall        `json:"tool,omitempty"`
 }
 
 func parseCoordinatorChatReply(raw string) (coordinatorChatReply, error) {
@@ -43,7 +49,7 @@ func parseCoordinatorChatReply(raw string) (coordinatorChatReply, error) {
 		reply.Text = reply.Message
 	}
 	reply.Text = strings.TrimSpace(reply.Text)
-	if reply.Text == "" {
+	if reply.Text == "" && reply.Tool == nil {
 		return coordinatorChatReply{}, fmt.Errorf("coordinator response was empty")
 	}
 	return reply, nil
@@ -99,20 +105,21 @@ func imageMIME(path string) string {
 }
 
 // Called under run.mu so completed results and live workers form one snapshot.
-func compactRunState(state assessment.State, pending []string, workers map[string]workerView, mode approval.Mode, images []string, proposed *assessment.Decision) string {
+func compactRunState(root string, state assessment.State, pending []string, workers map[string]workerView, mode approval.Mode, images []string, proposed *assessment.Decision) string {
 	results := make([]string, 0, len(state.Results))
 	for _, result := range state.Results {
 		results = append(results, result.Task.ID+"="+result.Status+": "+conversationExcerpt(result.Summary, 240))
 	}
 	progress := make([]workerProgress, 0, len(workers))
 	for _, worker := range workers {
-		item := workerProgress{ID: worker.ID, Phase: worker.Phase, ActiveStep: conversationExcerpt(worker.ActiveStep, 240), EvidenceCount: worker.EvidenceCount}
+		item := workerProgress{ID: worker.ID, Phase: worker.Phase, ActiveStep: conversationExcerpt(worker.ActiveStep, 240), PlanSummary: conversationExcerpt(worker.PlanSummary, 400), EvidenceCount: worker.EvidenceCount}
 		if n := len(worker.Evidence); n > 0 {
 			evidence := worker.Evidence[n-1]
 			evidence.Command = conversationExcerpt(evidence.Command, 400)
 			evidence.Summary = conversationExcerpt(evidence.Summary, 600)
 			evidence.ArtifactURLs = nil
 			item.LatestEvidence = &evidence
+			item.RecentOutput = recentWorkerOutput(root, evidence.LogRefs)
 		}
 		progress = append(progress, item)
 	}
@@ -141,6 +148,61 @@ func compactRunState(state assessment.State, pending []string, workers map[strin
 		ModelCalls      int                   `json:"model_calls"`
 	}{ApprovalMode: mode.Normalized(), Status: state.Status, Goal: state.Goal, Scope: state.Scope, Plans: len(state.Plans), Results: results, Workers: progress, Pending: pending, AvailableImages: images, LatestPlan: latestPlan, PendingPlan: pendingPlan, ModelCalls: state.Usage.Calls})
 	return string(data)
+}
+
+// Live chat receives a bounded view of the saved tool output as well as the
+// worker's latest interpretation. A short execution summary can end before the
+// actual observations, especially when a wrapper reports an error after its
+// underlying tool completed. These bytes are untrusted evidence, not commands.
+func recentWorkerOutput(root string, refs []string) string {
+	parts := make([]string, 0, 2)
+	for _, suffix := range []string{".stdout", ".stderr"} {
+		for _, ref := range refs {
+			if !strings.HasSuffix(ref, suffix) {
+				continue
+			}
+			rootReal, rootErr := filepath.EvalSymlinks(root)
+			refReal, refErr := filepath.EvalSymlinks(ref)
+			if rootErr != nil || refErr != nil || !pathWithin(rootReal, refReal) {
+				continue
+			}
+			limit := int64(1400)
+			if suffix == ".stderr" {
+				limit = 400
+			}
+			output := readOutputTail(refReal, limit)
+			if output != "" {
+				parts = append(parts, strings.TrimPrefix(suffix, ".")+": "+output)
+			}
+			break
+		}
+	}
+	return strings.Join(parts, " | ")
+}
+
+func readOutputTail(path string, limit int64) string {
+	file, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || info.Size() == 0 {
+		return ""
+	}
+	start := max(int64(0), info.Size()-limit)
+	if _, err := file.Seek(start, io.SeekStart); err != nil {
+		return ""
+	}
+	data, err := io.ReadAll(io.LimitReader(file, limit))
+	if err != nil {
+		return ""
+	}
+	text := strings.Join(strings.Fields(string(data)), " ")
+	if start > 0 {
+		return "[tail] " + text
+	}
+	return text
 }
 
 func conversationExcerpt(text string, limit int) string {

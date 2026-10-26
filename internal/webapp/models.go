@@ -25,6 +25,7 @@ type modelOption struct {
 	Model      string `json:"model,omitempty"`
 	Current    bool   `json:"current"`
 	Connection string `json:"connection,omitempty"`
+	MaxWorkers int    `json:"max_workers,omitempty"`
 }
 
 // ModelProfile binds a visible choice to its endpoint and request limits.
@@ -130,6 +131,12 @@ func (s *Server) profile(id string) (ModelProfile, bool) {
 }
 
 func (s *Server) workerCeiling(profileID string) int {
+	s.workerMu.RLock()
+	override := s.workerOverrides[profileID]
+	s.workerMu.RUnlock()
+	if override > 0 {
+		return override
+	}
 	profile, ok := s.profile(profileID)
 	if !ok {
 		return assessment.DefaultLimits().Workers
@@ -151,7 +158,7 @@ func (s *Server) models(w http.ResponseWriter, r *http.Request) {
 	if len(s.config.Profiles) > 0 {
 		options := make([]modelOption, 0, len(s.config.Profiles))
 		for _, profile := range s.config.Profiles {
-			option := modelOption{ID: profile.ID, Label: profile.Label, Provider: profile.Provider, Model: profile.Model, Current: profile.ID == s.config.DefaultProfile}
+			option := modelOption{ID: profile.ID, Label: profile.Label, Provider: profile.Provider, Model: profile.Model, Current: profile.ID == s.config.DefaultProfile, MaxWorkers: s.workerCeiling(profile.ID)}
 			if profile.Provider == "subscription" {
 				option.Connection = subscriptionConnection(profile)
 			}
@@ -197,6 +204,83 @@ func (s *Server) models(w http.ResponseWriter, r *http.Request) {
 		result["catalog_error"] = err.Error()
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) modelWorkers(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/v1/models/")
+	if !strings.HasSuffix(id, "/workers") {
+		http.NotFound(w, r)
+		return
+	}
+	id = strings.TrimSuffix(id, "/workers")
+	if !validSessionID(id) || id == "" {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPut {
+		methodNotAllowed(w, http.MethodPut)
+		return
+	}
+	var input struct {
+		MaxWorkers int `json:"max_workers"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if input.MaxWorkers < 1 || input.MaxWorkers > 10 {
+		writeError(w, http.StatusBadRequest, "maximum parallel workers must be between 1 and 10")
+		return
+	}
+	if _, ok := s.profile(id); !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if err := s.saveModelWorkers(id, input.MaxWorkers); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"profile": id, "max_workers": input.MaxWorkers})
+}
+
+func (s *Server) saveModelWorkers(id string, count int) error {
+	if s.config.ModelProfilesPath == "" {
+		return fmt.Errorf("model settings need a model profiles file")
+	}
+	s.workerMu.Lock()
+	defer s.workerMu.Unlock()
+	file, err := LoadModelProfiles(s.config.ModelProfilesPath)
+	if err != nil {
+		return fmt.Errorf("read model settings: %w", err)
+	}
+	found := false
+	for index := range file.Profiles {
+		if file.Profiles[index].ID == id {
+			file.Profiles[index].MaxWorkers = count
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("model profile %q is no longer in the settings file", id)
+	}
+	if err := atomicWriteJSON(s.config.ModelProfilesPath, file); err != nil {
+		return fmt.Errorf("save model settings: %w", err)
+	}
+	s.workerOverrides[id] = count
+	s.mu.RLock()
+	intakes := make([]*intakeRun, 0, len(s.intakes))
+	for _, current := range s.intakes {
+		intakes = append(intakes, current)
+	}
+	s.mu.RUnlock()
+	for _, current := range intakes {
+		current.mu.Lock()
+		if current.profileID == id && current.assessmentID == "" && !current.deleted {
+			current.workerCeiling = count
+		}
+		current.mu.Unlock()
+	}
+	return nil
 }
 
 // Connection state is diagnostic only; no account or bridge credential reaches

@@ -239,12 +239,13 @@ func (s *Server) intakeMessage(ctx context.Context, current *intakeRun, text str
 		current.mu.Unlock()
 	}()
 	current.conversation.Inspection = &intake.Inspection{
-		Workspace:   s.config.RepoRoot,
-		EvidenceDir: filepath.Join(s.config.SessionsRoot, "intake", current.id),
-		Connected:   s.config.Frame.Parameters["research_mode"] != "air_gapped" && s.config.Frame.Parameters["research_mode"] != "offline",
-		Policy:      "Use local metadata and public DNS/page observations only for the operator's requested question. Keep them minimal; do not access credentials, scan targets, or mutate files. Broader testing belongs to assessment workers.",
-		Approver:    &intakeToolApprover{run: current},
-		Emit:        current.recordObservation,
+		Workspace:    s.config.RepoRoot,
+		EvidenceDir:  filepath.Join(s.config.SessionsRoot, "intake", current.id),
+		Connected:    s.config.Frame.Parameters["research_mode"] != "air_gapped" && s.config.Frame.Parameters["research_mode"] != "offline",
+		WebSearchURL: s.config.WebSearchURL,
+		Policy:       "Use local metadata and public DNS/page observations only for the operator's requested question. Keep them minimal; do not access credentials, scan targets, or mutate files. Broader testing belongs to assessment workers.",
+		Approver:     &intakeToolApprover{run: current},
+		Emit:         current.recordObservation,
 	}
 	current.conversation.SetBehaviorContext(s.config.Frame.PromptText())
 	current.conversationMu.Lock()
@@ -311,10 +312,7 @@ func (s *Server) startIntake(current *intakeRun, customer, approachID string, ma
 		workerCeiling = assessment.DefaultLimits().Workers
 	}
 	if maxWorkers == 0 {
-		maxWorkers = assessment.DefaultLimits().Workers
-		if maxWorkers > workerCeiling {
-			maxWorkers = workerCeiling
-		}
+		maxWorkers = workerCeiling
 	}
 	if maxWorkers < 1 || maxWorkers > workerCeiling {
 		current.mu.Unlock()
