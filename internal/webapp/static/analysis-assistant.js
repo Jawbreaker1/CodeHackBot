@@ -58,6 +58,10 @@ export function askAboutFinding(finding) {
 
 function renderAssistant() {
   if (!element || !analysis) return;
+  const previousTranscript = element.querySelector('.assistant-transcript');
+  const previousScrollTop = previousTranscript?.scrollTop || 0;
+  const previousMessageCount = previousTranscript?.children.length || 0;
+  const wasNearLatest = !previousTranscript || previousTranscript.scrollHeight - previousTranscript.clientHeight - previousScrollTop < 80;
   const projectView = analysis.kind === 'customer';
   const heading = projectView ? 'Ask about this project' : 'Ask about this assessment';
   const scope = projectView
@@ -100,6 +104,9 @@ function renderAssistant() {
     '<form id="assistant-form"><div class="assistant-compose">' + (focus ? '<div class="assistant-focus">About: ' + escapeHTML(focus.title) + ' <button type="button" id="assistant-clear-focus" aria-label="Clear selected finding">×</button></div>' : '') +
     '<textarea id="assistant-question" rows="2" maxlength="1500" placeholder="Ask a question about this analysis" aria-label="Question about the analysis">' + escapeHTML(draft) + '</textarea>' +
     '<div class="assistant-compose-bottom"><span>' + (view.web_search_available ? 'The guide can search the web, check CVE records, and read public pages. No tests run from here.' : view.research_available ? 'The guide can check public CVE records and known public pages. Broader web search is not set up yet.' : 'Answers link back to saved results. External research is unavailable.') + '</span><button type="submit"' + (busy ? ' disabled' : '') + '>Ask ↗</button></div></div></form>';
+  const currentTranscript = element.querySelector('.assistant-transcript');
+  if (currentTranscript) currentTranscript.scrollTop = messages.length > previousMessageCount || wasNearLatest
+    ? currentTranscript.scrollHeight : previousScrollTop;
   element.querySelectorAll('[data-starter]').forEach(button => button.onclick = () => {
     draft = button.dataset.starter;
     renderAssistant();
@@ -162,6 +169,5 @@ async function submitQuestion(event) {
   } finally {
     busy = false;
     renderAssistant();
-    element.querySelector('.assistant-transcript')?.scrollTo({top: 1000000});
   }
 }
