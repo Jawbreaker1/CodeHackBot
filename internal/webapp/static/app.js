@@ -264,6 +264,7 @@ function traceNode(records) {
   for (const record of records.slice(-4)) {
     const event = record.event;
     const item = node('li');
+    item.dataset.kind = event.kind;
     item.append(node('strong', '', (event.task_id ? event.task_id + ' · ' : '') + phaseLabel(event.kind)));
     const description = event.message || event.rationale || event.action;
     if (description) item.append(node('span', '', preview(description, 130)));

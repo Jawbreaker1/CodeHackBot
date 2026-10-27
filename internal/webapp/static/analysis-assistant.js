@@ -93,7 +93,7 @@ function renderAssistant() {
         (message.report.output === 'pdf' && String(message.report.markdown_url || '').startsWith('/api/v1/')
           ? '<a href="' + escapeHTML(message.report.markdown_url) + '" target="_blank" rel="noopener">Open editable Markdown ↗</a>' : '') + '</div>'
       : '';
-    return '<article class="assistant-turn"><span class="assistant-speaker">' + (message.role === 'user' ? 'You' : 'Analysis guide') + '</span><p>' + escapeHTML(message.text) + '</p>' + sources + report + handoff + '</article>';
+    return '<article class="assistant-turn ' + (message.role === 'user' ? 'user' : 'guide') + '"><span class="assistant-speaker">' + (message.role === 'user' ? 'You' : 'Analysis guide') + '</span><p>' + escapeHTML(message.text) + '</p>' + sources + report + handoff + '</article>';
   }).join('') + '</div>' : '<div class="assistant-starters"><p>Ask what a result means or what would be useful to check next.</p><div>' +
     starters.map(question => '<button type="button" data-starter="' + escapeHTML(question) + '">' + escapeHTML(question) + '</button>').join('') + '</div></div>';
   const options = models.length ? models.map(item => '<option value="' + escapeHTML(item.id) + '"' + (item.id === selectedProfile ? ' selected' : '') + '>' + escapeHTML(item.label || item.id) + '</option>').join('') : '';

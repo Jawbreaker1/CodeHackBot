@@ -210,6 +210,7 @@ function observationResultNode(evidence, sequence) {
 export function eventNode(record) {
   const e = record.event;
   const entry = node('li', 'activity-item');
+  entry.dataset.kind = e.kind;
   const time = node('time', '', new Date(record.at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'}));
   entry.append(time, node('strong', '', (e.task_id ? e.task_id + ' · ' : '') + phaseLabel(e.kind)));
   if (e.message) entry.append(node('p', 'event-preview', preview(e.message, 160)));
