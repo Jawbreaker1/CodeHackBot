@@ -243,6 +243,31 @@ func (c *Console) Print(format string, args ...any) {
 }
 
 func (c *Console) Progress(e assessment.Event) {
+	// Intake observations belong to the coordinator, not the worker list.
+	// Keep their live progress visible without turning the conversation into a log.
+	if c.events != nil && e.TaskID == "coordinator" {
+		status := ""
+		switch e.Kind {
+		case "observation_requested":
+			status = "Choosing what to check"
+		case "action_proposed":
+			status = "Preparing a source check"
+		case "execution_started":
+			status = dashboardText(e.Message, 80)
+		case "execution_finished":
+			status = "Reading the result"
+		case "blocked":
+			status = "Checking the next step"
+		}
+		if status != "" {
+			c.emitEvent(consoleEvent{kind: consoleCoordinatorStatus, text: status, working: true})
+		}
+		return
+	}
+	if c.events != nil && e.Kind == "operator_message" {
+		c.emitEvent(consoleEvent{kind: consoleCoordinatorStatus, text: "Considering your message", working: true})
+		return
+	}
 	var lines []string
 	var status string
 	var activeWorkers int

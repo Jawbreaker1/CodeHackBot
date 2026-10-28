@@ -545,9 +545,8 @@ func (a App) runAssessmentWithFrame(ctx context.Context, c *Console, prefs prefe
 				history := conversation.Messages()
 				conversation.Add("user", line)
 				c.Progress(assessment.Event{Kind: "operator_message", Message: line})
-				c.Print("Coordinator message queued for the next planning turn.\n")
 				if chatBusy {
-					c.Print("The coordinator is answering another message; this message remains queued for planning.\n")
+					c.Notice("Your message is queued for the next planning turn.")
 					continue
 				}
 				chatBusy = true
@@ -560,10 +559,12 @@ func (a App) runAssessmentWithFrame(ctx context.Context, c *Console, prefs prefe
 		case result := <-chatDone:
 			chatBusy = false
 			if result.err != nil {
+				c.emitEvent(consoleEvent{kind: consoleCoordinatorStatus, text: "Could not answer", working: false})
 				c.Print("Coordinator chat unavailable: %v\n", result.err)
 				continue
 			}
 			conversation.Add("assistant", result.reply)
+			c.emitEvent(consoleEvent{kind: consoleCoordinatorStatus, text: "Answer ready", working: false})
 			c.Print("Coordinator: %s\n", strings.TrimSpace(result.reply))
 		}
 	}

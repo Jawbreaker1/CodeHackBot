@@ -359,20 +359,26 @@ func (m guidedTUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.waiting = false
 			m.approvalDetails = ""
 			m.busy = !m.active
-			if m.active && m.inputMode == promptChat && !strings.HasPrefix(line, "/") {
+			wasApproval := m.inputMode == promptApproval
+			chatMessage := m.inputMode == promptChat && !strings.HasPrefix(line, "/") && !strings.EqualFold(line, "settings") && !strings.EqualFold(line, "resume")
+			if chatMessage {
 				m.coordinatorWorking = true
-				m.coordinatorStatus = "responding"
+				m.coordinatorStatus = "Considering your question"
 			}
-			if m.inputMode == promptChat && !strings.HasPrefix(line, "/") && !strings.EqualFold(line, "settings") && !strings.EqualFold(line, "resume") {
+			if chatMessage {
 				m.lines = append(m.lines, "You: "+line)
 			}
-			if m.active {
+			if m.active || wasApproval {
 				m.inputMode = promptChat
 			}
 			// The guided console owns the conversation semantics. The TUI only
 			// transports the exact line to that runtime.
 			m.input.Prompt = "> "
-			m.input.Placeholder = "Talk to the orchestrator"
+			if chatMessage || wasApproval {
+				m.input.Placeholder = "Coordinator is working..."
+			} else {
+				m.input.Placeholder = "Talk to the orchestrator"
+			}
 			m.syncLayout()
 			return m, tea.Batch(sendTUILine(m.ctx, m.inputPipe, line), m.startSpinner())
 		case "pgup":
@@ -471,7 +477,11 @@ func (m guidedTUI) View() string {
 		inputTitle = " " + compactSessionText(question, m.width-12) + " "
 	}
 	if m.busy && !m.stopping {
-		inputTitle = " Input " + m.spinner.View() + " setting up "
+		if m.inputMode == promptChat {
+			inputTitle = " Coordinator " + m.spinner.View() + " working "
+		} else {
+			inputTitle = " Input " + m.spinner.View() + " setting up "
+		}
 	} else if m.stopping {
 		inputTitle = " Input " + m.spinner.View() + " stopping "
 	}

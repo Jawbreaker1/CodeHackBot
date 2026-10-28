@@ -127,6 +127,32 @@ func TestGuidedTUIAcceptsDefaultPromptChoice(t *testing.T) {
 	}
 }
 
+func TestGuidedTUIShowsCoordinatorWorkDuringIntake(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	model := newGuidedTUI(ctx, cancel, make(chan tuiOutput), make(chan error), nopWriteCloser{})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	updated, _ = updated.Update(tuiOutput{kind: consolePrompt, promptMode: promptChat, text: "birdhackbot> "})
+	ready := updated.(guidedTUI)
+	ready.input.SetValue("What happened with PHP?")
+	updated, _ = ready.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	working := updated.(guidedTUI)
+	view := ansi.Strip(working.View())
+	if !working.busy || !working.coordinatorWorking || !strings.Contains(view, "Considering your") || !strings.Contains(view, "working") || strings.Contains(view, "setting up") {
+		t.Fatalf("intake work was not clear while waiting for the model:\n%s", view)
+	}
+	updated, _ = working.Update(tuiOutput{kind: consoleCoordinatorStatus, text: "Search public web for PHP advisory", working: true})
+	searching := updated.(guidedTUI)
+	if !strings.Contains(ansi.Strip(searching.View()), "Search public") {
+		t.Fatalf("source check did not replace the generic working status:\n%s", ansi.Strip(searching.View()))
+	}
+	updated, _ = searching.Update(tuiOutput{kind: consoleOutput, text: "Coordinator: Short answer."})
+	updated, _ = updated.Update(tuiOutput{kind: consolePrompt, promptMode: promptChat, text: "birdhackbot> "})
+	if updated.(guidedTUI).coordinatorWorking {
+		t.Fatal("finished answer still marked coordinator as working")
+	}
+}
+
 func TestGuidedTUIShowsApprovalDetailsBesideInput(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -180,6 +206,20 @@ func TestGuidedTUIKeepsApprovalAnswersOutOfChat(t *testing.T) {
 	updated, _ = chat.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if !strings.Contains(strings.Join(updated.(guidedTUI).lines, "\n"), "You: What happened with PHP?") {
 		t.Fatal("ordinary chat input was hidden along with approval answers")
+	}
+}
+
+func TestGuidedTUIResumesWorkingStatusAfterIntakeApproval(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	model := newGuidedTUI(ctx, cancel, make(chan tuiOutput), make(chan error), nopWriteCloser{})
+	updated, _ := model.Update(tuiOutput{kind: consolePrompt, promptMode: promptApproval, text: "Read source\nAllow this observation? [y/N]"})
+	approval := updated.(guidedTUI)
+	approval.input.SetValue("y")
+	updated, _ = approval.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	view := ansi.Strip(updated.(guidedTUI).View())
+	if !strings.Contains(view, "working") || strings.Contains(view, "setting up") {
+		t.Fatalf("intake approval left an unclear waiting state:\n%s", view)
 	}
 }
 
@@ -392,6 +432,23 @@ func TestConsoleEmitsActualWorkerActivityForTUI(t *testing.T) {
 	console.Progress(assessment.Event{TaskID: "inspect", Kind: "task_completed"})
 	if last := events[len(events)-1]; last.kind != consoleDashboard || last.activeWorkers != 0 {
 		t.Fatalf("worker completion did not clear activity: %+v", last)
+	}
+}
+
+func TestConsoleShowsIntakeResearchAsCoordinatorActivity(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var events []consoleEvent
+	console := newConsole(ctx, strings.NewReader(""), nil, func(event consoleEvent) {
+		events = append(events, event)
+	})
+	console.Progress(assessment.Event{TaskID: "coordinator", Kind: "execution_started", Message: "Search public web for PHP advisory"})
+	console.Progress(assessment.Event{TaskID: "coordinator", Kind: "execution_finished", Message: "Coordinator observation recorded"})
+	if len(events) != 2 || events[0].kind != consoleCoordinatorStatus || events[0].text != "Search public web for PHP advisory" || !events[0].working || events[1].kind != consoleCoordinatorStatus || events[1].text != "Reading the result" {
+		t.Fatalf("intake progress did not stay concise and coordinator-owned: %+v", events)
+	}
+	if len(console.DashboardSnapshot()) != 1 {
+		t.Fatal("coordinator observation was incorrectly added to worker dashboard")
 	}
 }
 
