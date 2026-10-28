@@ -335,26 +335,35 @@ func (a observationApprover) Approve(ctx context.Context, request approval.Reque
 	if !a.console.approvalMode().RequiresApproval(request) {
 		return approval.DecisionApproveSession, ctx.Err()
 	}
-	prompt := fmt.Sprintf("\nCoordinator observation approval\n%s\n%s\nTarget: %s\nExact request: %s\nAllow this observation? [y/N]", request.Summary, request.Impact, request.Target, request.Command)
+	prompt := fmt.Sprintf("\nCoordinator observation approval\n%s\n%s\nTarget: %s\nExact request: %s\nAllow this observation? [y/N, d=details, p=approval settings]", request.Summary, request.Impact, request.Target, request.Command)
 	for {
-		answer, err := a.console.Ask(ctx, prompt)
+		answer, err := a.console.AskApproval(ctx, prompt)
 		if err != nil {
 			return approval.DecisionDeny, err
 		}
 		switch strings.ToLower(strings.TrimSpace(answer)) {
 		case "y", "yes":
 			return approval.DecisionApproveOnce, nil
+		case "d", "details":
+			a.console.Print("Action: %s\nImpact: %s\nTarget: %s\nExact request: %s\n", request.Summary, request.Impact, request.Target, request.Command)
+		case "p", "/permissions":
+			if err := a.console.choosePermissions(ctx); err != nil {
+				return approval.DecisionDeny, err
+			}
+			if !a.console.approvalMode().RequiresApproval(request) {
+				return approval.DecisionApproveSession, nil
+			}
 		case "", "n", "no":
 			return approval.DecisionDeny, nil
 		default:
-			prompt = "Please enter y to allow this read-only observation or n to deny it."
+			prompt = "Enter y to allow, n to deny, d for details, or p to change the approval level."
 		}
 	}
 }
 
 func (a App) readGoalOrCommand(ctx context.Context, c *Console, path string, prefs *preferences, client *llmclient.Client, cleanup *func(), intake *intakeConversation) (*assessmentDraft, *savedAssessment, error) {
 	for {
-		value, err := c.Ask(ctx, "birdhackbot> ")
+		value, err := c.AskChat(ctx, "birdhackbot> ")
 		if err != nil {
 			return nil, nil, err
 		}

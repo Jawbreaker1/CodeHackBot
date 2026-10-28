@@ -43,8 +43,10 @@ var finishedSlashCommands = []slashCommand{
 	{"/exit", "Exit"},
 }
 
+var approvalSlashCommands = []slashCommand{{"/permissions", "Change approval level"}}
+
 func (m guidedTUI) slashMatches() []slashCommand {
-	if m.busy || m.modalActive || (m.waiting && m.inputPrompt != "birdhackbot>") {
+	if m.busy || m.modalActive || (m.waiting && m.inputMode != promptChat && m.inputMode != promptApproval) {
 		return nil
 	}
 	value := m.input.Value()
@@ -52,7 +54,9 @@ func (m guidedTUI) slashMatches() []slashCommand {
 		return nil
 	}
 	commands := intakeSlashCommands
-	if m.active {
+	if m.waiting && m.inputMode == promptApproval {
+		commands = approvalSlashCommands
+	} else if m.active {
 		commands = runningSlashCommands
 		if m.sessionReady {
 			commands = finishedSlashCommands

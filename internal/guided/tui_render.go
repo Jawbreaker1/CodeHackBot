@@ -19,6 +19,26 @@ var (
 
 func tuiSectionTitle(text string) string { return tuiGreen.Render(text) }
 
+func (m guidedTUI) approvalLines() []string {
+	if m.approvalDetails == "" {
+		return nil
+	}
+	width := maxTUI(20, m.width-8)
+	var lines []string
+	for _, detail := range strings.Split(m.approvalDetails, "\n") {
+		for _, wrapped := range strings.Split(ansi.Wrap(strings.TrimSpace(detail), width, ""), "\n") {
+			if wrapped != "" {
+				lines = append(lines, wrapped)
+			}
+		}
+	}
+	limit := maxTUI(3, min(8, m.height-15))
+	if len(lines) > limit {
+		return append(lines[:limit-1], "… enter d to see full details")
+	}
+	return lines
+}
+
 // statusBody gives the operator a short, live overview. The full worker
 // snapshot remains available through /workers when the terminal is small.
 func (m guidedTUI) statusBody(width, height int) string {
@@ -63,6 +83,7 @@ func (m guidedTUI) statusBody(width, height int) string {
 	for _, line := range strings.Split(ansi.Wrap(permission, width, ""), "\n") {
 		rows = append(rows, tuiBody.Render(line))
 	}
+	rows = append(rows, tuiMuted.Render("Change: /permissions"))
 	if notice := strings.TrimSpace(m.notice); notice != "" {
 		rows = append(rows, tuiMuted.Render(ansi.Truncate(notice, width, "…")))
 	}

@@ -22,6 +22,14 @@ type line struct {
 
 type consoleEventKind uint8
 
+type promptMode uint8
+
+const (
+	promptAnswer promptMode = iota
+	promptChat
+	promptApproval
+)
+
 const (
 	consoleOutput consoleEventKind = iota
 	consolePrompt
@@ -45,6 +53,7 @@ type consoleChoice struct {
 type consoleEvent struct {
 	kind          consoleEventKind
 	text          string
+	promptMode    promptMode
 	choices       []consoleChoice
 	defaultChoice int
 	working       bool
@@ -129,10 +138,18 @@ func newConsole(ctx context.Context, reader io.Reader, writer io.Writer, events 
 }
 
 func (c *Console) Ask(ctx context.Context, prompt string) (string, error) {
-	return c.ask(ctx, prompt, nil)
+	return c.ask(ctx, prompt, nil, promptAnswer)
 }
 
-func (c *Console) ask(ctx context.Context, prompt string, choiceEvent *consoleEvent) (string, error) {
+func (c *Console) AskChat(ctx context.Context, prompt string) (string, error) {
+	return c.ask(ctx, prompt, nil, promptChat)
+}
+
+func (c *Console) AskApproval(ctx context.Context, prompt string) (string, error) {
+	return c.ask(ctx, prompt, nil, promptApproval)
+}
+
+func (c *Console) ask(ctx context.Context, prompt string, choiceEvent *consoleEvent, mode promptMode) (string, error) {
 	c.askMu.Lock()
 	defer c.askMu.Unlock()
 	response := make(chan line, 1)
@@ -144,7 +161,7 @@ func (c *Console) ask(ctx context.Context, prompt string, choiceEvent *consoleEv
 	if choiceEvent != nil {
 		c.emitEvent(*choiceEvent)
 	}
-	c.emit(consolePrompt, prompt)
+	c.emitEvent(consoleEvent{kind: consolePrompt, text: prompt, promptMode: mode})
 	select {
 	case <-ctx.Done():
 		return "", ctx.Err()
@@ -177,7 +194,7 @@ func (c *Console) Choose(ctx context.Context, title, prompt string, choices []co
 	if c.events != nil {
 		selection = &consoleEvent{kind: consoleChoices, text: title, choices: choices, defaultChoice: defaultChoice}
 	}
-	answer, err := c.ask(ctx, prompt, selection)
+	answer, err := c.ask(ctx, prompt, selection, promptAnswer)
 	if err != nil {
 		return "", err
 	}
@@ -217,7 +234,9 @@ func (c *Console) Commands() <-chan line { return c.commands }
 
 // PromptCommand shows a free-form coordinator input prompt while Commands
 // remains the sole receiver, including input typed during a phase change.
-func (c *Console) PromptCommand(prompt string) { c.emit(consolePrompt, prompt) }
+func (c *Console) PromptCommand(prompt string) {
+	c.emitEvent(consoleEvent{kind: consolePrompt, text: prompt, promptMode: promptChat})
+}
 
 func (c *Console) Print(format string, args ...any) {
 	c.emit(consoleOutput, fmt.Sprintf(format, args...))
@@ -342,13 +361,13 @@ func (a taskApprover) Approve(ctx context.Context, r approval.Request) (approval
 	}
 	prompt := fmt.Sprintf("\n%s — %s\nTarget: %s\nImpact: %s%s\nAllow this action? [y/N, d=command details, p=approval settings]", a.task.ID, purpose, r.Target, impact, review)
 	for {
-		answer, err := a.console.Ask(ctx, prompt)
+		answer, err := a.console.AskApproval(ctx, prompt)
 		if err != nil {
 			return approval.DecisionDeny, err
 		}
 		switch strings.ToLower(answer) {
 		case "d", "details":
-			a.console.Print("Exact invocation: %s\nWorking directory: %s\nDeclared scope: %s\nModel risk assessment: %s\n", r.Command, r.Cwd, a.scope, r.Risk)
+			a.console.Print("Action: %s\nTarget: %s\nImpact: %s%s\nExact invocation: %s\nWorking directory: %s\nDeclared scope: %s\nModel risk assessment: %s\n", purpose, r.Target, impact, review, r.Command, r.Cwd, a.scope, r.Risk)
 		case "p", "/permissions":
 			if err := a.console.choosePermissions(ctx); err != nil {
 				return approval.DecisionDeny, err

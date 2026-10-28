@@ -73,3 +73,48 @@ func TestConsoleRoutesPromptAnswersAndOperatorCommands(t *testing.T) {
 		t.Fatal("operator command was not routed")
 	}
 }
+
+func TestConsoleDistinguishesApprovalFromChatPrompt(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reader, writer := io.Pipe()
+	defer writer.Close()
+	events := make(chan consoleEvent, 2)
+	console := newConsole(ctx, reader, io.Discard, func(event consoleEvent) { events <- event })
+	for _, test := range []struct {
+		mode promptMode
+		ask  func() (string, error)
+	}{
+		{promptApproval, func() (string, error) { return console.AskApproval(ctx, "Allow this action?") }},
+		{promptChat, func() (string, error) { return console.AskChat(ctx, "birdhackbot> ") }},
+	} {
+		answer := make(chan string, 1)
+		go func() {
+			value, err := test.ask()
+			if err != nil {
+				answer <- "error: " + err.Error()
+				return
+			}
+			answer <- value
+		}()
+		select {
+		case event := <-events:
+			if event.kind != consolePrompt || event.promptMode != test.mode {
+				t.Fatalf("prompt classification = %+v; want %v", event, test.mode)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("prompt event was not emitted")
+		}
+		if _, err := writer.Write([]byte("ok\n")); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case got := <-answer:
+			if got != "ok" {
+				t.Fatalf("answer = %q", got)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("prompt answer was not routed")
+		}
+	}
+}

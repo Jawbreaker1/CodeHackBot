@@ -28,6 +28,7 @@ func wantsGuidedTUI(reader io.Reader, writer io.Writer) bool {
 type tuiOutput struct {
 	kind          consoleEventKind
 	text          string
+	promptMode    promptMode
 	choices       []consoleChoice
 	defaultChoice int
 	working       bool
@@ -55,6 +56,8 @@ type guidedTUI struct {
 	sessionReady       bool
 	inputPrompt        string
 	inputContext       string
+	inputMode          promptMode
+	approvalDetails    string
 	permissionLabel    string
 	workerStatus       string
 	coordinatorStatus  string
@@ -82,7 +85,7 @@ func (a App) runTUI(parent context.Context) error {
 		instance.Writer = io.Discard
 		instance.events = func(event consoleEvent) {
 			select {
-			case output <- tuiOutput{kind: event.kind, text: event.text, choices: event.choices, defaultChoice: event.defaultChoice, working: event.working, activeWorkers: event.activeWorkers}:
+			case output <- tuiOutput{kind: event.kind, text: event.text, promptMode: event.promptMode, choices: event.choices, defaultChoice: event.defaultChoice, working: event.working, activeWorkers: event.activeWorkers}:
 			case <-ctx.Done():
 			}
 		}
@@ -157,6 +160,10 @@ func (m guidedTUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.modalLines = nil
 			m.modalChoices = nil
 			m.waiting = false
+			m.approvalDetails = ""
+			if m.active {
+				m.inputMode = promptChat
+			}
 			m.input.SetValue("")
 		case consoleChoices:
 			m.modalHeading = value.text
@@ -167,6 +174,8 @@ func (m guidedTUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case consolePrompt:
 			m.waiting = true
+			m.inputMode = value.promptMode
+			m.approvalDetails = ""
 			m.busy = false
 			m.coordinatorWorking = false
 			m.slashSelected = 0
@@ -181,6 +190,8 @@ func (m guidedTUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				if m.modalActive {
 					m.modalLines = append(m.modalLines, strings.TrimSpace(detail))
+				} else if m.inputMode == promptApproval {
+					m.approvalDetails = strings.TrimSpace(detail)
 				} else {
 					m.lines = append(m.lines, strings.TrimSpace(detail))
 				}
@@ -201,6 +212,8 @@ func (m guidedTUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = value.text
 		case consoleAssessmentStarted:
 			m.active = true
+			m.inputMode = promptChat
+			m.approvalDetails = ""
 			m.sessionReady = false
 			m.workerStatus = ""
 			m.waiting = false
@@ -215,6 +228,8 @@ func (m guidedTUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.slashSelected = 0
 		case consoleAssessmentFinished:
 			m.sessionReady = true
+			m.inputMode = promptChat
+			m.approvalDetails = ""
 			m.busy = false
 			m.waiting = false
 			m.input.Placeholder = "Ask about results or continue the session"
@@ -342,13 +357,17 @@ func (m guidedTUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.input.SetValue("")
 			m.slashSelected = 0
 			m.waiting = false
+			m.approvalDetails = ""
 			m.busy = !m.active
-			if m.active {
+			if m.active && m.inputMode == promptChat && !strings.HasPrefix(line, "/") {
 				m.coordinatorWorking = true
 				m.coordinatorStatus = "responding"
 			}
-			if !strings.EqualFold(line, "/settings") && !strings.EqualFold(line, "settings") && !strings.EqualFold(line, "/permissions") && !strings.EqualFold(line, "/resume") && !strings.EqualFold(line, "resume") {
+			if m.inputMode == promptChat && !strings.HasPrefix(line, "/") && !strings.EqualFold(line, "settings") && !strings.EqualFold(line, "resume") {
 				m.lines = append(m.lines, "You: "+line)
+			}
+			if m.active {
+				m.inputMode = promptChat
 			}
 			// The guided console owns the conversation semantics. The TUI only
 			// transports the exact line to that runtime.
@@ -417,7 +436,11 @@ func (m *guidedTUI) syncLayout() {
 	m.width, m.height = width, height
 	left := width * 2 / 3
 	m.conversation.Width = left - 4
-	m.conversation.Height = maxTUI(4, height-10-len(m.slashPaletteLines()))
+	approvalRows := 0
+	if m.waiting && m.inputMode == promptApproval {
+		approvalRows = len(m.approvalLines()) + 1
+	}
+	m.conversation.Height = maxTUI(4, height-10-len(m.slashPaletteLines())-approvalRows)
 	follow := m.conversation.AtBottom()
 	content := renderTUIConversation(m.lines, m.conversation.Width)
 	m.conversation.SetContent(content)
@@ -438,7 +461,9 @@ func (m guidedTUI) View() string {
 	rightWidth := maxTUI(24, m.width-m.conversation.Width-9)
 	right := pane.Width(rightWidth).Height(m.conversation.Height + 2).Render(tuiSectionTitle(" Activity ") + "\n" + m.statusBody(rightWidth-4, m.conversation.Height))
 	inputTitle := " Input "
-	if m.waiting && m.inputPrompt != "" {
+	if m.waiting && m.inputMode == promptApproval {
+		inputTitle = " Approval needed "
+	} else if m.waiting && m.inputPrompt != "" {
 		question := m.inputPrompt
 		if m.inputContext != "" && m.inputContext != question {
 			question = m.inputContext + " · " + question
@@ -450,7 +475,14 @@ func (m guidedTUI) View() string {
 	} else if m.stopping {
 		inputTitle = " Input " + m.spinner.View() + " stopping "
 	}
-	bottomLines := []string{inputTitleStyle.Render(inputTitle), m.input.View()}
+	bottomLines := []string{inputTitleStyle.Render(inputTitle)}
+	if m.waiting && m.inputMode == promptApproval {
+		for _, line := range m.approvalLines() {
+			bottomLines = append(bottomLines, tuiBody.Render(line))
+		}
+		bottomLines = append(bottomLines, tuiBlue.Render(m.inputPrompt))
+	}
+	bottomLines = append(bottomLines, m.input.View())
 	bottomLines = append(bottomLines, m.slashPaletteLines()...)
 	bottomLines = append(bottomLines, lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("Enter send  ·  / commands  ·  PgUp/PgDn history  ·  Ctrl-C stop"))
 	bottom := pane.Width(maxTUI(30, m.width-2)).Render(strings.Join(bottomLines, "\n"))

@@ -127,14 +127,59 @@ func TestGuidedTUIAcceptsDefaultPromptChoice(t *testing.T) {
 	}
 }
 
-func TestGuidedTUIShowsApprovalDetailsInConversation(t *testing.T) {
+func TestGuidedTUIShowsApprovalDetailsBesideInput(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	model := newGuidedTUI(ctx, cancel, make(chan tuiOutput), make(chan error), nopWriteCloser{})
-	updated, _ := model.Update(tuiOutput{kind: consolePrompt, text: "Review this action\nTarget: fixture\nImpact: read-only\nAllow this action? [y/N]"})
+	updated, _ := model.Update(tuiOutput{kind: consolePrompt, promptMode: promptApproval, text: "Review this action\nTarget: fixture\nImpact: read-only\nAllow this action? [y/N]"})
 	got := updated.(guidedTUI)
-	if got.inputPrompt != "Allow this action? [y/N]" || len(got.lines) != 1 || got.lines[0] != "Review this action\nTarget: fixture\nImpact: read-only" {
-		t.Fatalf("approval prompt was not readable: question=%q details=%#v", got.inputPrompt, got.lines)
+	view := ansi.Strip(got.View())
+	if got.inputPrompt != "Allow this action? [y/N]" || len(got.lines) != 0 || !strings.Contains(view, "Approval needed") || !strings.Contains(view, "Target: fixture") || !strings.Contains(view, "Impact: read-only") {
+		t.Fatalf("approval details were not isolated from chat: question=%q lines=%#v\n%s", got.inputPrompt, got.lines, view)
+	}
+}
+
+func TestGuidedTUIKeepsApprovalAnswersOutOfChat(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var input bytes.Buffer
+	model := newGuidedTUI(ctx, cancel, make(chan tuiOutput), make(chan error), captureWriteCloser{&input})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	updated, _ = updated.Update(tuiOutput{kind: consoleAssessmentStarted})
+	updated, _ = updated.Update(tuiOutput{kind: consolePrompt, promptMode: promptApproval, text: "Review this action\nTarget: fixture\nAllow this action? [y/N, p=approval settings]"})
+	approval := updated.(guidedTUI)
+	approval.input.SetValue("/")
+	approval.syncLayout()
+	if matches := approval.slashMatches(); len(matches) != 1 || matches[0].name != "/permissions" {
+		t.Fatalf("approval slash menu = %#v", matches)
+	}
+	if rows := len(strings.Split(strings.TrimRight(ansi.Strip(approval.View()), "\n"), "\n")); rows > 24 {
+		t.Fatalf("approval menu overflows a 24-row terminal: %d rows", rows)
+	}
+	compact, _ := approval.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	if rows := len(strings.Split(strings.TrimRight(ansi.Strip(compact.(guidedTUI).View()), "\n"), "\n")); rows > 20 {
+		t.Fatalf("approval menu overflows a 20-row terminal: %d rows", rows)
+	}
+	approval.input.SetValue("y")
+	updated, command := approval.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if command == nil {
+		t.Fatal("approval answer was not submitted")
+	}
+	if batch, ok := command().(tea.BatchMsg); ok {
+		for _, child := range batch {
+			_ = child()
+		}
+	}
+	got := updated.(guidedTUI)
+	if input.String() != "y\n" || strings.Contains(strings.Join(got.lines, "\n"), "You: y") || got.coordinatorStatus == "responding" {
+		t.Fatalf("approval answer entered chat or falsely marked coordinator as responding: input=%q lines=%#v status=%q", input.String(), got.lines, got.coordinatorStatus)
+	}
+	updated, _ = got.Update(tuiOutput{kind: consolePrompt, promptMode: promptChat, text: "birdhackbot> "})
+	chat := updated.(guidedTUI)
+	chat.input.SetValue("What happened with PHP?")
+	updated, _ = chat.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !strings.Contains(strings.Join(updated.(guidedTUI).lines, "\n"), "You: What happened with PHP?") {
+		t.Fatal("ordinary chat input was hidden along with approval answers")
 	}
 }
 
@@ -271,7 +316,7 @@ func TestGuidedTUISlashCommandsFilterAndRunFromInput(t *testing.T) {
 	var input bytes.Buffer
 	model := newGuidedTUI(ctx, cancel, make(chan tuiOutput), make(chan error), captureWriteCloser{&input})
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	updated, _ = updated.Update(tuiOutput{kind: consolePrompt, text: "birdhackbot> "})
+	updated, _ = updated.Update(tuiOutput{kind: consolePrompt, promptMode: promptChat, text: "birdhackbot> "})
 	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
 	all := updated.(guidedTUI)
 	if len(all.slashMatches()) != 5 || !strings.Contains(all.View(), "Slash commands") || !strings.Contains(all.View(), "/resume") {
