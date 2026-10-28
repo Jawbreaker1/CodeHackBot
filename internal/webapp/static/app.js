@@ -922,7 +922,7 @@ narrow.addEventListener('change', () => { closePanels(); setInspector(!narrow.ma
 setInspector(!narrow.matches);
 selectTab($('workersTab'));
 $('toggleSidebar').setAttribute('aria-expanded', String(!mobile.matches));
-const permissionLabels = {per_action: 'Approve every execution', dangerous_only: 'Review risky actions', full_access: 'Approve everything'};
+const permissionLabels = {per_action: 'Ask me before every execution', dangerous_only: 'Ask me before risky actions', full_access: 'Run without approval prompts'};
 $('settings').onclick = () => {
   $('settingsModelValue').textContent = current?.model || 'Choose a model';
   $('settingsPermissionsValue').textContent = permissionLabels[current?.permission_mode] || permissionLabels.per_action;

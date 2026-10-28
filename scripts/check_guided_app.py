@@ -195,7 +195,7 @@ def run_case(binary, root, endpoint, mode):
             terminal.send("3")
             terminal.expect("Type confirm to apply.")
             terminal.send("confirm")
-            terminal.expect("Approval setting: Approve everything")
+            terminal.expect("Approval setting: Run without approval prompts")
             terminal.expect("birdhackbot> ")
         terminal.send("Who are you?")
         terminal.expect("I am the assessment orchestrator.")
@@ -229,7 +229,7 @@ def run_case(binary, root, endpoint, mode):
             terminal.send("3")
             terminal.expect("Type confirm to apply.")
             terminal.send("confirm")
-            terminal.expect("Approval setting: Approve everything")
+            terminal.expect("Approval setting: Run without approval prompts")
         approvals = 0 if mode in ("auto", "mode-switch") else 3 if mode == "orchestration" else 1
         for approval_index in range(approvals):
             if mode == "orchestration" and approval_index == 2:
@@ -340,7 +340,7 @@ def run_tui_smoke(binary, root, endpoint):
         terminal.expect("I am the assessment orchestrator.")
         terminal.interrupt()
         terminal.finish(0)
-        assert "│ Coordinator" in terminal.transcript
+        assert "COORDINATOR" in terminal.transcript
         assert "I am the assessment orchestrator." in terminal.transcript
         assert "\n> " not in terminal.transcript, "raw console prompts leaked into the TUI stream"
     finally:

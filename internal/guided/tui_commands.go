@@ -76,7 +76,7 @@ func (m guidedTUI) slashPaletteLines() []string {
 	if selected >= len(matches) {
 		selected = 0
 	}
-	lines := []string{"Slash commands · ↑/↓ choose · Tab complete · Enter run"}
+	lines := []string{tuiBlue.Render("Slash commands") + tuiMuted.Render(" · ↑/↓ choose · Tab complete · Enter run")}
 	columnWidth := maxTUI(20, (m.width-9)/2)
 	for row := 0; row < (len(matches)+1)/2; row++ {
 		left := slashCommandLabel(matches[row*2], row*2 == selected)
@@ -96,7 +96,7 @@ func slashCommandLabel(command slashCommand, selected bool) string {
 	}
 	label := marker + command.name + "  " + command.shorthint
 	if selected {
-		return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("81")).Render(label)
+		return tuiAccent.Render(label)
 	}
-	return lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render(label)
+	return tuiMuted.Render(label)
 }

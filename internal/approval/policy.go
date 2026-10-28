@@ -25,11 +25,11 @@ func (m Mode) Normalized() Mode {
 func (m Mode) Label() string {
 	switch m.Normalized() {
 	case DangerousOnly:
-		return "Review risky actions"
+		return "Ask me before risky actions"
 	case FullAccess:
-		return "Approve everything"
+		return "Run without approval prompts"
 	default:
-		return "Approve every execution"
+		return "Ask me before every execution"
 	}
 }
 

@@ -1,11 +1,138 @@
 package guided
 
 import (
+	"fmt"
 	"strings"
 
+	"github.com/Jawbreaker1/CodeHackBot/internal/approval"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
+
+var (
+	tuiAccent = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("203"))
+	tuiBlue   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("111"))
+	tuiGreen  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("114"))
+	tuiMuted  = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	tuiBody   = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+)
+
+func tuiSectionTitle(text string) string { return tuiGreen.Render(text) }
+
+// statusBody gives the operator a short, live overview. The full worker
+// snapshot remains available through /workers when the terminal is small.
+func (m guidedTUI) statusBody(width, height int) string {
+	if width < 1 || height < 1 {
+		return ""
+	}
+	phase := "SETUP"
+	phaseStyle := tuiBlue
+	if m.active {
+		phase = "RUNNING"
+		phaseStyle = tuiGreen
+	}
+	if m.sessionReady {
+		phase = "READY TO CONTINUE"
+		phaseStyle = tuiBlue
+	}
+	if m.stopping {
+		phase = "STOPPING"
+		phaseStyle = tuiAccent
+	}
+	gap := []string{""}
+	if height <= 12 {
+		gap = nil
+	}
+	rows := []string{phaseStyle.Render(phase)}
+	rows = append(rows, gap...)
+	rows = append(rows, tuiMuted.Render("COORDINATOR"))
+	coordinator := strings.TrimSpace(m.coordinatorStatus)
+	if coordinator == "" {
+		coordinator = "ready"
+	}
+	if m.coordinatorWorking {
+		coordinator = m.spinner.View() + " " + coordinator
+	}
+	rows = append(rows, tuiBody.Render(ansi.Truncate(coordinator, width, "…")))
+	rows = append(rows, gap...)
+	rows = append(rows, tuiMuted.Render("APPROVALS"))
+	permission := m.permissionLabel
+	if permission == "" {
+		permission = approval.EveryExecution.Label()
+	}
+	for _, line := range strings.Split(ansi.Wrap(permission, width, ""), "\n") {
+		rows = append(rows, tuiBody.Render(line))
+	}
+	if notice := strings.TrimSpace(m.notice); notice != "" {
+		rows = append(rows, tuiMuted.Render(ansi.Truncate(notice, width, "…")))
+	}
+	workersTitle := fmt.Sprintf("WORKERS · %d ACTIVE", m.activeWorkers)
+	if m.activeWorkers > 0 {
+		workersTitle = m.spinner.View() + " " + workersTitle
+	}
+	rows = append(rows, gap...)
+	rows = append(rows, tuiGreen.Render(workersTitle))
+	remaining := height - len(rows)
+	for _, line := range tuiWorkerRows(m.workerStatus, remaining) {
+		if len(rows) >= height {
+			break
+		}
+		style := tuiBlue
+		if strings.HasPrefix(line, " ") || strings.HasPrefix(line, "…") || line == "No workers yet" {
+			style = tuiMuted
+		}
+		rows = append(rows, style.Render(ansi.Truncate(line, width, "…")))
+	}
+	if len(rows) > height {
+		rows = rows[:height]
+	}
+	return strings.Join(rows, "\n")
+}
+
+// compactSnapshot uses unindented task names followed by indented details.
+// Keep the names visible first when a narrow inspector cannot show everything.
+func tuiWorkerRows(snapshot string, available int) []string {
+	if available <= 0 {
+		return nil
+	}
+	if strings.TrimSpace(snapshot) == "" {
+		return []string{"No workers yet"}
+	}
+	type workerGroup struct {
+		name    string
+		details []string
+	}
+	var groups []workerGroup
+	for _, line := range strings.Split(snapshot, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if strings.HasPrefix(line, " ") && len(groups) > 0 {
+			groups[len(groups)-1].details = append(groups[len(groups)-1].details, line)
+		} else {
+			groups = append(groups, workerGroup{name: line})
+		}
+	}
+	if len(groups) > available {
+		var rows []string
+		for _, group := range groups[:available-1] {
+			rows = append(rows, group.name)
+		}
+		return append(rows, "… see /workers")
+	}
+	var rows []string
+	extra := available - len(groups)
+	for i, group := range groups {
+		rows = append(rows, group.name)
+		share := extra / (len(groups) - i)
+		if share > len(group.details) {
+			share = len(group.details)
+		}
+		rows = append(rows, group.details[:share]...)
+		extra -= share
+	}
+	return rows
+}
 
 // The terminal renders presentation markup only. It never interprets model
 // output as commands or changes the assessment's saved conversation.
@@ -43,15 +170,16 @@ func tuiMessageParts(entry string) (string, string) {
 }
 
 func tuiLabel(label string) string {
-	color := lipgloss.Color("252")
-	if label == "You" {
-		color = lipgloss.Color("203")
+	switch label {
+	case "You":
+		return tuiAccent.Render("YOU")
+	case "Coordinator plan":
+		return tuiGreen.Render("PLAN")
+	case "Coordinator":
+		return tuiBlue.Render("COORDINATOR")
+	default:
+		return tuiMuted.Render("APPLICATION")
 	}
-	if label == "Coordinator plan" {
-		label = "Plan"
-		color = lipgloss.Color("81")
-	}
-	return lipgloss.NewStyle().Bold(true).Foreground(color).Render(label)
 }
 
 func renderTUIMarkdown(body string, width int) string {

@@ -182,6 +182,31 @@ func TestGuidedTUIShowsWorkerProgressInInspector(t *testing.T) {
 	}
 }
 
+func TestGuidedTUIStatusFitsNarrowTerminal(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	model := newGuidedTUI(ctx, cancel, make(chan tuiOutput), make(chan error), nopWriteCloser{})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	updated, _ = updated.Update(tuiOutput{kind: consoleAssessmentStarted})
+	updated, _ = updated.Update(tuiOutput{kind: consolePermissions, text: "Ask me before every execution"})
+	updated, _ = updated.Update(tuiOutput{kind: consoleDashboard, text: "inspect · running\n  reviewing the target response\n  input 23%\nvalidate · running\n  comparing evidence\n  input 31%", activeWorkers: 2})
+	got := updated.(guidedTUI)
+	view := ansi.Strip(got.View())
+	if rows := len(strings.Split(strings.TrimRight(view, "\n"), "\n")); rows > 24 {
+		t.Fatalf("active status overflows a 24-row terminal: %d rows\n%s", rows, view)
+	}
+	for _, want := range []string{"RUNNING", "COORDINATOR", "Ask me before", "WORKERS · 2 ACTIVE", "inspect · running", "validate · running"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("status missing %q:\n%s", want, view)
+		}
+	}
+	updated, _ = got.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	short := ansi.Strip(updated.(guidedTUI).View())
+	if !strings.Contains(short, "inspect · running") || !strings.Contains(short, "validate · running") {
+		t.Fatalf("compact terminal hid an active worker:\n%s", short)
+	}
+}
+
 func TestGuidedTUIAnimatesActiveCoordinatorAndWorker(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -222,7 +247,7 @@ func TestGuidedTUIFormatsConversationAndPreservesScroll(t *testing.T) {
 	updated, _ = updated.Update(tuiOutput{kind: consolePrompt, text: "Ask the coordinator"})
 	updated, _ = updated.Update(tuiOutput{kind: consoleOutput, text: "Coordinator: **Important**: use `nmap` carefully.\n\n- First step\n- Second step"})
 	view := ansi.Strip(updated.(guidedTUI).conversation.View())
-	if !strings.Contains(view, "Coordinator") || !strings.Contains(view, "Important: use nmap carefully.") || strings.Contains(view, "**Important**") || strings.Contains(view, "`nmap`") {
+	if !strings.Contains(view, "COORDINATOR") || !strings.Contains(view, "Important: use nmap carefully.") || strings.Contains(view, "**Important**") || strings.Contains(view, "`nmap`") {
 		t.Fatalf("conversation markup was not rendered clearly: %q", view)
 	}
 	for i := 0; i < 20; i++ {

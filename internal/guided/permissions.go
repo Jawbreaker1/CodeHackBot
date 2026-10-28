@@ -3,8 +3,9 @@ package guided
 import (
 	"context"
 	"errors"
-	"github.com/Jawbreaker1/CodeHackBot/internal/approval"
 	"strings"
+
+	"github.com/Jawbreaker1/CodeHackBot/internal/approval"
 )
 
 func (c *Console) approvalMode() approval.Mode {
@@ -27,9 +28,9 @@ func (c *Console) choosePermissions(ctx context.Context) error {
 		selected = 2
 	}
 	choice, err := c.Choose(ctx, "Approval level", "Choose an approval level, or Esc to close", []consoleChoice{
-		{Label: "Approve every execution", Detail: "Ask before each tool action", Value: "1"},
-		{Label: "Review risky actions", Detail: "Low-risk actions run automatically", Value: "2"},
-		{Label: "Approve everything", Detail: "Run without execution prompts", Value: "3"},
+		{Label: approval.EveryExecution.Label(), Detail: "Every tool run waits for your approval", Value: "1"},
+		{Label: approval.DangerousOnly.Label(), Detail: "Low-risk actions run automatically", Value: "2"},
+		{Label: approval.FullAccess.Label(), Detail: "Plans and tools run without approval prompts", Value: "3"},
 	}, selected)
 	if err != nil {
 		if errors.Is(err, errModalCanceled) {
@@ -52,7 +53,7 @@ func (c *Console) choosePermissions(ctx context.Context) error {
 		return nil
 	}
 	if mode != approval.EveryExecution {
-		answer, err := c.Ask(ctx, "Enable "+mode.Label()+" for this session? Any pending execution covered by this mode will proceed. Type confirm to apply.")
+		answer, err := c.Ask(ctx, "Switch to "+mode.Label()+" for this session? Any pending execution covered by this mode will proceed. Type confirm to apply.")
 		if err != nil {
 			if errors.Is(err, errModalCanceled) {
 				return nil

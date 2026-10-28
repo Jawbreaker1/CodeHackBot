@@ -227,13 +227,14 @@ captures remain local task artifacts and are never implicitly uploaded.
 
 ### Session approvals and observable execution
 
-Both interfaces use the shared `approval.Mode` policy: approve every execution
-(the default), review commands and risky actions, or approve everything. The model
+Both interfaces use the shared `approval.Mode` policy: ask the operator before
+every execution (the default), ask before risky or uncertain actions, or run
+without approval prompts. The model
 supplies a short action summary, affected target, impact, and structured risk
-(`low`, `dangerous`, or `unknown`). The middle mode automatically permits only
-validated built-in read-only observations. Arbitrary worker commands require
-review even when the model labels them `low`; shell scripts and task-local helpers
-cannot be proved harmless from that label alone. Full access is an explicit
+(`low`, `dangerous`, or `unknown`). The middle mode automatically permits validated
+built-in read-only observations and worker commands independently reviewed as low
+risk. A worker's own `low` label cannot waive review; shell scripts and task-local
+helpers cannot be proved harmless from that label alone. Full access is an explicit
 session override inside the authorized VM. Scope and prohibitions still apply.
 No command-text heuristics classify risk, and this is not a security sandbox.
 

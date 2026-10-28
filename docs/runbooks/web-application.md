@@ -87,8 +87,8 @@ The check creates and completes two approved sessions for one customer, verifies
 
 ### Approval settings and watching workers
 
-Click the approval label below the composer to choose **Approve every execution**,
-**Review risky actions**, or **Approve everything** for that session.
+Click the approval label below the composer to choose **Ask me before every execution**,
+**Ask me before risky actions**, or **Run without approval prompts** for that session.
 Automatic modes require explicit acknowledgement. The middle mode runs validated
 read-only observations automatically. It also runs worker commands when a separate
 review of the exact invocation finds them low risk; risky or uncertain actions ask

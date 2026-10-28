@@ -431,33 +431,12 @@ func (m *guidedTUI) syncLayout() {
 }
 
 func (m guidedTUI) View() string {
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("81"))
-	pane := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
-	left := pane.Width(m.conversation.Width + 2).Height(m.conversation.Height + 2).Render(title.Render(" Conversation and activity ") + "\n" + m.conversation.View())
-	permissionLabel := m.permissionLabel
-	if permissionLabel == "" {
-		permissionLabel = "Approve every execution"
-	}
-	phase := "phase: live orchestrator"
-	if m.sessionReady {
-		phase = "phase: session ready"
-	}
-	workers := m.workerStatus
-	if workers == "" {
-		workers = "No workers yet"
-	}
-	rightBody := strings.Join([]string{
-		phase,
-		"coordinator: " + m.activityStatus(m.coordinatorStatus, m.coordinatorWorking),
-		"approvals: " + permissionLabel,
-		m.notice,
-		"",
-		"Workers",
-		m.activityStatus(workers, m.activeWorkers > 0),
-	}, "\n")
+	conversationTitle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("111"))
+	inputTitleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("203"))
+	pane := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("240")).Padding(0, 1)
+	left := pane.Width(m.conversation.Width + 2).Height(m.conversation.Height + 2).Render(conversationTitle.Render(" Conversation ") + "\n" + m.conversation.View())
 	rightWidth := maxTUI(24, m.width-m.conversation.Width-9)
-	rightBody = lipgloss.NewStyle().Width(rightWidth - 4).Render(rightBody)
-	right := pane.Width(rightWidth).Height(m.conversation.Height + 2).Render(title.Render(" Assessment status ") + "\n" + rightBody)
+	right := pane.Width(rightWidth).Height(m.conversation.Height + 2).Render(tuiSectionTitle(" Activity ") + "\n" + m.statusBody(rightWidth-4, m.conversation.Height))
 	inputTitle := " Input "
 	if m.waiting && m.inputPrompt != "" {
 		question := m.inputPrompt
@@ -471,25 +450,18 @@ func (m guidedTUI) View() string {
 	} else if m.stopping {
 		inputTitle = " Input " + m.spinner.View() + " stopping "
 	}
-	bottomLines := []string{title.Render(inputTitle), m.input.View()}
+	bottomLines := []string{inputTitleStyle.Render(inputTitle), m.input.View()}
 	bottomLines = append(bottomLines, m.slashPaletteLines()...)
-	bottomLines = append(bottomLines, "Enter sends · PgUp/PgDn scroll · Ctrl-C stops all workers")
+	bottomLines = append(bottomLines, lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("Enter send  ·  / commands  ·  PgUp/PgDn history  ·  Ctrl-C stop"))
 	bottom := pane.Width(maxTUI(30, m.width-2)).Render(strings.Join(bottomLines, "\n"))
 	if m.modalActive {
-		bottom = pane.Width(maxTUI(30, m.width-2)).Render(title.Render(" Dialog open ") + "\nSettings are shown above. Esc closes the dialog.\nCtrl-C stops all workers")
+		bottom = pane.Width(maxTUI(30, m.width-2)).Render(inputTitleStyle.Render(" Dialog open ") + "\nUse the dialog above. Esc closes it.\nCtrl-C stops all workers")
 	}
 	base := lipgloss.JoinVertical(lipgloss.Left, lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right), bottom)
 	if m.modalActive {
 		return m.viewModal(base)
 	}
 	return base
-}
-
-func (m guidedTUI) activityStatus(status string, working bool) string {
-	if working {
-		return m.spinner.View() + " " + status
-	}
-	return status
 }
 
 func maxTUI(a, b int) int {
