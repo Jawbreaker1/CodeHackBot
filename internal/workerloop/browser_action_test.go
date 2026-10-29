@@ -26,7 +26,7 @@ func TestBrowserRunUsesNormalApprovalAndEvidence(t *testing.T) {
 	if err := os.MkdirAll(runnerDir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	runner := `import fs from 'node:fs'; fs.mkdirSync(process.argv[3]); for (const name of ['playwright-trace.zip','browser-live.png','browser-pages.json']) fs.writeFileSync(process.argv[3]+'/'+name, 'fixture'); console.log('Browser fixture completed');`
+	runner := `import fs from 'node:fs'; fs.mkdirSync(process.argv[3]); for (const name of ['playwright-trace.zip','browser-live.png','browser-pages.json','browser-network.json']) fs.writeFileSync(process.argv[3]+'/'+name, 'fixture'); console.log('Browser fixture completed');`
 	if err := os.WriteFile(filepath.Join(runnerDir, "run.mjs"), []byte(runner), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -53,10 +53,10 @@ func TestBrowserRunUsesNormalApprovalAndEvidence(t *testing.T) {
 		t.Fatalf("approval did not show exact browser action: %+v", approver.request)
 	}
 	result := packet.LatestExecutionResult
-	if result.ExitStatus != "0" || len(result.LogRefs) != 1 || len(result.ArtifactRefs) != 6 {
+	if result.ExitStatus != "0" || len(result.LogRefs) != 1 || len(result.ArtifactRefs) != 7 {
 		t.Fatalf("browser evidence not registered: %+v", result)
 	}
-	for _, name := range []string{"playwright-trace.zip", "browser-live.png", "browser-pages.json"} {
+	for _, name := range []string{"playwright-trace.zip", "browser-live.png", "browser-pages.json", "browser-network.json"} {
 		found := false
 		for _, ref := range result.ArtifactRefs {
 			found = found || filepath.Base(ref) == name

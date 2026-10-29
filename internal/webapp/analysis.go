@@ -464,13 +464,13 @@ func analysisSummary(status string, risk analysisRisk, findings, gaps, unresolve
 		if risk.Candidates == 1 {
 			need = "needs"
 		}
-		return confirmed + fmt.Sprintf(" %d candidate %s still %s review.", risk.Candidates, countNoun(risk.Candidates, "observation", "observations"), need)
+		return confirmed + fmt.Sprintf(" %d possible %s still %s review.", risk.Candidates, countNoun(risk.Candidates, "issue", "issues"), need)
 	}
 	verb := "need"
 	if activeFindings == 1 {
 		verb = "needs"
 	}
-	return fmt.Sprintf("%d candidate %s %s confirmation before becoming findings.", activeFindings, countNoun(activeFindings, "observation", "observations"), verb)
+	return fmt.Sprintf("%d possible %s %s verification before becoming findings.", activeFindings, countNoun(activeFindings, "issue", "issues"), verb)
 }
 
 func countNoun(count int, one, many string) string {

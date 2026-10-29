@@ -63,6 +63,15 @@ the most recently opened page and does not control the target browser. Never
 put a password or other secret in a step label. The Playwright trace retains
 the detailed interaction history for local review.
 
+The helper also records `browser-network.json`: a bounded request overview with
+source and destination origins, method, resource type, status, and whether the
+source or destination URL contained a query or fragment. It does not save URL
+paths, query or fragment values, headers, or request bodies. The file also
+records the observed `navigator.webdriver` value, because a site can behave
+differently under browser automation. These are coverage clues, not proof that
+data reached a third party. The full trace can contain sensitive data and must
+be reviewed locally before any excerpt is shared.
+
 The helper also records `browser-pages.json`: a bounded list of main-frame
 HTTP(S) pages actually visited and transitions observed within a page. It
 saves one `browser-page-NNN.png` screenshot per visited page after named steps

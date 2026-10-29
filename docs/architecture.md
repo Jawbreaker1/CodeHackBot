@@ -220,7 +220,7 @@ preprovisioned Playwright package against an approved system browser. A worker
 may create a task-local scenario to traverse declared routes or role flows and
 capture screenshots, traces, DOM snapshots, or network evidence. The
 `browser_run` action automatically declares the runner's trace, live preview,
-and observed page map; the worker declares any additional captures. The shared
+observed page map, and bounded network metadata; the worker declares any additional captures. The network record contains origins, methods, response status, URL-shape flags, and the observed browser automation signal. It omits URL values, paths, headers, and bodies. A worker can use it to select a focused source-to-sink check, but it cannot establish that a secret left the browser. The trace remains restricted raw evidence and may contain secrets. The shared
 worker engine registers only
 regular files that exist inside that task's workspace after the approved
 action completes. The coordinator receives those paths through the ordinary

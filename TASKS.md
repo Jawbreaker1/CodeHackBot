@@ -1,6 +1,6 @@
 # Tasks
 
-Updated 2026-10-26. This file owns immediate implementation order and status.
+Updated 2026-10-29. This file owns immediate implementation order and status.
 
 ## Agreed sequence
 
@@ -12,6 +12,8 @@ Updated 2026-10-26. This file owns immediate implementation order and status.
 The product remains orchestrator-first. The first two steps establish its shared engine and model access. Keep each implementation small, runnable, and tied to its done condition. Priority clarification, 2026-09-19: complete and accept the agentic worker first, then complete and accept the orchestrator structure, before expanding knowledge/source capabilities. Completed cleanup and provider checks do not establish full worker acceptance.
 
 ## Current priority: foundation acceptance and capability proof
+
+2026-10-29 assessment-flow improvement: a pushed checkpoint (`3379282`) precedes this slice. The browser runner now registers a bounded, value-free network overview alongside the trace and page map, including observed browser automation state. The browser-data-flow guide and coordinator/worker planning instructions connect source, browser, and network evidence while preserving uncertainty and switching approach after stalled attempts. Analysis labels now distinguish reproduced findings, confirmed affected software, supported behavior without established impact, possible issues, and ruled-out checks. The local two-control browser test, full CI, and three Daybreak planning checks passed; the rebuilt Analysis view was inspected against a saved assessment. These checks do not prove that a real target issue will be found, and this slice made no new live target contact. Account registration and MailSlurp integration remain deferred until after the operator's demo.
 
 2026-10-26 Analysis current research: connected sessions use shared NVD CVE search and the coordinator's bounded public `web_fetch`. The guide may search for a public product/component/CVE or read up to two exact public source URLs, then cites selected results separately from saved assessment references. A local SearXNG adapter now discovers broader public pages; the web server detects it automatically on port 8888. The model selects only returned URLs, and the guide cites a result only after reading its destination page. Search hits do not become target findings. Air-gapped mode disables this path. The hidden external search MCP remains removed. SearXNG 2026.10.25 was installed outside the repo in an isolated user-local virtualenv and enabled as a loopback user service. Real PHP and OWASP searches returned relevant sources; full CI and a live Daybreak Blue question through the real search and page reader passed. Search engine availability can still vary; a failed lookup is shown as a research gap.
 

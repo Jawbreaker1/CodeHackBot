@@ -56,7 +56,7 @@ func (c Coordinator) runWorker(ctx context.Context, root string, state State, ta
 	if len(state.Plans) > 0 {
 		packet.CapabilityInputs = append(packet.CapabilityInputs, siblingTaskBoundaries(state.Plans[len(state.Plans)-1], task.ID)...)
 	}
-	packet.CapabilityInputs = append(packet.CapabilityInputs, "For scoped web work, read tools/playwright-runner/README.md before using the preprovisioned helper. Create a task-local .mjs scenario with named browser steps, then use browser_run with a fresh artifact_dir; the trace, observed page map, and live preview are registered automatically. Declare any additional captures. No implicit downloads or installs.")
+	packet.CapabilityInputs = append(packet.CapabilityInputs, "For scoped web work, read tools/playwright-runner/README.md before using the preprovisioned helper. Create a task-local .mjs scenario with named browser steps, then use browser_run with a fresh artifact_dir; the trace, observed page map, redacted network metadata, and live preview are registered automatically. Inspect browser-network.json when external requests or automation-sensitive behavior could affect your conclusion. Declare any additional captures. No implicit downloads or installs.")
 	researchMode := c.Frame.Parameters["research_mode"]
 	if researchMode == "air_gapped" || researchMode == "offline" {
 		packet.CapabilityInputs = append(packet.CapabilityInputs, "research_mode: air_gapped; external web fetch is prohibited. Use only local advisory/source snapshots and record their provenance and freshness.")

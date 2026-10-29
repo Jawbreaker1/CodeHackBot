@@ -60,6 +60,7 @@ func prepareBrowserRun(response Response, cwd string) (Response, *ctxpacket.Exec
 		filepath.Join(dir, "playwright-trace.zip"),
 		filepath.Join(dir, "browser-live.png"),
 		filepath.Join(dir, "browser-pages.json"),
+		filepath.Join(dir, "browser-network.json"),
 	}, response.Artifacts...)
 	response.Summary = strings.TrimSpace(response.Summary)
 	response.Impact = strings.TrimSpace(response.Impact)

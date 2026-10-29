@@ -31,9 +31,54 @@ const linkedPairs = new Set();
 const linkScans = new Set();
 const pageLocations = new WeakMap();
 let journeyWrite = Promise.resolve();
+const networkRequests = [];
+const networkByRequest = new WeakMap();
+const browserSignals = [];
+let omittedRequests = 0;
 const maxRecordedPages = 40;
 const maxRecordedTransitions = 120;
 const maxRecordedLinks = 160;
+const maxRecordedRequests = 250;
+function requestOrigin(rawURL) {
+  try {
+    const parsed = new URL(rawURL);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.origin : '';
+  } catch { return ''; }
+}
+function urlShape(rawURL) {
+  try {
+    const parsed = new URL(rawURL);
+    return {has_query: Boolean(parsed.search), has_fragment: Boolean(parsed.hash)};
+  } catch { return {has_query: false, has_fragment: false}; }
+}
+function recordRequest(request) {
+  const destination = requestOrigin(request.url());
+  if (!destination) return;
+  if (networkRequests.length >= maxRecordedRequests) { omittedRequests++; return; }
+  let sourceURL = '';
+  try { sourceURL = request.frame().url(); } catch { /* Service-worker requests may have no frame. */ }
+  const sourceOrigin = requestOrigin(sourceURL);
+  const entry = {
+    at: new Date().toISOString(),
+    source_origin: sourceOrigin,
+    source_url_shape: urlShape(sourceURL),
+    destination_origin: destination,
+    destination_url_shape: urlShape(request.url()),
+    cross_origin: Boolean(sourceOrigin && sourceOrigin !== destination),
+    method: request.method(),
+    resource_type: request.resourceType(),
+  };
+  networkRequests.push(entry);
+  networkByRequest.set(request, entry);
+}
+async function publishNetwork() {
+  // Deliberately omit paths, query values, fragments, headers, and bodies.
+  const payload = JSON.stringify({version: 1, requests: networkRequests, omitted_requests: omittedRequests,
+    browser_signals: browserSignals, note: 'Metadata only. A cross-origin request or URL fragment is not proof of disclosure. The Playwright trace may contain sensitive values.'});
+  const temporary = path.join(artifactDir, '.browser-network.json');
+  await fs.writeFile(temporary, payload, {mode: 0o600});
+  await fs.rename(temporary, path.join(artifactDir, 'browser-network.json'));
+}
 function recordNavigation(page, rawURL) {
   const url = visibleURL(rawURL);
   if (!url) return;
@@ -139,9 +184,25 @@ context.on('page', page => {
       void publishStatus();
     }
   });
-  page.on('domcontentloaded', () => { void schedulePageCapture(page); });
+  page.on('domcontentloaded', () => {
+    void schedulePageCapture(page);
+    void page.evaluate(() => navigator.webdriver).then(value => {
+      if (browserSignals.length < maxRecordedPages) {
+        browserSignals.push({origin: requestOrigin(page.url()), navigator_webdriver: Boolean(value)});
+      }
+    }).catch(() => {});
+  });
   page.on('close', () => { log('Browser page closed'); void publishStatus(); });
   void publishStatus();
+});
+context.on('request', recordRequest);
+context.on('response', response => {
+  const entry = networkByRequest.get(response.request());
+  if (entry) entry.status = response.status();
+});
+context.on('requestfailed', request => {
+  const entry = networkByRequest.get(request);
+  if (entry) entry.failed = true;
 });
 async function step(label, action) {
   activeStep = label;
@@ -179,6 +240,8 @@ try {
   await schedulePageCapture(context.pages().at(-1));
   await Promise.allSettled([...pendingCaptures]);
   await journeyWrite;
+  await publishNetwork();
+  log(`Browser network metadata saved: ${networkRequests.length} requests${omittedRequests ? `, ${omittedRequests} omitted` : ''}`);
   activePhase = runFailed || activePhase === 'failed' ? 'failed' : 'finished';
   await publishStatus();
   await context.tracing.stop({ path: tracePath });
