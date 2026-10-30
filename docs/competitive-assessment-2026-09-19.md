@@ -76,7 +76,7 @@ Compare BirdHackBot first against a capable general agent and at least one close
 
 Measure validated unique findings, unsupported claims, missed known defects, reproduction success, coverage gaps, operator minutes/interventions, setup success, target side effects, wall-clock time, and aggregate model usage. Distinguish subscription quota usage from API charges. Run at least three trials per matched configuration and disclose model, tool, credential, source-access, and budget differences. Have a reviewer assess evidence against fixture truth independently of the testing agent.
 
-Before claiming superiority, agree on the minimum improvement that matters to System Verification. If another implementation performs equally well with less maintenance, consider integrating that capability instead of expanding ours without evidence.
+Before claiming superiority, agree on the minimum improvement that matters to the intended operators. If another implementation performs equally well with less maintenance, consider integrating that capability instead of expanding ours without evidence.
 
 Measure connected and air-gapped configurations separately. For harness comparisons, give the baseline comparable Kali/tool, model, and knowledge access; for product comparisons, disclose each product's supported configuration. Use controlled runs with playbooks, local research, or reusable helpers removed individually to determine which parts improve discovery. Start with the first working fixture and grow the evidence; three pilot runs cannot establish broad market superiority.
 

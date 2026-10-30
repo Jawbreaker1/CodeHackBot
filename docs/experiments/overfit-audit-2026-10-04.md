@@ -1,10 +1,10 @@
 # Audit of scenario-specific logic
 
-The SecurityGuru miss prompted a focused audit of the changes made to preserve and investigate security clues. The question is whether the runtime now follows general evidence, or whether it has been taught one URL-token/analytics scenario.
+An assessment miss prompted a focused audit of the changes made to preserve and investigate security clues. The question is whether the runtime now follows general evidence, or whether it has been taught one specific web scenario.
 
 ## Code and prompt review
 
-- The production Go runtime has no SecurityGuru, Matomo, magic-link, invitation, or `secret.zip` branch, target matcher, or command parser. The 64 KiB tool-output preview applies to all commands and file types. Full logs remain available for recall; the model view can shorten older observations when the selected input allowance is reached.
+- The production Go runtime has no named-target, vendor, or task-specific branch, target matcher, or command parser. The 64 KiB tool-output preview applies to all commands and file types. Full logs remain available for recall; the model view can shorten older observations when the selected input allowance is reached.
 - `Lead` is a model-authored, evidence-linked hypothesis with a proposed next check. Its validator checks references and continuity, not vulnerability keywords. Worker `lead_hints` and coordinator `open_leads` use the same generic path for all assessment domains.
 - The source-review and web-application guides briefly became too specific about URL parameters, browser storage, telemetry, and third-party scripts. They now direct workers to trace material data and control flows across components and decisions, with browser startup order considered only when relevant. The coordinator asks for one consequential input-to-effect path, not a fixed scan sequence or a named sink.
 - The lead-continuity unit fixture formerly used a callback URL and third-party request. It now uses an unrelated cross-tenant record-filter hypothesis. This test checks evidence continuity, not detection quality.

@@ -83,6 +83,19 @@
 /config/model-profiles.local.json
 /config/mcp-servers.local.json
 
+# Local credentials and private configuration
+/config/*.local.json
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pem
+*.p12
+*.pfx
+*.key
+id_rsa
+id_ed25519
+
 # OS files
 .DS_Store
 

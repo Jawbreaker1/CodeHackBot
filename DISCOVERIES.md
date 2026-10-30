@@ -1,5 +1,7 @@
 # Discoveries
 
+Historical public-target names in these notes are pseudonymized. The detailed session records remain local and are not part of the repository.
+
 ## Sequential context compaction diagnostics — 2026-10-20
 
 - Two opt-in manual diagnostics grew a fictional source-review worker and a two-worker assessment round by round using the production Daybreak text-token counter and complete request builders. The worker crossed the 128,000-token allowance at turn 20 (128,695 full, 123,589 sent) and continued through turn 22. A separate 18,000-token diagnostic allowance shortened an older result body at turn 2. Its latest observation and operator direction survived; after save/resume, the complete earliest observation remained in the registered stdout log and was found through `recall_context`. The saved worker packet contained 22 result cards, seven plan revisions, and 45 conversation entries.
@@ -9,7 +11,7 @@
 
 ## Daybreak token-budget live smoke — 2026-10-20
 
-- A fresh, focused, non-intrusive `opensverige.se` assessment was run through the web UI in project `opensverige`: `web-assessment-20261020-133621.446121578-000002`. It completed in 28 minutes 50 seconds with two reviewed rounds, three workers, 30 model calls, no failed calls, and a saved report and evidence index. The second round ran an API-publication worker and a bounded TLS worker concurrently. An operator message during their run was acknowledged, and the coordinator ended after that round as requested.
+- A fresh, focused, non-intrusive `example.test` assessment was run through the web UI in project `web-demo`: `web-assessment-20261020-133621.446121578-000002`. It completed in 28 minutes 50 seconds with two reviewed rounds, three workers, 30 model calls, no failed calls, and a saved report and evidence index. The second round ran an API-publication worker and a bounded TLS worker concurrently. An operator message during their run was acknowledged, and the coordinator ended after that round as requested.
 - Daybreak provider usage was persisted for all three coordinator planning calls (9,585, 18,119, and 27,601 input tokens) and all worker calls. The largest recorded worker input was 31,586 tokens. Worker context snapshots remained separate and passed their recorded validations. The web meter showed bytes during a pending call and provider tokens after completion. This run did not approach the 128,000-token allowance or exercise compaction, so it does not validate near-limit behavior or long-session recovery.
 - The report kept a missing CSP as a low-severity candidate without demonstrated impact; a suspected community-API disclosure was refuted against current public-page and policy evidence. It recorded the untested external membership service and other coverage gaps. The report's cited execution logs exist. This is one end-to-end smoke test of orchestration, context accounting, and reporting, not acceptance evidence for pentest effectiveness or absence of target vulnerabilities.
 - Live use exposed a stale "Coordinator input bytes" heading above a token value. The heading is now "Coordinator context". In-assessment chat remains byte-budgeted by design, including attachment-bearing conversations; token-driven admission currently applies to text-only assessment planning and workers.
@@ -37,7 +39,7 @@ Continuity and evidence, not a task list. Updated 2026-09-19.
 
 ## Product decisions
 
-- Build System Verification's production security testing platform. The orchestrator is the intended primary product; workers share one engine.
+- Build a production security testing platform. The orchestrator is the intended primary product; workers share one engine.
 - Implementation order is core cleanup, subscription API wrapper, orchestration, then source-assisted assessment.
 - Astra is the development/review model. The intended OpenAI pentest runtime is Daybreak on GPT-5.6 Sol, alongside local models. The first subscription slice successfully requested `gpt-daybreak-blue-latest`; the backend reported resolved model `gpt-5.6-sol`. Access is account-dependent.
 - Keep solutions proportional to demonstrated problems. Define done, validate it, and defer hypothetical cases. A broad roadmap does not authorize building every subsystem in the first slice.

@@ -4,7 +4,7 @@ Status: active implementation contracts and bounded future direction. Updated 20
 
 ## Product and implementation order
 
-BirdHackBot is System Verification's security testing platform. The primary product is an orchestrator coordinating bounded investigations, validation, and evidence-backed reporting. All workers use one execution engine.
+BirdHackBot is a security testing platform. The primary product is an orchestrator coordinating bounded investigations, validation, and evidence-backed reporting. All workers use one execution engine.
 
 Current sequence: **core cleanup → subscription API wrapper → orchestration → source-assisted assessment**. `TASKS.md` owns immediate work; `ROADMAP.md` owns future direction. Astra is the development model. The intended OpenAI pentest runtime is Daybreak on GPT-5.6 Sol, alongside local models. Provider/model access must be verified during integration.
 

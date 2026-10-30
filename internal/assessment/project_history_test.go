@@ -11,8 +11,8 @@ import (
 )
 
 func TestCoordinatorPacketIncludesBoundedPriorWorkAsHistory(t *testing.T) {
-	state := State{Version: 1, ID: "current", Goal: "Retest the target", Scope: "opensverige.se", Target: "opensverige.se",
-		ProjectHistory: &ProjectHistory{Project: "lab", Target: "opensverige.se", Sessions: []PriorSession{{ID: "older", Findings: []PriorFinding{{ID: "older#abc", Title: "Earlier candidate", Status: "candidate"}}}}}}
+	state := State{Version: 1, ID: "current", Goal: "Retest the target", Scope: "example.test", Target: "example.test",
+		ProjectHistory: &ProjectHistory{Project: "lab", Target: "example.test", Sessions: []PriorSession{{ID: "older", Findings: []PriorFinding{{ID: "older#abc", Title: "Earlier candidate", Status: "candidate"}}}}}}
 	var packet coordinatorModelPacket
 	if err := json.Unmarshal([]byte(coordinatorPrompt(state)), &packet); err != nil {
 		t.Fatal(err)

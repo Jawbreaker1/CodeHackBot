@@ -6,7 +6,7 @@ Historical baseline assessment at checkpoint `95edae1`. Core cleanup has since a
 
 This is an assessment and proposed implementation sequence, not an implemented architecture change. The existing worker remains the shared-engine concept; its current execution, evidence, and lifecycle implementations should not be treated as fixed commitments.
 
-The product target is System Verification's production security testing platform: orchestration first, source-assisted investigation, reproducible target validation, and professional reporting. Astra is the development/review model. Per the user's clarification, the intended OpenAI pentest runtime is Daybreak on GPT-5.6 Sol, alongside local models. This assessment makes no claim that a particular subscription or model endpoint has been integrated or validated.
+The product target is a production security testing platform: orchestration first, source-assisted investigation, reproducible target validation, and professional reporting. Astra is the development/review model. Per the operator's clarification, the intended OpenAI pentest runtime is Daybreak on GPT-5.6 Sol, alongside local models. This assessment makes no claim that a particular subscription or model endpoint has been integrated or validated.
 
 ## What was examined
 

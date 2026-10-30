@@ -26,13 +26,13 @@ func TestProjectHistoryKeepsOnlyEarlierRunsOnSameTarget(t *testing.T) {
 				Results: []assessment.Result{{Task: assessment.Task{ID: "inspect"}, Status: "done", Evidence: []ctxpacket.ExecutionResult{{LogRefs: []string{"/evidence/policy.log"}}}}}}}
 	}
 	server := &Server{runs: map[string]*run{
-		"older":   makeRun("older", "lab", "Target: the exact hostname `opensverige.se`, including linked pages."),
+		"older":   makeRun("older", "lab", "Target: the exact hostname `example.test`, including linked pages."),
 		"other":   makeRun("other", "lab", "Target: the exact hostname other.example, including linked pages."),
-		"foreign": makeRun("foreign", "another-lab", "Target: the exact hostname opensverige.se."),
-		"current": makeRun("current", "lab", "Target: the exact hostname opensverige.se."),
+		"foreign": makeRun("foreign", "another-lab", "Target: the exact hostname example.test."),
+		"current": makeRun("current", "lab", "Target: the exact hostname example.test."),
 	}}
-	history := server.projectHistory("lab", "https://OPENSVERIGE.SE/", "current")
-	if history == nil || history.Target != "opensverige.se" || len(history.Sessions) != 1 || history.Sessions[0].ID != "older" {
+	history := server.projectHistory("lab", "https://EXAMPLE.TEST/", "current")
+	if history == nil || history.Target != "example.test" || len(history.Sessions) != 1 || history.Sessions[0].ID != "older" {
 		t.Fatalf("wrong bounded project history: %+v", history)
 	}
 	if len(history.Sessions[0].Findings) != 1 || history.Sessions[0].Findings[0].ID == "" || history.Sessions[0].Findings[0].EvidenceRef != "/evidence/policy.log" {
@@ -41,7 +41,7 @@ func TestProjectHistoryKeepsOnlyEarlierRunsOnSameTarget(t *testing.T) {
 	if got := legacyHostname("Review the local file secret.zip."); got != "" {
 		t.Fatalf("filename misidentified as hostname: %q", got)
 	}
-	if got := legacyHostname("Test exactly the hostname opensverige.se. The named hostname. Allowed actions are read-only."); got != "opensverige.se" {
+	if got := legacyHostname("Test exactly the hostname example.test. The named hostname. Allowed actions are read-only."); got != "example.test" {
 		t.Fatalf("descriptive hostname prose obscured an explicit target: %q", got)
 	}
 	if got := canonicalTarget("https://example.test:8443/admin/"); got != "https://example.test:8443/admin" {
@@ -50,15 +50,15 @@ func TestProjectHistoryKeepsOnlyEarlierRunsOnSameTarget(t *testing.T) {
 }
 
 func TestCustomerAnalysisGroupsExplicitTargetAcrossDifferentScopeProse(t *testing.T) {
-	first := assessment.State{ID: "first", Scope: "Test exactly hostname opensverige.se with DNS only", Status: "completed", FinishedAt: time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC), Plans: []assessment.Decision{{Findings: []assessment.Finding{{Title: "First observation", Status: "candidate"}}}}}
-	second := assessment.State{ID: "second", Scope: "Target: hostname `opensverige.se`, with HTTP checks", Status: "completed", FinishedAt: time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC), Plans: []assessment.Decision{{Findings: []assessment.Finding{{Title: "Later observation", Status: "candidate"}}}}}
+	first := assessment.State{ID: "first", Scope: "Test exactly hostname example.test with DNS only", Status: "completed", FinishedAt: time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC), Plans: []assessment.Decision{{Findings: []assessment.Finding{{Title: "First observation", Status: "candidate"}}}}}
+	second := assessment.State{ID: "second", Scope: "Target: hostname `example.test`, with HTTP checks", Status: "completed", FinishedAt: time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC), Plans: []assessment.Decision{{Findings: []assessment.Finding{{Title: "Later observation", Status: "candidate"}}}}}
 	view := buildCustomerAnalysis("lab", []analysisView{buildAnalysis("first", "lab", first, nil), buildAnalysis("second", "lab", second, nil)})
-	if view.Sessions[0].Target != "opensverige.se" || view.Sessions[1].Target != "opensverige.se" || view.Sessions[1].UpdatedAt.IsZero() {
+	if view.Sessions[0].Target != "example.test" || view.Sessions[1].Target != "example.test" || view.Sessions[1].UpdatedAt.IsZero() {
 		t.Fatalf("target chronology missing: %+v", view.Sessions)
 	}
 	foundTarget := false
 	for _, group := range view.Correlations {
-		if group.Label == "Same target: opensverige.se" && len(group.Matches) == 2 {
+		if group.Label == "Same target: example.test" && len(group.Matches) == 2 {
 			foundTarget = true
 		}
 	}
@@ -68,10 +68,10 @@ func TestCustomerAnalysisGroupsExplicitTargetAcrossDifferentScopeProse(t *testin
 }
 
 func TestCustomerAnalysisRetestDoesNotEraseOriginalEvidence(t *testing.T) {
-	first := assessment.State{Scope: "hostname opensverige.se", Status: "completed", FinishedAt: time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC), Plans: []assessment.Decision{{Findings: []assessment.Finding{{Title: "Access control flaw", Status: "candidate", Evidence: []string{"/older/action.log"}}}}}}
+	first := assessment.State{Scope: "hostname example.test", Status: "completed", FinishedAt: time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC), Plans: []assessment.Decision{{Findings: []assessment.Finding{{Title: "Access control flaw", Status: "candidate", Evidence: []string{"/older/action.log"}}}}}}
 	firstView := buildAnalysis("first", "lab", first, nil)
 	id := firstView.Findings[0].ID
-	second := assessment.State{Scope: "hostname opensverige.se", Status: "completed", FinishedAt: time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC), Plans: []assessment.Decision{{PriorReviews: []assessment.PriorReview{{FindingID: id, Verdict: "remediated", Reason: "Fresh control check blocked the former behavior", ValidationTask: "retest", Evidence: []string{"/new/action.log"}}}}}}
+	second := assessment.State{Scope: "hostname example.test", Status: "completed", FinishedAt: time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC), Plans: []assessment.Decision{{PriorReviews: []assessment.PriorReview{{FindingID: id, Verdict: "remediated", Reason: "Fresh control check blocked the former behavior", ValidationTask: "retest", Evidence: []string{"/new/action.log"}}}}}}
 	combined := buildCustomerAnalysis("lab", []analysisView{firstView, buildAnalysis("second", "lab", second, nil)})
 	if len(combined.Findings) != 1 || combined.Findings[0].LatestReview == nil || combined.Findings[0].LatestReview.Verdict != "remediated" || combined.Findings[0].Evidence[0] != "/older/action.log" {
 		t.Fatalf("retest erased or failed to link original evidence: %+v", combined.Findings)

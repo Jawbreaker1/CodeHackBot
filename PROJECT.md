@@ -2,7 +2,7 @@
 
 ## Purpose
 
-BirdHackBot is being built as System Verification's security testing platform for authorized assessments. Current validation runs in the authorized lab; operating scope remains governed by `AGENTS.md`.
+BirdHackBot is being built as a security testing platform for authorized assessments. Current validation runs in an authorized lab; operating scope remains governed by `AGENTS.md`.
 
 Authorization and scope rules live in `AGENTS.md`.
 The rebuild source of truth is `docs/architecture.md`.
